@@ -479,6 +479,7 @@ const ptBR: typeof en = {
     `Excluir “${name}”? A busca e os filtros salvos serão removidos; projetos e sessões não serão afetados.`,
   "tree.viewSplitRight": "Dividir a visualização em árvore à direita",
   "tree.viewSplitDown": "Dividir a visualização em árvore abaixo",
+  "tree.viewKind": "Alterar o que esta visualização mostra",  // Change what this view shows
   "tree.viewAdd": "Copiar a visualização atual para uma nova aba",
   "tree.viewCount": (n) => `${n} visualizaç${n === 1 ? "ão" : "ões"} em árvore`,
   "mark.menu": "Marca", // Mark

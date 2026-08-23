@@ -472,6 +472,7 @@ const zhCN: typeof en = {
     `确定删除“${name}”吗？它保存的搜索与筛选条件会被移除，项目和会话不会受影响。`,
   "tree.viewSplitRight": "向右切分树分身",
   "tree.viewSplitDown": "向下切分树分身",
+  "tree.viewKind": "更改此分身显示的内容",  // Change what this view shows
   "tree.viewAdd": "复制当前树分身到新标签页",
   "tree.viewCount": (n) => `${n} 个树分身`,
   "mark.menu": "标记",

@@ -479,6 +479,7 @@ const fr: typeof en = {
     `Supprimer « ${name} » ? Ses recherches et filtres enregistrés seront supprimés, sans affecter les projets ni les sessions.`,
   "tree.viewSplitRight": "Scinder la vue de l’arbre vers la droite",
   "tree.viewSplitDown": "Scinder la vue de l’arbre vers le bas",
+  "tree.viewKind": "Changer ce qu’affiche cette vue",  // Change what this view shows
   "tree.viewAdd": "Copier la vue actuelle dans un nouvel onglet",
   "tree.viewCount": (n) => `${n} vue${n > 1 ? "s" : ""} arborescente${n > 1 ? "s" : ""}`,
   "mark.menu": "Repère", // Mark

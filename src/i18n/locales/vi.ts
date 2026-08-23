@@ -472,6 +472,7 @@ const vi: typeof en = {
     `Xóa “${name}”? Tìm kiếm và bộ lọc đã lưu sẽ bị xóa; dự án và phiên không bị ảnh hưởng.`,
   "tree.viewSplitRight": "Chia chế độ xem cây sang phải",
   "tree.viewSplitDown": "Chia chế độ xem cây xuống dưới",
+  "tree.viewKind": "Thay đổi nội dung hiển thị của chế độ xem này",  // Change what this view shows
   "tree.viewAdd": "Sao chép chế độ xem cây hiện tại sang thẻ mới",
   "tree.viewCount": (n) => `${n} chế độ xem cây`,
   "mark.menu": "Dấu", // Mark

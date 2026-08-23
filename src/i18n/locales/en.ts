@@ -479,6 +479,7 @@ const en = {
     `Delete “${name}”? Its saved search and filters will be removed; projects and sessions are unaffected.`,
   "tree.viewSplitRight": "Split tree view right",
   "tree.viewSplitDown": "Split tree view down",
+  "tree.viewKind": "Change what this view shows",
   "tree.viewAdd": "Copy current tree view to a new tab",
   "tree.viewCount": (n: number) => (n === 1 ? "1 tree view" : `${n} tree views`),
   "mark.menu": "Mark",

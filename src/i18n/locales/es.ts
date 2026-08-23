@@ -479,6 +479,7 @@ const es: typeof en = {
     `¿Eliminar “${name}”? Se quitarán su búsqueda y filtros guardados; los proyectos y las sesiones no se verán afectados.`,
   "tree.viewSplitRight": "Dividir la vista de árbol a la derecha",
   "tree.viewSplitDown": "Dividir la vista de árbol hacia abajo",
+  "tree.viewKind": "Cambiar lo que muestra esta vista",  // Change what this view shows
   "tree.viewAdd": "Copiar la vista de árbol actual a una pestaña nueva",
   "tree.viewCount": (n) => `${n} vista${n === 1 ? "" : "s"} de árbol`,
   "mark.menu": "Marca", // Mark

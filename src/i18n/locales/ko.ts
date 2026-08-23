@@ -476,6 +476,7 @@ const ko: typeof en = {
     `“${name}” 보기를 삭제하시겠습니까? 저장된 검색 및 필터만 제거되며 프로젝트와 세션에는 영향을 주지 않습니다.`,
   "tree.viewSplitRight": "트리 보기를 오른쪽으로 분할",
   "tree.viewSplitDown": "트리 보기를 아래로 분할",
+  "tree.viewKind": "이 보기에 표시할 내용 변경",  // Change what this view shows
   "tree.viewAdd": "현재 트리 보기를 새 탭으로 복사",
   "tree.viewCount": (n) => `트리 보기 ${n}개`,
   "mark.menu": "표시", // Mark

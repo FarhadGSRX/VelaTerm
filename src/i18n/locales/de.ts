@@ -479,6 +479,7 @@ const de: typeof en = {
     `„${name}“ löschen? Gespeicherte Such- und Filterbedingungen werden entfernt; Projekte und Sitzungen bleiben unverändert.`,
   "tree.viewSplitRight": "Baumansicht nach rechts teilen",
   "tree.viewSplitDown": "Baumansicht nach unten teilen",
+  "tree.viewKind": "Ändern, was diese Ansicht zeigt",  // Change what this view shows
   "tree.viewAdd": "Aktuelle Baumansicht in einen neuen Tab kopieren",
   "tree.viewCount": (n) => `${n} Baumansicht${n === 1 ? "" : "en"}`,
   "mark.menu": "Markierung", // Mark

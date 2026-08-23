@@ -477,6 +477,7 @@ const ja: typeof en = {
     `「${name}」を削除しますか？保存された検索とフィルターは削除されますが、プロジェクトとセッションには影響しません。`,
   "tree.viewSplitRight": "ツリービューを右に分割",
   "tree.viewSplitDown": "ツリービューを下に分割",
+  "tree.viewKind": "このビューの表示内容を変更",  // Change what this view shows
   "tree.viewAdd": "現在のツリービューを新しいタブにコピー",
   "tree.viewCount": (n) => `${n} 個のツリービュー`,
   "mark.menu": "マーク", // Mark

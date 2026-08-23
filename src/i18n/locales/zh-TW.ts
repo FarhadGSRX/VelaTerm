@@ -473,6 +473,7 @@ const zhTW: typeof en = {
     `確定刪除「${name}」嗎？其儲存的搜尋與篩選條件會被移除，專案和工作階段不受影響。`,
   "tree.viewSplitRight": "向右切分樹分身",
   "tree.viewSplitDown": "向下切分樹分身",
+  "tree.viewKind": "變更此分身顯示的內容",  // Change what this view shows
   "tree.viewAdd": "複製目前的樹分身到新分頁",
   "tree.viewCount": (n) => `${n} 個樹分身`,
   "mark.menu": "標記", // Mark
