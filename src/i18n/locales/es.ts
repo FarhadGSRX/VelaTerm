@@ -651,6 +651,8 @@ const es: typeof en = {
   "tab.killBgTab": "Terminar esta pestaña en segundo plano (sus procesos finalizarán)", // Kill this background tab…
   "tab.newBrowserTab": "Nueva pestaña", // New Tab
   "tab.refreshFile": "Recargar archivo", // Refresh File
+  "tab.stick": "Mantener visible en división", // Keep Visible in Split
+  "tab.unstick": "Dejar de mantener visible", // Stop Keeping Visible
   "tab.closeOthers": "Cerrar otras pestañas", // Close Other Tabs
   "tab.closeRight": "Cerrar pestañas a la derecha", // Close Tabs to the Right
   "tab.closeAll": "Cerrar todas las pestañas", // Close All Tabs

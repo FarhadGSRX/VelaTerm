@@ -651,6 +651,8 @@ const de: typeof en = {
   "tab.killBgTab": "Diesen Hintergrund-Tab beenden (Prozesse werden beendet)", // Kill this background tab…
   "tab.newBrowserTab": "Neuer Tab", // New Tab
   "tab.refreshFile": "Datei neu laden", // Refresh File
+  "tab.stick": "In geteilter Ansicht sichtbar halten", // Keep Visible in Split
+  "tab.unstick": "Nicht mehr sichtbar halten", // Stop Keeping Visible
   "tab.closeOthers": "Andere Tabs schließen", // Close Other Tabs
   "tab.closeRight": "Tabs rechts schließen", // Close Tabs to the Right
   "tab.closeAll": "Alle Tabs schließen", // Close All Tabs

@@ -651,6 +651,8 @@ const fr: typeof en = {
   "tab.killBgTab": "Fermer cet onglet d'arrière-plan (ses processus se termineront)", // Kill this background tab…
   "tab.newBrowserTab": "Nouvel onglet", // New Tab
   "tab.refreshFile": "Recharger le fichier", // Refresh File
+  "tab.stick": "Garder visible dans le fractionnement", // Keep Visible in Split
+  "tab.unstick": "Ne plus garder visible", // Stop Keeping Visible
   "tab.closeOthers": "Fermer les autres onglets", // Close Other Tabs
   "tab.closeRight": "Fermer les onglets à droite", // Close Tabs to the Right
   "tab.closeAll": "Fermer tous les onglets", // Close All Tabs

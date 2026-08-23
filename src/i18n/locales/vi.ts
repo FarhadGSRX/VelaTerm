@@ -635,6 +635,8 @@ const vi: typeof en = {
   "tab.killBgTab": "Dừng thẻ nền này (các tiến trình sẽ kết thúc)",
   "tab.newBrowserTab": "Thẻ mới",
   "tab.refreshFile": "Làm mới tệp",
+  "tab.stick": "Giữ hiển thị khi chia đôi",
+  "tab.unstick": "Bỏ giữ hiển thị",
   "tab.closeOthers": "Đóng các thẻ khác",
   "tab.closeRight": "Đóng các thẻ bên phải",
   "tab.closeAll": "Đóng tất cả thẻ",

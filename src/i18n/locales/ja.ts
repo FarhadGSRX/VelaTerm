@@ -647,6 +647,8 @@ const ja: typeof en = {
   "tab.killBgTab": "このバックグラウンドタブを終了（プロセスも終了します）", // Kill this background tab…
   "tab.newBrowserTab": "新しいタブ", // New Tab
   "tab.refreshFile": "ファイルを再読み込み", // Refresh File
+  "tab.stick": "分割表示で固定", // Keep Visible in Split
+  "tab.unstick": "固定を解除", // Stop Keeping Visible
   "tab.closeOthers": "他のタブを閉じる", // Close Other Tabs
   "tab.closeRight": "右側のタブを閉じる", // Close Tabs to the Right
   "tab.closeAll": "すべてのタブを閉じる", // Close All Tabs

@@ -651,6 +651,8 @@ const ptBR: typeof en = {
   "tab.killBgTab": "Encerrar esta aba em segundo plano (seus processos serão encerrados)", // Kill this background tab…
   "tab.newBrowserTab": "Nova aba", // New Tab
   "tab.refreshFile": "Recarregar arquivo", // Refresh File
+  "tab.stick": "Manter visível na divisão", // Keep Visible in Split
+  "tab.unstick": "Parar de manter visível", // Stop Keeping Visible
   "tab.closeOthers": "Fechar outras abas", // Close Other Tabs
   "tab.closeRight": "Fechar abas à direita", // Close Tabs to the Right
   "tab.closeAll": "Fechar todas as abas", // Close All Tabs

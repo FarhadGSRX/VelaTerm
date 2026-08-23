@@ -641,6 +641,8 @@ const zhTW: typeof en = {
   "tab.killBgTab": "結束該背景分頁（處理程序隨之結束）", // Kill this background tab…
   "tab.newBrowserTab": "新分頁", // New Tab
   "tab.refreshFile": "重新整理檔案", // Refresh File
+  "tab.stick": "在分割畫面中保持顯示", // Keep Visible in Split
+  "tab.unstick": "取消保持顯示", // Stop Keeping Visible
   "tab.closeOthers": "關閉其他分頁", // Close Other Tabs
   "tab.closeRight": "關閉右側分頁", // Close Tabs to the Right
   "tab.closeAll": "關閉所有分頁", // Close All Tabs

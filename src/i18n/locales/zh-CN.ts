@@ -640,6 +640,8 @@ const zhCN: typeof en = {
   "tab.killBgTab": "结束该后台标签（进程随之结束）",
   "tab.newBrowserTab": "新标签页",
   "tab.refreshFile": "刷新文件",
+  "tab.stick": "在分屏中保持显示",
+  "tab.unstick": "取消保持显示",
   "tab.closeOthers": "关闭其他标签",
   "tab.closeRight": "关闭右侧标签",
   "tab.closeAll": "关闭所有标签",

@@ -667,6 +667,8 @@ const ru: typeof en = {
   "tab.killBgTab": "Завершить эту фоновую вкладку (её процессы завершатся)", // Kill this background tab…
   "tab.newBrowserTab": "Новая вкладка", // New Tab
   "tab.refreshFile": "Обновить файл", // Refresh File
+  "tab.stick": "Закрепить в разделённом виде", // Keep Visible in Split
+  "tab.unstick": "Открепить", // Stop Keeping Visible
   "tab.closeOthers": "Закрыть другие вкладки", // Close Other Tabs
   "tab.closeRight": "Закрыть вкладки справа", // Close Tabs to the Right
   "tab.closeAll": "Закрыть все вкладки", // Close All Tabs

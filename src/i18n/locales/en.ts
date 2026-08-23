@@ -656,6 +656,8 @@ const en = {
   "tab.killBgTab": "Kill this background tab (its processes will end)",
   "tab.newBrowserTab": "New Tab",
   "tab.refreshFile": "Refresh File",
+  "tab.stick": "Keep Visible in Split",
+  "tab.unstick": "Stop Keeping Visible",
   "tab.closeOthers": "Close Other Tabs",
   "tab.closeRight": "Close Tabs to the Right",
   "tab.closeAll": "Close All Tabs",

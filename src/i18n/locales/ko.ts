@@ -645,6 +645,8 @@ const ko: typeof en = {
   "tab.killBgTab": "이 백그라운드 탭 종료 (프로세스도 종료됩니다)", // Kill this background tab…
   "tab.newBrowserTab": "새 탭", // New Tab
   "tab.refreshFile": "파일 새로고침", // Refresh File
+  "tab.stick": "분할 화면에 고정", // Keep Visible in Split
+  "tab.unstick": "고정 해제", // Stop Keeping Visible
   "tab.closeOthers": "다른 탭 닫기", // Close Other Tabs
   "tab.closeRight": "오른쪽 탭 닫기", // Close Tabs to the Right
   "tab.closeAll": "모든 탭 닫기", // Close All Tabs

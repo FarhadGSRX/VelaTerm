@@ -763,6 +763,11 @@ interface TermStore {
    * only the one unpinned session slot is reusable.
    */
   pinnedTabs: SessionId[];
+  /** Tab kept visible beside whatever tab is active, so it survives single-tab session swapping.
+   * In-memory only: tab IDs are not stable across a restart, so persisting this would dangle. */
+  stickyTabId: SessionId | null;
+  /** Width of the sticky region as a percentage of the stage. */
+  stickySize: number;
   /**
    * Status notice after automatic background-tab eviction. Timestamp retriggers notices for repeated labels.
    */
@@ -1195,6 +1200,10 @@ interface TermStore {
   setNavLayout: (v: NavLayout) => void;
   setInspectorTab: (v: InspectorTab) => void;
   setSettingsTab: (v: SettingsTab) => void;
+  /** Keeps `tabId` visible alongside the active tab, or clears the sticky slot with null. */
+  setStickyTab: (tabId: SessionId | null) => void;
+  /** Resizes the sticky region, clamped so neither side can be squeezed away. */
+  resizeSticky: (pct: number) => void;
   /** Pins or unpins a file at the top of `projectId`'s file tree. */
   toggleFavoritePath: (projectId: string, path: string) => void;
   /** Toggles persisted single-tab mode. */
@@ -1521,6 +1530,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
   focusedPaneId: null,
   liveTabs: [],
   pinnedTabs: [],
+  stickyTabId: null,
+  stickySize: 35,
   liveEvictNotice: null,
   liveEvictAsk: false,
   docTabs: {},
@@ -2422,7 +2433,9 @@ export const useTermStore = create<TermStore>((set, get) => ({
             : (openTabs.find((t) => paneTrees[t]) ?? null);
       }
       const pinnedTabs = state.pinnedTabs.filter((t) => t !== tabId);
-      return { openTabs, paneTrees, docTabs, browserTabs, pinnedTabs, activeTabId, lastActiveSessionTabId, activeSessionId, focusedPaneId };
+      // A closed tab cannot stay in the sticky slot; it would render an empty region forever.
+      const stickyTabId = state.stickyTabId === tabId ? null : state.stickyTabId;
+      return { openTabs, paneTrees, docTabs, browserTabs, pinnedTabs, stickyTabId, activeTabId, lastActiveSessionTabId, activeSessionId, focusedPaneId };
     });
     get().pruneEphemeral();
     saveLayoutTick();
@@ -2630,6 +2643,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       const openTabs = state.openTabs.filter((t) => t !== tabId);
       // Remove background tabs from the pinned set because they no longer participate in reuse selection.
       const pinnedTabs = state.pinnedTabs.filter((t) => t !== tabId);
+      // A closed tab cannot stay in the sticky slot; it would render an empty region forever.
+      const stickyTabId = state.stickyTabId === tabId ? null : state.stickyTabId;
       // Append uniquely to `liveTabs`, preserving the complete pane tree.
       let liveTabs = state.liveTabs.filter((t) => t !== tabId);
       liveTabs.push(tabId);
@@ -2683,6 +2698,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
       return {
         openTabs,
         pinnedTabs,
+        stickyTabId,
         liveTabs,
         paneTrees,
         activeTabId,
@@ -3583,6 +3599,11 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set({ inspectorTab: v });
     persistAndApplyVisual(get);
   },
+  setStickyTab: (tabId) =>
+    set((s) => ({ stickyTabId: s.stickyTabId === tabId ? null : tabId })),
+
+  resizeSticky: (pct) => set({ stickySize: Math.max(15, Math.min(85, pct)) }),
+
   toggleFavoritePath: (projectId, path) => {
     const current = get().favoritePaths[projectId] ?? [];
     const next = current.includes(path)
