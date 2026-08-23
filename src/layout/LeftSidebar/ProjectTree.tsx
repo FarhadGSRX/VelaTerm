@@ -22,6 +22,7 @@ import { MARK_LABEL_KEYS, type NodeMark, normalizeMark } from "../../marks";
 import { SessionKindIcon } from "../sessionViewers/sessionMeta";
 import { DEFAULT_BINDINGS, formatCombo } from "../../hooks/shortcutRegistry";
 import { treeKeyAction, type KeyNavRow } from "./treeKeyNav";
+import { focusTerminal } from "../../terminal/registry";
 import { useGitBranch } from "../../hooks/useGitBranch";
 
 /** WKWebView inserts control characters such as U+001C through beforeinput when Left/Right is pressed past an
@@ -845,6 +846,15 @@ export function ProjectTree(h: TreeHandlers) {
     // An inline rename field owns the keyboard while it is open, and modified chords belong to the
     // global shortcut listener.
     if (renamingId || e.metaKey || e.ctrlKey || e.altKey) return;
+    // Escape is the way back out. Without it the tree is a keyboard trap: once focused there is no
+    // way to return to the session you were already in without reaching for the mouse.
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      const { activeSessionId } = useTermStore.getState();
+      if (activeSessionId) focusTerminal(activeSessionId);
+      return;
+    }
     const action = treeKeyAction(navRows, cursorIndex, e.key);
     if (!action) return;
     e.preventDefault();
@@ -864,6 +874,10 @@ export function ProjectTree(h: TreeHandlers) {
       return;
     }
     activateNode({ id: row.id, kind: row.kind }, row.kind === "session", false);
+    // Enter means "go to this session", so focus must follow even when it is ALREADY active --
+    // TerminalView only grabs focus on the transition into active, so re-selecting the current
+    // session would otherwise leave the keyboard stranded in the tree.
+    if (row.kind === "session") focusTerminal(row.id);
   };
 
   // Entering the tree with nothing current starts at the active session when it is on screen, so

@@ -658,14 +658,16 @@ export function FilesTab({
     <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
       <div className="files-head">
         <span className="files-path" title={root.path}>{root.name}</span>
-        {/* Hidden while a query is active: filtering force-expands the tree (`open = filter ? true`),
-            so collapsing during a filter changes state the user cannot see and reads as a dead button.
-            Also hidden when nothing is open, for the same reason. */}
-        {!q && root && hasOpenDescendant(root) && (
+        {/* Hidden only while a query is active: filtering force-expands the tree
+            (`open = filter ? true`), so collapsing during a filter changes state the user cannot see.
+            When nothing is expanded the button is DISABLED rather than absent -- hiding it made the
+            feature undiscoverable, since a freshly opened tree has every directory closed. */}
+        {!q && root && (
           <button
             className="files-toggle"
             title={t("files.collapseAll")}
             aria-label={t("files.collapseAll")}
+            disabled={!hasOpenDescendant(root)}
             onClick={() => {
               collapseAllBelow(root);
               setRoot((r) => (r ? { ...r } : r));
