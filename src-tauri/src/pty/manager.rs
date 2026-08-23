@@ -1500,18 +1500,25 @@ fn session_agent_path(app: &AppCtx, id: &str) -> Option<String> {
 /// 400 ms `pushSetting` debounce window and the table is what survives a restart, so the frontend flushes
 /// the choice before a spawn can observe a stale one (`flushNow`, src/ipc/settingsSync.ts).
 fn configured_shell(app: &AppCtx, kind: SessionKind) -> Option<String> {
-    let key = if kind == SessionKind::Terminal {
-        TERMINAL_SHELL_SETTING
-    } else {
-        AGENT_SHELL_SETTING
-    };
     let json = {
         let conn = app.db().conn.lock().ok()?;
         crate::db::repo::get_app_settings(&conn)
             .ok()?
             .remove(VLX_SETTINGS_KEY)?
     };
-    let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+    configured_shell_from_json(&json, kind)
+}
+
+/// The decision half of [`configured_shell`], split out so every rule below is testable without standing up
+/// a database. Takes the raw `vlx-settings` JSON; malformed input yields `None` rather than an error, since a
+/// default is a preference and never a reason to fail a launch.
+fn configured_shell_from_json(json: &str, kind: SessionKind) -> Option<String> {
+    let key = if kind == SessionKind::Terminal {
+        TERMINAL_SHELL_SETTING
+    } else {
+        AGENT_SHELL_SETTING
+    };
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
     let s = v.get(key)?.as_str()?.trim();
     if s.is_empty() {
         return None;
@@ -2067,6 +2074,69 @@ mod tests {
         assert!(super::shell_path_usable(&tmp.to_string_lossy()));
         std::fs::remove_file(&tmp).unwrap();
         assert!(!super::shell_path_usable(&tmp.to_string_lossy()));
+    }
+
+    /// Default-shell setting resolution: the two session families read different keys, and every rejection
+    /// path falls through to the platform default rather than failing a launch.
+    #[test]
+    fn configured_shell_reads_the_key_for_its_session_family() {
+        use super::{configured_shell_from_json as pick, SessionKind};
+
+        // Terminal reads defaultShell, agent kinds read agentShell; neither can see the other's value.
+        let both = r#"{"defaultShell":"bash","agentShell":"pwsh.exe"}"#;
+        assert_eq!(pick(both, SessionKind::Terminal).as_deref(), Some("bash"));
+        assert_eq!(pick(both, SessionKind::Claude).as_deref(), Some("pwsh.exe"));
+        let terminal_only = r#"{"defaultShell":"bash"}"#;
+        assert_eq!(pick(terminal_only, SessionKind::Claude), None);
+
+        // Unset, blank, wrong-typed, absent and malformed all mean "no preference".
+        assert_eq!(pick(r#"{"agentShell":""}"#, SessionKind::Claude), None);
+        assert_eq!(pick(r#"{"agentShell":"   "}"#, SessionKind::Claude), None);
+        assert_eq!(pick(r#"{"agentShell":42}"#, SessionKind::Claude), None);
+        assert_eq!(pick("{}", SessionKind::Claude), None);
+        assert_eq!(pick("not json", SessionKind::Claude), None);
+
+        // Surrounding whitespace is trimmed rather than passed to process creation.
+        assert_eq!(
+            pick(r#"{"agentShell":"  pwsh.exe  "}"#, SessionKind::Claude).as_deref(),
+            Some("pwsh.exe")
+        );
+    }
+
+    /// WSL is terminal-only: spawn hard-errors on it for agent sessions, so an agent default naming a
+    /// distribution is ignored instead of being allowed to block every launch.
+    #[test]
+    fn configured_shell_ignores_wsl_for_agent_sessions() {
+        use super::{configured_shell_from_json as pick, SessionKind};
+
+        let wsl = r#"{"defaultShell":"wsl://Ubuntu","agentShell":"wsl://Ubuntu"}"#;
+        assert_eq!(
+            pick(wsl, SessionKind::Terminal).as_deref(),
+            Some("wsl://Ubuntu")
+        );
+        assert_eq!(pick(wsl, SessionKind::Claude), None);
+    }
+
+    /// A configured shell that has since been uninstalled must not reach spawn: the stale-path heal there
+    /// only covers a per-session value, so this is the only thing standing between a removed pwsh and a
+    /// failed process creation.
+    #[test]
+    fn configured_shell_drops_an_absolute_path_that_no_longer_exists() {
+        use super::{configured_shell_from_json as pick, SessionKind};
+
+        let tmp = std::env::temp_dir().join(format!("vlx-cfgshell-{}", std::process::id()));
+        std::fs::write(&tmp, b"x").unwrap();
+        let json = format!(
+            "{{\"agentShell\":{}}}",
+            serde_json::Value::String(tmp.to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            pick(&json, SessionKind::Claude).as_deref(),
+            Some(tmp.to_string_lossy().as_ref())
+        );
+
+        std::fs::remove_file(&tmp).unwrap();
+        assert_eq!(pick(&json, SessionKind::Claude), None);
     }
 
     /// Resize ownership: allow takeover, first claim when unowned, and the current owner; reject other clients.
