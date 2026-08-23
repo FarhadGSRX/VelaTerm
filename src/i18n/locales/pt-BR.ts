@@ -252,6 +252,8 @@ const ptBR: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "Não instalada neste dispositivo",
+  "settings.fontProportional": "Proporcional", // Proportional
+  "settings.fontMonospace": "Monoespaçada", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate

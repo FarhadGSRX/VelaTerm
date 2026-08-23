@@ -251,6 +251,8 @@ const ja: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "このデバイスにインストールされていません",
+  "settings.fontProportional": "プロポーショナル", // Proportional
+  "settings.fontMonospace": "等幅", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate

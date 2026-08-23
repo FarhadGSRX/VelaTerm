@@ -252,6 +252,8 @@ const vi: typeof en = {
   "settings.fontDefault": "Mặc định",
   "settings.fontCustom": "Tùy chỉnh…",
   "settings.fontUnavailable": "Chưa cài đặt trên thiết bị này",
+  "settings.fontProportional": "Tỷ lệ", // Proportional
+  "settings.fontMonospace": "Đơn cách", // Monospace
   "settings.fontAuto": "Tự động",
   "settings.fontSmaller": "Nhỏ hơn",
   "settings.fontLarger": "Lớn hơn",

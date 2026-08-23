@@ -251,6 +251,8 @@ const ko: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "이 기기에 설치되어 있지 않음",
+  "settings.fontProportional": "가변폭", // Proportional
+  "settings.fontMonospace": "고정폭", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate

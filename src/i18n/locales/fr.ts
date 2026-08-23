@@ -252,6 +252,8 @@ const fr: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "Non installée sur cet appareil",
+  "settings.fontProportional": "Proportionnelle", // Proportional
+  "settings.fontMonospace": "Chasse fixe", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate

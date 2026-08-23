@@ -248,6 +248,8 @@ const zhTW: typeof en = {
   "settings.fontDefault": "預設", // Default
   "settings.fontCustom": "自訂…", // Custom
   "settings.fontUnavailable": "本機未安裝此字型",
+  "settings.fontProportional": "比例字型", // Proportional
+  "settings.fontMonospace": "等寬字型", // Monospace
   "settings.fontAuto": "自動", // Auto
   "settings.fontSmaller": "縮小", // Smaller
   "settings.fontLarger": "放大", // Larger

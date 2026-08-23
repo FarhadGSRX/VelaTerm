@@ -251,6 +251,8 @@ const en = {
   "settings.fontDefault": "Default",
   "settings.fontCustom": "Custom…",
   "settings.fontUnavailable": "Not installed on this device",
+  "settings.fontProportional": "Proportional",
+  "settings.fontMonospace": "Monospace",
   "settings.fontAuto": "Auto",
   "settings.fontSmaller": "Smaller",
   "settings.fontLarger": "Larger",

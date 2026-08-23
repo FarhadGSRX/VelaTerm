@@ -247,6 +247,8 @@ const zhCN: typeof en = {
   "settings.fontDefault": "默认",
   "settings.fontCustom": "自定义…",
   "settings.fontUnavailable": "本机未安装该字体",
+  "settings.fontProportional": "比例字体", // Proportional
+  "settings.fontMonospace": "等宽字体", // Monospace
   "settings.fontAuto": "自动",
   "settings.fontSmaller": "缩小",
   "settings.fontLarger": "放大",

@@ -76,6 +76,18 @@ const MONO_FONTS = [
   "Sarasa Mono SC",
 ];
 
+/** Proportional presets, offered for the interface font only — xterm draws on a fixed-cell grid, so a
+ * variable-width terminal face would break alignment. Values are full CSS stacks: fontStack() passes any
+ * comma-bearing value through verbatim, which is what makes a non-monospace interface font work at all. */
+const UI_FONTS: { label: string; stack: string }[] = [
+  { label: "System UI", stack: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
+  { label: "Inter", stack: "Inter, system-ui, sans-serif" },
+  { label: "Segoe UI", stack: '"Segoe UI", system-ui, sans-serif' },
+  { label: "Helvetica Neue", stack: '"Helvetica Neue", Helvetica, Arial, sans-serif' },
+  { label: "Roboto", stack: "Roboto, system-ui, sans-serif" },
+  { label: "Noto Sans", stack: '"Noto Sans", system-ui, sans-serif' },
+];
+
 /** Shared style for the font-size stepper's minus/plus buttons. */
 const STEP_BTN: React.CSSProperties = {
   width: 24,
@@ -368,23 +380,31 @@ function isFontAvailable(name: string): boolean {
 }
 
 /** Font picker with presets and a custom-name input. A null value uses the default monospace stack.
- * Like the other appearance dropdowns, it avoids native select rendering. */
-function FontSelect({
+ * Like the other appearance dropdowns, it avoids native select rendering.
+ * `proportional` adds the non-monospace presets; leave it off for the terminal. */
+export function FontSelect({
   value,
   onChange,
+  proportional = false,
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
+  proportional?: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const isPreset = value != null && MONO_FONTS.includes(value);
-  const display = value == null ? t("settings.fontDefault") : value;
+  const uiPreset = proportional ? UI_FONTS.find((f) => f.stack === value) : undefined;
+  const isPreset = value != null && (uiPreset != null || MONO_FONTS.includes(value));
+  // A proportional preset is stored as its whole stack; show the short label instead of the raw CSS.
+  const display = value == null ? t("settings.fontDefault") : (uiPreset?.label ?? value);
   const [missing, setMissing] = useState(false);
   useEffect(() => {
-    if (value == null) {
+    // A comma means the value is a whole CSS stack rather than one family — the same test
+    // fontStack() in theme.ts applies. isFontAvailable probes a single family name, so a stack
+    // always measures as missing and would mislabel a working proportional preset.
+    if (value == null || value.includes(",")) {
       setMissing(false);
       return;
     }
@@ -497,85 +517,118 @@ function FontSelect({
               boxShadow: "var(--shadow)",
             }}
           >
-            {[
-              {
-                key: "__default",
-                label: t("settings.fontDefault"),
-                on: value == null,
-                act: () => {
-                  onChange(null);
-                  setOpen(false);
+            {(
+              [
+                {
+                  key: "__default",
+                  label: t("settings.fontDefault"),
+                  on: value == null,
+                  act: () => {
+                    onChange(null);
+                    setOpen(false);
+                  },
                 },
-              },
-              ...MONO_FONTS.map((f) => ({
-                key: f,
-                label: f,
-                on: value === f,
-                act: () => {
-                  onChange(f);
-                  setOpen(false);
-                },
-              })),
-              // A custom name is listed as its own row, so picking a preset and coming back does not mean
-              // retyping it. `__custom` below always opens the editor with the current value.
-              ...(value != null && !isPreset
-                ? [
-                    {
-                      key: "__current",
-                      label: value,
-                      on: true,
-                      act: () => {
-                        setOpen(false);
+                // Headings only appear once there are two groups to tell apart.
+                ...(proportional
+                  ? [
+                      { key: "__hProp", label: t("settings.fontProportional"), heading: true },
+                      ...UI_FONTS.map((f) => ({
+                        key: f.stack,
+                        label: f.label,
+                        on: value === f.stack,
+                        act: () => {
+                          onChange(f.stack);
+                          setOpen(false);
+                        },
+                      })),
+                      { key: "__hMono", label: t("settings.fontMonospace"), heading: true },
+                    ]
+                  : []),
+                ...MONO_FONTS.map((f) => ({
+                  key: f,
+                  label: f,
+                  on: value === f,
+                  act: () => {
+                    onChange(f);
+                    setOpen(false);
+                  },
+                })),
+                // A custom name is listed as its own row, so picking a preset and coming back does not mean
+                // retyping it. `__custom` below always opens the editor with the current value.
+                ...(value != null && !isPreset
+                  ? [
+                      {
+                        key: "__current",
+                        label: value,
+                        on: true,
+                        act: () => {
+                          setOpen(false);
+                        },
                       },
-                    },
-                  ]
-                : []),
-              {
-                key: "__custom",
-                label: t("settings.fontCustom"),
-                on: false,
-                act: () => {
-                  setDraft(value && !isPreset ? value : "");
-                  setOpen(false);
-                  setEditing(true);
+                    ]
+                  : []),
+                {
+                  key: "__custom",
+                  label: t("settings.fontCustom"),
+                  on: false,
+                  act: () => {
+                    setDraft(value && !isPreset ? value : "");
+                    setOpen(false);
+                    setEditing(true);
+                  },
                 },
-              },
-            ].map((opt) => (
-              <div
-                key={opt.key}
-                onClick={opt.act}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "5px 8px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  fontSize: 11.5,
-                  color: opt.on ? "var(--accent)" : "var(--text)",
-                  background: opt.on ? "var(--accent-soft)" : "transparent",
-                }}
-                onMouseEnter={(e) => {
-                  if (!opt.on)
-                    e.currentTarget.style.background = "var(--bg-3, rgba(128,128,128,0.12))";
-                }}
-                onMouseLeave={(e) => {
-                  if (!opt.on) e.currentTarget.style.background = "transparent";
-                }}
-              >
-                <span
+              ] as { key: string; label: string; heading?: boolean; on?: boolean; act?: () => void }[]
+            ).map((opt) =>
+              opt.heading ? (
+                <div
+                  key={opt.key}
                   style={{
-                    flex: 1,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    padding: "6px 8px 2px",
+                    fontSize: 10,
+                    letterSpacing: 0.4,
+                    textTransform: "uppercase",
+                    color: "var(--text-dim)",
                   }}
                 >
                   {opt.label}
-                </span>
-                {opt.on && <Icons.check size={12} style={{ flex: "none" }} />}
-              </div>
-            ))}
+                </div>
+              ) : (
+                <div
+                  key={opt.key}
+                  onClick={opt.act}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "5px 8px",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontSize: 11.5,
+                    color: opt.on ? "var(--accent)" : "var(--text)",
+                    background: opt.on ? "var(--accent-soft)" : "transparent",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!opt.on)
+                      e.currentTarget.style.background = "var(--bg-3, rgba(128,128,128,0.12))";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!opt.on) e.currentTarget.style.background = "transparent";
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {opt.label}
+                  </span>
+                  {opt.on && <Icons.check size={12} style={{ flex: "none" }} />}
+                </div>
+              ),
+            )}
           </div>
         </>
       )}
@@ -914,7 +967,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   />
                 </Field>
                 <Field label={t("settings.uiFont")}>
-                  <FontSelect value={uiFontFamily} onChange={setUiFontFamily} />
+                  <FontSelect value={uiFontFamily} onChange={setUiFontFamily} proportional />
                 </Field>
                 <Field label={t("settings.uiFontSize")}>
                   <FontSizeStepper
