@@ -10,6 +10,7 @@ import type {
   InspectorTab,
   NavLayout,
   PaneStyle,
+  SettingsTab,
   VisualSettings,
 } from "../theme";
 
@@ -67,6 +68,8 @@ export interface PersistedSettings {
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
   inspectorTab: InspectorTab;
+  /** Settings-modal section to reopen on. Remembered from the last section the user viewed. */
+  settingsTab: SettingsTab;
   /** Single-tab mode reuses the current tab and keeps the previous tree alive in the background. */
   singleTabMode: boolean;
   /** Terminal renderer. DOM is stable; canvas avoids DOM overhead without GPU contexts; WebGL is sharp
@@ -116,6 +119,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   dividerStyle: "subtle",
   navLayout: "tree",
   inspectorTab: "info",
+  settingsTab: "appearance",
   singleTabMode: true,
   termRenderer: "dom",
   redrawOnReveal: false,

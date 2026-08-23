@@ -30,6 +30,7 @@ import type {
   DividerStyle,
   NavLayout,
   PaneStyle,
+  SettingsTab,
 } from "../../theme";
 import { Field, Seg, SectionTitle } from "./settingsParts";
 import {
@@ -677,7 +678,7 @@ function AccentPicker({
 }
 
 
-type Cat = "appearance" | "terminal" | "behavior" | "advanced" | "agents" | "shortcuts" | "general";
+type Cat = SettingsTab;
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const t = useT();
@@ -720,7 +721,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setTermFontFamily = useTermStore((s) => s.setTermFontFamily);
   const setTermFontSize = useTermStore((s) => s.setTermFontSize);
 
-  const [cat, setCat] = useState<Cat>("appearance");
+  // Section navigation stays local so switching is instant and does not round-trip through settings
+  // persistence; the store copy is only the seed on open and the sink on change, which is what makes
+  // Settings reopen on the section last viewed instead of always Appearance.
+  const savedTab = useTermStore((s) => s.settingsTab);
+  const setSettingsTab = useTermStore((s) => s.setSettingsTab);
+  const [cat, setCatLocal] = useState<Cat>(savedTab);
+  const setCat = (v: Cat) => {
+    setCatLocal(v);
+    setSettingsTab(v);
+  };
   const [skillOn, setSkillOn] = useState<boolean | null>(null);
   const [cliStatus, setCliStatus] = useState<VelaCommandStatus | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
