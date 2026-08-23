@@ -132,7 +132,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   spawnConfirm: true,
   saveWorkspaceOnQuit: false,
   usageRefreshSec: 300,
-  imagePasteMode: "upload",
+  imagePasteMode: "agent",
 };
 export function loadSettings(): PersistedSettings {
   try {
