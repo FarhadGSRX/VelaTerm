@@ -773,6 +773,9 @@ const zhCN: typeof en = {
   "files.nameLabel": "名称", // Name
   "files.newTooltip": "新建文件或文件夹", // New file or folder
   "files.openInTerminal": "在终端中打开", // Open in Terminal
+  "files.favorite": "添加到收藏",
+  "files.unfavorite": "从收藏中移除",
+  "files.favorites": "收藏",
   "files.revealInFinder": "在文件管理器中显示", // Show in File Manager
   "files.copyPath": "复制路径", // Copy Path
   "files.copyRelPath": "复制相对路径", // Copy Relative Path

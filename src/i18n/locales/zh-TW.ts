@@ -774,6 +774,9 @@ const zhTW: typeof en = {
   "files.nameLabel": "名稱", // Name
   "files.newTooltip": "新增檔案或資料夾", // New file or folder
   "files.openInTerminal": "在終端機中開啟", // Open in Terminal
+  "files.favorite": "加入收藏", // Add to Favorites
+  "files.unfavorite": "從收藏移除", // Remove from Favorites
+  "files.favorites": "收藏", // Favorites
   "files.revealInFinder": "在檔案管理器中顯示", // Show in File Manager
   "files.copyPath": "複製路徑", // Copy Path
   "files.copyRelPath": "複製相對路徑", // Copy Relative Path

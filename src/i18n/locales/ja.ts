@@ -782,6 +782,9 @@ const ja: typeof en = {
   "files.nameLabel": "名前", // Name
   "files.newTooltip": "新規ファイル / フォルダ", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "お気に入りに追加", // Add to Favorites
+  "files.unfavorite": "お気に入りから削除", // Remove from Favorites
+  "files.favorites": "お気に入り", // Favorites
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

@@ -876,6 +876,8 @@ interface TermStore {
   navLayout: NavLayout;
   inspectorTab: InspectorTab;
   settingsTab: SettingsTab;
+  /** Files pinned to the top of the file tree, keyed by project ID. */
+  favoritePaths: Record<string, string[]>;
   /** Single-tab mode: reuse the session slot and keep replaced tabs alive in the background. */
   singleTabMode: boolean;
   /** Terminal renderer: stable DOM, GPU-independent 2D canvas, or sharper WebGL with context limits. */
@@ -1193,6 +1195,8 @@ interface TermStore {
   setNavLayout: (v: NavLayout) => void;
   setInspectorTab: (v: InspectorTab) => void;
   setSettingsTab: (v: SettingsTab) => void;
+  /** Pins or unpins a file at the top of `projectId`'s file tree. */
+  toggleFavoritePath: (projectId: string, path: string) => void;
   /** Toggles persisted single-tab mode. */
   setSingleTabMode: (v: boolean) => void;
   /** Toggles confirmation before spawning child sessions. */
@@ -1323,6 +1327,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     navLayout: s.navLayout,
     inspectorTab: s.inspectorTab,
     settingsTab: s.settingsTab,
+    favoritePaths: s.favoritePaths,
     singleTabMode: s.singleTabMode,
     termRenderer: s.termRenderer,
     redrawOnReveal: s.redrawOnReveal,
@@ -3576,6 +3581,20 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
   setInspectorTab: (v) => {
     set({ inspectorTab: v });
+    persistAndApplyVisual(get);
+  },
+  toggleFavoritePath: (projectId, path) => {
+    const current = get().favoritePaths[projectId] ?? [];
+    const next = current.includes(path)
+      ? current.filter((p) => p !== path)
+      : [...current, path];
+    set((s) => {
+      const favoritePaths = { ...s.favoritePaths };
+      // Drop the key entirely on the last removal so an untouched project leaves nothing behind.
+      if (next.length === 0) delete favoritePaths[projectId];
+      else favoritePaths[projectId] = next;
+      return { favoritePaths };
+    });
     persistAndApplyVisual(get);
   },
   setSettingsTab: (v) => {

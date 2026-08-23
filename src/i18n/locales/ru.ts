@@ -805,6 +805,9 @@ const ru: typeof en = {
   "files.nameLabel": "Имя", // Name
   "files.newTooltip": "Новый файл или папка", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Добавить в избранное", // Add to Favorites
+  "files.unfavorite": "Удалить из избранного", // Remove from Favorites
+  "files.favorites": "Избранное", // Favorites
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

@@ -30,6 +30,7 @@ export function SidebarFilesView() {
       <FilesTab
         rootPath={session?.cwd || project?.rootPath || null}
         rootName={project?.name ?? null}
+        projectId={project?.id ?? null}
       />
     </div>
   );

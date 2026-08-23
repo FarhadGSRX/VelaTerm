@@ -789,6 +789,9 @@ const es: typeof en = {
   "files.nameLabel": "Nombre", // Name
   "files.newTooltip": "Nuevo archivo o carpeta", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Añadir a favoritos", // Add to Favorites
+  "files.unfavorite": "Quitar de favoritos", // Remove from Favorites
+  "files.favorites": "Favoritos", // Favorites
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

@@ -212,7 +212,17 @@ function FileRow({
   );
 }
 
-export function FilesTab({ rootPath, rootName }: { rootPath: string | null; rootName: string | null }) {
+export function FilesTab({
+  rootPath,
+  rootName,
+  projectId,
+}: {
+  rootPath: string | null;
+  rootName: string | null;
+  /** Project the favourites belong to. The root is a session cwd, which may be a subdirectory or a
+   * worktree, so it cannot stand in for project identity. Null disables favourites entirely. */
+  projectId?: string | null;
+}) {
   const t = useT();
   const [root, setRoot] = useState<FileNodeT | null>(null);
   const [sel, setSel] = useState<FileNodeT | null>(null);
@@ -239,6 +249,10 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
   const [filter, setFilter] = useState("");
   // Keyboard focus row, independent of selected preview; focusing a file also previews it.
   const [focusPath, setFocusPath] = useState<string | null>(null);
+  const favoritePaths = useTermStore((st) => st.favoritePaths);
+  const toggleFavoritePath = useTermStore((st) => st.toggleFavoritePath);
+  const favorites = projectId ? (favoritePaths[projectId] ?? []) : [];
+  const isFavorite = (path: string) => favorites.includes(path);
   const treeRef = useRef<HTMLDivElement>(null);
   // Container for the tree and preview, whose height bounds preview resizing.
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -309,6 +323,15 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
   const onFile = (node: FileNodeT) => {
     setSel(node);
   };
+
+  /** A favourite is stored as a bare path. Rebuild the minimum node the row handlers need, rather
+   * than searching the tree: the real node may not be loaded, or may sit outside the current root. */
+  const favoriteNode = (path: string): FileNodeT => ({
+    name: path.split("/").filter(Boolean).pop() || path,
+    path,
+    isDir: false,
+    isHidden: false,
+  });
 
   // Preview selects a file and loads its contents into the bottom pane.
   const doPreview = async (node: FileNodeT) => {
@@ -482,6 +505,17 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
               label: t("panel.openInEditor"),
               icon: <Icons.code size={14} />,
               onClick: () => onOpen(node),
+            },
+          ] as MenuItem[])
+        : []),
+      // Favouriting is files-only: a pinned directory would have to answer "expand it where?", and the
+      // ask was for files pinned to the top.
+      ...(!node.isDir && projectId
+        ? ([
+            {
+              label: isFavorite(node.path) ? t("files.unfavorite") : t("files.favorite"),
+              icon: <Icons.star size={14} />,
+              onClick: () => toggleFavoritePath(projectId, node.path),
             },
           ] as MenuItem[])
         : []),
@@ -668,6 +702,28 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
           if (root) setMenu({ x: e.clientX, y: e.clientY, node: root });
         }}
       >
+        {favorites.length > 0 && (
+          <div className="files-favorites">
+            <div className="files-favorites-head">{t("files.favorites")}</div>
+            {favorites.map((path) => {
+              const node = favoriteNode(path);
+              return (
+                <div
+                  key={path}
+                  className={"file-row" + (sel?.path === path ? " sel" : "")}
+                  title={path}
+                  onClick={() => onFile(node)}
+                  onDoubleClick={() => onOpen(node)}
+                  onContextMenu={(e) => onContext(e, node)}
+                >
+                  <span className="tw leaf" />
+                  <span className="ic">{renderFileIcon(node.name, false)}</span>
+                  <span className="nm">{node.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <FileRow
           node={root}
           depth={0}
