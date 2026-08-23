@@ -12,7 +12,7 @@ import {
   resolveSpawn,
   type ShellOption,
 } from "../ipc/commands";
-import { pushSetting } from "../ipc/settingsSync";
+import { flushNow, pushSetting } from "../ipc/settingsSync";
 import { isTauri } from "../ipc/transport";
 import { env } from "../platform";
 import { genId } from "../genId";
@@ -857,8 +857,10 @@ interface TermStore {
   dynamicStatusFilter: boolean;
   /** Configurable limit for background live tabs. */
   maxLiveTabs: number;
-  /** Default shell path/name for scratch terminals; empty means system default. Explicit creation flows may override it. */
+  /** Default shell path/name for Terminal sessions; empty means system default. Explicit creation flows may override it. */
   defaultShell: string;
+  /** Default shell path/name for local-agent sessions; empty means the platform default. */
+  agentShell: string;
   /** Platform shells discovered once at startup for the inline selector. */
   shells: ShellOption[];
   /** Interface monospace font, or `null` for the default stack. */
@@ -1179,6 +1181,7 @@ interface TermStore {
   setMaxLiveTabs: (v: number) => void;
   /** Sets the persisted default terminal shell; empty means system default. */
   setDefaultShell: (v: string) => void;
+  setAgentShell: (v: string) => void;
   /** Interface font family; empty or `null` uses the default stack. */
   setUiFontFamily: (v: string | null) => void;
   /** Interface font size in pixels; `null` follows density. */
@@ -1295,6 +1298,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     dynamicStatusFilter: s.dynamicStatusFilter,
     maxLiveTabs: s.maxLiveTabs,
     defaultShell: s.defaultShell,
+    agentShell: s.agentShell,
     uiFontFamily: s.uiFontFamily,
     uiFontSize: s.uiFontSize,
     termFontFamily: s.termFontFamily,
@@ -3570,6 +3574,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
   setDefaultShell: (v) => {
     set({ defaultShell: v });
     persistAndApplyVisual(get);
+    // The backend reads this from app_settings at spawn time, so the debounced write has to start now rather
+    // than 400 ms from now; the same reason `locateAndSaveAgentPath` flushes before restarting a session.
+    void flushNow();
+  },
+  setAgentShell: (v) => {
+    set({ agentShell: v });
+    persistAndApplyVisual(get);
+    void flushNow();
   },
   setUiFontFamily: (v) => {
     set({ uiFontFamily: v && v.trim() ? v.trim() : null });

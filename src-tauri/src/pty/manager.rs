@@ -73,6 +73,12 @@ const RECORDING_CAP: u64 = 50 * 1024 * 1024;
 /// only `agentDefaults.<kind>.path`; see `PersistedSettings` and [`agent_bin_path`].
 const VLX_SETTINGS_KEY: &str = "vlx-settings";
 
+/// Keys inside the `vlx-settings` blob holding the user's default shell, one per session family. Terminal
+/// and agent sessions are configured separately so a Git Bash terminal and a PowerShell 7 agent can coexist
+/// without either choice overriding the other. Empty or absent means no preference; see `PersistedSettings`.
+const TERMINAL_SHELL_SETTING: &str = "defaultShell";
+const AGENT_SHELL_SETTING: &str = "agentShell";
+
 /// Shared `app_settings` key for session recording. Recording is off unless the user explicitly stores `"1"`.
 const RECORD_SESSIONS_KEY: &str = "vlx-record-sessions";
 
@@ -314,11 +320,11 @@ impl PtyManager {
         let shell = match shell {
             Some(s) if shell_path_usable(&s) => s,
             Some(stale) => {
-                let fb = resolve_fallback_shell(kind, data_dir_for_shell.as_deref());
+                let fb = resolve_fallback_shell(&app, kind, data_dir_for_shell.as_deref());
                 eprintln!("persisted shell path not found, falling back: {stale:?} -> {fb}");
                 fb
             }
-            None => default_shell(kind, data_dir_for_shell.as_deref()),
+            None => effective_default_shell(&app, kind, data_dir_for_shell.as_deref()),
         };
         // WSL is persisted as `wsl://<distribution>`, not an executable path. Convert it to
         // `wsl.exe --distribution <name>` and let WSL start the distribution's default interactive shell.
@@ -1486,6 +1492,61 @@ fn session_agent_path(app: &AppCtx, id: &str) -> Option<String> {
     Some(expand_home_prefix(trimmed))
 }
 
+/// Reads the user's configured default shell for `kind`, or `None` to use the platform default.
+///
+/// Terminal sessions read `defaultShell` and every agent kind reads `agentShell`; see the key constants.
+///
+/// Only `app_settings` is consulted, never the frontend's localStorage cache. The two disagree for the
+/// 400 ms `pushSetting` debounce window and the table is what survives a restart, so the frontend flushes
+/// the choice before a spawn can observe a stale one (`flushNow`, src/ipc/settingsSync.ts).
+fn configured_shell(app: &AppCtx, kind: SessionKind) -> Option<String> {
+    let key = if kind == SessionKind::Terminal {
+        TERMINAL_SHELL_SETTING
+    } else {
+        AGENT_SHELL_SETTING
+    };
+    let json = {
+        let conn = app.db().conn.lock().ok()?;
+        crate::db::repo::get_app_settings(&conn)
+            .ok()?
+            .remove(VLX_SETTINGS_KEY)?
+    };
+    let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+    let s = v.get(key)?.as_str()?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // WSL is terminal-only because agent hooks and executable paths do not cross the boundary. Spawn would
+    // reject it outright; ignore it here instead, since a default is not an explicit per-session choice and
+    // should never be the reason a session refuses to start.
+    if kind != SessionKind::Terminal && s.starts_with(WSL_SHELL_PREFIX) {
+        return None;
+    }
+    // A configured shell that no longer exists must not reach spawn: the stale-path heal there only covers a
+    // per-session value, so an unchecked default would fail process creation with no fallback.
+    //
+    // Coverage is narrower than it looks: `shell_path_usable` stats absolute paths and waves bare command
+    // names through for `PATH` resolution. That covers what the picker writes, because `pwsh` is stored
+    // absolute (`find_on_path("pwsh.exe")`), but a hand-edited bare name is not verified here.
+    if !shell_path_usable(s) {
+        // Deliberately distinct from spawn's stale-path line: this one means the user's explicit choice is
+        // being downgraded to the platform default, which is a different event from healing legacy state.
+        eprintln!("configured default shell not found, using platform default instead: {s:?}");
+        return None;
+    }
+    Some(s.to_string())
+}
+
+/// The shell a new session starts with: the user's configured choice when set and launchable, otherwise the
+/// platform default.
+fn effective_default_shell(
+    app: &AppCtx,
+    kind: SessionKind,
+    data_dir: Option<&std::path::Path>,
+) -> String {
+    configured_shell(app, kind).unwrap_or_else(|| default_shell(kind, data_dir))
+}
+
 /// Detects whether the installed Codex supports the trust flag required for lifecycle-hook injection.
 ///
 /// Inspects only public `--help` output without starting a session or using the network. Failure means
@@ -1750,14 +1811,14 @@ pub struct ShellOption {
 /// Lists shells available for Terminal sessions. Windows exposes cmd.exe, PowerShell, Git Bash, and installed
 /// WSL distributions. macOS and Linux return an empty list and always use `$SHELL`, allowing the frontend to
 /// hide shell-selection controls. Agent sessions use their fixed injection paths.
-pub fn available_shells(data_dir: Option<&std::path::Path>) -> Vec<ShellOption> {
+pub fn available_shells(app: &AppCtx, data_dir: Option<&std::path::Path>) -> Vec<ShellOption> {
     #[cfg(windows)]
     {
-        windows_shells(data_dir)
+        windows_shells(app, data_dir)
     }
     #[cfg(not(windows))]
     {
-        let _ = data_dir;
+        let _ = (app, data_dir);
         Vec::new()
     }
 }
@@ -1776,10 +1837,11 @@ fn find_on_path(exe: &str) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn windows_shells(data_dir: Option<&std::path::Path>) -> Vec<ShellOption> {
+fn windows_shells(app: &AppCtx, data_dir: Option<&std::path::Path>) -> Vec<ShellOption> {
     let mut out = Vec::new();
-    // Resolve the default Terminal shell so the matching entry can be marked.
-    let default_path = default_shell(SessionKind::Terminal, data_dir);
+    // Resolve the default Terminal shell so the matching entry can be marked. Use the effective value, not the
+    // platform one, so the list marks the shell a new terminal will actually start.
+    let default_path = effective_default_shell(app, SessionKind::Terminal, data_dir);
     let push = |out: &mut Vec<ShellOption>, id: &str, label: &str, path: String| {
         let is_default = path == default_path;
         out.push(ShellOption {
@@ -1866,7 +1928,9 @@ fn git_bash_path() -> Option<String> {
     None
 }
 
-/// Returns the platform's default shell. `data_dir` remains for signature compatibility and shell listing.
+/// Returns the platform's built-in default shell, used when the user has configured none. `data_dir`
+/// remains for signature compatibility and shell listing. Callers should prefer [`effective_default_shell`],
+/// which consults the user's setting first.
 ///
 /// Windows：
 /// Agent sessions default to PowerShell because `$env:` injection is safer than cmd.exe `%VAR%` expansion.
@@ -1907,7 +1971,16 @@ fn shell_path_usable(s: &str) -> bool {
 
 /// Chooses a fallback for a stale shell path. Windows terminals prefer the current bundled/downloaded Git Bash
 /// to preserve the user's intent, then fall back to the system default.
-fn resolve_fallback_shell(kind: SessionKind, data_dir: Option<&std::path::Path>) -> String {
+fn resolve_fallback_shell(
+    app: &AppCtx,
+    kind: SessionKind,
+    data_dir: Option<&std::path::Path>,
+) -> String {
+    // An explicitly configured default outranks the Git Bash preference below: the user picked it on purpose,
+    // while Git Bash is only this function's guess at what a Windows terminal wanted.
+    if let Some(s) = configured_shell(app, kind) {
+        return s;
+    }
     #[cfg(windows)]
     {
         if kind == SessionKind::Terminal {

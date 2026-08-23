@@ -121,6 +121,7 @@ const de: typeof en = {
   "settings.tabMulti": "Mehrere", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "Standard-Shell", // Default shell
+  "settings.agentShell": "Agent-Shell", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "Eingefügte Bilder automatisch bereinigen",

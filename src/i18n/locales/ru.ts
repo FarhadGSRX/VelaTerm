@@ -131,6 +131,7 @@ const ru: typeof en = {
   "settings.tabMulti": "Несколько", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "Shell по умолчанию", // Default shell
+  "settings.agentShell": "Shell агента", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "Автоочистка вставленных изображений",

@@ -119,6 +119,7 @@ const en = {
   "settings.tabMulti": "Multi",
   "settings.maxLiveTabs": "Background limit",
   "settings.defaultShell": "Default shell",
+  "settings.agentShell": "Agent shell",
   "settings.spawnConfirm": "Confirm before spawn",
   "settings.usageRefresh": "Usage refresh",
   "settings.cleanImages": "Auto-clean pasted images",

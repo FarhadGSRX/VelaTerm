@@ -257,7 +257,9 @@ pub async fn list_shells(app: AppHandle) -> Vec<crate::pty::manager::ShellOption
     // WSL detection launches `wsl.exe --list --quiet`, so run it in the blocking pool. Other systems
     // immediately return an empty list.
     tauri::async_runtime::spawn_blocking(move || {
-        crate::pty::manager::available_shells(data_dir.as_deref())
+        // The default-shell setting lives in app_settings, so the listing needs managed state as well as the
+        // data directory; AppHandle moves into the pool and AppCtx retrieves it there.
+        crate::pty::manager::available_shells(&AppCtx::Tauri(app), data_dir.as_deref())
     })
     .await
     .unwrap_or_default()

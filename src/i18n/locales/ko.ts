@@ -120,6 +120,7 @@ const ko: typeof en = {
   "settings.tabMulti": "다중", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "기본 셸", // Default shell
+  "settings.agentShell": "에이전트 셸", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "붙여넣은 이미지 자동 정리",

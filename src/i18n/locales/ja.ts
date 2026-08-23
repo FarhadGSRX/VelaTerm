@@ -120,6 +120,7 @@ const ja: typeof en = {
   "settings.tabMulti": "マルチ", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "既定のシェル", // Default shell
+  "settings.agentShell": "エージェントのシェル", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "貼り付け画像の自動クリーンアップ",
