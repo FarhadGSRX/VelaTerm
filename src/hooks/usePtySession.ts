@@ -286,6 +286,13 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
         void ptyWrite(session.id, "\x1b\r").catch(() => {});
         return false;
       }
+      // Cmd/Ctrl+Tab and Cmd/Ctrl+Shift+Tab cycle app tabs (see useKeyboardShortcuts). xterm would also
+      // encode them as HT / CBT (\x1b[Z) and write them to the PTY, so swallow them here on every
+      // platform — this sits above the macOS early return below. Only the modified combination is taken:
+      // an unmodified Tab or Shift+Tab still reaches the shell, so completion is untouched.
+      if (e.key === "Tab" && (e.ctrlKey || e.metaKey)) {
+        return false;
+      }
       // On Windows/Linux, let plain Ctrl+V reach native browser paste. xterm otherwise converts it to
       // \x16 and prevents the paste event, breaking both image capture and text paste. Ctrl+Shift+V is
       // already allowed, while macOS uses Cmd+V and keeps Ctrl+V for terminal applications. Use the
