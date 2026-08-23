@@ -113,12 +113,20 @@ const zhCN: typeof en = {
   "settings.navTree": "标准",
   "settings.navCompact": "紧凑",
   "settings.tabs": "标签页",
+  "settings.tabsHint":
+    "“单标签”会为你打开的每个会话复用同一个标签页，其余会话在后台继续运行。“多标签”则为每个会话单独开一个标签页。",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "状态筛选动态增加",
+  "settings.dynamicStatusFilterHint":
+    "状态筛选会保留应用筛选那一刻匹配的会话。开启后，之后开始匹配的会话也会被加入。会话状态变化时不会被移出列表。",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "单标签",
   "settings.tabMulti": "多标签",
   "settings.maxLiveTabs": "后台保活上限",
+  "settings.maxLiveTabsHint":
+    "单标签模式下可在后台保持运行的会话数量。超过上限时会关闭最久未活动的空闲会话；正在工作、等待确认或有未读通知的会话会被保留。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "默认 Shell",
   "settings.spawnConfirm": "派生前确认",
+  "settings.spawnConfirmHint":
+    "适用于代理通过 vspawn 派生的会话，而不是你自己打开的标签页。开启后，可在会话启动前查看并修改提示词。",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "额度刷新",
   "settings.cleanImages": "自动清理粘贴图片",
   "settings.cleanImagesHint":
