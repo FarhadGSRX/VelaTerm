@@ -810,6 +810,7 @@ const ru: typeof en = {
   "files.favorite": "Добавить в избранное", // Add to Favorites
   "files.unfavorite": "Удалить из избранного", // Remove from Favorites
   "files.favorites": "Избранное", // Favorites
+  "files.collapseAll": "Свернуть все", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

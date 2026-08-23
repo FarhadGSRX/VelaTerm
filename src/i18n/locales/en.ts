@@ -809,6 +809,7 @@ const en = {
   "files.favorite": "Add to Favorites",
   "files.unfavorite": "Remove from Favorites",
   "files.favorites": "Favorites",
+  "files.collapseAll": "Collapse All",
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

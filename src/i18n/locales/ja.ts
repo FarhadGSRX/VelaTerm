@@ -787,6 +787,7 @@ const ja: typeof en = {
   "files.favorite": "お気に入りに追加", // Add to Favorites
   "files.unfavorite": "お気に入りから削除", // Remove from Favorites
   "files.favorites": "お気に入り", // Favorites
+  "files.collapseAll": "すべて折りたたむ", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

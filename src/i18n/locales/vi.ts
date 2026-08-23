@@ -781,6 +781,7 @@ const vi: typeof en = {
   "files.favorite": "Thêm vào mục yêu thích",
   "files.unfavorite": "Xóa khỏi mục yêu thích",
   "files.favorites": "Mục yêu thích",
+  "files.collapseAll": "Thu gọn tất cả",
   "files.revealInFinder": "Hiện trong trình quản lý tệp",
   "files.copyPath": "Sao chép đường dẫn",
   "files.copyRelPath": "Sao chép đường dẫn tương đối",

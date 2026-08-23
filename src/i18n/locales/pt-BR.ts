@@ -794,6 +794,7 @@ const ptBR: typeof en = {
   "files.favorite": "Adicionar aos favoritos", // Add to Favorites
   "files.unfavorite": "Remover dos favoritos", // Remove from Favorites
   "files.favorites": "Favoritos", // Favorites
+  "files.collapseAll": "Recolher tudo", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

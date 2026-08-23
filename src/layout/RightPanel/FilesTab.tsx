@@ -25,7 +25,7 @@ import {
 import { useTermStore } from "../../store/termStore";
 /* ===================== Files: real tree, preview, and one-level lazy loading ===================== */
 
-interface FileNodeT {
+export interface FileNodeT {
   name: string;
   /** Absolute path. */
   path: string;
@@ -68,6 +68,29 @@ function findNodeByPath(root: FileNodeT | null, path: string): FileNodeT | null 
     if (f) return f;
   }
   return null;
+}
+
+/**
+ * Close every loaded directory below `root`, leaving the root itself open.
+ *
+ * Collapsing the root too would hide the whole tree and read as a broken panel, so the root is the
+ * one node exempted. Mutates in place, the way `onDir` already toggles `open`; callers re-render by
+ * replacing the root reference.
+ */
+export function collapseAllBelow(root: FileNodeT): void {
+  const walk = (node: FileNodeT) => {
+    for (const child of node.children || []) {
+      child.open = false;
+      walk(child);
+    }
+  };
+  walk(root);
+}
+
+/** Whether any loaded directory below `root` is currently open, i.e. whether collapsing would do
+ *  anything. Used to leave the control out rather than offer a button that visibly does nothing. */
+export function hasOpenDescendant(root: FileNodeT): boolean {
+  return (root.children || []).some((c) => !!c.open || hasOpenDescendant(c));
 }
 
 /** Whether a node name or loaded descendant matches the lowercase query. */
@@ -635,6 +658,22 @@ export function FilesTab({
     <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
       <div className="files-head">
         <span className="files-path" title={root.path}>{root.name}</span>
+        {/* Hidden while a query is active: filtering force-expands the tree (`open = filter ? true`),
+            so collapsing during a filter changes state the user cannot see and reads as a dead button.
+            Also hidden when nothing is open, for the same reason. */}
+        {!q && root && hasOpenDescendant(root) && (
+          <button
+            className="files-toggle"
+            title={t("files.collapseAll")}
+            aria-label={t("files.collapseAll")}
+            onClick={() => {
+              collapseAllBelow(root);
+              setRoot((r) => (r ? { ...r } : r));
+            }}
+          >
+            <Icons.collapse size={13} />
+          </button>
+        )}
         <button
           className={"files-toggle" + (filterOn ? " on" : "")}
           title={t("files.filterPlaceholder")}

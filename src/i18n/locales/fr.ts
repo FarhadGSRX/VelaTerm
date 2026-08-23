@@ -794,6 +794,7 @@ const fr: typeof en = {
   "files.favorite": "Ajouter aux favoris", // Add to Favorites
   "files.unfavorite": "Retirer des favoris", // Remove from Favorites
   "files.favorites": "Favoris", // Favorites
+  "files.collapseAll": "Tout réduire", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

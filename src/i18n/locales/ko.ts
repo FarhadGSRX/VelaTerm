@@ -784,6 +784,7 @@ const ko: typeof en = {
   "files.favorite": "즐겨찾기에 추가", // Add to Favorites
   "files.unfavorite": "즐겨찾기에서 제거", // Remove from Favorites
   "files.favorites": "즐겨찾기", // Favorites
+  "files.collapseAll": "모두 접기", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

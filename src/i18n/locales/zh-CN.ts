@@ -778,6 +778,7 @@ const zhCN: typeof en = {
   "files.favorite": "添加到收藏",
   "files.unfavorite": "从收藏中移除",
   "files.favorites": "收藏",
+  "files.collapseAll": "全部折叠",
   "files.revealInFinder": "在文件管理器中显示", // Show in File Manager
   "files.copyPath": "复制路径", // Copy Path
   "files.copyRelPath": "复制相对路径", // Copy Relative Path

@@ -779,6 +779,7 @@ const zhTW: typeof en = {
   "files.favorite": "加入收藏", // Add to Favorites
   "files.unfavorite": "從收藏移除", // Remove from Favorites
   "files.favorites": "收藏", // Favorites
+  "files.collapseAll": "全部收合", // Collapse All
   "files.revealInFinder": "在檔案管理器中顯示", // Show in File Manager
   "files.copyPath": "複製路徑", // Copy Path
   "files.copyRelPath": "複製相對路徑", // Copy Relative Path
