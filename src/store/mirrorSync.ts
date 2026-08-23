@@ -43,6 +43,8 @@ const WATCHED = [
   "openTabs",
   "liveTabs",
   "pinnedTabs",
+  "stickyTabId",
+  "stickySize",
   "activeTabId",
   "lastActiveSessionTabId",
   "activeSessionId",

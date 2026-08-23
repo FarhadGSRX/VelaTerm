@@ -104,3 +104,87 @@ describe("closing the sticky tab", () => {
     expect(st().stickyTabId).toBe("doc-1");
   });
 });
+
+describe("the sticky slot under mirror mode", () => {
+  it("survives a round trip through the published layout", async () => {
+    const { buildMirrorLayout, sanitizeMirrorLayout } = await import("./mirrorLayout");
+    const source = {
+      openTabs: ["main", "doc-1"],
+      liveTabs: [],
+      pinnedTabs: [],
+      stickyTabId: "doc-1",
+      stickySize: 42,
+      activeTabId: "main",
+      lastActiveSessionTabId: "main",
+      activeSessionId: "main",
+      focusedPaneId: "p1",
+      paneTrees: { main: { kind: "leaf" as const, paneId: "p1", sessionId: "main" } },
+      ephemeralSessions: {},
+      docTabs: {},
+      browserTabs: {},
+      sessions: [],
+      selection: [],
+      inspectTarget: null,
+      leftCollapsed: false,
+      rightCollapsed: false,
+      inspectorTab: "files" as const,
+    };
+    const round = sanitizeMirrorLayout(JSON.parse(JSON.stringify(buildMirrorLayout(source))));
+    expect(round?.center.stickyTabId).toBe("doc-1");
+    expect(round?.center.stickySize).toBe(42);
+  });
+
+  it("reads a stock peer's snapshot as no sticky tab, rather than rejecting it", async () => {
+    const { buildMirrorLayout, sanitizeMirrorLayout } = await import("./mirrorLayout");
+    const source = {
+      openTabs: ["main"],
+      liveTabs: [],
+      pinnedTabs: [],
+      activeTabId: "main",
+      lastActiveSessionTabId: "main",
+      activeSessionId: "main",
+      focusedPaneId: "p1",
+      paneTrees: { main: { kind: "leaf" as const, paneId: "p1", sessionId: "main" } },
+      ephemeralSessions: {},
+      docTabs: {},
+      browserTabs: {},
+      sessions: [],
+      selection: [],
+      inspectTarget: null,
+      leftCollapsed: false,
+      rightCollapsed: false,
+      inspectorTab: "files" as const,
+    };
+    // Strip the fields the way a stock v0.1.102 client would never have sent them at all.
+    const wire = JSON.parse(JSON.stringify(buildMirrorLayout(source)));
+    delete wire.center.stickyTabId;
+    delete wire.center.stickySize;
+    const round = sanitizeMirrorLayout(wire);
+    // The snapshot must still be accepted -- rejecting it would break mirroring with stock clients.
+    expect(round).not.toBeNull();
+    expect(round?.center.stickyTabId).toBeNull();
+    expect(round?.center.stickySize).toBe(35);
+  });
+
+  it("refuses a sticky tab the snapshot does not carry as open", async () => {
+    const { sanitizeMirrorLayout } = await import("./mirrorLayout");
+    const round = sanitizeMirrorLayout({
+      v: 1,
+      center: { openTabs: ["main"], stickyTabId: "ghost-tab", paneTrees: {} },
+      left: {},
+      right: {},
+    });
+    expect(round?.center.stickyTabId).toBeNull();
+  });
+
+  it("clamps a peer's out-of-range width instead of trusting it", async () => {
+    const { sanitizeMirrorLayout } = await import("./mirrorLayout");
+    const wide = sanitizeMirrorLayout({
+      v: 1,
+      center: { openTabs: [], stickySize: 300, paneTrees: {} },
+      left: {},
+      right: {},
+    });
+    expect(wide?.center.stickySize).toBe(85);
+  });
+});

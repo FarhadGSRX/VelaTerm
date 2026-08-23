@@ -3260,6 +3260,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       openTabs: c.openTabs,
       liveTabs: c.liveTabs,
       pinnedTabs: c.pinnedTabs,
+      stickyTabId: c.stickyTabId,
+      stickySize: c.stickySize,
       activeTabId: c.activeTabId,
       lastActiveSessionTabId: c.lastActiveSessionTabId,
       activeSessionId: c.activeSessionId,
