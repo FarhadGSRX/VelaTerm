@@ -292,6 +292,7 @@ const vi: typeof en = {
   "settings.scSearch": "Tìm trong terminal",
   "settings.scGlobalSearch": "Tìm mọi phiên",
   "settings.scSaveDoc": "Lưu tài liệu",
+  "settings.scFocusSidebar": "Chuyển tiêu điểm vào thanh bên",
   "settings.scRecording": "Nhấn phím…",
   "settings.scHint": "Nhấp vào phím tắt, rồi nhấn tổ hợp mới (bắt buộc Cmd/Ctrl).",
   "settings.scReset": "Khôi phục mặc định",

@@ -293,6 +293,7 @@ const en = {
   "settings.scSearch": "Find in terminal",
   "settings.scGlobalSearch": "Search all sessions",
   "settings.scSaveDoc": "Save document",
+  "settings.scFocusSidebar": "Focus sidebar",
   "settings.scRecording": "Press keys…",
   "settings.scHint": "Click a shortcut, then press a new combination (Cmd/Ctrl required).",
   "settings.scReset": "Restore defaults",

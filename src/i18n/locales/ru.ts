@@ -304,6 +304,7 @@ const ru: typeof en = {
   "settings.scSearch": "Поиск в терминале", // Find in terminal
   "settings.scGlobalSearch": "Поиск по всем сеансам", // Search all sessions
   "settings.scSaveDoc": "Сохранить документ", // Save document
+  "settings.scFocusSidebar": "Фокус на боковой панели", // Focus sidebar
   "settings.scRecording": "Нажмите клавиши…", // Press keys…
   "settings.scHint": "Нажмите на сочетание, затем нажмите новую комбинацию (нужен Cmd/Ctrl).", // hint
   "settings.scReset": "Сбросить по умолчанию", // Restore defaults

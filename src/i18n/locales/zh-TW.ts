@@ -290,6 +290,7 @@ const zhTW: typeof en = {
   "settings.scSearch": "在終端機中搜尋", // Find in terminal
   "settings.scGlobalSearch": "搜尋所有工作階段", // Search all sessions
   "settings.scSaveDoc": "儲存文件", // Save document
+  "settings.scFocusSidebar": "聚焦側邊欄", // Focus sidebar
   "settings.scRecording": "請按下按鍵…", // Press keys…
   "settings.scHint": "點一下快捷鍵，再按下新的組合鍵（需含 Cmd/Ctrl）。", // hint
   "settings.scReset": "還原為預設", // Restore defaults

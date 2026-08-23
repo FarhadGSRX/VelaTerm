@@ -293,6 +293,7 @@ const ja: typeof en = {
   "settings.scSearch": "ターミナル内を検索", // Find in terminal
   "settings.scGlobalSearch": "全セッションを検索", // Search all sessions
   "settings.scSaveDoc": "ドキュメントを保存", // Save document
+  "settings.scFocusSidebar": "サイドバーにフォーカス", // Focus sidebar
   "settings.scRecording": "キーを押してください…", // Press keys…
   "settings.scHint": "ショートカットをクリックし、新しい組み合わせを押します（Cmd/Ctrl が必要）。", // hint
   "settings.scReset": "デフォルトに戻す", // Restore defaults

@@ -294,6 +294,7 @@ const es: typeof en = {
   "settings.scSearch": "Buscar en la terminal", // Find in terminal
   "settings.scGlobalSearch": "Buscar en todas las sesiones", // Search all sessions
   "settings.scSaveDoc": "Guardar documento", // Save document
+  "settings.scFocusSidebar": "Enfocar barra lateral", // Focus sidebar
   "settings.scRecording": "Pulsa las teclas…", // Press keys…
   "settings.scHint": "Haz clic en un atajo y pulsa una nueva combinación (se requiere Cmd/Ctrl).", // hint
   "settings.scReset": "Restaurar valores predeterminados", // Restore defaults

@@ -294,6 +294,7 @@ const de: typeof en = {
   "settings.scSearch": "Im Terminal suchen", // Find in terminal
   "settings.scGlobalSearch": "Alle Sitzungen durchsuchen", // Search all sessions
   "settings.scSaveDoc": "Dokument speichern", // Save document
+  "settings.scFocusSidebar": "Seitenleiste fokussieren", // Focus sidebar
   "settings.scRecording": "Tasten drücken…", // Press keys…
   "settings.scHint": "Klicke ein Kürzel an und drücke eine neue Kombination (Cmd/Strg erforderlich).", // hint
   "settings.scReset": "Standard wiederherstellen", // Restore defaults

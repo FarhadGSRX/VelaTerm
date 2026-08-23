@@ -294,6 +294,7 @@ const ptBR: typeof en = {
   "settings.scSearch": "Buscar no terminal", // Find in terminal
   "settings.scGlobalSearch": "Buscar em todas as sessões", // Search all sessions
   "settings.scSaveDoc": "Salvar documento", // Save document
+  "settings.scFocusSidebar": "Focar barra lateral", // Focus sidebar
   "settings.scRecording": "Pressione as teclas…", // Press keys…
   "settings.scHint": "Clique em um atalho e pressione uma nova combinação (Cmd/Ctrl obrigatório).", // hint
   "settings.scReset": "Restaurar padrões", // Restore defaults
