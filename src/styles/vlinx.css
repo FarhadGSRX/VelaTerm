@@ -234,6 +234,19 @@ svg { display: block; }
 
 /* ============================ TREE ================================== */
 .tree { height: 100%; overflow-y: scroll; padding: 4px 6px 16px; }
+/* Keyboard cursor. DOM focus sits on the scrolling .tree container (rows are virtualized and would
+   unmount under focus), so the current row is drawn here rather than through :focus on the row.
+   The container shows its own ring only while no row is current, so the two never stack. */
+.tree:focus-visible { outline: 1px solid var(--accent-line); outline-offset: -1px; }
+.tree:focus-visible:has([data-cursor]) { outline: none; }
+.tree:focus [data-cursor] .row { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.tree:focus [data-cursor] .row.sel { box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* Pinned files above the file tree. The separator below the block is what tells the reader these rows
+   are not part of the tree's hierarchy, so they carry no indentation guides. */
+.files-favorites { border-bottom: 1px solid var(--border); margin-bottom: 4px; padding-bottom: 4px; }
+.files-favorites-head { padding: 4px 8px 2px; font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-dim); }
+
 .row { display: flex; align-items: center; gap: 6px; height: var(--row-h); padding-right: 6px; border-radius: var(--r-sm); cursor: pointer; position: relative; color: var(--text-mid); white-space: nowrap; user-select: none; -webkit-user-select: none; }
 .row:hover { background: var(--bg-hover); }
 .row.sel { background: var(--accent-soft); color: var(--text); }
@@ -386,6 +399,10 @@ svg { display: block; }
 .files-toggle { display: grid; place-items: center; width: 22px; height: 22px; border-radius: var(--r-sm); color: var(--text-faint); }
 .files-toggle:hover { color: var(--text); background: var(--bg-hover); }
 .files-toggle.on { color: var(--accent); }
+/* A disabled header toggle stays visible so the control is discoverable, but reads as unavailable
+   and stops answering hover. Used by Collapse All when nothing is expanded. */
+.files-toggle:disabled { opacity: 0.35; cursor: default; }
+.files-toggle:disabled:hover { color: var(--text-faint); background: none; }
 .files-path { flex: 1; min-width: 0; font-size: 11px; font-weight: 600; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-filter { flex: none; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--border); color: var(--text-faint); }
 .files-filter input { flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--text); font-size: 12px; }

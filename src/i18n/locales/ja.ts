@@ -115,12 +115,20 @@ const ja: typeof en = {
   "settings.navTree": "標準", // Tree
   "settings.navCompact": "コンパクト", // Compact
   "settings.tabs": "タブ", // Tabs
+  "settings.tabsHint":
+    "「単一」は開いたセッションごとに同じタブを再利用し、他はバックグラウンドで実行し続けます。「複数」は各セッションに専用のタブを与えます。",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "状態フィルターへの動的追加",
+  "settings.dynamicStatusFilterHint":
+    "状態フィルターは、適用した時点で一致していたセッションを保持します。オンにすると、後から一致し始めたセッションも追加されます。状態が変わってもセッションが除外されることはありません。",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "シングル", // Single
   "settings.tabMulti": "マルチ", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "単一タブモードでバックグラウンド実行を維持するセッション数です。上限を超えると最も古いアイドル状態のセッションが閉じられます。作業中・確認待ち・未読通知のあるセッションは保持されます。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "既定のシェル", // Default shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
+  "settings.spawnConfirmHint":
+    "自分で開くタブではなく、エージェントが vspawn で派生させるセッションに適用されます。オンにすると、セッション開始前にプロンプトを確認・編集できます。",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "貼り付け画像の自動クリーンアップ",
   "settings.cleanImagesHint":
@@ -243,6 +251,8 @@ const ja: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "このデバイスにインストールされていません",
+  "settings.fontProportional": "プロポーショナル", // Proportional
+  "settings.fontMonospace": "等幅", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -283,6 +293,7 @@ const ja: typeof en = {
   "settings.scSearch": "ターミナル内を検索", // Find in terminal
   "settings.scGlobalSearch": "全セッションを検索", // Search all sessions
   "settings.scSaveDoc": "ドキュメントを保存", // Save document
+  "settings.scFocusSidebar": "サイドバーにフォーカス", // Focus sidebar
   "settings.scRecording": "キーを押してください…", // Press keys…
   "settings.scHint": "ショートカットをクリックし、新しい組み合わせを押します（Cmd/Ctrl が必要）。", // hint
   "settings.scReset": "デフォルトに戻す", // Restore defaults
@@ -467,6 +478,7 @@ const ja: typeof en = {
     `「${name}」を削除しますか？保存された検索とフィルターは削除されますが、プロジェクトとセッションには影響しません。`,
   "tree.viewSplitRight": "ツリービューを右に分割",
   "tree.viewSplitDown": "ツリービューを下に分割",
+  "tree.viewKind": "このビューの表示内容を変更",  // Change what this view shows
   "tree.viewAdd": "現在のツリービューを新しいタブにコピー",
   "tree.viewCount": (n) => `${n} 個のツリービュー`,
   "mark.menu": "マーク", // Mark
@@ -635,6 +647,8 @@ const ja: typeof en = {
   "tab.killBgTab": "このバックグラウンドタブを終了（プロセスも終了します）", // Kill this background tab…
   "tab.newBrowserTab": "新しいタブ", // New Tab
   "tab.refreshFile": "ファイルを再読み込み", // Refresh File
+  "tab.stick": "分割表示で固定", // Keep Visible in Split
+  "tab.unstick": "固定を解除", // Stop Keeping Visible
   "tab.closeOthers": "他のタブを閉じる", // Close Other Tabs
   "tab.closeRight": "右側のタブを閉じる", // Close Tabs to the Right
   "tab.closeAll": "すべてのタブを閉じる", // Close All Tabs
@@ -770,6 +784,10 @@ const ja: typeof en = {
   "files.nameLabel": "名前", // Name
   "files.newTooltip": "新規ファイル / フォルダ", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "お気に入りに追加", // Add to Favorites
+  "files.unfavorite": "お気に入りから削除", // Remove from Favorites
+  "files.favorites": "お気に入り", // Favorites
+  "files.collapseAll": "すべて折りたたむ", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

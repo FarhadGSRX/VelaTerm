@@ -57,6 +57,7 @@ import {
   type InspectorTab,
   type NavLayout,
   type PaneStyle,
+  type SettingsTab,
   type ResolvedTheme,
   type Theme,
 } from "../theme";
@@ -147,10 +148,18 @@ const WORKSPACE_KEY = "vlx-workspace";
 /** Local-storage key for desktop sidebar tree views ("avatars"). */
 const SIDEBAR_VIEWS_KEY = "vlx-sidebar-tree-views";
 
+/**
+ * What a sidebar view renders. `"sessions"` is the original projection of the shared project tree; `"files"`
+ * shows the real directory tree of the active session's cwd. Required rather than optional so the compiler
+ * enumerates every site that has to handle a kind added later.
+ */
+export type SidebarViewKind = "sessions" | "files";
+
 /** One saved projection of the shared project tree. Node data is shared; only view conditions are isolated. */
 export interface SidebarTreeView {
   id: string;
   name: string;
+  kind: SidebarViewKind;
   treeFilter: string;
   statusFilter: AgentState[] | null;
   /**
@@ -186,6 +195,15 @@ interface PersistedSidebarViewsV2 {
   activeId: string;
 }
 
+/** V2 plus each view's `kind`. V1 and V2 payloads predate view kinds, so their views load as `"sessions"`. */
+interface PersistedSidebarViewsV3 {
+  version: 3;
+  views: PersistedSidebarTreeView[];
+  tabs: SidebarTreeTab[];
+  primaryId: string;
+  activeId: string;
+}
+
 const MAIN_TREE_VIEW_ID = "main";
 
 function defaultSidebarViews(): {
@@ -197,6 +215,7 @@ function defaultSidebarViews(): {
   const view: SidebarTreeView = {
     id: MAIN_TREE_VIEW_ID,
     name: t("tree.viewMainName"),
+    kind: "sessions",
     treeFilter: "",
     statusFilter: null,
     statusFilterIds: null,
@@ -215,6 +234,14 @@ function defaultSidebarViews(): {
 const SIDEBAR_VIEW_MAP_LIMIT = 20000;
 
 const AGENT_STATES: AgentState[] = ["working", "asking", "waiting"];
+
+/**
+ * Restore a view kind from untrusted storage. Anything that is not a known kind — a missing field in a V1/V2
+ * payload, a hand-edited value, a kind written by a newer build — falls back to the session tree.
+ */
+function loadViewKind(candidate: unknown): SidebarViewKind {
+  return candidate === "files" ? "files" : "sessions";
+}
 
 function loadStatusFilter(candidate: unknown): AgentState[] | null {
   if (!Array.isArray(candidate)) return null;
@@ -290,8 +317,10 @@ function loadSidebarViews() {
   try {
     const raw = localStorage.getItem(SIDEBAR_VIEWS_KEY);
     if (!raw) return fallback;
-    const saved = JSON.parse(raw) as Partial<PersistedSidebarViewsV1 | PersistedSidebarViewsV2>;
-    if ((saved.version !== 1 && saved.version !== 2)
+    const saved = JSON.parse(raw) as Partial<
+      PersistedSidebarViewsV1 | PersistedSidebarViewsV2 | PersistedSidebarViewsV3
+    >;
+    if ((saved.version !== 1 && saved.version !== 2 && saved.version !== 3)
       || !Array.isArray(saved.views)
       || saved.views.length === 0) {
       return fallback;
@@ -309,6 +338,7 @@ function loadSidebarViews() {
       const statusFilter = statusFilterIds ? loadStatusFilter(candidate.statusFilter) : null;
       views.push({
         id,
+        kind: loadViewKind(candidate.kind),
         name: typeof candidate.name === "string" && candidate.name.trim()
           ? candidate.name.replace(/[\u0000-\u001F\u007F-\u009F]/g, "").trim().slice(0, 80)
           : t("tree.viewUntitled"),
@@ -733,6 +763,11 @@ interface TermStore {
    * only the one unpinned session slot is reusable.
    */
   pinnedTabs: SessionId[];
+  /** Tab kept visible beside whatever tab is active, so it survives single-tab session swapping.
+   * In-memory only: tab IDs are not stable across a restart, so persisting this would dangle. */
+  stickyTabId: SessionId | null;
+  /** Width of the sticky region as a percentage of the stage. */
+  stickySize: number;
   /**
    * Status notice after automatic background-tab eviction. Timestamp retriggers notices for repeated labels.
    */
@@ -845,6 +880,9 @@ interface TermStore {
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
   inspectorTab: InspectorTab;
+  settingsTab: SettingsTab;
+  /** Files pinned to the top of the file tree, keyed by project ID. */
+  favoritePaths: Record<string, string[]>;
   /** Single-tab mode: reuse the session slot and keep replaced tabs alive in the background. */
   singleTabMode: boolean;
   /** Terminal renderer: stable DOM, GPU-independent 2D canvas, or sharper WebGL with context limits. */
@@ -1124,6 +1162,8 @@ interface TermStore {
     splitPaneId: string,
     sizes: [number, number],
   ) => void;
+  /** Switches what one view renders. Its saved search and filters are kept so switching back restores them. */
+  setSidebarTreeViewKind: (id: string, kind: SidebarViewKind) => void;
   setSidebarTreeViewFilter: (id: string, q: string) => void;
   setSidebarTreeViewStatusFilter: (id: string, st: AgentState) => void;
   /** Adds newly matching sessions to an active status filter without removing stale members. */
@@ -1159,6 +1199,13 @@ interface TermStore {
   setDividerStyle: (v: DividerStyle) => void;
   setNavLayout: (v: NavLayout) => void;
   setInspectorTab: (v: InspectorTab) => void;
+  setSettingsTab: (v: SettingsTab) => void;
+  /** Keeps `tabId` visible alongside the active tab, or clears the sticky slot with null. */
+  setStickyTab: (tabId: SessionId | null) => void;
+  /** Resizes the sticky region, clamped so neither side can be squeezed away. */
+  resizeSticky: (pct: number) => void;
+  /** Pins or unpins a file at the top of `projectId`'s file tree. */
+  toggleFavoritePath: (projectId: string, path: string) => void;
   /** Toggles persisted single-tab mode. */
   setSingleTabMode: (v: boolean) => void;
   /** Toggles confirmation before spawning child sessions. */
@@ -1288,6 +1335,8 @@ function persistAndApplyVisual(getState: () => TermStore) {
     dividerStyle: s.dividerStyle,
     navLayout: s.navLayout,
     inspectorTab: s.inspectorTab,
+    settingsTab: s.settingsTab,
+    favoritePaths: s.favoritePaths,
     singleTabMode: s.singleTabMode,
     termRenderer: s.termRenderer,
     redrawOnReveal: s.redrawOnReveal,
@@ -1316,13 +1365,15 @@ function saveSidebarViewsTick(getState: () => TermStore) {
   clearTimeout(saveSidebarViewsTimer);
   saveSidebarViewsTimer = setTimeout(() => {
     const state = getState();
-    const payload: PersistedSidebarViewsV2 = {
-      version: 2,
+    const payload: PersistedSidebarViewsV3 = {
+      version: 3,
       // Status/marker filtering and the collapse map are written only for split-off panes. The main tree stores
-      // just its search text, as it always did, so a restart gives it back unfiltered.
+      // just its search text, as it always did, so a restart gives it back unfiltered. `kind` is written for
+      // every view including the main one: it is a deliberate choice, not a stale runtime snapshot.
       views: state.sidebarTreeViews.map(({
         id,
         name,
+        kind,
         treeFilter,
         statusFilter,
         statusFilterIds,
@@ -1332,13 +1383,14 @@ function saveSidebarViewsTick(getState: () => TermStore) {
         ? {
             id,
             name,
+            kind,
             treeFilter,
             statusFilter: null,
             statusFilterIds: null,
             markFilter: null,
             collapsedOverrides: null,
           }
-        : { id, name, treeFilter, statusFilter, statusFilterIds, markFilter, collapsedOverrides })),
+        : { id, name, kind, treeFilter, statusFilter, statusFilterIds, markFilter, collapsedOverrides })),
       tabs: state.sidebarTreeTabs,
       primaryId: state.primarySidebarTreeViewId,
       activeId: state.activeSidebarTreeViewId,
@@ -1478,6 +1530,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
   focusedPaneId: null,
   liveTabs: [],
   pinnedTabs: [],
+  stickyTabId: null,
+  stickySize: 35,
   liveEvictNotice: null,
   liveEvictAsk: false,
   docTabs: {},
@@ -2379,7 +2433,9 @@ export const useTermStore = create<TermStore>((set, get) => ({
             : (openTabs.find((t) => paneTrees[t]) ?? null);
       }
       const pinnedTabs = state.pinnedTabs.filter((t) => t !== tabId);
-      return { openTabs, paneTrees, docTabs, browserTabs, pinnedTabs, activeTabId, lastActiveSessionTabId, activeSessionId, focusedPaneId };
+      // A closed tab cannot stay in the sticky slot; it would render an empty region forever.
+      const stickyTabId = state.stickyTabId === tabId ? null : state.stickyTabId;
+      return { openTabs, paneTrees, docTabs, browserTabs, pinnedTabs, stickyTabId, activeTabId, lastActiveSessionTabId, activeSessionId, focusedPaneId };
     });
     get().pruneEphemeral();
     saveLayoutTick();
@@ -2587,6 +2643,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       const openTabs = state.openTabs.filter((t) => t !== tabId);
       // Remove background tabs from the pinned set because they no longer participate in reuse selection.
       const pinnedTabs = state.pinnedTabs.filter((t) => t !== tabId);
+      // A closed tab cannot stay in the sticky slot; it would render an empty region forever.
+      const stickyTabId = state.stickyTabId === tabId ? null : state.stickyTabId;
       // Append uniquely to `liveTabs`, preserving the complete pane tree.
       let liveTabs = state.liveTabs.filter((t) => t !== tabId);
       liveTabs.push(tabId);
@@ -2640,6 +2698,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
       return {
         openTabs,
         pinnedTabs,
+        stickyTabId,
         liveTabs,
         paneTrees,
         activeTabId,
@@ -2742,6 +2801,12 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
 
   closeSession: (sessionId) => {
+    // A stopped process has nothing left to read, so retire its unread marker here rather than in each
+    // caller. Every way a session's process ends routes through this action -- natural exit and remote
+    // kill via usePtySession's listeners, End Process and Close Draft via sessionMenu -- and the tree
+    // node itself survives, so `focusReturned`'s sweep (which only drops IDs whose session is gone)
+    // never reaches it and the blue dot would otherwise sit on a dead session until it was opened.
+    get().clearNotification(sessionId);
     // Remove the exited process's pane, closing its tab when last, while leaving the app in an empty state.
     const { paneTrees, openTabs, liveTabs } = get();
     const loc = locate(paneTrees, openTabs, sessionId);
@@ -3195,6 +3260,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       openTabs: c.openTabs,
       liveTabs: c.liveTabs,
       pinnedTabs: c.pinnedTabs,
+      stickyTabId: c.stickyTabId,
+      stickySize: c.stickySize,
       activeTabId: c.activeTabId,
       lastActiveSessionTabId: c.lastActiveSessionTabId,
       activeSessionId: c.activeSessionId,
@@ -3366,6 +3433,13 @@ export const useTermStore = create<TermStore>((set, get) => ({
     }));
     saveSidebarViewsTick(get);
   },
+  setSidebarTreeViewKind: (id, kind) => {
+    set((state) => ({
+      sidebarTreeViews: state.sidebarTreeViews.map((view) =>
+        view.id === id ? { ...view, kind } : view),
+    }));
+    saveSidebarViewsTick(get);
+  },
   setSidebarTreeViewFilter: (id, q) => {
     set((state) => ({
       sidebarTreeViews: state.sidebarTreeViews.map((view) =>
@@ -3525,6 +3599,29 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
   setInspectorTab: (v) => {
     set({ inspectorTab: v });
+    persistAndApplyVisual(get);
+  },
+  setStickyTab: (tabId) =>
+    set((s) => ({ stickyTabId: s.stickyTabId === tabId ? null : tabId })),
+
+  resizeSticky: (pct) => set({ stickySize: Math.max(15, Math.min(85, pct)) }),
+
+  toggleFavoritePath: (projectId, path) => {
+    const current = get().favoritePaths[projectId] ?? [];
+    const next = current.includes(path)
+      ? current.filter((p) => p !== path)
+      : [...current, path];
+    set((s) => {
+      const favoritePaths = { ...s.favoritePaths };
+      // Drop the key entirely on the last removal so an untouched project leaves nothing behind.
+      if (next.length === 0) delete favoritePaths[projectId];
+      else favoritePaths[projectId] = next;
+      return { favoritePaths };
+    });
+    persistAndApplyVisual(get);
+  },
+  setSettingsTab: (v) => {
+    set({ settingsTab: v });
     persistAndApplyVisual(get);
   },
   setSingleTabMode: (v) => {

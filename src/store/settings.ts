@@ -10,6 +10,7 @@ import type {
   InspectorTab,
   NavLayout,
   PaneStyle,
+  SettingsTab,
   VisualSettings,
 } from "../theme";
 
@@ -67,6 +68,13 @@ export interface PersistedSettings {
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
   inspectorTab: InspectorTab;
+  /** Settings-modal section to reopen on. Remembered from the last section the user viewed. */
+  settingsTab: SettingsTab;
+  /** Files pinned to the top of the file tree, keyed by project ID so a favourite belongs to the repo
+   * it was chosen in. Values are absolute paths. Directories are never pinned — a favourite is a file
+   * you keep reopening, and pinning a directory would raise "expand where?" with no good answer.
+   * Entries under a project ID that no longer exists are simply never read. */
+  favoritePaths: Record<string, string[]>;
   /** Single-tab mode reuses the current tab and keeps the previous tree alive in the background. */
   singleTabMode: boolean;
   /** Terminal renderer. DOM is stable; canvas avoids DOM overhead without GPU contexts; WebGL is sharp
@@ -116,6 +124,8 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   dividerStyle: "subtle",
   navLayout: "tree",
   inspectorTab: "info",
+  settingsTab: "appearance",
+  favoritePaths: {},
   singleTabMode: true,
   termRenderer: "dom",
   redrawOnReveal: false,
@@ -132,7 +142,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   spawnConfirm: true,
   saveWorkspaceOnQuit: false,
   usageRefreshSec: 300,
-  imagePasteMode: "upload",
+  imagePasteMode: "agent",
 };
 export function loadSettings(): PersistedSettings {
   try {

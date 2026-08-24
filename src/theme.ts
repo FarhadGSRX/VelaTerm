@@ -29,6 +29,15 @@ export type DividerStyle = "subtle" | "visible";
 export type NavLayout = "tree" | "compact";
 /** Active tab in the right-side Inspector. */
 export type InspectorTab = "files" | "info" | "git";
+/** Settings-modal section. Persisted so reopening Settings returns to the section last viewed. */
+export type SettingsTab =
+  | "appearance"
+  | "terminal"
+  | "behavior"
+  | "advanced"
+  | "agents"
+  | "shortcuts"
+  | "general";
 
 /** Vlinx visual settings: design tokens beyond the color scheme. */
 export interface VisualSettings {

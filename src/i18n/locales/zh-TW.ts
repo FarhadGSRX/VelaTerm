@@ -114,12 +114,20 @@ const zhTW: typeof en = {
   "settings.navTree": "標準", // Tree
   "settings.navCompact": "緊湊", // Compact
   "settings.tabs": "分頁", // Tabs
+  "settings.tabsHint":
+    "「單一」會為你開啟的每個工作階段重複使用同一個分頁，其餘則在背景繼續執行。「多重」則為每個工作階段各開一個分頁。",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "狀態篩選動態增加",
+  "settings.dynamicStatusFilterHint":
+    "狀態篩選會保留套用當下符合的工作階段。開啟後，之後才開始符合的工作階段也會加入。工作階段的狀態改變時不會被移出清單。",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "單分頁", // Single
   "settings.tabMulti": "多分頁", // Multi
   "settings.maxLiveTabs": "背景保活上限", // Background limit
+  "settings.maxLiveTabsHint":
+    "單一分頁模式下可在背景保持執行的工作階段數量。超過上限時會關閉閒置最久的工作階段；正在執行、等待確認或有未讀通知者則會保留。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "預設 Shell", // Default shell
   "settings.spawnConfirm": "派生前確認", // Confirm before spawn
+  "settings.spawnConfirmHint":
+    "適用於代理透過 vspawn 衍生的工作階段，而非你自己開啟的分頁。開啟後，可在工作階段啟動前檢視並編輯提示。",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "額度刷新", // Usage refresh
   "settings.cleanImages": "自動清理貼上的圖片",
   "settings.cleanImagesHint":
@@ -240,6 +248,8 @@ const zhTW: typeof en = {
   "settings.fontDefault": "預設", // Default
   "settings.fontCustom": "自訂…", // Custom
   "settings.fontUnavailable": "本機未安裝此字型",
+  "settings.fontProportional": "比例字型", // Proportional
+  "settings.fontMonospace": "等寬字型", // Monospace
   "settings.fontAuto": "自動", // Auto
   "settings.fontSmaller": "縮小", // Smaller
   "settings.fontLarger": "放大", // Larger
@@ -280,6 +290,7 @@ const zhTW: typeof en = {
   "settings.scSearch": "在終端機中搜尋", // Find in terminal
   "settings.scGlobalSearch": "搜尋所有工作階段", // Search all sessions
   "settings.scSaveDoc": "儲存文件", // Save document
+  "settings.scFocusSidebar": "聚焦側邊欄", // Focus sidebar
   "settings.scRecording": "請按下按鍵…", // Press keys…
   "settings.scHint": "點一下快捷鍵，再按下新的組合鍵（需含 Cmd/Ctrl）。", // hint
   "settings.scReset": "還原為預設", // Restore defaults
@@ -463,6 +474,7 @@ const zhTW: typeof en = {
     `確定刪除「${name}」嗎？其儲存的搜尋與篩選條件會被移除，專案和工作階段不受影響。`,
   "tree.viewSplitRight": "向右切分樹分身",
   "tree.viewSplitDown": "向下切分樹分身",
+  "tree.viewKind": "變更此分身顯示的內容",  // Change what this view shows
   "tree.viewAdd": "複製目前的樹分身到新分頁",
   "tree.viewCount": (n) => `${n} 個樹分身`,
   "mark.menu": "標記", // Mark
@@ -629,6 +641,8 @@ const zhTW: typeof en = {
   "tab.killBgTab": "結束該背景分頁（處理程序隨之結束）", // Kill this background tab…
   "tab.newBrowserTab": "新分頁", // New Tab
   "tab.refreshFile": "重新整理檔案", // Refresh File
+  "tab.stick": "在分割畫面中保持顯示", // Keep Visible in Split
+  "tab.unstick": "取消保持顯示", // Stop Keeping Visible
   "tab.closeOthers": "關閉其他分頁", // Close Other Tabs
   "tab.closeRight": "關閉右側分頁", // Close Tabs to the Right
   "tab.closeAll": "關閉所有分頁", // Close All Tabs
@@ -762,6 +776,10 @@ const zhTW: typeof en = {
   "files.nameLabel": "名稱", // Name
   "files.newTooltip": "新增檔案或資料夾", // New file or folder
   "files.openInTerminal": "在終端機中開啟", // Open in Terminal
+  "files.favorite": "加入收藏", // Add to Favorites
+  "files.unfavorite": "從收藏移除", // Remove from Favorites
+  "files.favorites": "收藏", // Favorites
+  "files.collapseAll": "全部收合", // Collapse All
   "files.revealInFinder": "在檔案管理器中顯示", // Show in File Manager
   "files.copyPath": "複製路徑", // Copy Path
   "files.copyRelPath": "複製相對路徑", // Copy Relative Path

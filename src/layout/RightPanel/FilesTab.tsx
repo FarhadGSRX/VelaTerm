@@ -25,7 +25,7 @@ import {
 import { useTermStore } from "../../store/termStore";
 /* ===================== Files: real tree, preview, and one-level lazy loading ===================== */
 
-interface FileNodeT {
+export interface FileNodeT {
   name: string;
   /** Absolute path. */
   path: string;
@@ -68,6 +68,29 @@ function findNodeByPath(root: FileNodeT | null, path: string): FileNodeT | null 
     if (f) return f;
   }
   return null;
+}
+
+/**
+ * Close every loaded directory below `root`, leaving the root itself open.
+ *
+ * Collapsing the root too would hide the whole tree and read as a broken panel, so the root is the
+ * one node exempted. Mutates in place, the way `onDir` already toggles `open`; callers re-render by
+ * replacing the root reference.
+ */
+export function collapseAllBelow(root: FileNodeT): void {
+  const walk = (node: FileNodeT) => {
+    for (const child of node.children || []) {
+      child.open = false;
+      walk(child);
+    }
+  };
+  walk(root);
+}
+
+/** Whether any loaded directory below `root` is currently open, i.e. whether collapsing would do
+ *  anything. Used to leave the control out rather than offer a button that visibly does nothing. */
+export function hasOpenDescendant(root: FileNodeT): boolean {
+  return (root.children || []).some((c) => !!c.open || hasOpenDescendant(c));
 }
 
 /** Whether a node name or loaded descendant matches the lowercase query. */
@@ -212,7 +235,17 @@ function FileRow({
   );
 }
 
-export function FilesTab({ rootPath, rootName }: { rootPath: string | null; rootName: string | null }) {
+export function FilesTab({
+  rootPath,
+  rootName,
+  projectId,
+}: {
+  rootPath: string | null;
+  rootName: string | null;
+  /** Project the favourites belong to. The root is a session cwd, which may be a subdirectory or a
+   * worktree, so it cannot stand in for project identity. Null disables favourites entirely. */
+  projectId?: string | null;
+}) {
   const t = useT();
   const [root, setRoot] = useState<FileNodeT | null>(null);
   const [sel, setSel] = useState<FileNodeT | null>(null);
@@ -239,6 +272,10 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
   const [filter, setFilter] = useState("");
   // Keyboard focus row, independent of selected preview; focusing a file also previews it.
   const [focusPath, setFocusPath] = useState<string | null>(null);
+  const favoritePaths = useTermStore((st) => st.favoritePaths);
+  const toggleFavoritePath = useTermStore((st) => st.toggleFavoritePath);
+  const favorites = projectId ? (favoritePaths[projectId] ?? []) : [];
+  const isFavorite = (path: string) => favorites.includes(path);
   const treeRef = useRef<HTMLDivElement>(null);
   // Container for the tree and preview, whose height bounds preview resizing.
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -309,6 +346,15 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
   const onFile = (node: FileNodeT) => {
     setSel(node);
   };
+
+  /** A favourite is stored as a bare path. Rebuild the minimum node the row handlers need, rather
+   * than searching the tree: the real node may not be loaded, or may sit outside the current root. */
+  const favoriteNode = (path: string): FileNodeT => ({
+    name: path.split("/").filter(Boolean).pop() || path,
+    path,
+    isDir: false,
+    isHidden: false,
+  });
 
   // Preview selects a file and loads its contents into the bottom pane.
   const doPreview = async (node: FileNodeT) => {
@@ -485,6 +531,17 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
             },
           ] as MenuItem[])
         : []),
+      // Favouriting is files-only: a pinned directory would have to answer "expand it where?", and the
+      // ask was for files pinned to the top.
+      ...(!node.isDir && projectId
+        ? ([
+            {
+              label: isFavorite(node.path) ? t("files.unfavorite") : t("files.favorite"),
+              icon: <Icons.star size={14} />,
+              onClick: () => toggleFavoritePath(projectId, node.path),
+            },
+          ] as MenuItem[])
+        : []),
       {
         label: t("files.openInTerminal"),
         icon: <Icons.terminal size={14} />,
@@ -601,6 +658,24 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
     <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
       <div className="files-head">
         <span className="files-path" title={root.path}>{root.name}</span>
+        {/* Hidden only while a query is active: filtering force-expands the tree
+            (`open = filter ? true`), so collapsing during a filter changes state the user cannot see.
+            When nothing is expanded the button is DISABLED rather than absent -- hiding it made the
+            feature undiscoverable, since a freshly opened tree has every directory closed. */}
+        {!q && root && (
+          <button
+            className="files-toggle"
+            title={t("files.collapseAll")}
+            aria-label={t("files.collapseAll")}
+            disabled={!hasOpenDescendant(root)}
+            onClick={() => {
+              collapseAllBelow(root);
+              setRoot((r) => (r ? { ...r } : r));
+            }}
+          >
+            <Icons.collapse size={13} />
+          </button>
+        )}
         <button
           className={"files-toggle" + (filterOn ? " on" : "")}
           title={t("files.filterPlaceholder")}
@@ -668,6 +743,28 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
           if (root) setMenu({ x: e.clientX, y: e.clientY, node: root });
         }}
       >
+        {favorites.length > 0 && (
+          <div className="files-favorites">
+            <div className="files-favorites-head">{t("files.favorites")}</div>
+            {favorites.map((path) => {
+              const node = favoriteNode(path);
+              return (
+                <div
+                  key={path}
+                  className={"file-row" + (sel?.path === path ? " sel" : "")}
+                  title={path}
+                  onClick={() => onFile(node)}
+                  onDoubleClick={() => onOpen(node)}
+                  onContextMenu={(e) => onContext(e, node)}
+                >
+                  <span className="tw leaf" />
+                  <span className="ic">{renderFileIcon(node.name, false)}</span>
+                  <span className="nm">{node.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <FileRow
           node={root}
           depth={0}
