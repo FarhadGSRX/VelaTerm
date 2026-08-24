@@ -91,8 +91,13 @@ export interface PersistedSettings {
   dynamicStatusFilter: boolean;
   /** User-configurable background keep-alive tab limit, defaulting to 32. */
   maxLiveTabs: number;
-  /** Default terminal shell; empty uses the system default. */
+  /** Default shell for Terminal sessions; empty uses the system default. Applied by the backend whenever a
+   * session carries no explicit shell, so it covers tree-created terminals as well as scratch ones. */
   defaultShell: string;
+  /** Default shell for local-agent sessions (Claude, Codex, ...); empty uses the platform default, which is
+   * Windows PowerShell on Windows. Kept separate from `defaultShell` so a Git Bash terminal and a PowerShell 7
+   * agent can coexist. WSL values are ignored here: agent hooks do not cross the WSL boundary. */
+  agentShell: string;
   /** Primary UI monospace font; null uses the default JetBrains Mono stack. */
   uiFontFamily: string | null;
   /** UI font size in pixels; null follows density without an inline `--ui-fs`. */
@@ -133,6 +138,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   dynamicStatusFilter: true,
   maxLiveTabs: DEFAULT_MAX_LIVE_TABS,
   defaultShell: "",
+  agentShell: "",
   uiFontFamily: null,
   uiFontSize: null,
   termFontFamily: null,

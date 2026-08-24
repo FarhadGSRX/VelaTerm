@@ -137,6 +137,7 @@ const ru: typeof en = {
   "settings.maxLiveTabsHint":
     "Сколько сессий продолжают работать в фоне в режиме одной вкладки. Сверх лимита закрывается самая давняя неактивная сессия; работающие, ожидающие подтверждения и с непрочитанным уведомлением сохраняются.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell по умолчанию", // Default shell
+  "settings.agentShell": "Shell агента", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.spawnConfirmHint":
     "Относится к сессиям, которые агент порождает через vspawn, а не к вкладкам, открытым вами. Если включено, запрос можно просмотреть и отредактировать до запуска сессии.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.

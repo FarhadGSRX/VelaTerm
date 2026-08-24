@@ -125,6 +125,7 @@ const en = {
   "settings.maxLiveTabsHint":
     "How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.",
   "settings.defaultShell": "Default shell",
+  "settings.agentShell": "Agent shell",
   "settings.spawnConfirm": "Confirm before spawn",
   "settings.spawnConfirmHint":
     "Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.",

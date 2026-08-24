@@ -125,6 +125,7 @@ const zhTW: typeof en = {
   "settings.maxLiveTabsHint":
     "單一分頁模式下可在背景保持執行的工作階段數量。超過上限時會關閉閒置最久的工作階段；正在執行、等待確認或有未讀通知者則會保留。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "預設 Shell", // Default shell
+  "settings.agentShell": "代理 Shell", // Agent shell
   "settings.spawnConfirm": "派生前確認", // Confirm before spawn
   "settings.spawnConfirmHint":
     "適用於代理透過 vspawn 衍生的工作階段，而非你自己開啟的分頁。開啟後，可在工作階段啟動前檢視並編輯提示。",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.

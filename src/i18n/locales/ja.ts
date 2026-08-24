@@ -126,6 +126,7 @@ const ja: typeof en = {
   "settings.maxLiveTabsHint":
     "単一タブモードでバックグラウンド実行を維持するセッション数です。上限を超えると最も古いアイドル状態のセッションが閉じられます。作業中・確認待ち・未読通知のあるセッションは保持されます。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "既定のシェル", // Default shell
+  "settings.agentShell": "エージェントのシェル", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.spawnConfirmHint":
     "自分で開くタブではなく、エージェントが vspawn で派生させるセッションに適用されます。オンにすると、セッション開始前にプロンプトを確認・編集できます。",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.

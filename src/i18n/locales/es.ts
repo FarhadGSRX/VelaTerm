@@ -127,6 +127,7 @@ const es: typeof en = {
   "settings.maxLiveTabsHint":
     "Cuántas sesiones siguen ejecutándose en segundo plano en modo de pestaña única. Superado el límite se cierra la sesión inactiva más antigua; se conservan las que trabajan, esperan confirmación o tienen una notificación sin leer.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell predeterminada", // Default shell
+  "settings.agentShell": "Shell del agente", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.spawnConfirmHint":
     "Se aplica a las sesiones que un agente deriva con vspawn, no a las pestañas que abres tú. Activado, puedes revisar y editar el prompt antes de que la sesión arranque.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
