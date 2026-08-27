@@ -130,6 +130,7 @@ const ptBR: typeof en = {
   "settings.maxLiveTabsHint":
     "Quantas sessões continuam rodando em segundo plano no modo de aba única. Acima do limite, a sessão ociosa mais antiga é fechada; as que estão trabalhando, aguardando confirmação ou com notificação não lida são mantidas.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell padrão", // Default shell
+  "settings.agentShell": "Shell do agente", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.spawnConfirmHint":
     "Vale para sessões que um agente deriva com vspawn, não para abas que você abre. Ativado, você pode revisar e editar o prompt antes de a sessão iniciar.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.

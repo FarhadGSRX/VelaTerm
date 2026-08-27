@@ -127,6 +127,7 @@ const zhCN: typeof en = {
   "settings.maxLiveTabsHint":
     "单标签模式下可在后台保持运行的会话数量。超过上限时会关闭最久未活动的空闲会话；正在工作、等待确认或有未读通知的会话会被保留。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "默认 Shell",
+  "settings.agentShell": "智能体 Shell",
   "settings.spawnConfirm": "派生前确认",
   "settings.spawnConfirmHint":
     "适用于代理通过 vspawn 派生的会话，而不是你自己打开的标签页。开启后，可在会话启动前查看并修改提示词。",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.

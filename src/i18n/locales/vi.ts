@@ -130,6 +130,7 @@ const vi: typeof en = {
   "settings.maxLiveTabsHint":
     "Số phiên tiếp tục chạy nền ở chế độ một thẻ. Vượt giới hạn, phiên rảnh lâu nhất sẽ bị đóng; những phiên đang chạy, đang chờ xác nhận hoặc có thông báo chưa đọc thì được giữ lại.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell mặc định",
+  "settings.agentShell": "Shell tác nhân",
   "settings.spawnConfirm": "Xác nhận trước khi tạo phiên",
   "settings.spawnConfirmHint":
     "Áp dụng cho các phiên mà tác nhân sinh ra bằng vspawn, không phải thẻ bạn tự mở. Khi bật, bạn có thể xem lại và sửa lời nhắc trước khi phiên khởi chạy.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.

@@ -220,7 +220,7 @@ pub fn dispatch(
         "get_session_cwd" => to_value(app.pty().cwd(&req_str(args, "sessionId")?)),
         "list_shells" => {
             let data_dir = app.data_dir().ok();
-            to_value(crate::pty::manager::available_shells(data_dir.as_deref()))
+            to_value(crate::pty::manager::available_shells(app, data_dir.as_deref()))
         }
         // Git Bash status was previously desktop-only, causing every browser/remote mount probe to return
         // Unknown command. Register it here: query actual status on Windows and report unavailable elsewhere.

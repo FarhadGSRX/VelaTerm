@@ -129,6 +129,7 @@ const ko: typeof en = {
   "settings.maxLiveTabsHint":
     "단일 탭 모드에서 백그라운드로 계속 실행할 세션 수입니다. 한도를 넘으면 가장 오래된 유휴 세션이 닫히며, 작업 중이거나 확인 대기 중이거나 읽지 않은 알림이 있는 세션은 유지됩니다.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "기본 셸", // Default shell
+  "settings.agentShell": "에이전트 셸", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.spawnConfirmHint":
     "직접 여는 탭이 아니라 에이전트가 vspawn으로 파생시키는 세션에 적용됩니다. 켜면 세션이 시작되기 전에 프롬프트를 검토하고 편집할 수 있습니다.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
