@@ -30,6 +30,7 @@ import type {
   DividerStyle,
   NavLayout,
   PaneStyle,
+  SettingsTab,
 } from "../../theme";
 import { Field, Seg, SectionTitle } from "./settingsParts";
 import {
@@ -73,6 +74,18 @@ const MONO_FONTS = [
   "Hack Nerd Font",
   "Maple Mono NF CN",
   "Sarasa Mono SC",
+];
+
+/** Proportional presets, offered for the interface font only — xterm draws on a fixed-cell grid, so a
+ * variable-width terminal face would break alignment. Values are full CSS stacks: fontStack() passes any
+ * comma-bearing value through verbatim, which is what makes a non-monospace interface font work at all. */
+const UI_FONTS: { label: string; stack: string }[] = [
+  { label: "System UI", stack: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
+  { label: "Inter", stack: "Inter, system-ui, sans-serif" },
+  { label: "Segoe UI", stack: '"Segoe UI", system-ui, sans-serif' },
+  { label: "Helvetica Neue", stack: '"Helvetica Neue", Helvetica, Arial, sans-serif' },
+  { label: "Roboto", stack: "Roboto, system-ui, sans-serif" },
+  { label: "Noto Sans", stack: '"Noto Sans", system-ui, sans-serif' },
 ];
 
 /** Shared style for the font-size stepper's minus/plus buttons. */
@@ -184,24 +197,32 @@ function isFontAvailable(name: string): boolean {
 }
 
 /** Font picker with presets and a custom-name input. A null value uses the default monospace stack.
- * Like the other appearance dropdowns, it avoids native select rendering. */
-function FontSelect({
+ * Like the other appearance dropdowns, it avoids native select rendering.
+ * `proportional` adds the non-monospace presets; leave it off for the terminal. */
+export function FontSelect({
   value,
   onChange,
   label,
+  proportional = false,
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
   /** Field caption, reused as the control's accessible name. */
   label: string;
+  /** Also offer the proportional UI-font presets, grouped above the monospace list. */
+  proportional?: boolean;
 }) {
   const t = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const isPreset = value != null && MONO_FONTS.includes(value);
+  const uiPreset = proportional ? UI_FONTS.find((f) => f.stack === value) : undefined;
+  const isPreset = value != null && (uiPreset != null || MONO_FONTS.includes(value));
   const [missing, setMissing] = useState(false);
   useEffect(() => {
-    if (value == null) {
+    // A comma means the value is a whole CSS stack rather than one family — the same test
+    // fontStack() in theme.ts applies. isFontAvailable probes a single family name, so a stack
+    // always measures as missing and would mislabel a working proportional preset.
+    if (value == null || value.includes(",")) {
       setMissing(false);
       return;
     }
@@ -258,7 +279,11 @@ function FontSelect({
   const CUSTOM = "\u0000custom";
   const options = [
     { value: "", label: t("settings.fontDefault") },
-    ...MONO_FONTS.map((f) => ({ value: f, label: f })),
+    // Proportional presets lead when offered. Each is stored as a whole CSS stack but listed by its short
+    // label, which Select echoes on the trigger because it renders the option matching the current value.
+    ...(proportional ? UI_FONTS.map((f) => ({ value: f.stack, label: f.label })) : []),
+    // The rule marks where the proportional group ends; without it the two lists read as one.
+    ...MONO_FONTS.map((f, i) => ({ value: f, label: f, separatorBefore: proportional && i === 0 })),
     // A typed-in name keeps its own row, so picking a preset and coming back does not mean retyping it.
     ...(value != null && !isPreset ? [{ value, label: value }] : []),
     { value: CUSTOM, label: t("settings.fontCustom"), separatorBefore: true },
@@ -387,7 +412,7 @@ function AccentPicker({
 }
 
 
-type Cat = "appearance" | "terminal" | "behavior" | "advanced" | "agents" | "shortcuts" | "general";
+type Cat = SettingsTab;
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const t = useT();
@@ -430,7 +455,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setTermFontFamily = useTermStore((s) => s.setTermFontFamily);
   const setTermFontSize = useTermStore((s) => s.setTermFontSize);
 
-  const [cat, setCat] = useState<Cat>("appearance");
+  // Section navigation stays local so switching is instant and does not round-trip through settings
+  // persistence; the store copy is only the seed on open and the sink on change, which is what makes
+  // Settings reopen on the section last viewed instead of always Appearance.
+  const savedTab = useTermStore((s) => s.settingsTab);
+  const setSettingsTab = useTermStore((s) => s.setSettingsTab);
+  const [cat, setCatLocal] = useState<Cat>(savedTab);
+  const setCat = (v: Cat) => {
+    setCatLocal(v);
+    setSettingsTab(v);
+  };
   const [skillOn, setSkillOn] = useState<boolean | null>(null);
   const [cliStatus, setCliStatus] = useState<VelaCommandStatus | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
@@ -614,7 +648,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   />
                 </Field>
                 <Field label={t("settings.uiFont")}>
-                  <FontSelect value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} />
+                  <FontSelect
+                    value={uiFontFamily}
+                    onChange={setUiFontFamily}
+                    label={t("settings.uiFont")}
+                    proportional
+                  />
                 </Field>
                 <Field label={t("settings.uiFontSize")}>
                   <FontSizeStepper
@@ -709,7 +748,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             {cat === "behavior" && (
               <>
                 <SectionTitle>{t("settings.catBehavior")}</SectionTitle>
-                <Field label={t("settings.tabs")}>
+                <Field label={t("settings.tabs")} hint={t("settings.tabsHint")}>
                   <Seg<"single" | "multi">
                     value={singleTabMode ? "single" : "multi"}
                     options={[
@@ -719,7 +758,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     onChange={(v) => setSingleTabMode(v === "single")}
                   />
                 </Field>
-                <Field label={t("settings.dynamicStatusFilter")}>
+                <Field label={t("settings.dynamicStatusFilter")} hint={t("settings.dynamicStatusFilterHint")}>
                   <Seg<"on" | "off">
                     value={dynamicStatusFilter ? "on" : "off"}
                     options={[
@@ -730,7 +769,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   />
                 </Field>
                 {singleTabMode && (
-                  <Field label={t("settings.maxLiveTabs")}>
+                  <Field label={t("settings.maxLiveTabs")} hint={t("settings.maxLiveTabsHint")}>
                     <Seg<string>
                       value={String(maxLiveTabs)}
                       options={[
@@ -743,7 +782,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     />
                   </Field>
                 )}
-                <Field label={t("settings.spawnConfirm")}>
+                <Field label={t("settings.spawnConfirm")} hint={t("settings.spawnConfirmHint")}>
                   <Seg<"on" | "off">
                     value={spawnConfirm ? "on" : "off"}
                     options={[

@@ -225,3 +225,37 @@ export function computeDividers(
     }),
   ];
 }
+
+/**
+ * Squeeze a tab-local percentage rect into one horizontal band of the stage.
+ *
+ * `computeLayout` returns percentages of the whole stage, because a tab normally owns all of it.
+ * When a sticky tab is shown beside the active one, each tab owns only a band, so its rects are
+ * rescaled rather than the layout being recomputed — splits keep their proportions inside the band.
+ * Only the horizontal axis moves; the bands are full height.
+ */
+export function rectIntoRegion(r: Rect, left: number, width: number): Rect {
+  return {
+    left: left + (r.left * width) / 100,
+    top: r.top,
+    width: (r.width * width) / 100,
+    height: r.height,
+  };
+}
+
+/**
+ * The same squeeze for a divider.
+ *
+ * `lengthPct` is a height for a horizontal divider and a width for a vertical one, so only the
+ * latter scales. `parentRect` must scale too: the drag handler converts pixel movement into
+ * percentages by dividing through it, so leaving it at full-stage width would make a dragged
+ * divider move faster than the pointer.
+ */
+export function dividerIntoRegion(d: DividerInfo, left: number, width: number): DividerInfo {
+  return {
+    ...d,
+    leftPct: left + (d.leftPct * width) / 100,
+    lengthPct: d.dir === "vertical" ? (d.lengthPct * width) / 100 : d.lengthPct,
+    parentRect: rectIntoRegion(d.parentRect, left, width),
+  };
+}

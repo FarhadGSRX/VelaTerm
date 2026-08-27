@@ -129,12 +129,20 @@ const ru: typeof en = {
   "settings.navTree": "Дерево", // Tree
   "settings.navCompact": "Компактно", // Compact
   "settings.tabs": "Вкладки", // Tabs
+  "settings.tabsHint":
+    "«Одна» переиспользует одну и ту же вкладку для каждой открываемой сессии, а остальные продолжают работать в фоне. «Несколько» даёт каждой сессии собственную вкладку.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "Динамическое добавление в фильтр статуса",
+  "settings.dynamicStatusFilterHint":
+    "Фильтр статуса сохраняет сессии, которые подходили в момент его применения. Если включено, добавляются и те, что начали подходить позже. Сессии никогда не убираются из списка при смене статуса.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "Одна", // Single
   "settings.tabMulti": "Несколько", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "Сколько сессий продолжают работать в фоне в режиме одной вкладки. Сверх лимита закрывается самая давняя неактивная сессия; работающие, ожидающие подтверждения и с непрочитанным уведомлением сохраняются.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell по умолчанию", // Default shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
+  "settings.spawnConfirmHint":
+    "Относится к сессиям, которые агент порождает через vspawn, а не к вкладкам, открытым вами. Если включено, запрос можно просмотреть и отредактировать до запуска сессии.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "Автоочистка вставленных изображений",
   "settings.cleanImagesHint":
@@ -261,6 +269,8 @@ const ru: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "Не установлен на этом устройстве",
+  "settings.fontProportional": "Пропорциональный", // Proportional
+  "settings.fontMonospace": "Моноширинный", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -301,6 +311,7 @@ const ru: typeof en = {
   "settings.scSearch": "Поиск в терминале", // Find in terminal
   "settings.scGlobalSearch": "Поиск по всем сеансам", // Search all sessions
   "settings.scSaveDoc": "Сохранить документ", // Save document
+  "settings.scFocusSidebar": "Фокус на боковой панели", // Focus sidebar
   "settings.scRecording": "Нажмите клавиши…", // Press keys…
   "settings.scHint": "Нажмите на сочетание, затем нажмите новую комбинацию (нужен Cmd/Ctrl).", // hint
   "settings.scReset": "Сбросить по умолчанию", // Restore defaults
@@ -492,6 +503,7 @@ const ru: typeof en = {
     `Удалить «${name}»? Сохранённые поиск и фильтры будут удалены; проекты и сеансы не изменятся.`,
   "tree.viewSplitRight": "Разделить представление дерева вправо",
   "tree.viewSplitDown": "Разделить представление дерева вниз",
+  "tree.viewKind": "Изменить содержимое представления",  // Change what this view shows
   "tree.viewAdd": "Скопировать текущее представление в новую вкладку",
   "tree.viewCount": (n) => `Представлений дерева: ${n}`,
   "mark.menu": "Метка", // Mark
@@ -669,6 +681,8 @@ const ru: typeof en = {
   "tab.killBgTab": "Завершить эту фоновую вкладку (её процессы завершатся)", // Kill this background tab…
   "tab.newBrowserTab": "Новая вкладка", // New Tab
   "tab.refreshFile": "Обновить файл", // Refresh File
+  "tab.stick": "Закрепить в разделённом виде", // Keep Visible in Split
+  "tab.unstick": "Открепить", // Stop Keeping Visible
   "tab.closeOthers": "Закрыть другие вкладки", // Close Other Tabs
   "tab.closeRight": "Закрыть вкладки справа", // Close Tabs to the Right
   "tab.closeAll": "Закрыть все вкладки", // Close All Tabs
@@ -807,6 +821,10 @@ const ru: typeof en = {
   "files.nameLabel": "Имя", // Name
   "files.newTooltip": "Новый файл или папка", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Добавить в избранное", // Add to Favorites
+  "files.unfavorite": "Удалить из избранного", // Remove from Favorites
+  "files.favorites": "Избранное", // Favorites
+  "files.collapseAll": "Свернуть все", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

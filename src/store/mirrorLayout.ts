@@ -42,6 +42,12 @@ export interface MirrorCenter {
   openTabs: string[];
   liveTabs: string[];
   pinnedTabs: string[];
+  /** Tab held in the sticky region beside the active one, and that region's width. Added by this fork.
+   * Deliberately NOT guarded by a version bump: `sanitizeMirrorLayout` rejects any snapshot whose `v`
+   * differs, so bumping would break mirroring with a stock client entirely. A stock peer simply omits
+   * these, which sanitises to "no sticky tab" — the truth for a client that has no such feature. */
+  stickyTabId: string | null;
+  stickySize: number;
   activeTabId: string | null;
   lastActiveSessionTabId: string | null;
   activeSessionId: string | null;
@@ -99,6 +105,9 @@ export interface MirrorLayoutSource {
   openTabs: string[];
   liveTabs: string[];
   pinnedTabs: string[];
+  /** Optional so callers written against upstream's shape still satisfy this type. */
+  stickyTabId?: string | null;
+  stickySize?: number;
   activeTabId: string | null;
   lastActiveSessionTabId: string | null;
   activeSessionId: string | null;
@@ -163,6 +172,8 @@ export function buildMirrorLayout(s: MirrorLayoutSource): MirrorLayout {
       openTabs: [...s.openTabs],
       liveTabs: [...s.liveTabs],
       pinnedTabs: [...s.pinnedTabs],
+      stickyTabId: s.stickyTabId ?? null,
+      stickySize: s.stickySize ?? 35,
       activeTabId: s.activeTabId,
       lastActiveSessionTabId: s.lastActiveSessionTabId,
       activeSessionId: s.activeSessionId,
@@ -316,6 +327,9 @@ function sidebarView(v: unknown): SidebarTreeView | null {
     id,
     // The pane header needs some label; the ID is at least stable and identical on both sides.
     name: name || id,
+    // An absent or unrecognised kind renders the session tree: that is what every client published before
+    // the file-tree kind existed, so it is both the compatible reading and the harmless one.
+    kind: v.kind === "files" ? "files" : "sessions",
     treeFilter: typeof v.treeFilter === "string" ? v.treeFilter.slice(0, 500) : "",
     statusFilter,
     statusFilterIds: statusFilter ? statusFilterIds : null,
@@ -426,6 +440,7 @@ export function sanitizeMirrorLayout(raw: unknown): MirrorLayout | null {
   const paneTrees = paneTreeMap(center.paneTrees);
   const openTabs = strArray(center.openTabs);
   const activeTabId = strOrNull(center.activeTabId);
+  const stickyTabId = strOrNull(center.stickyTabId);
   const inspectorTab =
     right.inspectorTab === "files" || right.inspectorTab === "info" || right.inspectorTab === "git"
       ? right.inspectorTab
@@ -436,6 +451,13 @@ export function sanitizeMirrorLayout(raw: unknown): MirrorLayout | null {
       openTabs,
       liveTabs: strArray(center.liveTabs),
       pinnedTabs: strArray(center.pinnedTabs),
+      // Same guard activeTabId gets: a tab that is not open cannot hold the sticky slot. A stock peer
+      // omits this entirely, which lands on null rather than on an error.
+      stickyTabId: stickyTabId && openTabs.includes(stickyTabId) ? stickyTabId : null,
+      stickySize:
+        typeof center.stickySize === "number" && Number.isFinite(center.stickySize)
+          ? Math.max(15, Math.min(85, center.stickySize))
+          : 35,
       // A tab that is not open cannot be the active one; a peer mid-transition could publish that pair.
       activeTabId: activeTabId && openTabs.includes(activeTabId) ? activeTabId : null,
       lastActiveSessionTabId: strOrNull(center.lastActiveSessionTabId),
