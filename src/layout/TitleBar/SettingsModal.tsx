@@ -280,7 +280,11 @@ export function FontSelect({
   const CUSTOM = "\u0000custom";
   const options = [
     { value: "", label: t("settings.fontDefault") },
-    ...MONO_FONTS.map((f) => ({ value: f, label: f })),
+    // Proportional presets lead when offered. Each is stored as a whole CSS stack but listed by its short
+    // label, which Select echoes on the trigger because it renders the option matching the current value.
+    ...(proportional ? UI_FONTS.map((f) => ({ value: f.stack, label: f.label })) : []),
+    // The rule marks where the proportional group ends; without it the two lists read as one.
+    ...MONO_FONTS.map((f, i) => ({ value: f, label: f, separatorBefore: proportional && i === 0 })),
     // A typed-in name keeps its own row, so picking a preset and coming back does not mean retyping it.
     ...(value != null && !isPreset ? [{ value, label: value }] : []),
     { value: CUSTOM, label: t("settings.fontCustom"), separatorBefore: true },
