@@ -15,6 +15,8 @@ import {
   collectSessionIds,
   computeDividers,
   computeLayout,
+  dividerIntoRegion,
+  rectIntoRegion,
   type DividerInfo,
   type Rect,
 } from "./paneTree";
@@ -113,6 +115,57 @@ function Divider({
   );
 }
 
+/** Draggable edge between the tab stage and the sticky region. Unlike Divider, this splits the stage
+ *  itself rather than a node inside one tab's pane tree, so it writes `stickySize` instead. */
+function StickyDivider({
+  mainWidth,
+  stageRef,
+}: {
+  mainWidth: number;
+  stageRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const resizeSticky = useTermStore((s) => s.resizeSticky);
+
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const stage = stageRef.current;
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const el = e.currentTarget as HTMLElement;
+    el.classList.add("dragging");
+
+    const move = (ev: MouseEvent) => {
+      // The sticky region is everything to the right of the pointer.
+      resizeSticky(((rect.right - ev.clientX) / rect.width) * 100);
+    };
+    const up = () => {
+      el.classList.remove("dragging");
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.style.userSelect = "";
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  return (
+    <div
+      className="divider dv-row"
+      style={{
+        position: "absolute",
+        left: `${mainWidth}%`,
+        top: 0,
+        height: "100%",
+        transform: "translateX(-50%)",
+        zIndex: 7,
+      }}
+      onMouseDown={startDrag}
+    />
+  );
+}
+
 export function CenterPane() {
   useMemoryTab();
   const t = useT();
@@ -125,6 +178,8 @@ export function CenterPane() {
   const browserTabs = useTermStore((s) => s.browserTabs);
   const paneTrees = useTermStore((s) => s.paneTrees);
   const activeTabId = useTermStore((s) => s.activeTabId);
+  const stickyTabId = useTermStore((s) => s.stickyTabId);
+  const stickySize = useTermStore((s) => s.stickySize);
   const activeSessionId = useTermStore((s) => s.activeSessionId);
   const epochs = useTermStore((s) => s.epochs);
   const dormantSessions = useTermStore((s) => s.dormantSessions);
@@ -163,13 +218,42 @@ export function CenterPane() {
     [focusPane, closePane],
   );
 
+  // A tab kept visible beside the active one. Showing the active tab twice would be pointless, so the
+  // stage goes back to full width whenever the user activates the sticky tab itself.
+  const stickyOn =
+    !!stickyTabId && stickyTabId !== activeTabId && openTabs.includes(stickyTabId);
+  const mainWidth = stickyOn ? 100 - stickySize : 100;
+
+  const intoMain = (r: Rect) => rectIntoRegion(r, 0, mainWidth);
+  const intoSticky = (r: Rect) => rectIntoRegion(r, mainWidth, stickySize);
+  const MAIN_FULL: React.CSSProperties = rectToStyle(
+    intoMain({ left: 0, top: 0, width: 100, height: 100 }),
+  );
+  const STICKY_FULL: React.CSSProperties = rectToStyle(
+    intoSticky({ left: 0, top: 0, width: 100, height: 100 }),
+  );
+
   // Active-tab layout: sessionId -> { rect, paneId }, plus dividers.
   const activeTree = activeTabId ? paneTrees[activeTabId] : null;
   const layout = activeTree ? computeLayout(activeTree) : [];
   const dividers = activeTree ? computeDividers(activeTree) : [];
-  const visibleBySession = new Map(
-    layout.map(({ leaf, rect }) => [leaf.sessionId, { rect, paneId: leaf.paneId }]),
-  );
+  // The sticky tab may itself be a session tab with its own splits, so lay it out the same way and
+  // squeeze it into the sticky region. Its leaves join the visible map, which is what keeps them
+  // mounted-and-shown while a different tab owns the stage.
+  const stickyTree = stickyOn ? paneTrees[stickyTabId] : null;
+  const stickyLayout = stickyTree ? computeLayout(stickyTree) : [];
+  const stickyDividers = stickyTree ? computeDividers(stickyTree) : [];
+
+  const visibleBySession = new Map([
+    ...layout.map(
+      ({ leaf, rect }) =>
+        [leaf.sessionId, { rect: intoMain(rect), paneId: leaf.paneId }] as const,
+    ),
+    ...stickyLayout.map(
+      ({ leaf, rect }) =>
+        [leaf.sessionId, { rect: intoSticky(rect), paneId: leaf.paneId }] as const,
+    ),
+  ]);
   const multi = layout.length > 1;
 
   // Collect sessions from visible and background keep-alive tabs. All remain mounted; hidden ones use display:none.
@@ -251,7 +335,7 @@ export function CenterPane() {
               key={`${id}:${epoch}`}
               session={session}
               cwd={cwd}
-              area={info ? rectToStyle(info.rect) : FULL}
+              area={info ? rectToStyle(info.rect) : MAIN_FULL}
               hidden={!visible}
               focused={visible && id === activeSessionId}
               multi={multi}
@@ -268,11 +352,24 @@ export function CenterPane() {
             and undo history until closeTab unmounts them. */}
         {openTabs
           .filter((tabId) => docTabs[tabId])
-          .map((tabId) => (
-            <Suspense key={tabId} fallback={null}>
-              <DocView tab={docTabs[tabId]} hidden={tabId !== activeTabId} />
-            </Suspense>
-          ))}
+          .map((tabId) => {
+            const isSticky = stickyOn && tabId === stickyTabId;
+            return (
+              // `.docview` is position:absolute inset:0, so this positioned wrapper is all it takes to
+              // confine it to a region -- DocView itself needs to know nothing about the sticky slot.
+              <div
+                key={tabId}
+                style={{ position: "absolute", ...(isSticky ? STICKY_FULL : MAIN_FULL) }}
+              >
+                <Suspense fallback={null}>
+                  <DocView
+                    tab={docTabs[tabId]}
+                    hidden={!isSticky && tabId !== activeTabId}
+                  />
+                </Suspense>
+              </div>
+            );
+          })}
 
         {/* Browser tabs also remain mounted because unmounting destroys the native child WebView.
             When inactive, BrowserView hides the child WebView while its process stays alive, and
@@ -284,7 +381,18 @@ export function CenterPane() {
             // browser tab still reaches a remote client through mirror mode, where it renders as this
             // notice: the tab stays in place, so following the layout never closes the peer's tab.
             env.hasNativeHost ? (
-              <BrowserView key={tabId} tab={browserTabs[tabId]} hidden={tabId !== activeTabId} />
+              <div
+                key={tabId}
+                style={{
+                  position: "absolute",
+                  ...(stickyOn && tabId === stickyTabId ? STICKY_FULL : MAIN_FULL),
+                }}
+              >
+                <BrowserView
+                  tab={browserTabs[tabId]}
+                  hidden={!(stickyOn && tabId === stickyTabId) && tabId !== activeTabId}
+                />
+              </div>
             ) : (
               <div
                 key={tabId}
@@ -306,8 +414,26 @@ export function CenterPane() {
 
         {activeTabId &&
           dividers.map((d) => (
-            <Divider key={d.paneId} info={d} tabId={activeTabId} stageRef={stageRef} />
+            <Divider
+              key={d.paneId}
+              info={dividerIntoRegion(d, 0, mainWidth)}
+              tabId={activeTabId}
+              stageRef={stageRef}
+            />
           ))}
+
+        {/* The sticky tab keeps its own splits resizable; Divider already targets a tab by ID. */}
+        {stickyOn &&
+          stickyDividers.map((d) => (
+            <Divider
+              key={`sticky:${d.paneId}`}
+              info={dividerIntoRegion(d, mainWidth, stickySize)}
+              tabId={stickyTabId}
+              stageRef={stageRef}
+            />
+          ))}
+
+        {stickyOn && <StickyDivider mainWidth={mainWidth} stageRef={stageRef} />}
       </div>
       <LiveTabsOverLimitDialog />
     </div>

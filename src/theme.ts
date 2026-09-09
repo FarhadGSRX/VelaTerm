@@ -29,6 +29,18 @@ export type DividerStyle = "subtle" | "visible";
 export type NavLayout = "tree" | "compact";
 /** Active tab in the right-side Inspector. */
 export type InspectorTab = "files" | "info" | "git";
+/** Settings-modal section. Persisted so reopening Settings returns to the section last viewed. */
+export type SettingsTab =
+  | "appearance"
+  | "terminal"
+  // Added by upstream in v0.1.106; listed here because this vocabulary is what the
+  // "reopen Settings on the section last viewed" feature persists.
+  | "conversation"
+  | "behavior"
+  | "advanced"
+  | "agents"
+  | "shortcuts"
+  | "general";
 
 /** Vlinx visual settings: design tokens beyond the color scheme. */
 export interface VisualSettings {

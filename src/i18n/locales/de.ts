@@ -266,13 +266,21 @@ const de: typeof en = {
   "settings.tabs": "Tabs", // Tabs
   "settings.defaultSessionEngine": "Standardansicht für neue Sitzungen",
   "settings.defaultSessionEngineHint": "Bestehende Sitzungen behalten die Ansicht, mit der sie erstellt wurden.",
+  "settings.tabsHint":
+    "„Einzeln“ verwendet für jede geöffnete Sitzung denselben Tab weiter und lässt die übrigen im Hintergrund laufen. „Mehrere“ gibt jeder Sitzung einen eigenen Tab.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "Dynamische Ergänzung des Statusfilters",
+  "settings.dynamicStatusFilterHint":
+    "Ein Statusfilter behält die Sitzungen, die beim Anwenden übereingestimmt haben. Ist die Option aktiv, werden später hinzukommende Treffer ergänzt. Sitzungen werden bei Statuswechseln nie entfernt.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "Einzeln", // Single
   "settings.tabMulti": "Mehrere", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "Wie viele Sitzungen im Einzel-Tab-Modus im Hintergrund weiterlaufen. Oberhalb der Grenze wird die älteste untätige Sitzung geschlossen; arbeitende, auf Bestätigung wartende oder ungelesen benachrichtigte bleiben erhalten.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Standard-Shell", // Default shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
+  "settings.spawnConfirmHint":
+    "Gilt für Sitzungen, die ein Agent per vspawn ableitet, nicht für selbst geöffnete Tabs. Aktiviert lässt sich der Prompt vor dem Start prüfen und bearbeiten.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "Eingefügte Bilder automatisch bereinigen",
   "settings.cleanImagesHint":
@@ -432,6 +440,8 @@ const de: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "Auf diesem Gerät nicht installiert",
+  "settings.fontProportional": "Proportional", // Proportional
+  "settings.fontMonospace": "Monospace", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -473,6 +483,7 @@ const de: typeof en = {
   "settings.scSearch": "Im Terminal suchen", // Find in terminal
   "settings.scGlobalSearch": "Alle Sitzungen durchsuchen", // Search all sessions
   "settings.scSaveDoc": "Dokument speichern", // Save document
+  "settings.scFocusSidebar": "Seitenleiste fokussieren", // Focus sidebar
   "settings.scRecording": "Tasten drücken…", // Press keys…
   "settings.scHint":
     "Klicke ein Kürzel an und drücke eine neue Kombination (Cmd/Strg erforderlich).", // hint
@@ -678,6 +689,7 @@ const de: typeof en = {
     `„${name}“ löschen? Gespeicherte Such- und Filterbedingungen werden entfernt; Projekte und Sitzungen bleiben unverändert.`,
   "tree.viewSplitRight": "Baumansicht nach rechts teilen",
   "tree.viewSplitDown": "Baumansicht nach unten teilen",
+  "tree.viewKind": "Ändern, was diese Ansicht zeigt",  // Change what this view shows
   "tree.viewAdd": "Aktuelle Baumansicht in einen neuen Tab kopieren",
   "tree.viewCount": (n) => `${n} Baumansicht${n === 1 ? "" : "en"}`,
   "mark.menu": "Markierung", // Mark
@@ -886,6 +898,8 @@ const de: typeof en = {
   "tab.killBgTab": "Diesen Hintergrund-Tab beenden (Prozesse werden beendet)", // Kill this background tab…
   "tab.newBrowserTab": "Neuer Tab", // New Tab
   "tab.refreshFile": "Datei neu laden", // Refresh File
+  "tab.stick": "In geteilter Ansicht sichtbar halten", // Keep Visible in Split
+  "tab.unstick": "Nicht mehr sichtbar halten", // Stop Keeping Visible
   "tab.closeOthers": "Andere Tabs schließen", // Close Other Tabs
   "tab.closeRight": "Tabs rechts schließen", // Close Tabs to the Right
   "tab.closeAll": "Alle Tabs schließen", // Close All Tabs
@@ -1031,6 +1045,10 @@ const de: typeof en = {
   "files.nameLabel": "Name", // Name
   "files.newTooltip": "Neue Datei oder Ordner", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Zu Favoriten hinzufügen", // Add to Favorites
+  "files.unfavorite": "Aus Favoriten entfernen", // Remove from Favorites
+  "files.favorites": "Favoriten", // Favorites
+  "files.collapseAll": "Alle einklappen", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

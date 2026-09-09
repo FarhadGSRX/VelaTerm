@@ -81,6 +81,8 @@ export function TabBar() {
   const browserTabs = useTermStore((s) => s.browserTabs);
   const setActiveTab = useTermStore((s) => s.setActiveTab);
   const closeTab = useTermStore((s) => s.closeTab);
+  const stickyTabId = useTermStore((s) => s.stickyTabId);
+  const setStickyTab = useTermStore((s) => s.setStickyTab);
   const requestCloseDocTab = useTermStore((s) => s.requestCloseDocTab);
   const refreshDocTab = useTermStore((s) => s.refreshDocTab);
   const newScratchTab = useTermStore((s) => s.newScratchTab);
@@ -536,8 +538,14 @@ export function TabBar() {
         (() => {
           const tabId = menu.tabId;
           const idx = openTabs.indexOf(tabId);
-          // Close actions shared by all four tab types.
+          // Actions shared by all four tab types. Keeping a tab visible leads, and applies to every
+          // type, because the sticky region renders documents, browsers and session trees alike.
           const closeItems: MenuItem[] = [
+            {
+              label: stickyTabId === tabId ? t("tab.unstick") : t("tab.stick"),
+              onClick: () => setStickyTab(tabId),
+            },
+            { label: "", separator: true },
             { label: t("doc.closeTab"), onClick: () => closeAnyTab(tabId) },
             {
               label: t("tab.closeOthers"),

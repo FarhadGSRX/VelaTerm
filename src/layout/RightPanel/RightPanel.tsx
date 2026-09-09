@@ -110,7 +110,13 @@ export function RightPanel() {
         ))}
       </div>
       <div className="insp-body" style={{ display: "flex", flexDirection: "column" }}>
-        {inspectorTab === "files" && <FilesTab rootPath={cwd} rootName={project?.name ?? null} />}
+        {inspectorTab === "files" && (
+          <FilesTab
+            rootPath={cwd}
+            rootName={project?.name ?? null}
+            projectId={project?.id ?? null}
+          />
+        )}
         {inspectorTab === "info" &&
           (session ? (
             <InfoTab session={session} cwd={cwd} />

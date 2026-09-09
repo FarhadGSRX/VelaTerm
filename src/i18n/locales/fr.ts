@@ -267,13 +267,21 @@ const fr: typeof en = {
   "settings.tabs": "Onglets", // Tabs
   "settings.defaultSessionEngine": "Vue par défaut des nouvelles sessions",
   "settings.defaultSessionEngineHint": "Les sessions existantes gardent la vue avec laquelle elles ont été créées.",
+  "settings.tabsHint":
+    "« Unique » réutilise le même onglet pour chaque session ouverte et laisse les autres tourner en arrière-plan. « Multiple » donne à chaque session son propre onglet.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "Ajout dynamique au filtre d’état",
+  "settings.dynamicStatusFilterHint":
+    "Un filtre d’état conserve les sessions qui correspondaient au moment où vous l’avez appliqué. Activé, il ajoute aussi celles qui se mettent à correspondre ensuite. Aucune session n’est retirée lorsque son état change.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "Unique", // Single
   "settings.tabMulti": "Multiples", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "Nombre de sessions maintenues en arrière-plan en mode onglet unique. Au-delà de la limite, la session inactive la plus ancienne est fermée ; celles qui travaillent, attendent une confirmation ou ont une notification non lue sont conservées.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell par défaut", // Default shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
+  "settings.spawnConfirmHint":
+    "S’applique aux sessions qu’un agent dérive via vspawn, pas aux onglets que vous ouvrez vous-même. Activé, vous pouvez relire et modifier l’invite avant le démarrage.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.cleanImages": "Nettoyer automatiquement les images collées",
   "settings.cleanImagesHint":
@@ -433,6 +441,8 @@ const fr: typeof en = {
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontUnavailable": "Non installée sur cet appareil",
+  "settings.fontProportional": "Proportionnelle", // Proportional
+  "settings.fontMonospace": "Chasse fixe", // Monospace
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -474,6 +484,7 @@ const fr: typeof en = {
   "settings.scSearch": "Rechercher dans le terminal", // Find in terminal
   "settings.scGlobalSearch": "Rechercher dans toutes les sessions", // Search all sessions
   "settings.scSaveDoc": "Enregistrer le document", // Save document
+  "settings.scFocusSidebar": "Activer la barre latérale", // Focus sidebar
   "settings.scRecording": "Appuyez sur les touches…", // Press keys…
   "settings.scHint":
     "Cliquez sur un raccourci, puis appuyez sur une nouvelle combinaison (Cmd/Ctrl requis).", // hint
@@ -680,6 +691,7 @@ const fr: typeof en = {
     `Supprimer « ${name} » ? Ses recherches et filtres enregistrés seront supprimés, sans affecter les projets ni les sessions.`,
   "tree.viewSplitRight": "Scinder la vue de l’arbre vers la droite",
   "tree.viewSplitDown": "Scinder la vue de l’arbre vers le bas",
+  "tree.viewKind": "Changer ce qu’affiche cette vue",  // Change what this view shows
   "tree.viewAdd": "Copier la vue actuelle dans un nouvel onglet",
   "tree.viewCount": (n) =>
     `${n} vue${n > 1 ? "s" : ""} arborescente${n > 1 ? "s" : ""}`,
@@ -892,6 +904,8 @@ const fr: typeof en = {
     "Fermer cet onglet d'arrière-plan (ses processus se termineront)", // Kill this background tab…
   "tab.newBrowserTab": "Nouvel onglet", // New Tab
   "tab.refreshFile": "Recharger le fichier", // Refresh File
+  "tab.stick": "Garder visible dans le fractionnement", // Keep Visible in Split
+  "tab.unstick": "Ne plus garder visible", // Stop Keeping Visible
   "tab.closeOthers": "Fermer les autres onglets", // Close Other Tabs
   "tab.closeRight": "Fermer les onglets à droite", // Close Tabs to the Right
   "tab.closeAll": "Fermer tous les onglets", // Close All Tabs
@@ -1042,6 +1056,10 @@ const fr: typeof en = {
   "files.nameLabel": "Nom", // Name
   "files.newTooltip": "Nouveau fichier ou dossier", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Ajouter aux favoris", // Add to Favorites
+  "files.unfavorite": "Retirer des favoris", // Remove from Favorites
+  "files.favorites": "Favoris", // Favorites
+  "files.collapseAll": "Tout réduire", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

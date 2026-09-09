@@ -11,6 +11,7 @@ import { knowledgeUrl } from "../Knowledge/navigation";
 import { memoryNavigate } from "../Memory/navigation";
 import {
   type SidebarTreeView,
+  type SidebarViewKind,
   useTermStore,
 } from "../../store/termStore";
 import { isWorktreeGone } from "../../hooks/useGitBranch";
@@ -26,6 +27,7 @@ import { useSessionMenu } from "../sessionMenu";
 import { GlobalSearch } from "../GlobalSearch/GlobalSearch";
 import { ArchivePanel } from "./ArchivePanel";
 import { labelWithCombo } from "../../hooks/shortcutRegistry";
+import { SidebarFilesView } from "./SidebarFilesView";
 import {
   ProjectTree,
   type TreeHandlers,
@@ -182,6 +184,55 @@ function TreeFilter({ view }: { view: SidebarTreeView }) {
   );
 }
 
+/**
+ * Everything that differs between view kinds, resolved in a single exhaustive switch.
+ *
+ * Deliberately one switch rather than a condition per call site: a kind added to `SidebarViewKind` fails to
+ * compile here until every aspect of it is answered, instead of silently falling through to the session tree
+ * at whichever site was forgotten.
+ */
+function sidebarViewParts(
+  view: SidebarTreeView,
+  isPrimary: boolean,
+  treeHandlers: Omit<TreeHandlers, "view" | "isPrimary">,
+  treeWrapRef: React.RefObject<HTMLDivElement | null>,
+): {
+  /** The pane body. */
+  body: React.ReactNode;
+  /** Whether the header's session-search box and status/marker filter apply to this body. */
+  treeControls: boolean;
+  /** Icon for the kind switcher, showing what the pane currently renders. */
+  icon: React.ReactNode;
+  /** What the kind switcher advances to. */
+  nextKind: SidebarViewKind;
+} {
+  switch (view.kind) {
+    case "sessions":
+      return {
+        body: (
+          <>
+            <ProjectTree view={view} isPrimary={isPrimary} {...treeHandlers} />
+            <TreeScrollbar wrapRef={treeWrapRef} />
+          </>
+        ),
+        treeControls: true,
+        icon: <Icons.project size={14} />,
+        nextKind: "files",
+      };
+    case "files":
+      return {
+        body: <SidebarFilesView />,
+        treeControls: false,
+        icon: <Icons.folder size={14} />,
+        nextKind: "sessions",
+      };
+    default: {
+      const unhandled: never = view.kind;
+      return unhandled;
+    }
+  }
+}
+
 /** One independently filtered projection of the shared tree. Every pane can be split again. */
 function SidebarTreePane({
   view,
@@ -206,8 +257,11 @@ function SidebarTreePane({
 }) {
   const t = useT();
   const setTreeFilter = useTermStore((s) => s.setSidebarTreeViewFilter);
+  const setViewKind = useTermStore((s) => s.setSidebarTreeViewKind);
   const refreshStatusMatches = useTermStore((s) => s.refreshSidebarTreeViewStatusMatches);
   const treeWrapRef = useRef<HTMLDivElement>(null);
+  const { body, treeControls, icon, nextKind } =
+    sidebarViewParts(view, isPrimary, treeHandlers, treeWrapRef);
 
   return (
     <section
@@ -219,25 +273,44 @@ function SidebarTreePane({
       onMouseDown={onActivate}
     >
       <div className="searchbar sidebar-tree-search">
-        <div className="box">
-          <Icons.search size={13} />
-          <input
-            placeholder={t("tree.searchPlaceholder")}
-            value={view.treeFilter}
-            onChange={(event) => setTreeFilter(view.id, event.target.value)}
-          />
-          {view.treeFilter && (
-            <button
-              className="search-clear"
-              title={t("tree.clearSearch")}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => setTreeFilter(view.id, "")}
-            >
-              <Icons.x size={12} />
-            </button>
-          )}
-        </div>
-        <TreeFilter view={view} />
+        {/* The search box and status/marker filter only mean anything over the session tree. A body that does
+            its own searching gets a spacer instead, keeping the switcher and close button right-aligned. */}
+        {treeControls ? (
+          <>
+            <div className="box">
+              <Icons.search size={13} />
+              <input
+                placeholder={t("tree.searchPlaceholder")}
+                value={view.treeFilter}
+                onChange={(event) => setTreeFilter(view.id, event.target.value)}
+              />
+              {view.treeFilter && (
+                <button
+                  className="search-clear"
+                  title={t("tree.clearSearch")}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setTreeFilter(view.id, "")}
+                >
+                  <Icons.x size={12} />
+                </button>
+              )}
+            </div>
+            <TreeFilter view={view} />
+          </>
+        ) : (
+          <div style={{ flex: 1 }} />
+        )}
+        <button
+          className="icon-btn sm sidebar-tree-kind"
+          title={t("tree.viewKind")}
+          aria-label={t("tree.viewKind")}
+          onClick={(event) => {
+            event.stopPropagation();
+            setViewKind(view.id, nextKind);
+          }}
+        >
+          {icon}
+        </button>
         {split && !isPrimary && (
           <button
             className="icon-btn sm sidebar-tree-close"
@@ -253,8 +326,7 @@ function SidebarTreePane({
         )}
       </div>
       <div ref={treeWrapRef} className="sidebar-tree-body">
-        <ProjectTree view={view} isPrimary={isPrimary} {...treeHandlers} />
-        <TreeScrollbar wrapRef={treeWrapRef} />
+        {body}
       </div>
       <div className="sidebar-tree-footer">
         {/* Creation action, kept apart from the two view controls on the right. */}
@@ -426,6 +498,7 @@ export function LeftSidebar() {
     : [{
         id: "main",
         name: t("tree.viewMainName"),
+        kind: "sessions",
         treeFilter: legacyTreeFilter ?? "",
         statusFilter: legacyStatusFilter ?? null,
         statusFilterIds: legacyStatusFilterIds ?? null,
