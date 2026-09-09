@@ -276,6 +276,7 @@ const en = {
   "settings.maxLiveTabsHint":
     "How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.",
   "settings.defaultShell": "Default shell",
+  "settings.agentShell": "Agent shell",
   "settings.spawnConfirm": "Confirm before spawn",
   "settings.usageAuto": "Usage auto-refresh",
   "settings.spawnConfirmHint":

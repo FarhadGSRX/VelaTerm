@@ -287,6 +287,7 @@ const ru: typeof en = {
   "settings.maxLiveTabsHint":
     "Сколько сессий продолжают работать в фоне в режиме одной вкладки. Сверх лимита закрывается самая давняя неактивная сессия; работающие, ожидающие подтверждения и с непрочитанным уведомлением сохраняются.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell по умолчанию", // Default shell
+  "settings.agentShell": "Shell агента", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.spawnConfirmHint":

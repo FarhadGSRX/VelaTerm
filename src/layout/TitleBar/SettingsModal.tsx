@@ -134,12 +134,20 @@ function LangSelect() {
 }
 
 /** Default-shell picker listing the system default plus detected shells. The row hides itself when
- * detection turns up nothing. New terminals without an explicit choice use this value; tree and
- * edit-form entry points may still override it per launch. */
-function ShellSelect() {
+ * detection turns up nothing. New sessions without an explicit choice use this value; tree and
+ * edit-form entry points may still override it per launch.
+ *
+ * `target` selects which default is edited. Agent sessions are configured separately from terminals because
+ * the two wants differ — Git Bash terminals alongside PowerShell 7 agents is a normal pairing — and because
+ * WSL is excluded from the agent list: agent hooks and executable paths do not cross that boundary, the same
+ * reason the per-session edit form filters it out. */
+function ShellSelect({ target }: { target: "terminal" | "agent" }) {
   const t = useT();
-  const defaultShell = useTermStore((s) => s.defaultShell);
+  const isAgent = target === "agent";
+  const value = useTermStore((s) => (isAgent ? s.agentShell : s.defaultShell));
   const setDefaultShell = useTermStore((s) => s.setDefaultShell);
+  const setAgentShell = useTermStore((s) => s.setAgentShell);
+  const setValue = isAgent ? setAgentShell : setDefaultShell;
   const [shells, setShells] = useState<ShellOption[]>([]);
   useEffect(() => {
     let alive = true;
@@ -151,24 +159,28 @@ function ShellSelect() {
     };
   }, []);
 
-  if (!shells.length) return null;
+  const selectable = isAgent ? shells.filter((s) => !s.id.startsWith("wsl:")) : shells;
+  if (!selectable.length) return null;
 
   const options = [
     { value: "", label: t("tree.shellSystemDefault") },
-    ...shells.map((s) => ({ value: s.path, label: s.label })),
+    ...selectable.map((s) => ({ value: s.path, label: s.label })),
   ];
 
+  // One caption serves as both the visible label and the control's accessible name.
+  const label = t(isAgent ? "settings.agentShell" : "settings.defaultShell");
+
   return (
-    <Field label={t("settings.defaultShell")}>
+    <Field label={label}>
       <Select
-        value={defaultShell}
-        onChange={setDefaultShell}
+        value={value}
+        onChange={setValue}
         options={options}
         size="sm"
         width={160}
         menuWidth={172}
         align="right"
-        ariaLabel={t("settings.defaultShell")}
+        ariaLabel={label}
       />
     </Field>
   );
@@ -696,7 +708,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <>
                 <SectionTitle>{t("settings.catTerminal")}</SectionTitle>
                 <ImagePasteModeField />
-                <ShellSelect />
+                <ShellSelect target="terminal" />
+                <ShellSelect target="agent" />
                 <Field label={t("settings.termFont")}>
                   <FontSelect value={termFontFamily} onChange={setTermFontFamily} label={t("settings.termFont")} />
                 </Field>

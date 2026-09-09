@@ -278,6 +278,7 @@ const ptBR: typeof en = {
   "settings.maxLiveTabsHint":
     "Quantas sessões continuam rodando em segundo plano no modo de aba única. Acima do limite, a sessão ociosa mais antiga é fechada; as que estão trabalhando, aguardando confirmação ou com notificação não lida são mantidas.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell padrão", // Default shell
+  "settings.agentShell": "Shell do agente", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.spawnConfirmHint":
