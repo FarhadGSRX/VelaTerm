@@ -1,5 +1,5 @@
-//! Installation and discovery of built-in command shims (`vspawn`, `vspawn-tree`, `vopen`, `vrefer`,
-//! and `vsearch`).
+//! Installation and discovery of built-in command shims and their companion skills (`vspawn`,
+//! `vspawn-tree`, `vopen`, `vrefer`, `vsearch`, `vask`, `vtell`, and `vkb`).
 //!
 //! At startup VelaTerm installs thin shims under the application data `bin/` directory and prepends it
 //! to each session shell's PATH, allowing `vspawn "task"`, `vopen <file>`, `vrefer <session>`, and
@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 /// Built-in `(command name, main-program subcommand arguments)` shims. `vspawn` creates a child session
 /// without a worktree, `vspawn-tree` forces `--worktree`, `vopen` opens a document or browser tab,
-/// `vrefer` reads another session's conversation, `vsearch` searches across every session, `vorch`
-/// proposes several sessions at once, and `vstat` reports which sessions are busy.
+/// `vrefer` reads another session's conversation, `vsearch` searches across every session, `vstat` reports which sessions are busy, and `vkb` queries code
+/// and the knowledge base. `vtell` sends session messages and execution reports.
 ///
 /// Unique `v`-prefixed names avoid shadowing system commands such as Vim's `/usr/bin/view`, so simply
 /// prepending the bin directory is sufficient without ZDOTDIR/path_helper reordering.
@@ -24,13 +24,20 @@ const SHIMS: &[(&str, &str)] = &[
     ("vopen", "--view"),
     ("vrefer", "--refer"),
     ("vsearch", "--search"),
-    ("vorch", "--orch"),
     ("vstat", "--stat"),
-    ("vknowledge", "--knowledge"),
+    ("vkb", "--knowledge"),
+    ("vflow", "--flow"),
+    ("vtell", "--tell"),
 ];
 
 #[cfg(feature = "gui")]
 const VELA_SHIM_MARKER: &str = "VelaTerm managed vela command";
+
+/// Fixed destination of the managed `vela` launcher on macOS, the same location VS Code uses for its
+/// `code` command. Writing there requires administrator authorization, so only explicit user actions
+/// install it.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+const MACOS_CLI_PATH: &str = "/usr/local/bin/vela";
 
 /// Visibility of the `vela` command in the user's shell. `conflict` means an earlier PATH entry contains
 /// an unmanaged command with the same name, which the installer never overwrites.
@@ -54,12 +61,10 @@ const SKILLS: &[(&str, &str)] = &[
     ("vopen", include_str!("../../../skills/vopen/SKILL.md")),
     ("vrefer", include_str!("../../../skills/vrefer/SKILL.md")),
     ("vsearch", include_str!("../../../skills/vsearch/SKILL.md")),
-    ("vorch", include_str!("../../../skills/vorch/SKILL.md")),
+    ("vask", include_str!("../../../skills/vask/SKILL.md")),
     ("vstat", include_str!("../../../skills/vstat/SKILL.md")),
-    (
-        "vknowledge",
-        include_str!("../../../skills/vknowledge/SKILL.md"),
-    ),
+    ("vtell", include_str!("../../../skills/vtell/SKILL.md")),
+    ("vkb", include_str!("../../../skills/vkb/SKILL.md")),
 ];
 
 /// Bin directory prepended to session PATH: `<data_dir>/bin`.
@@ -75,6 +80,14 @@ pub fn install(data_dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(&bin)?;
     for (name, subcmd) in SHIMS {
         write_shim(&bin, name, subcmd)?;
+    }
+    // Retire both wrappers, including the extensionless Git Bash variant on Windows.
+    for name in ["vknowledge", "vknowledge.cmd", "vorch", "vorch.cmd"] {
+        match std::fs::remove_file(bin.join(name)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
     }
     Ok(bin)
 }
@@ -110,9 +123,10 @@ pub fn user_cli_status() -> UserCliStatus {
     }
 }
 
-/// Install `vela` into the current login shell's PATH. macOS invokes this explicitly from menus/settings;
-/// Windows and Linux releases may run it at startup for packaged-app convenience. Never modify shell
-/// profiles, elevate privileges, or overwrite a same-name file without the application marker.
+/// Install `vela` into the current login shell's PATH. On macOS this is `/usr/local/bin/vela` written
+/// with administrator authorization, matching VS Code's `code` command; Windows and Linux releases pick
+/// the first writable user bin directory already in PATH and may run this at startup. Never modify
+/// shell profiles or overwrite a same-name file without the application marker.
 #[cfg(feature = "gui")]
 pub fn install_user_cli() -> std::io::Result<UserCliStatus> {
     if cfg!(debug_assertions) {
@@ -132,42 +146,169 @@ pub fn install_user_cli() -> std::io::Result<UserCliStatus> {
         ));
     }
     let exe = std::env::current_exe()?;
-    for dir in user_path_dirs() {
-        if !is_safe_user_bin_dir(&dir) {
-            continue;
-        }
-        if !dir.exists() && std::fs::create_dir_all(&dir).is_err() {
-            continue;
-        }
-        if !dir.is_dir() {
-            continue;
-        }
-        let dest = managed_cli_path(&dir);
-        match write_user_cli_at(&dest, &exe) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(e),
-            Err(_) => continue,
-        }
-        return Ok(UserCliStatus {
-            installed: true,
-            path: Some(dest.to_string_lossy().into_owned()),
-            conflict: None,
-        });
+
+    #[cfg(target_os = "macos")]
+    {
+        return install_user_cli_macos(&exe);
     }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        for dir in user_path_dirs() {
+            if !is_safe_user_bin_dir(&dir) {
+                continue;
+            }
+            if !dir.exists() && std::fs::create_dir_all(&dir).is_err() {
+                continue;
+            }
+            if !dir.is_dir() {
+                continue;
+            }
+            let dest = managed_cli_path(&dir);
+            match write_user_cli_at(&dest, &exe) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(e),
+                Err(_) => continue,
+            }
+            return Ok(UserCliStatus {
+                installed: true,
+                path: Some(dest.to_string_lossy().into_owned()),
+                conflict: None,
+            });
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "no writable bin directory from your PATH is available; add a user-writable bin directory to PATH and try again",
+        ))
+    }
+}
+
+/// Remove every VelaTerm-managed `vela` launcher in PATH without touching user-owned commands. The
+/// macOS copy under `/usr/local/bin` needs administrator authorization; legacy user PATH shims do not.
+#[cfg(feature = "gui")]
+pub fn uninstall_user_cli() -> std::io::Result<UserCliStatus> {
+    #[cfg(target_os = "macos")]
+    {
+        return uninstall_user_cli_macos();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        for dir in user_path_dirs() {
+            let dest = managed_cli_path(&dir);
+            remove_user_cli_at(&dest)?;
+        }
+        Ok(user_cli_status())
+    }
+}
+
+/// Install the macOS launcher at `/usr/local/bin/vela`. The launcher is staged as the current user and
+/// the authorized shell only copies it into place, so the authorization prompt never runs
+/// user-controlled script content.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn install_user_cli_macos(exe: &Path) -> std::io::Result<UserCliStatus> {
+    let dest = Path::new(MACOS_CLI_PATH);
+    let staged = std::env::temp_dir().join(format!("vlx-vela-{}", std::process::id()));
+    if let Err(e) = write_user_cli_at(&staged, exe) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
+    }
+    let command = format!(
+        "mkdir -p /usr/local/bin && rm -f {dst} && cp {src} {dst} && chmod 755 {dst}",
+        src = shell_quote(&staged),
+        dst = shell_quote(dest)
+    );
+    let authorized = run_admin_shell(&command);
+    let _ = std::fs::remove_file(&staged);
+    match authorized {
+        Ok(()) => {}
+        // A dismissed authorization prompt is not a failure; report the unchanged state.
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => return Ok(user_cli_status()),
+        Err(e) => return Err(e),
+    }
+    let status = user_cli_status();
+    if status.installed {
+        Ok(status)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "the 'vela' command could not be installed in /usr/local/bin",
+        ))
+    }
+}
+
+/// Remove the macOS launcher, plus any managed shims older releases left in user PATH directories.
+/// `/usr/local/bin` is root-owned, so deleting the managed file there asks for authorization; a
+/// user-owned `vela` at that path is never touched.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn uninstall_user_cli_macos() -> std::io::Result<UserCliStatus> {
+    let fixed_dir = Path::new("/usr/local/bin");
+    for dir in user_path_dirs() {
+        if dir.as_path() == fixed_dir {
+            continue;
+        }
+        remove_user_cli_at(&managed_cli_path(&dir))?;
+    }
+    let dest = Path::new(MACOS_CLI_PATH);
+    if is_managed_cli(dest) {
+        match std::fs::remove_file(dest) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                let command = format!("rm -f {}", shell_quote(dest));
+                match run_admin_shell(&command) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(user_cli_status())
+}
+
+/// Execute `command` as root through `osascript`, the mechanism VS Code uses to install its `code`
+/// command. A dismissed authorization prompt maps to `Interrupted` so callers can treat it as a no-op.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn run_admin_shell(command: &str) -> std::io::Result<()> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(render_admin_script(command))
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if is_admin_cancel(&stderr) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "administrator authorization was cancelled",
+        ));
+    }
+    crate::diagnostic_warn!("osascript administrator command failed: {}", stderr.trim());
     Err(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        "no writable bin directory from your PATH is available; add a user-writable bin directory to PATH and try again",
+        std::io::ErrorKind::Other,
+        "administrator authorization failed",
     ))
 }
 
-/// Remove every VelaTerm-managed `vela` shim in PATH without touching user-owned commands.
-#[cfg(feature = "gui")]
-pub fn uninstall_user_cli() -> std::io::Result<UserCliStatus> {
-    for dir in user_path_dirs() {
-        let dest = managed_cli_path(&dir);
-        remove_user_cli_at(&dest)?;
-    }
-    Ok(user_cli_status())
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn render_admin_script(command: &str) -> String {
+    let escaped = command.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("do shell script \"{escaped}\" with administrator privileges")
+}
+
+/// AppleScript reports a dismissed authorization prompt as error -128. Match the numeric code because
+/// the surrounding message is localized.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn is_admin_cancel(stderr: &str) -> bool {
+    stderr.contains("-128") || stderr.contains("User canceled") || stderr.contains("User cancelled")
+}
+
+/// Single-quote a path for the `/bin/sh` command executed by `do shell script`.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
 #[cfg(feature = "gui")]
@@ -176,10 +317,12 @@ fn user_path_dirs() -> Vec<PathBuf> {
         return Vec::new();
     };
     let mut dirs: Vec<PathBuf> = std::env::split_paths(&path_env).collect();
-    // Prefer `/usr/local/bin` on macOS like VS Code, but only when already in PATH so the command is visible.
+    // macOS always checks `/usr/local/bin` first: that is where the managed command lives, and a
+    // Finder-launched app inherits a minimal PATH without the login shell's additions.
     #[cfg(target_os = "macos")]
-    if let Some(i) = dirs.iter().position(|p| p == Path::new("/usr/local/bin")) {
-        let preferred = dirs.remove(i);
+    {
+        let preferred = PathBuf::from("/usr/local/bin");
+        dirs.retain(|dir| dir != &preferred);
         dirs.insert(0, preferred);
     }
     dirs.dedup();
@@ -244,7 +387,7 @@ fn remove_user_cli_at(dest: &Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-#[cfg(feature = "gui")]
+#[cfg(all(feature = "gui", not(target_os = "macos")))]
 fn is_safe_user_bin_dir(dir: &Path) -> bool {
     // Allow only known user/package-manager bin directories, never arbitrary writable PATH entries such
     // as project node_modules, temporary directories, or system locations. The write still verifies access.
@@ -364,18 +507,34 @@ fn write_skills(dir: &Path, for_codex: bool) -> std::io::Result<()> {
     for (name, content) in SKILLS {
         let dest = dir.join(name);
         std::fs::create_dir_all(&dest)?;
+        if *name == "vspawn" {
+            std::fs::create_dir_all(dest.join("references"))?;
+            std::fs::write(dest.join("references/plan-execute.md"), include_str!("../../../skills/vspawn/references/plan-execute.md"))?;
+        }
         if for_codex {
             std::fs::write(dest.join("SKILL.md"), codex_skill_content(content))?;
-            if *name == "vknowledge" {
+            if *name == "vkb" {
                 let agents = dest.join("agents");
                 std::fs::create_dir_all(&agents)?;
                 std::fs::write(
                     agents.join("openai.yaml"),
-                    include_str!("../../../skills/vknowledge/agents/openai.yaml"),
+                    include_str!("../../../skills/vkb/agents/openai.yaml"),
                 )?;
             }
         } else {
             std::fs::write(dest.join("SKILL.md"), content)?;
+        }
+    }
+    remove_retired_skills(dir)
+}
+
+/// Remove the former bundled skill on upgrades as well as explicit installation or removal.
+fn remove_retired_skills(dir: &Path) -> std::io::Result<()> {
+    for name in ["vknowledge", "vorch"] {
+        match std::fs::remove_dir_all(dir.join(name)) {
+            Ok(()) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return Err(e),
         }
     }
     Ok(())
@@ -402,6 +561,7 @@ pub fn install_skills() -> std::io::Result<()> {
 /// Uninstall all bundled skills from Claude and Codex user-level skill directories.
 pub fn uninstall_skills() -> std::io::Result<()> {
     for dir in skill_dirs()? {
+        remove_retired_skills(&dir)?;
         for (name, _) in SKILLS {
             let dest = dir.join(name);
             if dest.exists() {
@@ -415,16 +575,24 @@ pub fn uninstall_skills() -> std::io::Result<()> {
 /// Refresh installed skills at startup so contents follow application updates, like bin scripts. Leave
 /// uninstalled skills untouched because the setting controls installation. Log failures without aborting.
 pub fn refresh_installed_skills() {
+    if let Err(e) = skill_dirs().and_then(refresh_skills_in_dirs) {
+        crate::diagnostic_warn!("failed to refresh installed agent skills (skill content may lag behind the current version): {e}");
+    }
+}
+
+fn refresh_skills_in_dirs(dirs: [PathBuf; 2]) -> std::io::Result<()> {
     // Older releases wrote only ~/.claude/skills. A sentinel on either side means the user enabled the
     // bundle, so refresh also fills the other directory.
-    let was_installed = skill_dirs()
-        .map(|dirs| dirs.iter().any(|dir| sentinel_exists(dir)))
-        .unwrap_or(false);
-    if was_installed {
-        if let Err(e) = install_skills() {
-            eprintln!("failed to refresh installed agent skills (skill content may lag behind the current version): {e}");
-        }
+    let was_installed = dirs.iter().any(|dir| sentinel_exists(dir));
+    // Retired skills must also disappear from partial or disabled installations.
+    for dir in &dirs {
+        remove_retired_skills(dir)?;
     }
+    if was_installed {
+        write_skills(&dirs[0], false)?;
+        write_skills(&dirs[1], true)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -507,6 +675,114 @@ mod tests {
         assert!(!rendered.contains("allowed-tools:"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn knowledge_command_preserves_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let tmp = std::env::temp_dir().join(format!("vlx-vkb-shims-{}", uuid::Uuid::new_v4()));
+        let bin = install(&tmp).unwrap();
+        let fake_exe = tmp.join("Vela Term");
+        std::fs::write(&fake_exe, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&fake_exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let query = "中文 字体 $(echo unexpected) ; & \"quoted\"";
+        let output = Command::new(bin.join("vkb"))
+            .env("VLX_EXE", &fake_exe)
+            .args(["memories", query])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "vkb should execute successfully");
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), format!("--knowledge\nmemories\n{query}\n"));
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn install_removes_retired_command_wrappers() {
+        let tmp = std::env::temp_dir().join(format!("vlx-vkb-upgrade-{}", uuid::Uuid::new_v4()));
+        let bin = bin_dir(&tmp);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("vknowledge"), "#!/bin/sh\nexec \"$VLX_EXE\" --knowledge \"$@\"\n").unwrap();
+        std::fs::write(bin.join("vknowledge.cmd"), "@\"%VLX_EXE%\" --knowledge %*\r\n").unwrap();
+        for name in ["vorch", "vorch.cmd"] { std::fs::write(bin.join(name), "retired").unwrap(); }
+        std::fs::write(bin.join("custom-command"), "keep").unwrap();
+        for _ in 0..2 {
+            install(&tmp).unwrap();
+            assert!(!bin.join("vknowledge").exists());
+            assert!(!bin.join("vknowledge.cmd").exists());
+            assert!(!bin.join("vorch").exists());
+            assert!(!bin.join("vorch.cmd").exists());
+            assert!(shim_path(&bin, "vkb").is_file());
+            assert_eq!(std::fs::read_to_string(bin.join("custom-command")).unwrap(), "keep");
+        }
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn knowledge_skills_replace_retired_name_without_implicit_invocation() {
+        let tmp = std::env::temp_dir().join(format!("vlx-vkb-skills-{}", uuid::Uuid::new_v4()));
+        for (provider, for_codex) in [("claude", false), ("codex", true)] {
+            let dir = tmp.join(provider);
+            // Simulate an older bundle that has only the original skill.
+            std::fs::create_dir_all(dir.join("vknowledge/agents")).unwrap();
+            std::fs::write(dir.join("vknowledge/SKILL.md"), "old bundled skill").unwrap();
+            std::fs::write(dir.join("vknowledge/agents/openai.yaml"), "old bundled policy").unwrap();
+            std::fs::create_dir_all(dir.join("custom-skill")).unwrap();
+            std::fs::write(dir.join("custom-skill/SKILL.md"), "keep").unwrap();
+            for _ in 0..2 {
+                write_skills(&dir, for_codex).unwrap();
+                assert!(!dir.join("vknowledge").exists());
+                assert_eq!(std::fs::read_to_string(dir.join("custom-skill/SKILL.md")).unwrap(), "keep");
+                let content = std::fs::read_to_string(dir.join("vkb/SKILL.md")).unwrap();
+                assert!(content.contains("name: vkb\n"));
+                assert!(content.contains("only when the user explicitly"));
+                assert!(content.contains("vkb memories"));
+                if for_codex {
+                    assert!(!content.contains("disable-model-invocation:"));
+                    let policy = std::fs::read_to_string(dir.join("vkb/agents/openai.yaml")).unwrap();
+                    assert!(policy.contains("allow_implicit_invocation: false"));
+                } else {
+                    assert!(content.contains("disable-model-invocation: true"));
+                }
+            }
+        }
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn startup_removes_retired_skills_and_respects_bundle_setting() {
+        let tmp = std::env::temp_dir().join(format!("vlx-vkb-refresh-{}", uuid::Uuid::new_v4()));
+        for enabled in [false, true] {
+            let root = tmp.join(enabled.to_string());
+            let dirs = [root.join("claude"), root.join("codex")];
+            for dir in &dirs {
+                std::fs::create_dir_all(dir.join("vknowledge")).unwrap();
+                std::fs::write(dir.join("vknowledge/SKILL.md"), "old bundled skill").unwrap();
+                std::fs::create_dir_all(dir.join("vorch")).unwrap();
+                std::fs::write(dir.join("vorch/SKILL.md"), "old task splitter").unwrap();
+            }
+            if enabled {
+                std::fs::create_dir_all(dirs[0].join("vspawn")).unwrap();
+                std::fs::write(dirs[0].join("vspawn/SKILL.md"), "bundle sentinel").unwrap();
+            }
+            for _ in 0..2 {
+                refresh_skills_in_dirs(dirs.clone()).unwrap();
+                for dir in &dirs {
+                    assert!(!dir.join("vknowledge").exists());
+                    assert!(!dir.join("vorch").exists());
+                    assert_eq!(dir.join("vkb/SKILL.md").exists(), enabled);
+                    assert_eq!(dir.join("vask/SKILL.md").exists(), enabled);
+                    if enabled {
+                        let skill = std::fs::read_to_string(dir.join("vask/SKILL.md")).unwrap();
+                        assert!(skill.contains("name: vask"));
+                        assert!(skill.contains("vrefer <session> --ask"));
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
     #[cfg(feature = "gui")]
     #[test]
     fn user_cli_forwards_one_quoted_project_path() {
@@ -556,5 +832,34 @@ mod tests {
             "#!/bin/sh\necho user-owned\n"
         );
         let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[cfg(all(feature = "gui", target_os = "macos"))]
+    #[test]
+    fn admin_script_escapes_applescript_string_metacharacters() {
+        let rendered = render_admin_script("cp '/tmp/a b' '/usr/local/bin/vela'");
+        assert_eq!(
+            rendered,
+            "do shell script \"cp '/tmp/a b' '/usr/local/bin/vela'\" with administrator privileges"
+        );
+        let injected = render_admin_script("echo \"hi\" \\ end");
+        assert!(injected.contains("\\\"hi\\\""));
+        assert!(injected.contains("\\\\"));
+        assert!(!injected.contains("echo \"hi\""));
+    }
+
+    #[cfg(all(feature = "gui", target_os = "macos"))]
+    #[test]
+    fn admin_cancel_detection_matches_numeric_code_not_wording() {
+        assert!(is_admin_cancel("execution error: User canceled. (-128)"));
+        assert!(is_admin_cancel("execution error: Benutzer hat abgebrochen. (-128)"));
+        assert!(!is_admin_cancel("execution error: cp: /x: No such file or directory (-2741)"));
+    }
+
+    #[cfg(all(feature = "gui", target_os = "macos"))]
+    #[test]
+    fn shell_quoting_escapes_single_quotes() {
+        assert_eq!(shell_quote(Path::new("/tmp/plain")), "'/tmp/plain'");
+        assert_eq!(shell_quote(Path::new("/tmp/it's")), "'/tmp/it'\\''s'");
     }
 }

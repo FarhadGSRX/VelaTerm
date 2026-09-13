@@ -7,7 +7,7 @@
 //! as well so the store loads in jsdom, following docTabs.test.
 
 import * as React from "react";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { readTextFile, statFile, writeTextFile } = vi.hoisted(() => ({
@@ -28,10 +28,15 @@ vi.mock("./SourceEditor", () => ({
     React.createElement("div", { "data-testid": "source-editor" }),
   ),
 }));
-vi.mock("./WysiwygEditor", () => ({
-  WysiwygEditor: React.forwardRef(() =>
-    React.createElement("div", { "data-testid": "wysiwyg-editor" }),
-  ),
+vi.mock("./MarkdownEditor", () => ({
+  MarkdownEditor: React.forwardRef(function MockMarkdown(props: { defaultValue: string; mode: string; onEdited: () => void }, ref) {
+    const [value, setValue] = React.useState(props.defaultValue);
+    React.useImperativeHandle(ref, () => ({ getText: () => value, scrollToHeading: () => {} }));
+    return React.createElement("textarea", {
+      "data-testid": "markdown-editor", value, disabled: false,
+      onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => { setValue(e.target.value); props.onEdited(); },
+    });
+  }),
 }));
 vi.mock("./ImageDocView", () => ({ ImageDocView: () => null }));
 vi.mock("./DocFileTree", () => ({ DocFileTree: () => null }));
@@ -143,5 +148,38 @@ describe("the document save shortcut", () => {
     } finally {
       document.removeEventListener("keydown", forwardGlobalSave, true);
     }
+  });
+});
+
+
+describe("Markdown view switching", () => {
+  it("retains the editor and unsaved text across all three views, then saves exactly that text", async () => {
+    const { id, sync } = await mountDoc("/tmp/three-views.md");
+    const input = document.querySelector<HTMLTextAreaElement>('[data-testid="markdown-editor"]')!;
+    expect(input.disabled).toBe(false);
+    act(() => useTermStore.getState().setDocTabMode(id, "source"));
+    sync();
+    fireEvent.change(input, { target: { value: "# Edited\n\nNo trailing newline" } });
+    for (const mode of ["compare", "visual", "source"] as const) {
+      act(() => useTermStore.getState().setDocTabMode(id, mode));
+      sync();
+      expect(document.querySelector('[data-testid="markdown-editor"]')).toBe(input);
+      expect(input.value).toBe("# Edited\n\nNo trailing newline");
+    }
+    act(() => window.dispatchEvent(new CustomEvent("vlx:doc-save", { detail: id })));
+    await waitFor(() => expect(writeTextFile).toHaveBeenCalledWith("/tmp/three-views.md", "# Edited\n\nNo trailing newline", 1));
+  });
+
+  it("does not serialize or mark a file dirty when only changing views", async () => {
+    const original = "# Title\r\n\r\n-   preserved spacing";
+    readTextFile.mockResolvedValueOnce({ content: original, mtimeMs: 1 });
+    const { id, sync } = await mountDoc("/tmp/pristine.md");
+    for (const mode of ["source", "compare", "visual"] as const) {
+      act(() => useTermStore.getState().setDocTabMode(id, mode));
+      sync();
+    }
+    expect(useTermStore.getState().docTabs[id].dirty).toBe(false);
+    act(() => window.dispatchEvent(new CustomEvent("vlx:doc-save", { detail: id })));
+    await waitFor(() => expect(writeTextFile).toHaveBeenCalledWith("/tmp/pristine.md", original, 1));
   });
 });

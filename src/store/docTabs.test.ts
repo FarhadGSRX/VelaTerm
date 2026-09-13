@@ -122,7 +122,7 @@ describe("openDocTab: creating, focusing and deduplicating", () => {
     const tab = s.docTabs[id];
     expect(tab.path).toBe("/tmp/notes.md");
     expect(tab.title).toBe("notes.md");
-    expect(tab.mode).toBe("wysiwyg"); // Markdown opens in WYSIWYG mode.
+    expect(tab.mode).toBe("visual"); // Markdown opens in reading mode.
     expect(tab.dirty).toBe(false);
   });
 
@@ -182,9 +182,9 @@ describe("refreshDocTab: the Refresh file action in the tab context menu", () =>
 
 describe("makeDocTab classifies by extension (kind plus initial mode)", () => {
   const table: Array<[string, string, string]> = [
-    ["/tmp/a.md", "markdown", "wysiwyg"],
-    ["/tmp/b.markdown", "markdown", "wysiwyg"],
-    ["/tmp/c.mdx", "markdown", "wysiwyg"],
+    ["/tmp/a.md", "markdown", "visual"],
+    ["/tmp/b.markdown", "markdown", "visual"],
+    ["/tmp/c.mdx", "markdown", "visual"],
     ["/tmp/b.py", "code", "source"],
     ["/tmp/c.rs", "code", "source"],
     ["/tmp/no-extension", "code", "source"],

@@ -33,6 +33,20 @@ it("closes with Escape without propagating an agent interrupt", () => {
   expect(parent).not.toHaveBeenCalled();
 });
 
+it("does not report no results before history is loaded or after a paging failure", () => {
+  const props = { entries: [], onLocate: vi.fn(), onClose: vi.fn(), onRetryHistory: vi.fn() };
+  const { rerender } = render(<ChatSearch {...props} loadingHistory />);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "first message" } });
+  expect(screen.queryByText("No results")).toBeNull();
+  expect(screen.getByText("Loading…")).toBeTruthy();
+  rerender(<ChatSearch {...props} historyError="History temporarily unavailable" />);
+  expect(screen.queryByText("No results")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(props.onRetryHistory).toHaveBeenCalledOnce();
+  rerender(<ChatSearch {...props} />);
+  expect(screen.getByText("No results")).toBeTruthy();
+});
+
 it("searches deferred tool output and nested details without expanding cards", async () => {
   vi.mocked(loadChatTool).mockResolvedValueOnce({ kind: "tool", id: "deferred", name: "Bash", input: {}, status: "completed", isError: false, output: "remote needle", children: [{ kind: "tool", id: "child", name: "Read", input: {}, status: "completed", isError: false, detailAvailable: true }] }).mockResolvedValueOnce({ kind: "tool", id: "child", name: "Read", input: {}, status: "completed", isError: false, output: "nested needle" });
   render(<ChatSearch entries={[{ kind: "row", id: "deferred", row: { kind: "tool", id: "deferred", name: "Bash", input: {}, status: "completed", isError: false, detailAvailable: true } }]} onLocate={vi.fn()} onClose={vi.fn()} />);

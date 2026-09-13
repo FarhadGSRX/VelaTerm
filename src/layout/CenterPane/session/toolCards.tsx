@@ -11,6 +11,7 @@ import { useState, type ReactNode } from "react";
 import { useT } from "../../../i18n";
 import { highlight } from "../../RightPanel/highlight";
 import { Markdown } from "./markdown";
+import { CodeBlockHeader } from "./CodeBlockHeader";
 
 /** Longest output shown before the card offers to expand. Keeps a 200 KB build log from freezing a pane. */
 const OUTPUT_CLAMP = 2000;
@@ -227,6 +228,7 @@ function safeJson(v: unknown): string {
 function CodeSection({ text }: { text: string }): ReactNode {
   return (
     <div className="sv-code sv-tool-section">
+      <CodeBlockHeader code={text} />
       <pre>{highlight(text)}</pre>
     </div>
   );

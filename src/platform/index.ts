@@ -18,6 +18,7 @@ export { env };
 export type {
   BadgeCapability,
   BrowserCapability,
+  BrowserPopupPayload,
   BrowserRect,
   BrowserStatePayload,
   ClipboardCapability,

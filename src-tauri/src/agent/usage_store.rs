@@ -157,6 +157,8 @@ struct State {
     restored: bool,
 }
 
+static CODEX_OPERATION: Mutex<()> = Mutex::new(());
+
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
 fn now_ms() -> u64 {
@@ -213,6 +215,47 @@ pub fn refresh(ctx: &AppCtx, provider: Option<Provider>, force: bool) -> UsageSn
     snap
 }
 
+/// Redeem through the same installed CLI and refresh the account snapshot for every client.
+/// A refresh failure does not turn a confirmed redemption into an ambiguous mutation failure.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexResetResult {
+    outcome: crate::agent::transcript::CodexResetOutcome,
+    usage: UsageSnapshot,
+}
+
+pub fn consume_codex_reset(
+    ctx: &AppCtx,
+    idempotency_key: &str,
+) -> Result<CodexResetResult, String> {
+    restore_once(ctx);
+    let _guard = CODEX_OPERATION
+        .try_lock()
+        .map_err(|_| "Codex account request in progress; retry the same request".to_string())?;
+    let bin_path = crate::agent::executable::resolve(ctx, SessionKind::Codex, None);
+    let outcome =
+        crate::agent::transcript::consume_codex_reset_credit(bin_path.as_deref(), idempotency_key)?;
+    // Never substitute an old rollout after redemption: it cannot confirm the new balance.
+    let reading = crate::agent::transcript::live_codex_rate_limits(bin_path.as_deref());
+    {
+        let mut guard = STATE.lock().unwrap();
+        let st = guard.get_or_insert_with(State::default);
+        match reading {
+            Ok(data) => mark_ok(&mut st.snapshot.codex, data, now_ms()),
+            Err(error) => {
+                if let Some(data) = &mut st.snapshot.codex.data {
+                    data.reset_credits = None;
+                }
+                mark_err(&mut st.snapshot.codex, FetchError::from(error), now_ms());
+            }
+        }
+    }
+    let usage = snapshot(ctx);
+    persist(ctx, &usage);
+    ctx.emit(USAGE_EVENT, usage.clone());
+    Ok(CodexResetResult { outcome, usage })
+}
+
 /// Start the single background poller. Safe to call once per process entry point (GUI and headless).
 pub fn start(ctx: AppCtx) {
     std::thread::spawn(move || {
@@ -267,6 +310,8 @@ fn reset_backoff(p: Provider) {
 
 /// Fetch one provider and store the outcome. Returns true when the stored entry actually changed.
 fn fetch_one(ctx: &AppCtx, p: Provider, force: bool) -> bool {
+    // Keep a pre-redemption poll from overwriting the post-redemption snapshot.
+    let _codex_guard = (p == Provider::Codex).then(|| CODEX_OPERATION.lock().unwrap());
     let result: Result<StoredValue, FetchError> = match p {
         Provider::Claude => crate::agent::usage::claude_usage(force).map(StoredValue::Claude),
         Provider::Codex => codex_account_usage(ctx)
@@ -337,8 +382,7 @@ enum StoredValue {
 /// front ends; the newest local rollout is the offline fallback for older CLIs and for a machine with no
 /// network.
 fn codex_account_usage(ctx: &AppCtx) -> Result<CodexUsage, String> {
-    let bin_path = crate::pty::manager::agent_bin_path(ctx, SessionKind::Codex)
-        .or_else(|| crate::agent::install::locate_installed_bin("codex"));
+    let bin_path = crate::agent::executable::resolve(ctx, SessionKind::Codex, None);
     if let Ok(u) = crate::agent::transcript::live_codex_rate_limits(bin_path.as_deref()) {
         return Ok(u);
     }
@@ -417,7 +461,7 @@ fn persist(ctx: &AppCtx, snap: &UsageSnapshot) {
         return;
     };
     if let Err(e) = crate::db::repo::set_app_settings(&conn, &entries) {
-        eprintln!("failed to persist usage snapshot: {e}");
+        crate::diagnostic_warn!("failed to persist usage snapshot: {e}");
     }
 }
 

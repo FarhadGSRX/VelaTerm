@@ -31,6 +31,11 @@ const devBackend = process.env.VLX_DEV_BACKEND || "https://localhost:8799";
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  // Relative asset URLs so the same bundle works at the root (desktop/LAN) and under the public share
+  // prefix `/r/<grantId>/`, where the relay forwards from velaterm.com. The app has no path-based routes,
+  // so relative resolution is unambiguous.
+  base: "./",
+
   // Inject the version at build time from package.json through pnpm's npm_package_version, along with the
   // build timestamp passed by release.sh in VLX_BUILD_TIME (format: YYYYMMDD-HHmm). Ordinary development and
   // builds not launched through the script use an empty timestamp.

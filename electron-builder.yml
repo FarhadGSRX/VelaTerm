@@ -26,6 +26,7 @@ directories:
 # frontend packages from package.json dependencies (CodeMirror, Milkdown, and others) to app.asar.
 files:
   - electron/**/*
+  - "!electron/**/*.test.cjs"
   - package.json
   - "!node_modules/**/*"
 

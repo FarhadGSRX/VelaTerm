@@ -5,7 +5,7 @@ import { genId } from "../genId";
 
 /**
  * Document content type used by DocView dispatch:
- * markdown supports WYSIWYG and source modes; image uses the built-in viewer; code uses the source
+ * markdown supports visual, source, and comparison modes; image uses the built-in viewer; code uses the source
  * editor with filename-based language highlighting and plain-text fallback.
  */
 export type DocKind = "markdown" | "code" | "image";
@@ -21,7 +21,7 @@ export interface DocTab {
   /** Content type controlling editor/viewer dispatch; only Markdown exposes a mode switch. */
   kind: DocKind;
   /** Current editor mode; meaningful for Markdown, while code/image retain the source placeholder. */
-  mode: "wysiwyg" | "source";
+  mode: "visual" | "source" | "compare";
   /** Unsaved-change flag used by the tab indicator and close confirmation; always false for images. */
   dirty: boolean;
   /** Pending close confirmation set for dirty tabs so DocView renders the three-way prompt. */
@@ -36,7 +36,7 @@ export interface DocTab {
   isNew?: boolean;
 }
 
-/** Markdown-family extensions start as kind=markdown in WYSIWYG mode. */
+/** Markdown-family extensions start as kind=markdown in visual mode. */
 const MARKDOWN_EXTS = new Set(["md", "markdown", "mdx"]);
 
 /** Image extensions use kind=image and the built-in viewer. */
@@ -60,7 +60,7 @@ export function makeDocTab(path: string): DocTab {
     path,
     title,
     kind,
-    mode: kind === "markdown" ? "wysiwyg" : "source",
+    mode: kind === "markdown" ? "visual" : "source",
     dirty: false,
     pendingClose: false,
     reloadNonce: 0,

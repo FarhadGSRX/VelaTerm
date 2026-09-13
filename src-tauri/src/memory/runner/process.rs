@@ -164,10 +164,9 @@ pub fn command(bin: &str, job: &Job, dir: &WorkDir) -> Command {
                 for section in ["mcp_servers", "plugins"] {
                     if let Some(table) = doc.get(section).and_then(toml_edit::Item::as_table_like) {
                         for (name, _) in table.iter() {
-                            if let Ok(quoted) = serde_json::to_string(name) {
-                                cmd.arg("-c")
-                                    .arg(format!("{section}.{quoted}.enabled=false"));
-                            }
+                            // Codex parses override paths directly; quotes become part of the key.
+                            cmd.arg("-c")
+                                .arg(format!("{section}.{name}.enabled=false"));
                         }
                     }
                 }
@@ -405,42 +404,9 @@ pub fn call(
 
 use sha2::Digest;
 pub fn audit(app: &AppCtx, id: &str, level: &str, event: &str, data: &Value) {
-    if std::env::var("VLX_MEMORY_LOG_LEVEL").is_ok_and(|v| {
-        v.eq_ignore_ascii_case("off") || (v.eq_ignore_ascii_case("error") && level != "ERROR")
-    }) {
-        return;
-    }
-    let utc = time::OffsetDateTime::now_utc();
-    let date = time::UtcOffset::current_local_offset().map_or(utc, |o| utc.to_offset(o));
-    let line = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{:<5}] [system] event={} jobId={} {}\n",
-        date.year(),
-        date.month() as u8,
-        date.day(),
-        date.hour(),
-        date.minute(),
-        date.second(),
-        level,
-        event,
-        id,
-        data
-    );
-    eprint!("{line}");
-    let dir = std::env::var_os("VLX_MEMORY_LOG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| app.data_dir().ok().map(|p| p.join("logs")));
-    if let Some(dir) = dir {
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let mut options = std::fs::OpenOptions::new();
-            options.create(true).append(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            if let Ok(mut file) = options.open(dir.join("memory.log")) {
-                let _ = file.write_all(line.as_bytes());
-            }
-        }
-    }
+    let _ = app;
+    let configured=std::env::var("VLX_MEMORY_LOG_LEVEL").unwrap_or_else(|_|"info".into());
+    if !crate::diagnostics::enabled(&configured,level) {return;}
+    let mut fields=data.clone(); fields["jobId"]=json!(id); fields["step"]=json!(event);
+    crate::diagnostics::record(level,"memory",fields);
 }

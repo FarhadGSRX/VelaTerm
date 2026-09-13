@@ -6,6 +6,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Icons from "../../components/Icons";
 import { StatusIndicator } from "../../components/StatusIndicator";
 import { useT } from "../../i18n";
+import { isShareSurface } from "../../ipc/shareBase";
+import { navigateSharedSession, sharedSessionUrl } from "../../sharing/sessionNavigation";
 import {
   type SelNode,
   type SidebarTreeView,
@@ -23,27 +25,7 @@ import { MARK_LABEL_KEYS, type NodeMark, normalizeMark } from "../../marks";
 import { SessionKindIcon } from "../sessionViewers/sessionMeta";
 import { DEFAULT_BINDINGS, formatCombo } from "../../hooks/shortcutRegistry";
 import { useGitBranch } from "../../hooks/useGitBranch";
-
-/** WKWebView inserts control characters such as U+001C through beforeinput when Left/Right is pressed past an
- *  input boundary. They render as boxes and are unrelated to IME; Chromium is unaffected. Strip C0/C1 and DEL
- *  so rename fields accept only normal printable text. */
-const CTRL_CHARS_RE = /[\u0000-\u001F\u007F-\u009F]/g;
-const stripControlChars = (s: string) => s.replace(CTRL_CHARS_RE, "");
-
-/** Attaches a native beforeinput listener that cancels control-character insertion. React's synthetic prevention is
- *  unreliable in WebKit, while onChange sanitization can leave the DOM unchanged when state compares equal. Native
- *  cancellation prevents insertion and caret movement. Returns cleanup for React 19 ref callbacks. */
-function useCtrlCharGuard() {
-  return useCallback((el: HTMLInputElement | null) => {
-    if (!el) return;
-    const onBeforeInput = (ev: Event) => {
-      const d = (ev as InputEvent).data;
-      if (typeof d === "string" && d !== stripControlChars(d)) ev.preventDefault();
-    };
-    el.addEventListener("beforeinput", onBeforeInput);
-    return () => el.removeEventListener("beforeinput", onBeforeInput);
-  }, []);
-}
+import { stripControlChars, useCtrlCharGuard } from "../../hooks/textInputGuards";
 
 /** Reference to a node targeted by a context menu or operation. */
 export interface TreeNodeRef {
@@ -195,7 +177,7 @@ const SessionRow = memo(function SessionRow(p: SessionRowProps) {
     groupId: s.groupId ?? null,
   };
   const dndProps = {
-    draggable: p.draggable,
+    draggable: !isShareSurface && p.draggable,
     onDragStart: (e: React.DragEvent) =>
       p.onDragStartRow({ kind: "session", id: s.id, projectId: s.projectId }, e),
     onDragOver: (e: React.DragEvent) => p.onDragOverRow(s.id, e),
@@ -209,7 +191,7 @@ const SessionRow = memo(function SessionRow(p: SessionRowProps) {
       {...dndProps}
       onMouseDown={p.onMouseDownRow}
       onClick={(e) => p.onRowClick({ id: s.id, kind: "session" }, e, true)}
-      onContextMenu={(e) => p.onRowContext(ref, e)}
+      onContextMenu={(e) => {if(!isShareSurface)p.onRowContext(ref, e)}}
     >
       {p.hasKids ? (
         <span
@@ -251,12 +233,15 @@ const SessionRow = memo(function SessionRow(p: SessionRowProps) {
       ) : (
         <>
           <NodeMarkBadge mark={s.mark} />
-          <span className="nm">{s.name}</span>
+          {isShareSurface ? <a className="nm" href={sharedSessionUrl(s.id)} style={{color:"inherit",textDecoration:"none"}} onClick={e=>{
+            e.stopPropagation();if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;
+            e.preventDefault();navigateSharedSession(s.id);
+          }}>{s.name}</a> : <span className="nm">{s.name}</span>}
         </>
       )}
       {/* Browser page nodes have no PTY or agent, so a status dot would be meaningless and is omitted. */}
       {!isBrowser && <StatusIndicator status={status} unread={unread} />}
-      <span className="meta">
+      {!isShareSurface && <span className="meta">
         <span
           className="add"
           title={t("tree.newChildSession")}
@@ -267,7 +252,7 @@ const SessionRow = memo(function SessionRow(p: SessionRowProps) {
         >
           <Icons.plus size={12} />
         </span>
-      </span>
+      </span>}
     </div>
   );
 });

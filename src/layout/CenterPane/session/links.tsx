@@ -1,4 +1,8 @@
-import { createContext, useContext, useState, type MouseEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type MouseEvent, type ReactNode } from "react";
+
+import { createPortal } from "react-dom";
+import { ContextMenu } from "../../../components/ContextMenu";
+import { useT } from "../../../i18n";
 
 import { platform } from "../../../platform";
 import { useTermStore } from "../../../store/termStore";
@@ -57,10 +61,25 @@ export function resolveSessionLink(href: string, cwd?: string): LinkTarget | nul
 
 /** Files use the existing backend-backed viewer; URLs use the native opener on desktop. */
 export function SessionLink({ href, children }: { href: string; children: ReactNode }) {
+  const t = useT();
   const cwd = useContext(SessionLinkDirectory);
   const target = resolveSessionLink(href, cwd);
   const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; host: Element } | null>(null);
+  useEffect(() => { setMenu(null); setError(null); }, [href, cwd]);
+  useEffect(() => {
+    if (!menu) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMenu(null);
+    };
+    document.addEventListener("keydown", dismiss, true);
+    return () => document.removeEventListener("keydown", dismiss, true);
+  }, [menu]);
   if (!target) return <span>{children}</span>;
+  const address = target.kind === "file" ? target.path : target.url;
   const activate = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
     if (target.kind === "anchor") return;
@@ -73,9 +92,20 @@ export function SessionLink({ href, children }: { href: string; children: ReactN
     }
   };
   return <>
-    <a className="sv-link" href={target.kind === "file" ? target.path : target.url}
+    <a className="sv-link" href={address}
       target={target.kind === "anchor" ? undefined : "_blank"} rel="noreferrer"
-      onClick={activate} onAuxClick={activate}>{children}</a>
+      onClick={activate} onAuxClick={activate}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenu({ x: event.clientX, y: event.clientY, host: event.currentTarget.closest("dialog") || document.body });
+      }}>{children}</a>
+    {menu && createPortal(<ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+      { label: t("share.copyLink"), onClick: () => {
+        setError(null);
+        void platform.clipboard.writeText(address).catch((err: unknown) => setError(String(err)));
+      } },
+    ]} />, menu.host)}
     {error && <span role="alert"> {error}</span>}
   </>;
 }

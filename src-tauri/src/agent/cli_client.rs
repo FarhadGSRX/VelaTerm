@@ -58,7 +58,13 @@ pub fn run_spawn(args: &[String]) -> ! {
     let endpoint = format!("{url}/spawn?t={token}");
     match post_json(&endpoint, &body) {
         Some(code) if (200..300).contains(&code) => {
-            let wt = if parsed.worktree {
+            let wt = if parsed.plan_execute.as_ref().and_then(|c| c.worktree_mode)
+                == Some(super::plan_execute::WorktreeMode::Each)
+            {
+                "one worktree per workflow session"
+            } else if parsed.worktree && parsed.plan_execute.is_some() {
+                "shared workflow worktree"
+            } else if parsed.worktree {
                 "isolated worktree"
             } else {
                 "current dir"
@@ -72,7 +78,15 @@ pub fn run_spawn(args: &[String]) -> ! {
             if let Some(e) = parsed.effort.as_deref() {
                 about.push_str(&format!(", effort {e}"));
             }
-            println!("spawned sub-session ({about}): {}", parsed.prompt);
+            if parsed.plan_execute.is_some() {
+                let value: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+                println!(
+                    "Submitted planning/execution request {} ({about})",
+                    value["requestId"].as_str().unwrap_or("")
+                );
+            } else {
+                println!("spawned sub-session ({about}): {}", parsed.prompt);
+            }
             std::process::exit(0);
         }
         Some(code) => {
@@ -132,8 +146,14 @@ pub fn run_view(args: &[String]) -> ! {
 
 const SPAWN_USAGE: &str =
     "usage: vspawn [--worktree] [--cwd <path>] [--yes] [--claude|--codex|--copilot|--kiro] [--model <name>] [--effort <level>] <task description...>\n\
+    --plan-execute    create planning/review and execution chat sessions\n\
+    --split-tasks     let the planner propose multiple tasks for user confirmation (requires --plan-execute)\n\
+    --worktree-mode <none|shared|each>   directory mode for all workflow roles; overrides --worktree (requires --plan-execute)\n\
+    --plan-agent / --exec-agent <agent>   agent for each role\n\
+    --plan-model / --exec-model <model>   model for each role\n\
+    --plan-effort / --exec-effort <level> reasoning effort for each role\n\
     --cwd <path>      child working directory and repository used to create a worktree\n\
-    --yes             skip the confirmation dialog and start the child session with default settings\n\
+    --yes             skip initial launch confirmation; split-task proposals still require review\n\
     --model <name>    model for the child session, such as opus or gpt-5.5; names are agent specific\n\
     --effort <level>  reasoning effort for agents that offer one, such as low, medium, or high";
 const VIEW_USAGE: &str = "usage: vopen <file|url>...   (relative paths resolve against the current dir; opens multiple at once)\n\
@@ -158,11 +178,12 @@ fn require_env(name: &str) -> Result<String, String> {
 
 /// Spawn argument parsing result.
 struct SpawnArgs {
+    plan_execute: Option<super::plan_execute::Config>,
     worktree: bool,
     /// Explicit child/repository directory; absent means the command's current directory.
     cwd: Option<String>,
     kind: Option<String>,
-    /// Skip the confirmation dialog and start the child session with default settings.
+    /// Skip initial launch confirmation, but never split-task proposal review.
     no_confirm: bool,
     /// Model for the child session; the frontend turns it into the agent's own model flag.
     model: Option<String>,
@@ -183,6 +204,9 @@ enum SpawnParse {
 /// and everything after `--` is prompt text even when prefixed by `-`. Other options are errors;
 /// remaining words join into a required prompt.
 fn parse_spawn_args(rest: &[String]) -> SpawnParse {
+    let mut workflow = false;
+    let mut flow_config = super::plan_execute::Config::default();
+    let mut flow_options = false;
     let mut worktree = false;
     let mut cwd: Option<String> = None;
     let mut kind: Option<String> = None;
@@ -194,6 +218,66 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
     while i < rest.len() {
         let a = rest[i].as_str();
         match a {
+            "--plan-execute" => workflow = true,
+            "--split-tasks" => { flow_config.split_tasks = true; flow_options = true; }
+            _ if a == "--worktree-mode" || a.starts_with("--worktree-mode=") => {
+                let value = if let Some((_, value)) = a.split_once('=') {
+                    value
+                } else {
+                    i += 1;
+                    match rest.get(i) {
+                        Some(value) => value.as_str(),
+                        None => return SpawnParse::Err("vspawn: --worktree-mode needs a value".into()),
+                    }
+                };
+                flow_config.worktree_mode = match serde_json::from_value(serde_json::json!(value)) {
+                    Ok(mode) => Some(mode),
+                    Err(_) => return SpawnParse::Err("vspawn: --worktree-mode must be none, shared or each".into()),
+                };
+                flow_options = true;
+            }
+            _ if a.starts_with("--plan-") || a.starts_with("--exec-") => {
+                let (flag, inline) = a
+                    .split_once('=')
+                    .map(|(f, v)| (f, Some(v)))
+                    .unwrap_or((a, None));
+                let value = if let Some(v) = inline {
+                    v
+                } else {
+                    i += 1;
+                    match rest.get(i) {
+                        Some(v) => v.as_str(),
+                        None => return SpawnParse::Err(format!("vspawn: {flag} needs a value")),
+                    }
+                };
+                if value.trim().is_empty() {
+                    return SpawnParse::Err(format!("vspawn: {flag} needs a value"));
+                }
+                let role = if flag.starts_with("--plan-") {
+                    &mut flow_config.plan
+                } else {
+                    &mut flow_config.exec
+                };
+                match flag
+                    .strip_prefix("--plan-")
+                    .or_else(|| flag.strip_prefix("--exec-"))
+                    .unwrap_or("")
+                {
+                    "agent" => match serde_json::from_value(serde_json::json!(value)) {
+                        Ok(kind) if super::plan_execute::supported(kind) => role.agent = Some(kind),
+                        _ => {
+                            return SpawnParse::Err(
+                                "vspawn: planning and execution require a chat-capable agent"
+                                    .into(),
+                            )
+                        }
+                    },
+                    "model" => role.model = Some(value.to_owned()),
+                    "effort" => role.effort = Some(value.to_owned()),
+                    _ => return SpawnParse::Err(format!("vspawn: unknown option {flag}")),
+                }
+                flow_options = true;
+            }
             "--worktree" | "--wt" => worktree = true,
             "--no-worktree" | "--nowt" => worktree = false,
             "--yes" | "-y" | "--no-confirm" => no_confirm = true,
@@ -250,7 +334,27 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
     if prompt.trim().is_empty() {
         return SpawnParse::Err("vspawn: missing task description".to_string());
     }
+    if flow_options && !workflow {
+        return SpawnParse::Err("vspawn: role options, --split-tasks and --worktree-mode require --plan-execute".into());
+    }
+    if workflow {
+        if let Some(mode) = flow_config.worktree_mode {
+            worktree = mode != super::plan_execute::WorktreeMode::None;
+        }
+        if flow_config.plan.agent.is_none() {
+            flow_config.plan.agent = kind
+                .as_ref()
+                .and_then(|k| serde_json::from_value(serde_json::json!(k)).ok());
+        }
+        if flow_config.plan.model.is_none() {
+            flow_config.plan.model = model.clone();
+        }
+        if flow_config.plan.effort.is_none() {
+            flow_config.plan.effort = effort.clone();
+        }
+    }
     SpawnParse::Ok(SpawnArgs {
+        plan_execute: workflow.then_some(flow_config),
         worktree,
         cwd,
         kind,
@@ -267,6 +371,13 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
 /// written when set, keeping the body identical to previous builds for ordinary spawns.
 fn build_spawn_body(sid: &str, args: &SpawnArgs, cwd: &str) -> String {
     let mut obj = serde_json::Map::new();
+    if let Some(config) = &args.plan_execute {
+        obj.insert("planExecute".into(), serde_json::json!(config));
+        obj.insert(
+            "requestId".into(),
+            serde_json::json!(uuid::Uuid::new_v4().to_string()),
+        );
+    }
     obj.insert("parentSessionId".into(), serde_json::json!(sid));
     obj.insert("prompt".into(), serde_json::json!(args.prompt));
     obj.insert("worktree".into(), serde_json::json!(args.worktree));
@@ -325,14 +436,15 @@ const REFER_USAGE: &str = "usage: vrefer <session> [--last N] [--range A:B] [--j
     --last N     only the last N messages\n\
     --range A:B  only this message index range, zero-based, A included and B excluded\n\
     --ask TEXT   have an agent read the transcript and answer this instead of printing it\n\
-    --with KIND  which agent answers (claude|codex|cursor|copilot|grok); default picks one\n\
-    --timeout N  seconds the answering agent may take (default 120)\n\
+    --with KIND  answering agent (claude|codex|opencode|pi|omp|cursor|copilot|grok); default picks one\n\
+    --timeout N  seconds allowed for the whole answer operation (default 120)\n\
     --list       list the sessions available to read\n\
     --json       machine-readable output";
 
-const SEARCH_USAGE: &str = "usage: vsearch <words...> [--all|--archived] [--limit N] [--json]\n\
-    full-text search across every vlx-term session. Multiple words are an implicit AND and word order\n\
+const SEARCH_USAGE: &str = "usage: vsearch <words...> [--session <session>] [--all|--archived] [--limit N] [--json]\n\
+    full-text search across every vlx-term session, or within one session. Multiple words are an implicit AND and word order\n\
     does not matter.\n\
+    --session S  search only this session (id, prefix, exact name, or unique substring)\n\
     --all        include archived sessions (default: live sessions only)\n\
     --archived   search archived sessions only\n\
     --limit N    maximum number of matching sessions (default 10)\n\
@@ -363,7 +475,7 @@ pub fn run_refer(args: &[String]) -> ! {
     };
     let body = build_refer_body(&sid, &parsed);
     let endpoint = format!("{url}/refer?t={token}");
-    let (code, payload) = match post_json_read(&endpoint, &body) {
+    let (code, payload) = match post_json_read_with(&endpoint, &body, refer_http_timeout(&parsed)) {
         Some(v) => v,
         None => {
             eprintln!("vrefer: cannot read a complete response from VelaTerm ({url})");
@@ -372,6 +484,10 @@ pub fn run_refer(args: &[String]) -> ! {
     };
     let value = read_value("vrefer", code, &payload);
     if code == 200 {
+        // JSON callers also need the warning; stdout remains a valid JSON payload.
+        if let Some(reason) = value.get("askFailed").and_then(|v| v.as_str()) {
+            eprintln!("vrefer: could not answer ({reason}); printing the transcript instead");
+        }
         if parsed.json {
             println!("{payload}");
         } else if parsed.list {
@@ -379,12 +495,6 @@ pub fn run_refer(args: &[String]) -> ! {
         } else if value.get("answer").is_some() {
             println!("{}", render_answer(&value));
         } else {
-            // Asking may have failed; the transcript still came back, so say what happened on stderr
-            // and print it. Silently handing back a transcript when an answer was requested would look
-            // like the question was ignored.
-            if let Some(reason) = value.get("askFailed").and_then(|v| v.as_str()) {
-                eprintln!("vrefer: could not answer ({reason}); printing the transcript instead");
-            }
             println!("{}", render_refer(&value));
         }
         std::process::exit(0);
@@ -437,101 +547,15 @@ pub fn run_search(args: &[String]) -> ! {
     report_read_failure("vsearch", code, &payload, &value)
 }
 
-const ORCH_USAGE: &str = "usage: vorch < proposal.json   (the proposal is read from stdin)\n\
-    starts several sessions at once under the current one. Nothing is created until you confirm the\n\
-    dialog that appears; you can edit or drop any entry there first.\n\
-    \n\
-    the JSON body:\n\
-    {\n\
-      \"title\": \"what this run is for\",\n\
-      \"worktreeMode\": \"none\" | \"shared\" | \"each\",      // default: each\n\
-      \"defaults\": { \"kind\": \"claude\", \"model\": \"...\", \"effort\": \"...\" },\n\
-      \"agents\": [\n\
-        { \"name\": \"short label\", \"prompt\": \"self-contained task\" },\n\
-        { \"name\": \"...\", \"prompt\": \"...\", \"kind\": \"codex\", \"worktree\": false }\n\
-      ]\n\
-    }\n\
-    \n\
-    omit an agent's kind/model/effort/worktree to follow defaults. Each prompt must stand on its own:\n\
-    a child session is a fresh conversation and sees nothing of this one.";
-
-/// `vlx-term --orch` entry point used by the `vorch` shim: propose several sessions at once.
-///
-/// The proposal arrives on stdin rather than in arguments because each agent's prompt is multi-line
-/// prose; quoting that through a shell reliably is not something to ask of a caller.
-pub fn run_orch(args: &[String]) -> ! {
-    let rest = &args[args.len().min(2)..];
-    if rest.iter().any(|a| a == "-h" || a == "--help") {
-        println!("{ORCH_USAGE}");
-        std::process::exit(0);
-    }
-    if let Some(unknown) = rest.iter().find(|a| a.starts_with('-')) {
-        eprintln!("vorch: unknown option {unknown}");
-        eprintln!("{ORCH_USAGE}");
-        std::process::exit(2);
-    }
-
-    let mut body = String::new();
-    if std::io::stdin().read_to_string(&mut body).is_err() || body.trim().is_empty() {
-        eprintln!("vorch: no proposal on stdin");
-        eprintln!("{ORCH_USAGE}");
-        std::process::exit(2);
-    }
-
-    let (url, sid, token) = match session_env() {
-        Ok(v) => v,
-        Err(msg) => {
-            eprintln!("vorch: {msg}");
-            std::process::exit(1);
-        }
-    };
-    // The caller writes the proposal; the session it belongs to is not theirs to claim, so it is filled
-    // in here from the injected environment.
-    let body = match stamp_session_id(&body, &sid) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("vorch: {e}");
-            std::process::exit(2);
-        }
-    };
-
-    let endpoint = format!("{url}/orch?t={token}");
-    let (code, payload) = match post_json_read(&endpoint, &body) {
-        Some(v) => v,
-        None => {
-            eprintln!("vorch: cannot read a complete response from VelaTerm ({url})");
-            std::process::exit(1);
-        }
-    };
-    let value = read_value("vorch", code, &payload);
-    if code == 200 {
-        let agents = value.get("agents").and_then(|v| v.as_u64()).unwrap_or(0);
-        println!(
-            "proposed {agents} agents; confirm the dialog in VelaTerm to start them\n\
-             nothing runs until you do, and you can edit or drop entries there"
-        );
-        std::process::exit(0);
-    }
-    report_read_failure("vorch", code, &payload, &value)
-}
-
-/// Insert the caller's own session id into the proposal, replacing anything they put there.
-///
-/// Returns a message rather than a panic when the body is not a JSON object, because the caller composed
-/// it by hand and deserves to be told which part is wrong.
-fn stamp_session_id(body: &str, sid: &str) -> Result<String, String> {
-    let mut value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("proposal is not valid JSON: {e}"))?;
-    let obj = value
-        .as_object_mut()
-        .ok_or_else(|| "proposal must be a JSON object".to_string())?;
-    obj.insert("sessionId".into(), serde_json::json!(sid));
-    Ok(serde_json::Value::Object(obj.clone()).to_string())
+/// Migration response for wrappers installed by older releases.
+pub fn run_orch(_args: &[String]) -> ! {
+    eprintln!("vorch has been retired. Use vspawn --plan-execute --split-tasks <task> instead.");
+    std::process::exit(2);
 }
 
 const STAT_USAGE: &str = "usage: vstat [<orch-id>] [--wait] [--follow] [--timeout N] [--json]\n\
     reports which sessions are working, asking, or waiting.\n\
-    <orch-id>    limit to one orchestration's agents, or `latest` for this session's newest run;\n\
+    <orch-id>    limit to a legacy orchestration, or `latest` for its newest run;\n\
                  omit for every session\n\
     --wait       block until something changes, instead of answering at once\n\
     --follow     keep watching, printing each change, until every agent is idle\n\
@@ -974,6 +998,7 @@ fn parse_range(value: &str) -> Option<(u32, u32)> {
 /// Parsed `vsearch` arguments.
 struct SearchArgs {
     query: String,
+    target: Option<String>,
     scope: Option<String>,
     limit: Option<u32>,
     json: bool,
@@ -989,6 +1014,7 @@ enum SearchParse {
 /// query text even when it starts with `-`.
 fn parse_search_args(rest: &[String]) -> SearchParse {
     let mut scope: Option<String> = None;
+    let mut target: Option<String> = None;
     let mut limit: Option<u32> = None;
     let mut json = false;
     let mut words: Vec<&str> = Vec::new();
@@ -1000,6 +1026,15 @@ fn parse_search_args(rest: &[String]) -> SearchParse {
             "--json" => json = true,
             "--all" => scope = Some("all".to_string()),
             "--archived" => scope = Some("archived".to_string()),
+            "--session" => {
+                let Some(value) = rest.get(i + 1).filter(|v| !v.trim().is_empty()) else {
+                    return SearchParse::Err(
+                        "vsearch: --session needs a session reference".to_string(),
+                    );
+                };
+                target = Some(value.clone());
+                i += 1;
+            }
             "--limit" => {
                 let Some(value) = rest.get(i + 1) else {
                     return SearchParse::Err("vsearch: --limit needs a value".to_string());
@@ -1033,6 +1068,7 @@ fn parse_search_args(rest: &[String]) -> SearchParse {
     }
     SearchParse::Ok(SearchArgs {
         query,
+        target,
         scope,
         limit,
         json,
@@ -1071,6 +1107,9 @@ fn build_search_body(sid: &str, args: &SearchArgs) -> String {
     let mut obj = serde_json::Map::new();
     obj.insert("sessionId".into(), serde_json::json!(sid));
     obj.insert("query".into(), serde_json::json!(args.query));
+    if let Some(target) = &args.target {
+        obj.insert("target".into(), serde_json::json!(target));
+    }
     if let Some(scope) = &args.scope {
         obj.insert("scope".into(), serde_json::json!(scope));
     }
@@ -1115,13 +1154,27 @@ fn one_line(text: &str, max_chars: usize) -> String {
 
 /// Render a `/refer` transcript response as text for a model to read.
 fn render_refer(value: &serde_json::Value) -> String {
-    let session_id = value.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = value
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    let archived = value.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+    let archived = value
+        .get("archived")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let total = value.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-    let start = value.get("range").and_then(|v| v.get(0)).and_then(|v| v.as_u64()).unwrap_or(0);
-    let end = value.get("range").and_then(|v| v.get(1)).and_then(|v| v.as_u64()).unwrap_or(0);
+    let start = value
+        .get("range")
+        .and_then(|v| v.get(0))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let end = value
+        .get("range")
+        .and_then(|v| v.get(1))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let empty = Vec::new();
     let messages = value
         .get("messages")
@@ -1184,7 +1237,12 @@ fn render_refer(value: &serde_json::Value) -> String {
 /// session's own words, and the caller should quote it as such.
 fn render_answer(value: &serde_json::Value) -> String {
     let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let id = short_id(value.get("sessionId").and_then(|v| v.as_str()).unwrap_or(""));
+    let id = short_id(
+        value
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
     let total = value.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
     let by = value
         .get("summarizer")
@@ -1192,7 +1250,27 @@ fn render_answer(value: &serde_json::Value) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("an agent");
     let answer = value.get("answer").and_then(|v| v.as_str()).unwrap_or("");
-    format!("[via {by} · read {total} messages from {name} ({id})]\n\n{answer}")
+    let context = value.get("context");
+    let context_note =
+        if context.and_then(|v| v.get("mode")).and_then(|v| v.as_str()) == Some("summary") {
+            let agent = context
+                .and_then(|v| v.get("agent"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("an agent");
+            let model = context
+                .and_then(|v| v.get("model"))
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .unwrap_or("default model");
+            let matches = context
+                .and_then(|v| v.get("searchMatches"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            format!(" · context summarized by {agent}/{model} + {matches} search excerpts")
+        } else {
+            " · full transcript context".to_string()
+        };
+    format!("[via {by} · read {total} messages from {name} ({id}){context_note}]\n\n{answer}")
 }
 
 /// Render a `/refer --list` response as one line per session.
@@ -1225,9 +1303,19 @@ fn render_refer_list(value: &serde_json::Value) -> String {
 /// Render a `/search` response as text, ending each session with the command that reads its transcript.
 fn render_search(value: &serde_json::Value) -> String {
     let query = value.get("query").and_then(|v| v.as_str()).unwrap_or("");
-    let scope = value.get("scope").and_then(|v| v.as_str()).unwrap_or("live");
+    let scope = value
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("live");
+    let target = value
+        .get("target")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
     let empty = Vec::new();
-    let hits = value.get("hits").and_then(|v| v.as_array()).unwrap_or(&empty);
+    let hits = value
+        .get("hits")
+        .and_then(|v| v.as_array())
+        .unwrap_or(&empty);
     let recording_only = value
         .get("recordingOnlySessions")
         .and_then(|v| v.as_u64())
@@ -1243,14 +1331,25 @@ fn render_search(value: &serde_json::Value) -> String {
         .and_then(|v| v.as_u64())
         .unwrap_or(hits.len() as u64) as usize;
 
-    let mut out = format!(
-        "=== {} of {total} matching sessions for \"{query}\" ({scope}) ===\n",
-        hits.len()
-    );
+    let mut out = if let Some(target) = target {
+        format!(
+            "=== {} matching result{} for \"{query}\" in {target} ({scope}) ===\n",
+            hits.len(),
+            if hits.len() == 1 { "" } else { "s" }
+        )
+    } else {
+        format!(
+            "=== {} of {total} matching sessions for \"{query}\" ({scope}) ===\n",
+            hits.len()
+        )
+    };
     for (i, hit) in hits.iter().enumerate() {
         let session_id = hit.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
         let id = short_id(session_id);
-        let archived = hit.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+        let archived = hit
+            .get("archived")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let match_count = hit.get("matchCount").and_then(|v| v.as_u64()).unwrap_or(0);
         out.push_str(&format!(
             "\n[{}] {} ({id}) · {}{} · {} · {match_count} matches\n",
@@ -1261,13 +1360,19 @@ fn render_search(value: &serde_json::Value) -> String {
             hit.get("source").and_then(|v| v.as_str()).unwrap_or("")
         ));
 
-        let matches = hit.get("matches").and_then(|v| v.as_array()).unwrap_or(&empty);
+        let matches = hit
+            .get("matches")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&empty);
         for m in matches.iter().take(TEXT_SNIPPETS_PER_SESSION) {
             // Every match anchors to a message index, which `vrefer --range` consumes directly. The
             // ordinal is a fallback for the rare row indexed without one.
             let anchor = match m.get("messageIndex").and_then(|v| v.as_u64()) {
                 Some(index) => format!("msg {index}"),
-                None => format!("hit {}", m.get("ordinal").and_then(|v| v.as_u64()).unwrap_or(0)),
+                None => format!(
+                    "hit {}",
+                    m.get("ordinal").and_then(|v| v.as_u64()).unwrap_or(0)
+                ),
             };
             out.push_str(&format!(
                 "      [{anchor}] {}\n",
@@ -1307,8 +1412,16 @@ fn post_json_read_with(
     body: &str,
     timeout: std::time::Duration,
 ) -> Option<(u16, String)> {
-    let agent = ureq::AgentBuilder::new().timeout(timeout).redirects(0).try_proxy_from_env(false).build();
-    let response = match agent.post(url).set("Content-Type", "application/json").send_string(body) {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .redirects(0)
+        .try_proxy_from_env(false)
+        .build();
+    let response = match agent
+        .post(url)
+        .set("Content-Type", "application/json")
+        .send_string(body)
+    {
         Ok(response) | Err(ureq::Error::Status(_, response)) => response,
         Err(ureq::Error::Transport(_)) => return None,
     };
@@ -1332,6 +1445,18 @@ fn read_value(cli: &str, status: u16, payload: &str) -> serde_json::Value {
 
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+fn refer_http_timeout(args: &ReferArgs) -> std::time::Duration {
+    if args.ask.is_none() {
+        return READ_TIMEOUT;
+    }
+    // Keep time for the service to return an answer or its transcript fallback after the AI deadline.
+    let seconds = args
+        .timeout
+        .map(u64::from)
+        .unwrap_or(super::server::DEFAULT_ASK_TIMEOUT_SECS);
+    READ_TIMEOUT.max(std::time::Duration::from_secs(seconds + 15))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1343,6 +1468,7 @@ mod tests {
     /// Body-building fixture: only the fields a test cares about are set by the caller.
     fn spawn_args(prompt: &str) -> SpawnArgs {
         SpawnArgs {
+            plan_execute: None,
             worktree: false,
             cwd: None,
             kind: None,
@@ -1350,6 +1476,137 @@ mod tests {
             model: None,
             effort: None,
             prompt: prompt.to_string(),
+        }
+    }
+
+    #[test]
+    fn planning_parameters_keep_the_two_roles_independent() {
+        let SpawnParse::Ok(parsed) = parse_spawn_args(&args(&[
+            "--plan-execute",
+            "--plan-agent",
+            "claude",
+            "--plan-model",
+            "planner",
+            "--plan-effort",
+            "high",
+            "--exec-agent=codex",
+            "--exec-model=executor",
+            "--exec-effort=medium",
+            "Task",
+        ])) else {
+            panic!("valid workflow")
+        };
+        let body: serde_json::Value =
+            serde_json::from_str(&build_spawn_body("owner", &parsed, "/repo")).unwrap();
+        assert_eq!(
+            body["planExecute"]["plan"],
+            serde_json::json!({"agent":"claude","model":"planner","effort":"high"})
+        );
+        assert_eq!(
+            body["planExecute"]["exec"],
+            serde_json::json!({"agent":"codex","model":"executor","effort":"medium"})
+        );
+        assert_eq!(body["prompt"], "Task");
+        assert!(matches!(
+            parse_spawn_args(&args(&["--exec-agent", "codex", "Task"])),
+            SpawnParse::Err(_)
+        ));
+        assert!(matches!(
+            parse_spawn_args(&args(&[
+                "--plan-execute",
+                "--exec-agent",
+                "terminal",
+                "Task"
+            ])),
+            SpawnParse::Err(_)
+        ));
+        assert!(matches!(
+            parse_spawn_args(&args(&["--plan-execute", "--exec-effort=", "Task"])),
+            SpawnParse::Err(_)
+        ));
+        assert!(
+            matches!(parse_spawn_args(&args(&["--review-loop","Task"])),SpawnParse::Err(error) if error == "vspawn: unknown option --review-loop")
+        );
+    }
+
+    #[test]
+    fn split_tasks_requires_planning_and_survives_skip_confirmation() {
+        assert!(matches!(parse_spawn_args(&args(&["--split-tasks", "Task"])), SpawnParse::Err(_)));
+        let SpawnParse::Ok(parsed) = parse_spawn_args(&args(&["--plan-execute", "--split-tasks", "--yes", "Task"])) else {
+            panic!("valid split workflow")
+        };
+        let body: serde_json::Value = serde_json::from_str(&build_spawn_body("owner", &parsed, "/repo")).unwrap();
+        assert_eq!(body["planExecute"]["splitTasks"], true);
+        assert!(parsed.no_confirm);
+        assert_eq!(body["noConfirm"], true);
+        let SpawnParse::Ok(interactive) = parse_spawn_args(&args(&["--plan-execute", "--split-tasks", "Task"])) else {
+            panic!("valid interactive split workflow")
+        };
+        assert!(!interactive.no_confirm, "plain CLI splitting must not imply --yes");
+        let SpawnParse::Ok(single) = parse_spawn_args(&args(&["--plan-execute", "Task"])) else { panic!("valid single workflow") };
+        assert!(!single.no_confirm, "non-split confirmation must remain unchanged");
+        assert!(!single.plan_execute.unwrap().split_tasks);
+    }
+
+    #[test]
+    fn planning_worktree_modes_preserve_skill_selections_without_launch_confirmation() {
+        for mode in ["none", "shared", "each"] {
+            for inline in [false, true] {
+                for split in [false, true] {
+                    let mut input = args(&["--plan-execute", "--yes"]);
+                    if inline {
+                        input.push(format!("--worktree-mode={mode}"));
+                    } else {
+                        input.extend(args(&["--worktree-mode", mode]));
+                    }
+                    if split { input.push("--split-tasks".into()); }
+                    input.push("Task".into());
+                    let SpawnParse::Ok(parsed) = parse_spawn_args(&input) else { panic!("valid directory mode") };
+                    let body: serde_json::Value = serde_json::from_str(&build_spawn_body("owner", &parsed, "/repo with spaces 中文")).unwrap();
+                    assert_eq!(body["planExecute"]["worktreeMode"], mode);
+                    assert_eq!(body["planExecute"]["splitTasks"].as_bool().unwrap_or(false), split);
+                    assert_eq!(body["worktree"], mode != "none");
+                    assert_eq!(body["noConfirm"], true);
+                    assert_eq!(body["cwd"], "/repo with spaces 中文");
+                    let request: super::super::server::SpawnRequest = serde_json::from_value(body).unwrap();
+                    assert!(request.no_confirm);
+                    assert_eq!(serde_json::to_value(request.plan_execute.unwrap().worktree_mode).unwrap(), mode);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn planning_worktree_mode_overrides_legacy_flags_and_rejects_invalid_values() {
+        for mode in ["none", "shared", "each"] {
+            for legacy_first in [false, true] {
+                for legacy in ["--worktree", "--no-worktree"] {
+                    let input = if legacy_first {
+                        args(&[legacy, "--worktree-mode", mode, "--plan-execute", "Task"])
+                    } else {
+                        args(&["--worktree-mode", mode, legacy, "--plan-execute", "Task"])
+                    };
+                    let SpawnParse::Ok(parsed) = parse_spawn_args(&input) else { panic!("explicit mode wins") };
+                    assert_eq!(parsed.worktree, mode != "none");
+                    assert!(!parsed.no_confirm);
+                }
+            }
+        }
+        for input in [
+            vec!["--worktree-mode", "each", "Task"],
+            vec!["--plan-execute", "Task", "--worktree-mode"],
+            vec!["--plan-execute", "--worktree-mode=", "Task"],
+            vec!["--plan-execute", "--worktree-mode", "", "Task"],
+            vec!["--plan-execute", "--worktree-mode", "--yes", "Task"],
+            vec!["--plan-execute", "--worktree-mode=invalid", "Task"],
+            vec!["--plan-execute", "--worktree-mode=SHARED", "Task"],
+        ] {
+            assert!(matches!(parse_spawn_args(&args(&input)), SpawnParse::Err(_)), "{input:?}");
+        }
+        for legacy in ["--worktree", "--no-worktree"] {
+            let SpawnParse::Ok(parsed) = parse_spawn_args(&args(&["--plan-execute", legacy, "Task"])) else { panic!("legacy workflow") };
+            assert_eq!(parsed.worktree, legacy == "--worktree");
+            assert!(parsed.plan_execute.unwrap().worktree_mode.is_none(), "old requests keep their shape");
         }
     }
 
@@ -1365,7 +1622,8 @@ mod tests {
 
     #[test]
     fn parse_spawn_flags() {
-        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--worktree", "--codex", "do", "something"]))
+        let SpawnParse::Ok(p) =
+            parse_spawn_args(&args(&["--worktree", "--codex", "do", "something"]))
         else {
             panic!("parsing should succeed");
         };
@@ -1483,7 +1741,8 @@ mod tests {
         assert_eq!(p.last, Some(50));
         assert!(!p.json && !p.list);
 
-        let ReferParse::Ok(p) = parse_refer_args(&args(&["--range", "10:30", "my session", "--json"]))
+        let ReferParse::Ok(p) =
+            parse_refer_args(&args(&["--range", "10:30", "my session", "--json"]))
         else {
             panic!("parsing should succeed");
         };
@@ -1541,9 +1800,18 @@ mod tests {
             panic!("parsing should succeed");
         };
         assert_eq!(p.query, "throttle");
+        assert!(p.target.is_none());
         assert_eq!(p.scope.as_deref(), Some("archived"));
         assert_eq!(p.limit, Some(5));
         assert!(p.json);
+
+        let SearchParse::Ok(p) =
+            parse_search_args(&args(&["--session", "Output scheduler", "throttle"]))
+        else {
+            panic!("a session-scoped search should parse");
+        };
+        assert_eq!(p.target.as_deref(), Some("Output scheduler"));
+        assert_eq!(p.query, "throttle");
 
         // Everything after `--` is query text, even words starting with a dash.
         let SearchParse::Ok(p) = parse_search_args(&args(&["--", "--all", "literally"])) else {
@@ -1557,7 +1825,10 @@ mod tests {
             parse_search_args(&args(&["--limit", "x", "q"])),
             SearchParse::Err(_)
         ));
-        assert!(matches!(parse_search_args(&args(&["--help"])), SearchParse::Help));
+        assert!(matches!(
+            parse_search_args(&args(&["--help"])),
+            SearchParse::Help
+        ));
     }
 
     #[test]
@@ -1569,7 +1840,10 @@ mod tests {
         assert_eq!(v["sessionId"], "me");
         assert_eq!(v["target"], "abc12345");
         assert_eq!(v["list"], false);
-        assert!(v.get("last").is_none(), "the server applies its own default window");
+        assert!(
+            v.get("last").is_none(),
+            "the server applies its own default window"
+        );
         assert!(v.get("start").is_none() && v.get("end").is_none());
 
         let SearchParse::Ok(p) = parse_search_args(&args(&["needle"])) else {
@@ -1578,6 +1852,13 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&build_search_body("me", &p)).unwrap();
         assert_eq!(v["query"], "needle");
         assert!(v.get("scope").is_none() && v.get("limit").is_none());
+
+        let SearchParse::Ok(p) = parse_search_args(&args(&["needle", "--session", "abc12345"]))
+        else {
+            panic!("a session-scoped search should parse");
+        };
+        let v: serde_json::Value = serde_json::from_str(&build_search_body("me", &p)).unwrap();
+        assert_eq!(v["target"], "abc12345");
     }
 
     #[test]
@@ -1598,9 +1879,18 @@ mod tests {
         assert_eq!(p.timeout, Some(30));
 
         // Missing or empty values are refused rather than sent as a blank question.
-        assert!(matches!(parse_refer_args(&args(&["s", "--ask"])), ReferParse::Err(_)));
-        assert!(matches!(parse_refer_args(&args(&["s", "--ask", "  "])), ReferParse::Err(_)));
-        assert!(matches!(parse_refer_args(&args(&["s", "--with"])), ReferParse::Err(_)));
+        assert!(matches!(
+            parse_refer_args(&args(&["s", "--ask"])),
+            ReferParse::Err(_)
+        ));
+        assert!(matches!(
+            parse_refer_args(&args(&["s", "--ask", "  "])),
+            ReferParse::Err(_)
+        ));
+        assert!(matches!(
+            parse_refer_args(&args(&["s", "--with"])),
+            ReferParse::Err(_)
+        ));
         assert!(matches!(
             parse_refer_args(&args(&["s", "--timeout", "0"])),
             ReferParse::Err(_)
@@ -1609,6 +1899,21 @@ mod tests {
             parse_refer_args(&args(&["s", "--timeout", "soon"])),
             ReferParse::Err(_)
         ));
+    }
+
+    #[test]
+    fn refer_http_deadline_allows_the_server_to_finish_or_return_fallback() {
+        for (options, expected_seconds) in [
+            (vec!["s"], 30),
+            (vec!["s", "--ask", "why"], 135),
+            (vec!["s", "--ask", "why", "--timeout", "300"], 315),
+            (vec!["s", "--ask", "why", "--timeout", "1"], 30),
+        ] {
+            let ReferParse::Ok(parsed) = parse_refer_args(&args(&options)) else {
+                panic!("reference options should parse");
+            };
+            assert_eq!(refer_http_timeout(&parsed).as_secs(), expected_seconds);
+        }
     }
 
     #[test]
@@ -1644,33 +1949,27 @@ mod tests {
         });
         let out = render_answer(&value);
         assert!(
-            out.starts_with("[via claude · read 842 messages from Output scheduler throttling (cbf83d22)]"),
+            out.starts_with(
+                "[via claude · read 842 messages from Output scheduler throttling (cbf83d22) · full transcript context]"
+            ),
             "the reader and the source must be named: {out}"
         );
         assert!(out.contains("Per-tab tiers"), "got: {out}");
-        assert!(!out.contains("[#0"), "the transcript itself should not be reprinted: {out}");
-    }
+        assert!(
+            !out.contains("[#0"),
+            "the transcript itself should not be reprinted: {out}"
+        );
 
-    #[test]
-    fn stamp_session_id_overwrites_whatever_the_caller_claimed() {
-        // The proposal is composed by a model; which session it belongs to is not its to assert.
-        let stamped = stamp_session_id(
-            r#"{"title":"t","sessionId":"someone-else","agents":[]}"#,
-            "real-session",
-        )
-        .unwrap();
-        let v: serde_json::Value = serde_json::from_str(&stamped).unwrap();
-        assert_eq!(v["sessionId"], "real-session");
-        assert_eq!(v["title"], "t");
-
-        // A body without the field gets it added.
-        let stamped = stamp_session_id(r#"{"title":"t"}"#, "s1").unwrap();
-        let v: serde_json::Value = serde_json::from_str(&stamped).unwrap();
-        assert_eq!(v["sessionId"], "s1");
-
-        // Malformed input is reported, not panicked on: a person composed it by hand.
-        assert!(stamp_session_id("not json", "s1").is_err());
-        assert!(stamp_session_id("[1,2,3]", "s1").is_err(), "must be an object");
+        let summarized = serde_json::json!({
+            "sessionId": "cbf83d22", "name": "n", "total": 842, "answer": "done",
+            "summarizer": {"kind": "codex"},
+            "context": {"mode": "summary", "agent": "pi", "model": "kimi-k2", "searchMatches": 4}
+        });
+        let out = render_answer(&summarized);
+        assert!(
+            out.contains("context summarized by pi/kimi-k2 + 4 search excerpts"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1695,9 +1994,18 @@ mod tests {
         assert!(p.follow && p.wait);
 
         assert!(matches!(parse_stat_args(&args(&["-h"])), StatParse::Help));
-        assert!(matches!(parse_stat_args(&args(&["a", "b"])), StatParse::Err(_)));
-        assert!(matches!(parse_stat_args(&args(&["--timeout", "0"])), StatParse::Err(_)));
-        assert!(matches!(parse_stat_args(&args(&["--bogus"])), StatParse::Err(_)));
+        assert!(matches!(
+            parse_stat_args(&args(&["a", "b"])),
+            StatParse::Err(_)
+        ));
+        assert!(matches!(
+            parse_stat_args(&args(&["--timeout", "0"])),
+            StatParse::Err(_)
+        ));
+        assert!(matches!(
+            parse_stat_args(&args(&["--bogus"])),
+            StatParse::Err(_)
+        ));
     }
 
     #[test]
@@ -1740,15 +2048,27 @@ mod tests {
             ]
         });
         let out = render_stat(&value);
-        assert!(out.contains("=== break up the settings panel ==="), "got: {out}");
+        assert!(
+            out.contains("=== break up the settings panel ==="),
+            "got: {out}"
+        );
         assert!(out.contains("aaaaaaaa  working"), "got: {out}");
         assert!(out.contains("just now"), "got: {out}");
-        assert!(out.contains("bbbbbbbb  asking") && out.contains("2m"), "got: {out}");
+        assert!(
+            out.contains("bbbbbbbb  asking") && out.contains("2m"),
+            "got: {out}"
+        );
         // A session with no reported state says so rather than looking idle.
         assert!(out.contains("cccccccc  unknown"), "got: {out}");
-        assert!(out.lines().all(|l| l == l.trim_end()), "no trailing padding: {out:?}");
+        assert!(
+            out.lines().all(|l| l == l.trim_end()),
+            "no trailing padding: {out:?}"
+        );
 
-        assert_eq!(render_stat(&serde_json::json!({"sessions": []})), "no sessions");
+        assert_eq!(
+            render_stat(&serde_json::json!({"sessions": []})),
+            "no sessions"
+        );
     }
 
     #[test]
@@ -1762,7 +2082,10 @@ mod tests {
         // A never-reported state compares as `unknown`, so it still counts as a change when it arrives.
         assert_eq!(
             session_states(&value),
-            vec![("a".to_string(), "working".to_string()), ("b".to_string(), "unknown".to_string())]
+            vec![
+                ("a".to_string(), "working".to_string()),
+                ("b".to_string(), "unknown".to_string())
+            ]
         );
         // OSC 777 fields are semicolon-separated, so text may not carry one through.
         assert_eq!(
@@ -1785,17 +2108,22 @@ mod tests {
         use std::net::TcpListener;
         use std::thread;
         // Keep temporary test listeners within the project's permitted non-default port range.
-        let listener = (0..100).find_map(|_| {
-            let n = u16::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..2].try_into().unwrap());
-            TcpListener::bind(("127.0.0.1", 10000 + n % 39152)).ok()
-        }).unwrap();
+        let listener = (0..100)
+            .find_map(|_| {
+                let n =
+                    u16::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..2].try_into().unwrap());
+                TcpListener::bind(("127.0.0.1", 10000 + n % 39152)).ok()
+            })
+            .unwrap();
         let url = format!("http://{}/refer", listener.local_addr().unwrap());
         let payload = r#"{"sessions":[{"name":"会话"}]}"#;
         let expected = payload.to_string();
         let server = thread::spawn(move || {
             for (index, status) in ["200 OK", "404 Not Found", "200 OK"].iter().enumerate() {
                 let (mut socket, _) = listener.accept().unwrap();
-                socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
                 let mut request = Vec::new();
                 while !request.ends_with(b"\r\n\r\n") {
                     let mut byte = [0];
@@ -1818,7 +2146,10 @@ mod tests {
         });
         assert_eq!(post_json_read(&url, ""), Some((200, expected.clone())));
         assert_eq!(post_json_read(&url, ""), Some((404, expected)));
-        assert!(post_json_read(&url, "").is_none(), "truncated responses must fail");
+        assert!(
+            post_json_read(&url, "").is_none(),
+            "truncated responses must fail"
+        );
         server.join().unwrap();
     }
 
@@ -1839,7 +2170,10 @@ mod tests {
         let out = render_refer(&value);
         assert!(out.contains("=== Session: Refactor session views (2feead2c) · claude · 84 messages · showing #82-#83 ==="), "got: {out}");
         assert!(out.contains("[#82 user 08-17 14:02]"), "got: {out}");
-        assert!(out.contains("[#83 assistant 08-17 14:03] (Read, Edit)"), "got: {out}");
+        assert!(
+            out.contains("[#83 assistant 08-17 14:03] (Read, Edit)"),
+            "got: {out}"
+        );
         assert!(out.contains("split the viewers") && out.contains("done"));
         assert!(
             out.contains("vrefer 2feead2c --range 0:82"),
@@ -1855,7 +2189,10 @@ mod tests {
         let out = render_refer(&whole);
         assert!(out.contains("· archived ·"), "got: {out}");
         assert!(!out.contains("--range"), "got: {out}");
-        assert!(out.contains("[#0 user]"), "a missing timestamp should be skipped: {out}");
+        assert!(
+            out.contains("[#0 user]"),
+            "a missing timestamp should be skipped: {out}"
+        );
     }
 
     #[test]
@@ -1880,14 +2217,34 @@ mod tests {
             }]
         });
         let out = render_search(&value);
-        assert!(out.contains("=== 1 of 1 matching sessions for \"scheduler throttling\" (live) ==="), "got: {out}");
-        assert!(out.contains("[1] Output scheduler throttling (a9af7b1c) · claude · transcript · 12 matches"), "got: {out}");
+        assert!(
+            out.contains("=== 1 of 1 matching sessions for \"scheduler throttling\" (live) ==="),
+            "got: {out}"
+        );
+        assert!(
+            out.contains(
+                "[1] Output scheduler throttling (a9af7b1c) · claude · transcript · 12 matches"
+            ),
+            "got: {out}"
+        );
         // Snippets collapse to one line and are capped at three per session.
-        assert!(out.contains("[msg 3] background tabs rotate on a budget"), "got: {out}");
+        assert!(
+            out.contains("[msg 3] background tabs rotate on a budget"),
+            "got: {out}"
+        );
         assert!(out.contains("[msg 9] third"), "got: {out}");
-        assert!(!out.contains("fourth"), "only three snippets belong in text output: {out}");
-        assert!(out.contains("... 1 more snippets, see --json"), "got: {out}");
-        assert!(out.contains("full transcript: vrefer a9af7b1c"), "got: {out}");
+        assert!(
+            !out.contains("fourth"),
+            "only three snippets belong in text output: {out}"
+        );
+        assert!(
+            out.contains("... 1 more snippets, see --json"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("full transcript: vrefer a9af7b1c"),
+            "got: {out}"
+        );
 
         // A row indexed without a message index falls back to its ordinal.
         let no_anchor = serde_json::json!({
@@ -1903,7 +2260,8 @@ mod tests {
         assert!(out.contains("· archived ·"), "got: {out}");
 
         // No hits reads as an ordinary outcome rather than an error.
-        let empty = serde_json::json!({"query": "q", "scope": "live", "totalSessions": 0, "hits": []});
+        let empty =
+            serde_json::json!({"query": "q", "scope": "live", "totalSessions": 0, "hits": []});
         assert_eq!(render_search(&empty), "no matches");
     }
 
@@ -2013,14 +2371,25 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("2feead2c  live"), "got: {}", lines[0]);
-        assert!(lines[0].contains("claude") && lines[0].contains("live one") && lines[0].contains("/work/a"));
-        assert!(lines[1].contains("archived") && lines[1].contains("old one"), "got: {}", lines[1]);
+        assert!(
+            lines[0].contains("claude")
+                && lines[0].contains("live one")
+                && lines[0].contains("/work/a")
+        );
+        assert!(
+            lines[1].contains("archived") && lines[1].contains("old one"),
+            "got: {}",
+            lines[1]
+        );
         assert!(
             lines.iter().all(|l| *l == l.trim_end()),
             "a session without a cwd should not leave trailing padding: {out:?}"
         );
 
-        assert_eq!(render_refer_list(&serde_json::json!({"sessions": []})), "no sessions");
+        assert_eq!(
+            render_refer_list(&serde_json::json!({"sessions": []})),
+            "no sessions"
+        );
     }
 
     #[test]

@@ -23,17 +23,26 @@ use crate::models::SessionKind;
 pub enum PromptDelivery {
     /// Appended as the final argument. Every CLI accepts this, but the whole command line has to fit
     /// under the operating system's argument cap, which a long transcript will not.
-    Arg,
+    Arg { marker: Option<&'static str> },
     /// Written to stdin, which is then closed. `marker`, when set, is the argument that tells the CLI to
     /// read its prompt from stdin. Only claude and codex document this, and only they can therefore take
     /// a transcript of any size.
     Stdin { marker: Option<&'static str> },
 }
 
+/// How stdout becomes the one answer returned to `vrefer`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputShape {
+    /// The CLI writes only the final answer to stdout.
+    Plain,
+    /// OpenCode writes JSONL events; concatenate completed text parts from the event stream.
+    OpenCodeJson,
+}
+
 /// How one agent CLI runs a single non-interactive prompt.
 #[derive(Debug, Clone)]
 pub struct HeadlessSpec {
-    /// Settings and probe key for this kind, matching `pty::manager::agent_bin_path` and
+    /// Settings and probe key for this kind, matching `executable::resolve` and
     /// `install::locate_installed_bin`.
     pub key: &'static str,
     /// Command name looked up on PATH when no absolute path is configured.
@@ -41,6 +50,7 @@ pub struct HeadlessSpec {
     /// Subcommand and flags, in order, before the prompt.
     pub args: &'static [&'static str],
     pub prompt: PromptDelivery,
+    pub output: OutputShape,
 }
 
 impl HeadlessSpec {
@@ -69,14 +79,22 @@ pub fn spec(kind: SessionKind) -> Option<HeadlessSpec> {
             bin: "claude",
             args: &["-p", "--permission-mode", "bypassPermissions"],
             prompt: PromptDelivery::Stdin { marker: None },
+            output: OutputShape::Plain,
         }),
         // codex-cli 0.146.0: `exec` is the non-interactive subcommand, and `-` makes it read stdin.
         // `--color never` keeps escape sequences out of the answer.
         SessionKind::Codex => Some(HeadlessSpec {
             key: "codex",
             bin: "codex",
-            args: &["exec", "--sandbox", "danger-full-access", "--color", "never"],
+            args: &[
+                "exec",
+                "--sandbox",
+                "danger-full-access",
+                "--color",
+                "never",
+            ],
             prompt: PromptDelivery::Stdin { marker: Some("-") },
+            output: OutputShape::Plain,
         }),
         // Cursor CLI 2026.07.01: `-p` is headless; `--trust` skips the workspace-trust prompt, which only
         // exists in that mode. Its help documents no stdin path, so the prompt goes in an argument.
@@ -84,7 +102,8 @@ pub fn spec(kind: SessionKind) -> Option<HeadlessSpec> {
             key: "cursor",
             bin: "cursor-agent",
             args: &["-p", "--output-format", "text", "--force", "--trust"],
-            prompt: PromptDelivery::Arg,
+            prompt: PromptDelivery::Arg { marker: None },
+            output: OutputShape::Plain,
         }),
         // GitHub Copilot CLI 1.0.63: `--allow-all-tools` is required for non-interactive runs, `-s` drops
         // the trailing statistics so stdout is just the answer, and `--no-ask-user` stops it stalling on a
@@ -92,8 +111,9 @@ pub fn spec(kind: SessionKind) -> Option<HeadlessSpec> {
         SessionKind::Copilot => Some(HeadlessSpec {
             key: "copilot",
             bin: "copilot",
-            args: &["--allow-all-tools", "--no-ask-user", "-s", "--no-color", "-p"],
-            prompt: PromptDelivery::Arg,
+            args: &["--allow-all-tools", "--no-ask-user", "-s", "--no-color"],
+            prompt: PromptDelivery::Arg { marker: Some("-p") },
+            output: OutputShape::Plain,
         }),
         // grok 0.2.118: `-p/--single` is one-shot and `plain` is the default output format.
         SessionKind::Grok => Some(HeadlessSpec {
@@ -104,14 +124,48 @@ pub fn spec(kind: SessionKind) -> Option<HeadlessSpec> {
                 "plain",
                 "--permission-mode",
                 "bypassPermissions",
-                "-p",
             ],
-            prompt: PromptDelivery::Arg,
+            prompt: PromptDelivery::Arg { marker: Some("-p") },
+            output: OutputShape::Plain,
         }),
-        // opencode 1.18.5 has `run --auto`, but its only output modes are human-decorated text and a raw
-        // JSON event stream — neither is a bare answer. Wiring it up needs an extraction step first, so it
-        // stays out until then rather than returning framing as if it were the answer.
-        SessionKind::Opencode => None,
+        // OpenCode 1.18.5 exposes a JSONL event stream in one-shot mode. `decode_output` extracts text
+        // parts so progress framing and session metadata never leak into the answer.
+        SessionKind::Opencode => Some(HeadlessSpec {
+            key: "opencode",
+            bin: "opencode",
+            args: &["run", "--format", "json", "--pure"],
+            prompt: PromptDelivery::Arg { marker: None },
+            output: OutputShape::OpenCodeJson,
+        }),
+        // Pi and OMP both provide print mode. Disable tools, skills and session persistence: a reference
+        // summary is a bounded read-only model call and must not create another visible conversation.
+        SessionKind::Pi => Some(HeadlessSpec {
+            key: "pi",
+            bin: "pi",
+            args: &[
+                "--no-session",
+                "--no-tools",
+                "--no-skills",
+                "--no-extensions",
+                "--no-context-files",
+            ],
+            prompt: PromptDelivery::Arg { marker: Some("-p") },
+            output: OutputShape::Plain,
+        }),
+        SessionKind::Omp => Some(HeadlessSpec {
+            key: "omp",
+            bin: "omp",
+            args: &[
+                "--no-session",
+                "--no-tools",
+                "--no-skills",
+                "--no-extensions",
+                "--no-rules",
+                "--no-title",
+            ],
+            prompt: PromptDelivery::Arg { marker: Some("-p") },
+            output: OutputShape::Plain,
+        }),
         // The rest either have no documented one-shot mode or have not been checked on a real machine.
         // Add an arm here once verified against that CLI's own help; nothing else needs to change.
         _ => None,
@@ -134,6 +188,9 @@ pub struct Summarizer {
 const PREFERENCE: &[SessionKind] = &[
     SessionKind::Claude,
     SessionKind::Codex,
+    SessionKind::Opencode,
+    SessionKind::Pi,
+    SessionKind::Omp,
     SessionKind::Cursor,
     SessionKind::Copilot,
     SessionKind::Grok,
@@ -152,9 +209,8 @@ fn candidates(
     prompt_len: usize,
 ) -> Vec<SessionKind> {
     let needs_stdin = prompt_len > ARG_PROMPT_LIMIT;
-    let usable = |kind: SessionKind| {
-        spec(kind).is_some_and(|s| !needs_stdin || s.accepts_long_prompt())
-    };
+    let usable =
+        |kind: SessionKind| spec(kind).is_some_and(|s| !needs_stdin || s.accepts_long_prompt());
     if let Some(want) = want {
         return if usable(want) { vec![want] } else { Vec::new() };
     }
@@ -196,68 +252,16 @@ fn resolve_bin(
     kind: SessionKind,
     spec: &HeadlessSpec,
 ) -> Option<String> {
-    if let Some(path) = crate::pty::manager::agent_bin_path(app, kind) {
-        return Some(path);
-    }
-    if let Some(path) = crate::agent::install::locate_installed_bin(spec.key) {
-        return Some(path);
-    }
-    find_on_path(spec.bin)
-}
-
-/// First executable of this name on PATH.
-///
-/// The agent may have been installed by a package manager none of the fixed-location probes know about,
-/// so PATH is the last word before declaring it absent.
-fn find_on_path(bin: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        for name in exe_names(bin) {
-            let candidate = dir.join(&name);
-            if is_executable_file(&candidate) {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
-        }
-    }
-    None
-}
-
-/// Filenames to try for one command, covering Windows's extension-based lookup.
-fn exe_names(bin: &str) -> Vec<String> {
-    #[cfg(windows)]
-    {
-        return ["exe", "cmd", "bat"]
-            .iter()
-            .map(|ext| format!("{bin}.{ext}"))
-            .collect();
-    }
-    #[cfg(not(windows))]
-    {
-        vec![bin.to_string()]
-    }
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    // Windows has no permission bit to read here; existing as a file is as far as this check goes.
-    #[cfg(unix)]
-    let runnable = {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    };
-    #[cfg(not(unix))]
-    let runnable = true;
-    runnable
+    debug_assert_eq!(kind.as_str(), spec.key);
+    super::executable::resolve(app, kind, None)
+        .or_else(|| super::executable::find_on_path(spec.bin))
 }
 
 /// Why a headless run produced no answer.
 #[derive(Debug)]
 pub enum HeadlessError {
+    /// A persisted model or effort contains syntax the target CLI cannot safely receive.
+    InvalidSelection(String),
     /// The prompt is too large for argument delivery and this CLI cannot read stdin.
     PromptTooLarge { limit: usize, actual: usize },
     /// The process could not be started, usually because the binary is missing.
@@ -273,6 +277,7 @@ pub enum HeadlessError {
 impl std::fmt::Display for HeadlessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidSelection(e) => write!(f, "invalid summarizer settings: {e}"),
             Self::PromptTooLarge { limit, actual } => write!(
                 f,
                 "prompt is {actual} bytes, over this agent's {limit}-byte argument limit"
@@ -306,7 +311,7 @@ pub fn run(
     cwd: Option<&Path>,
     timeout: Duration,
 ) -> Result<String, HeadlessError> {
-    if matches!(delivery, PromptDelivery::Arg) && prompt.len() > ARG_PROMPT_LIMIT {
+    if matches!(delivery, PromptDelivery::Arg { .. }) && prompt.len() > ARG_PROMPT_LIMIT {
         return Err(HeadlessError::PromptTooLarge {
             limit: ARG_PROMPT_LIMIT,
             actual: prompt.len(),
@@ -314,9 +319,13 @@ pub fn run(
     }
 
     let mut command = crate::host::command(bin);
+    super::executable::prepare_command(&mut command, bin);
     command.args(args);
     match delivery {
-        PromptDelivery::Arg => {
+        PromptDelivery::Arg { marker } => {
+            if let Some(marker) = marker {
+                command.arg(marker);
+            }
             command.arg(prompt);
         }
         PromptDelivery::Stdin { marker } => {
@@ -345,6 +354,7 @@ pub fn run(
         command.process_group(0);
     }
 
+    let started = std::time::Instant::now();
     let mut child = command
         .spawn()
         .map_err(|e| HeadlessError::Start(e.to_string()))?;
@@ -363,21 +373,25 @@ pub fn run(
     }
 
     let out_reader = child.stdout.take().map(|mut out| {
+        let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut buf = String::new();
             let _ = out.read_to_string(&mut buf);
-            buf
-        })
+            let _ = sender.send(buf);
+        });
+        receiver
     });
     let err_reader = child.stderr.take().map(|mut err| {
+        let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut buf = String::new();
             let _ = err.read_to_string(&mut buf);
-            buf
-        })
+            let _ = sender.send(buf);
+        });
+        receiver
     });
 
-    let status = match wait_with_deadline(&mut child, timeout) {
+    let status = match wait_with_deadline(&mut child, timeout.saturating_sub(started.elapsed())) {
         Some(status) => status,
         None => {
             terminate(&mut child);
@@ -386,8 +400,22 @@ pub fn run(
         }
     };
 
-    let stdout = out_reader.and_then(|h| h.join().ok()).unwrap_or_default();
-    let stderr = err_reader.and_then(|h| h.join().ok()).unwrap_or_default();
+    // Helpers may keep inherited pipes open after the main process exits. Collect both streams
+    // within the original deadline instead of joining reader threads without a time limit.
+    let collect = |reader: Option<std::sync::mpsc::Receiver<String>>| match reader {
+        Some(reader) => reader.recv_timeout(timeout.saturating_sub(started.elapsed())),
+        None => Ok(String::new()),
+    };
+    let (stdout, stderr) = match collect(out_reader)
+        .and_then(|out| collect(err_reader).map(|err| (out, err)))
+    {
+        Ok(output) => output,
+        Err(_) => {
+            terminate(&mut child);
+            let _ = child.wait();
+            return Err(HeadlessError::Timeout(timeout));
+        }
+    };
 
     if !status.success() {
         return Err(HeadlessError::Failed {
@@ -400,6 +428,83 @@ pub fn run(
         return Err(HeadlessError::Empty);
     }
     Ok(answer)
+}
+
+/// Run a resolved agent with the model and effort selected in Settings.
+///
+/// Selection flags are rendered by the same backend-owned mapping used by launch dialogs, so `--model`,
+/// Codex config overrides, OpenCode variants and Pi thinking levels cannot drift apart.
+pub fn run_selected(
+    summarizer: &Summarizer,
+    prompt: &str,
+    selection: Option<&super::launch_options::AgentSelection>,
+    cwd: Option<&Path>,
+    timeout: Duration,
+) -> Result<String, HeadlessError> {
+    if selection.is_some_and(|choice| choice.agent != summarizer.kind) {
+        return Err(HeadlessError::InvalidSelection(
+            "agent does not match the resolved one-shot runner".to_string(),
+        ));
+    }
+    let args = match selection {
+        Some(choice) => super::launch_options::apply_selection(None, choice),
+        None => super::launch_options::apply(summarizer.kind, None, None, None),
+    }
+    .map_err(HeadlessError::InvalidSelection)?;
+    let selection = super::inject::split_extra_args(args.as_deref());
+    let mut args: Vec<&str> = summarizer.spec.args.to_vec();
+    args.extend(selection.iter().map(String::as_str));
+    let stdout = run(
+        &summarizer.bin,
+        &args,
+        prompt,
+        summarizer.spec.prompt,
+        cwd,
+        timeout,
+    )?;
+    decode_output(summarizer.spec.output, &stdout)
+}
+
+/// Strip one agent's transport framing from stdout.
+fn decode_output(shape: OutputShape, stdout: &str) -> Result<String, HeadlessError> {
+    if shape == OutputShape::Plain {
+        let answer = stdout.trim().to_string();
+        return (!answer.is_empty())
+            .then_some(answer)
+            .ok_or(HeadlessError::Empty);
+    }
+    let mut parts = Vec::new();
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if matches!(
+            event.get("type").and_then(serde_json::Value::as_str),
+            Some("error")
+        ) {
+            return Err(HeadlessError::Failed {
+                code: None,
+                stderr: "OpenCode returned an error event".to_string(),
+            });
+        }
+        let text = event
+            .get("part")
+            .filter(|part| part.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+            .and_then(|part| part.get("text"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                (event.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+                    .then(|| event.get("text").and_then(serde_json::Value::as_str))
+                    .flatten()
+            });
+        if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+            parts.push(text.trim().to_string());
+        }
+    }
+    let answer = parts.join("\n\n");
+    (!answer.is_empty())
+        .then_some(answer)
+        .ok_or(HeadlessError::Empty)
 }
 
 /// Wait for the child, giving up after `timeout`. Returns None when the deadline passed first.
@@ -423,7 +528,7 @@ fn wait_with_deadline(
         if std::time::Instant::now() >= deadline {
             return None;
         }
-        std::thread::sleep(POLL);
+        std::thread::sleep(POLL.min(deadline.saturating_duration_since(std::time::Instant::now())));
     }
 }
 
@@ -471,6 +576,9 @@ mod tests {
         for kind in [
             SessionKind::Claude,
             SessionKind::Codex,
+            SessionKind::Opencode,
+            SessionKind::Pi,
+            SessionKind::Omp,
             SessionKind::Cursor,
             SessionKind::Copilot,
             SessionKind::Grok,
@@ -479,7 +587,6 @@ mod tests {
             assert!(!spec.bin.is_empty() && !spec.args.is_empty(), "{kind:?}");
         }
         // Kinds with no verified one-shot mode must say so rather than be guessed at.
-        assert!(spec(SessionKind::Opencode).is_none(), "its output is decorated, not an answer");
         assert!(spec(SessionKind::Terminal).is_none());
         assert!(spec(SessionKind::Browser).is_none());
         assert!(spec(SessionKind::Cline).is_none());
@@ -494,6 +601,9 @@ mod tests {
         assert!(!spec(SessionKind::Cursor).unwrap().accepts_long_prompt());
         assert!(!spec(SessionKind::Copilot).unwrap().accepts_long_prompt());
         assert!(!spec(SessionKind::Grok).unwrap().accepts_long_prompt());
+        assert!(!spec(SessionKind::Opencode).unwrap().accepts_long_prompt());
+        assert!(!spec(SessionKind::Pi).unwrap().accepts_long_prompt());
+        assert!(!spec(SessionKind::Omp).unwrap().accepts_long_prompt());
         // Codex needs `-` to be told stdin carries the prompt; claude needs no such marker.
         assert_eq!(
             spec(SessionKind::Codex).unwrap().prompt,
@@ -540,7 +650,7 @@ mod tests {
             vec![SessionKind::Grok]
         );
         // Including when the named agent cannot summarize at all.
-        assert!(candidates(Some(SessionKind::Opencode), Some(SessionKind::Claude), 100).is_empty());
+        assert!(candidates(Some(SessionKind::Cline), Some(SessionKind::Claude), 100).is_empty());
         // And when it cannot take a prompt this large.
         assert!(candidates(Some(SessionKind::Grok), None, ARG_PROMPT_LIMIT + 1).is_empty());
     }
@@ -598,12 +708,15 @@ mod tests {
             "echo",
             &[],
             "answer text",
-            PromptDelivery::Arg,
+            PromptDelivery::Arg { marker: None },
             None,
             Duration::from_secs(10),
         )
         .expect("argument delivery should succeed");
-        assert_eq!(got, "answer text", "surrounding whitespace should be trimmed");
+        assert_eq!(
+            got, "answer text",
+            "surrounding whitespace should be trimmed"
+        );
     }
 
     #[cfg(unix)]
@@ -631,7 +744,7 @@ mod tests {
                 "vlx-no-such-binary-anywhere",
                 &[],
                 "",
-                PromptDelivery::Arg,
+                PromptDelivery::Arg { marker: None },
                 None,
                 Duration::from_secs(5)
             ),
@@ -640,7 +753,14 @@ mod tests {
 
         // Success with nothing on stdout is not an answer.
         assert!(matches!(
-            run("true", &[], "", PromptDelivery::Arg, None, Duration::from_secs(10)),
+            run(
+                "true",
+                &[],
+                "",
+                PromptDelivery::Arg { marker: None },
+                None,
+                Duration::from_secs(10)
+            ),
             Err(HeadlessError::Empty)
         ));
     }
@@ -655,7 +775,7 @@ mod tests {
             "sh",
             &["-c", "sleep 60 & wait"],
             "",
-            PromptDelivery::Arg,
+            PromptDelivery::Arg { marker: None },
             None,
             Duration::from_millis(300),
         )
@@ -670,6 +790,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn run_bounds_output_collection_after_the_main_process_exits() {
+        // A helper can inherit both pipes and outlive the CLI that launched it.
+        let started = std::time::Instant::now();
+        let result = run(
+            "sh",
+            &["-c", "sleep 2 & printf answer"],
+            "",
+            PromptDelivery::Stdin { marker: None },
+            None,
+            Duration::from_millis(100),
+        );
+        assert!(
+            matches!(result, Err(HeadlessError::Timeout(_))),
+            "got: {result:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn run_strips_the_session_variables_from_the_child() {
         // A summarizer that inherited these could call vspawn or vrefer itself, turning one reference
         // into a recursion the caller never asked for and cannot see.
@@ -680,7 +820,7 @@ mod tests {
             "sh",
             &["-c", "echo \"[$VLX_SPAWN_URL|$VLX_SESSION_ID|$VLX_TOKEN]\""],
             "",
-            PromptDelivery::Arg,
+            PromptDelivery::Arg { marker: None },
             None,
             Duration::from_secs(10),
         )
@@ -698,12 +838,61 @@ mod tests {
             "echo",
             &[],
             &huge,
-            PromptDelivery::Arg,
+            PromptDelivery::Arg { marker: None },
             None,
             Duration::from_secs(5),
         )
         .expect_err("it should refuse rather than let the OS reject the command line");
-        assert!(matches!(err, HeadlessError::PromptTooLarge { .. }), "got: {err}");
+        assert!(
+            matches!(err, HeadlessError::PromptTooLarge { .. }),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn opencode_json_output_keeps_only_answer_text() {
+        let stdout = concat!(
+            "{\"type\":\"step_start\",\"sessionID\":\"ses_1\"}\n",
+            "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"first\"}}\n",
+            "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"second\"}}\n"
+        );
+        assert_eq!(
+            decode_output(OutputShape::OpenCodeJson, stdout).unwrap(),
+            "first\n\nsecond"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_run_uses_shared_model_effort_mapping_before_the_prompt() {
+        let runner = Summarizer {
+            kind: SessionKind::Pi,
+            spec: HeadlessSpec {
+                key: "pi",
+                bin: "sh",
+                args: &["-c", "printf '%s\\n' \"$@\"", "probe"],
+                prompt: PromptDelivery::Arg { marker: Some("-p") },
+                output: OutputShape::Plain,
+            },
+            bin: "sh".to_string(),
+        };
+        let selection = super::super::launch_options::AgentSelection {
+            agent: SessionKind::Pi,
+            model: "provider/model".to_string(),
+            effort: "high".to_string(),
+        };
+        let got = run_selected(
+            &runner,
+            "summarize this",
+            Some(&selection),
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            "--model\nprovider/model\n--thinking\nhigh\n-p\nsummarize this"
+        );
     }
 
     #[test]
@@ -716,3 +905,6 @@ mod tests {
         assert_eq!(tail("一二三四五", 2), "…四五");
     }
 }
+
+#[cfg(test)]
+use super::executable::{find_on_path, is_executable_file};

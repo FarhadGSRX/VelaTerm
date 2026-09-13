@@ -24,7 +24,7 @@ export const DEBUG = readFlag();
 
 /** Toggleable debug log emitted only under DEBUG with a consistent filterable prefix. */
 export function dlog(...args: unknown[]): void {
-  if (DEBUG) console.log("%c[vlx]", "color:#6cf;font-weight:bold", ...args);
+  if (DEBUG) console.log("[vlx] diagnostic", { argumentCount: args.length });
 }
 
 /** Minimal state view required by checkTabInvariants, avoiding a reverse dependency on store types. */
@@ -97,7 +97,7 @@ export function checkTabInvariants(label: string, s: TabStateView): void {
     docTabKeys: Object.keys(s.docTabs),
   };
   if (problems.length) {
-    console.error(`[vlx][invariant violated] after ${label}:`, problems, snap);
+    console.error("[vlx] tab invariant violated", { problemCount: problems.length, tabCount: snap.openTabs.length });
   } else {
     dlog(`after ${label}`, snap);
   }

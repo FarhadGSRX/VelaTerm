@@ -1,3 +1,4 @@
+import { kindIconEl } from "./sessionMeta";
 //! Agent transcript viewer for scrollable, searchable, copyable messages parsed by the backend.
 //!
 //! Two caller-selected modes:
@@ -147,7 +148,7 @@ export function TranscriptViewer({
                     color: isUser ? "var(--accent)" : "var(--text-primary)",
                   }}
                 >
-                  {isUser ? t("archive.you") : label}
+                  {isUser && m.origin ? <>{kindIconEl(m.origin.agent, 14)} {m.origin.name}{(m.origin.role === "plan" || m.origin.role === "exec") && <> · {t(m.origin.role === "plan" ? "chat.origin.plan" : "chat.origin.exec")}</>}</> : isUser ? t("archive.you") : label}
                 </span>
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{fmtTs(m.timestamp)}</span>
               </div>

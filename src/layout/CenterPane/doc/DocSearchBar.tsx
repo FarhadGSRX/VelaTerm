@@ -13,6 +13,7 @@ export function DocSearchBar({
   onClose,
   onEdited,
   epoch,
+  readOnly = false,
 }: {
   /** Return the active editor's search control, or null while the editor is not ready. */
   getControl: () => DocSearchControl | null;
@@ -21,6 +22,7 @@ export function DocSearchBar({
   onEdited: () => void;
   /** Editor reconstruction generation; when it changes, reapply the query so highlights follow the new instance. */
   epoch: number;
+  readOnly?: boolean;
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -82,6 +84,7 @@ export function DocSearchBar({
         <button
           className={"docsearch-toggle" + (showReplace ? " on" : "")}
           title={t("doc.searchToggleReplace")}
+          disabled={readOnly}
           onClick={() => setShowReplace((v) => !v)}
         >
           {showReplace ? "▾" : "▸"}
@@ -131,7 +134,7 @@ export function DocSearchBar({
         </button>
       </div>
 
-      {showReplace && (
+      {showReplace && !readOnly && (
         <div className="docsearch-row">
           <span className="docsearch-toggle" aria-hidden />
           <input

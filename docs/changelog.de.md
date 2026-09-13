@@ -1,3 +1,41 @@
+## v0.2.0 — 2026-09-13
+
+- 📱 VelaTerm für iOS und Android (frühe Version): Verbinde dich per SSH oder URL mit einem Rechner und bestätige beim ersten Verbinden den Fingerabdruck des Hosts; lade die vollständige entfernte Oberfläche direkt in der App, fülle Verbindungsdaten per QR-Code aus und melde dich bei einem entfernten Konto an.
+
+- 🛡️ Experimentelle Codeprüfung: Starte im Kontextmenü eines Projekts mit Codex oder Claude Code eine Prüfung des gesamten Repositorys, eines Verzeichnisses oder einer Datei oder der nicht committeten Änderungen im Arbeitsverzeichnis; prüfe Befunde gegen den Quellcode und exportiere einen Markdown- oder JSON-Bericht.
+
+- 📓 Lokale Wissensdatenbank: Öffne im rechten Bereich einen Ordner mit Markdown-Notizen, bearbeite Notizen im WYSIWYG-Editor, suche in Pfaden und im Volltext, verwalte Tags und Favoriten und stelle gelöschte Notizen aus dem Papierkorb wieder her. Agenten können Notizen mit `vkb` abfragen; Ordnerimporte laufen im Hintergrund und hinterlassen einen aufklappbaren, erneut aufrufbaren und abbrechbaren Verlauf.
+
+- 🤖 Planungs- und Ausführungssitzungen: `vspawn --plan-execute` öffnet eine Planungssitzung, die die Aufgabe in Ausführungssitzungen aufteilt; `vflow` schlägt die Aufteilung vor, `vtell --report` meldet das Ergebnis jeder Ausführung zur Abnahme zurück, und bei einer Überarbeitung wird die ursprüngliche Ausführungssitzung wiederverwendet. Worktrees können von allen Rollen geteilt oder pro Sitzung erstellt werden.
+
+- 🔗 Geteilte Projekte und Sitzungen laden jetzt die echte Oberfläche des Hosts hinter der geteilten URL, übertragen über einen ausgehenden Tunnel und beschränkt auf das freigegebene Projekt oder die freigegebene Sitzung. Geräte und Freigaben lassen sich auf den Kontoseiten verwalten.
+
+- 🧠 Die Sitzungswissensdatenbank unterstützt Gruppen für Projekte, Sitzungen und Einträge mit Drag-and-drop, Umbenennen und Löschen; eine erneute Organisation derselben Sitzung ersetzt die wartende Aufgabe.
+
+- 💬 Gesprächsansicht: Lange Verläufe laden seitenweise bis zur ersten Nachricht, jeder gesprächsfähige Agent (einschließlich OMP) öffnet neue Sitzungen standardmäßig in der Gesprächsansicht, und aufeinanderfolgende Runden desselben Agenten teilen eine Autorenzeile.
+
+- ⌨️ Terminal: Shell-eigene Vorschläge bieten Tab-Vervollständigung für zsh, bash, fish und PowerShell unter macOS und Linux, die Pfeiltasten rufen weiterhin frühere Befehle ab, während die Liste geöffnet ist, und der Terminalkern wechselt auf xterm 6.
+
+- 📊 Das Info-Panel zeigt Statistiken der aktuellen Runde für Claude, Codex, Grok, OpenCode, Pi und OMP: Eingabe- und Ausgabe-Token, Cache-Trefferrate, Generierungsgeschwindigkeit, Werkzeugaufrufe und erfasste Dateiänderungen. Seltener genutzte Bedienelemente der Eingabe wandern unter „Mehr“.
+
+- 🔐 Die Eingabe zeigt den konfigurierten, den aktuell wirksamen und den ausstehenden Berechtigungsmodus und fragt nach Bestätigung, wenn ein Neustart zum Anwenden nötig ist.
+
+- 🔔 Benachrichtigungen zeigen den Sitzungsnamen und eine kurze Vorschau; ein Klick öffnet die Sitzung, und die Mobil-App kann sie über den Push-Dienst des Systems empfangen.
+
+- 🌐 Claudes Modellliste stammt jetzt aus dem veröffentlichten Modellkatalog, wird lokal zwischengespeichert und alle sechs Stunden aktualisiert und mit den von der CLI gemeldeten Modellen zusammengeführt.
+
+- 🧵 Mit den Pfeiltasten auf und ab ruft die Eingabe frühere Nachrichten ab, auch wartende und noch unbestätigte, und stellt am Ende den ungesendeten Entwurf wieder her.
+
+- ↩️ Beim Zurücksetzen einer Nachricht kehren ihre Bilder in die Eingabe zurück und können erneut gesendet werden.
+
+- 🔑 Unter macOS gestartete Agenten übernehmen die vollständige Umgebung der Login-Shell, sodass auch Werkzeuge außerhalb des Standard-PATH gefunden werden.
+
+- 💡 Ein Feedback-Eintrag in der Titelleiste öffnet die Feedback-Seite.
+
+- 🕹️ Ein Spielecenter-Eintrag in der Tab-Leiste öffnet das Spielecenter der Website (PIXEL WING); am Desktop öffnet sich das Spiel im integrierten Browser.
+
+---
+
 ## v0.1.108 — 2026-09-08
 
 - 💬 Experimentelle Gesprächsansicht für Claude, Codex und OpenCode mit gestreamten Antworten, Denkprozess, Werkzeugdetails, Berechtigungen und Frageformularen. Neue Konfigurationen verwenden weiterhin standardmäßig die Terminalansicht.

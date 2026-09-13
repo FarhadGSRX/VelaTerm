@@ -16,11 +16,12 @@
 
 const { app, BrowserWindow, WebContentsView, Menu, dialog, shell, ipcMain, net, session, screen } =
   require("electron");
-const { spawn } = require("node:child_process");
+const { spawn, execFile } = require("node:child_process");
 const crypto = require("node:crypto");
 const net0 = require("node:net");
 const path = require("node:path");
 const fs = require("node:fs");
+const diagnostic = require("./diagnostics.cjs").createDiagnostics(process.env.VLX_LOG_DIR || path.join(app.getPath("userData"), "logs"));
 
 const LOOPBACK = "127.0.0.1";
 /** Overall timeout for sidecar health checks and login, in milliseconds. */
@@ -72,7 +73,7 @@ function parseOpenProjectArg(argv, cwd) {
 try {
   state.pendingOpenProject = parseOpenProjectArg(process.argv, process.cwd());
 } catch (e) {
-  console.error(`vela: ${e && e.message ? e.message : e}`);
+  diagnostic("launcher_failed");
   app.exit(2);
 }
 
@@ -140,7 +141,7 @@ function installVelaCommand() {
           ? `@REM ${VELA_SHIM_MARKER}\r\n@IF "%~1"=="-h" GOTO help\r\n@IF "%~1"=="--help" GOTO help\r\n@"${exe}" --open-project %*\r\n@EXIT /B %ERRORLEVEL%\r\n:help\r\n@ECHO usage: vela ^<project-path^>\r\n`
           : `#!/bin/sh\n# ${VELA_SHIM_MARKER}\ncase "\${1:-}" in -h|--help) echo 'usage: vela <project-path>'; exit 0;; esac\nexec '${exe.replaceAll("'", "'\\''")}' --open-project "$@"\n`;
       fs.writeFileSync(dest, content, { mode: 0o755 });
-      console.log(`vela command ready: ${dest}`);
+      diagnostic("command_ready");
       return { installed: true, path: dest, conflict: null };
     } catch {
       // This candidate is not writable. Try the next one without elevation or disrupting application startup.
@@ -232,10 +233,10 @@ function spawnSidecar() {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  child.stdout.on("data", (b) => process.stdout.write(`[sidecar] ${b}`));
-  child.stderr.on("data", (b) => process.stderr.write(`[sidecar] ${b}`));
+  child.stdout.on("data", () => {}); // Drain CLI output; the backend persists its own safe diagnostics.
+  child.stderr.on("data", () => {}); // Never relay arbitrary child-process error text into logs.
   child.on("exit", (code, signal) => {
-    console.log(`[sidecar] exited code=${code} signal=${signal}`);
+    diagnostic("sidecar_exit", { exitCode: code });
     state.child = null;
     // Only an unexpected exit after successful readiness counts as a crash and triggers an automatic restart.
     // Initial startup failures are reported by startSidecar's health-check timeout, preventing competing restart loops.
@@ -312,7 +313,7 @@ function scheduleRestart() {
     return;
   }
   const delay = Math.min(500 * state.restarts, 3000); // Linear backoff capped at 3 seconds.
-  console.log(`[sidecar] exit detected, restart attempt ${state.restarts} in ${delay}ms`);
+  diagnostic("sidecar_restart", { retryCount: state.restarts, durationMs: delay });
   setTimeout(async () => {
     try {
       await startSidecar();
@@ -320,7 +321,7 @@ function scheduleRestart() {
         await state.win.loadURL(`http://${LOOPBACK}:${state.port}/`);
       }
     } catch (e) {
-      console.error("[sidecar] restart failed:", e);
+      diagnostic("sidecar_restart_failed");
       scheduleRestart(); // Continue retrying with backoff, bounded by MAX_RESTARTS.
     }
   }, delay);
@@ -405,7 +406,8 @@ async function nativeQuitConfirmation() {
 //      shares them between browser tabs, and retains them across restarts. Chromium provides this storage
 //      directly, without Tauri's macOS 14+ requirement.
 //   3. A complete Safari UA avoids Google's `disallowed_useragent` response for embedded WebViews.
-//   4. `setWindowOpenHandler` turns window.open / target=_blank into navigation **within the current tab**.
+//   4. `setWindowOpenHandler` denies native popups and forwards them to the renderer, which opens them as
+//      app browser tabs matching the Tauri `on_new_window` path.
 //   5. A scheme allowlist in `will-navigate` provides a final guard; the frontend already normalizes address-bar
 //      input in `ipc/browserUrl.ts`.
 //
@@ -478,9 +480,11 @@ function openBrowserView(tabId, url, rect) {
   const rec = { view, url, title: "", loading: false };
   browserViews.set(tabId, rec);
 
-  // Security 4: open popups / target=_blank in the current tab; v1 does not support multiple windows.
+  // Security 4: deny native popups; the renderer opens each request as an app browser tab.
   wc.setWindowOpenHandler(({ url: popupUrl }) => {
-    if (browserSchemeAllowed(popupUrl)) void wc.loadURL(popupUrl);
+    if (browserSchemeAllowed(popupUrl) && state.win && !state.win.isDestroyed()) {
+      state.win.webContents.send("vlx:browser:popup", { tabId, url: popupUrl });
+    }
     return { action: "deny" };
   });
   // Security 5: enforce the scheme allowlist for in-page navigation; the frontend already normalizes address-bar input.
@@ -553,7 +557,7 @@ function closeBrowserView(tabId) {
     }
     rec.view.webContents.close();
   } catch (e) {
-    console.error("[browser] failed to close the child view:", e);
+    diagnostic("browser_close_failed");
   }
 }
 
@@ -715,12 +719,30 @@ function registerNativeIpc() {
     state.quitPromptAcked = false;
   });
   ipcMain.handle("vlx:velaCommand:status", () => velaCommandStatus());
+  ipcMain.handle("vlx:fonts:catalog", () => new Promise((resolve, reject) => {
+    execFile(locateBinary(), ["--font-catalog"], { timeout: 15000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
+      if (error) return reject(new Error("Local font enumeration failed"));
+      try { resolve(JSON.parse(stdout)); }
+      catch { reject(new Error("Invalid local font catalog")); }
+    });
+  }));
   ipcMain.handle("vlx:velaCommand:install", () => installVelaCommand());
   ipcMain.handle("vlx:velaCommand:uninstall", () => uninstallVelaCommand());
   ipcMain.handle("vlx:project:takeOpenRequest", () => {
     const value = state.pendingOpenProject;
     state.pendingOpenProject = null;
     return value;
+  });
+  ipcMain.handle("vlx:account:remote", async (event, url) => {
+    if (event.sender !== state.win?.webContents) throw new Error("Invalid Remote window request");
+    let target;
+    try { target = new URL(String(url)); } catch { throw new Error("Invalid Remote URL"); }
+    // The URL comes from this app's own authenticated sidecar; only the scheme is constrained here.
+    if (target.protocol !== "https:" && target.protocol !== "http:") throw new Error("Invalid Remote URL");
+    const win = new BrowserWindow({width:1280,height:820,minWidth:720,minHeight:480,
+      title:"VelaTerm · Remote", webPreferences:{preload:path.join(__dirname,"preload.cjs"),contextIsolation:true,nodeIntegration:false,sandbox:false}});
+    win.webContents.setWindowOpenHandler(()=>({action:"deny"}));
+    await win.loadURL(target.href);
   });
   ipcMain.handle("vlx:dialog:saveFile", async (_e, opts) => {
     const res = await dialog.showSaveDialog(state.win ?? undefined, {
@@ -795,7 +817,7 @@ if (!app.requestSingleInstanceLock()) {
       try {
         installVelaCommand();
       } catch (e) {
-        console.error(`vela command was not installed: ${e && e.message ? e.message : e}`);
+        diagnostic("command_install_failed");
       }
     }
     registerNativeIpc();
@@ -804,7 +826,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       await startSidecar();
     } catch (e) {
-      console.error(e);
+      diagnostic("startup_failed");
       dialog.showErrorBox("VelaTerm failed to start", String(e && e.message ? e.message : e));
       app.quit();
       return;

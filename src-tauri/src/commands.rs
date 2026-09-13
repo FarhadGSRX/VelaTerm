@@ -119,8 +119,14 @@ pub async fn desktop_call(
     app: AppHandle,
     cmd: String,
     args: serde_json::Value,
+    diagnostic_request_id: Option<String>,
+    diagnostic_operation_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let queued = std::time::Instant::now();
     tauri::async_runtime::spawn_blocking(move || {
+        let _context=crate::diagnostics::Context::enter(diagnostic_request_id.as_deref());
+        let _operation=crate::diagnostics::Operation::enter(diagnostic_operation_id.as_deref());
+        crate::diagnostics::record("DEBUG", "rpc_queue", serde_json::json!({"command":cmd,"requestId":diagnostic_request_id,"queueMs":queued.elapsed().as_millis() as u64}));
         crate::web::dispatch::dispatch(
             &AppCtx::Tauri(app),
             &cmd,
@@ -165,7 +171,12 @@ pub fn pty_spawn(
     // Inject the light/dark theme into Claude settings because ConPTY cannot detect the real background.
     theme: Option<String>,
     on_output: Channel<InvokeResponseBody>,
+    diagnostic_request_id: Option<String>,
+    diagnostic_operation_id: Option<String>,
 ) -> Result<SpawnResult, String> {
+    let _diagnostic_context = crate::diagnostics::Context::enter(diagnostic_request_id.as_deref());
+    let _operation=crate::diagnostics::Operation::enter(diagnostic_operation_id.as_deref());
+    let mut diagnostic = crate::diagnostics::Span::new("pty_prepare", serde_json::json!({"sessionId":session_id}));
     // Read the resume ID and pending-fork flag under a short lock, then verify the transcript exists.
     let (in_db, mut resume_id, fork, agent_args, perm, created_at) = {
         let conn = db.conn.lock().unwrap();
@@ -212,6 +223,8 @@ pub fn pty_spawn(
         }
     }
 
+    diagnostic.success();
+    drop(diagnostic);
     // Wrap the Tauri binary Channel as a transport-neutral OutputSink so desktop and WebSocket clients
     // share subscription fan-out/replay. A failed send returns false and removes the stale subscriber.
     let sink: crate::pty::session::OutputSink = Box::new(move |bytes: &[u8]| {
@@ -639,6 +652,7 @@ pub async fn open_remote_window(
         CapabilityBuilder::new(format!("remote-caps-{label}"))
             .window(label.clone())
             .remote("http://127.0.0.1:*".to_string())
+            .permission("local-fonts:allow-catalog")
             .permission("clipboard-manager:allow-write-text")
             .permission("clipboard-manager:allow-write-image")
             .permission("notification:default")
@@ -651,6 +665,43 @@ pub async fn open_remote_window(
     )
     .map_err(|e| format!("Failed to grant remote window capability: {e}"))?;
 
+    Ok(())
+}
+
+/// Account Remote opens the relay's authorized URL in a browser-mode window. The page is the real app served
+/// by this host through the account tunnel, not a bundled client. A one-time browser session minted with the
+/// local device credential lets the window start without a separate web login; `grant_id` optionally opens
+/// one shared range directly, otherwise the account page lists the ranges.
+#[tauri::command]
+pub async fn open_account_remote_window(
+    app: AppHandle,
+    device_id: String,
+    grant_id: Option<String>,
+) -> Result<(), String> {
+    let id = uuid::Uuid::parse_str(&device_id).map_err(|_| "Invalid device ID")?;
+    let ctx = crate::host::AppCtx::Tauri(app.clone());
+    let url = tauri::async_runtime::spawn_blocking(move || {
+        crate::web::public_relay::browser_ticket_url(&ctx, &id.to_string(), grant_id.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Remote window task failed: {e}"))??;
+    let parsed: url::Url = url.parse().map_err(|e| format!("Invalid remote URL: {e}"))?;
+    let label = format!("account-remote-{}", uuid::Uuid::new_v4().simple());
+    // Force the browser transport: the external page has no Tauri IPC capability, and the app talks to the
+    // host over the WebSocket tunnel instead. Keep __TAURI_INTERNALS__ for clipboard and notification APIs.
+    let init_script = r#"(function(){
+  window.__VLX_FORCE_BROWSER__=true;
+  if(typeof window.OffscreenCanvas!=='undefined')window.OffscreenCanvas=undefined;
+})();"#;
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(parsed))
+        .title("VelaTerm · Remote")
+        .inner_size(1280.0, 820.0)
+        .min_inner_size(720.0, 480.0)
+        .theme(crate::native_theme(&app))
+        .initialization_script(init_script)
+        .disable_drag_drop_handler()
+        .build()
+        .map_err(|e| format!("Cannot open Remote window: {e}"))?;
     Ok(())
 }
 
@@ -829,6 +880,7 @@ pub async fn ssh_connect(
     remember: Option<bool>,
     shared_db: Option<bool>,
     mirror: Option<bool>,
+    diagnostic_request_id: Option<String>,
 ) -> Result<String, String> {
     // Data mode defaults to an isolated database; true reuses the remote desktop release database.
     let shared_db = shared_db.unwrap_or(false);
@@ -852,6 +904,7 @@ pub async fn ssh_connect(
     let host_bg = host.clone();
     let app_ev = app.clone();
     let r = tauri::async_runtime::spawn_blocking(move || {
+        let _context=crate::diagnostics::Context::enter(diagnostic_request_id.as_deref());
         // Emit stage code and percentage through ssh://progress for localized frontend display.
         let progress = move |stage: &str, pct: Option<u8>| {
             let _ = app_ev.emit(
@@ -941,7 +994,7 @@ pub async fn ssh_connect(
             &r.password,
             r.desktop_link,
         ) {
-            eprintln!("open ssh login window failed: {e}");
+            crate::diagnostic_warn!("open ssh login window failed: {e}");
         }
     })
     .map_err(|e| format!("failed to schedule window open on main thread: {e}"))?;
@@ -1075,6 +1128,7 @@ fn open_login_window(
         CapabilityBuilder::new(format!("ssh-caps-{label}"))
             .window(label.clone())
             .remote("http://127.0.0.1:*".to_string())
+            .permission("local-fonts:allow-catalog")
             .permission("clipboard-manager:allow-write-text")
             .permission("clipboard-manager:allow-write-image")
             .permission("notification:default")

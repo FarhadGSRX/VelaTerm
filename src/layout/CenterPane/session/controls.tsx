@@ -71,8 +71,11 @@ export function ControlChip<T extends string>({
   disabled,
   menuWidth = 220,
   keepLabel,
+  onKeepCurrent,
   filterPlaceholder,
   defaultValue,
+  defaultLabel = "Default",
+  footer,
 }: {
   glyph: ReactNode;
   label?: string;
@@ -88,6 +91,8 @@ export function ControlChip<T extends string>({
    * drops the box, which is how a control that has nothing to remember keeps its menu plain.
    */
   keepLabel?: string;
+  /** Save the value already shown by the chip when the box itself is ticked. */
+  onKeepCurrent?: (value: T) => void;
   /**
    * Placeholder of a filter box above the list, shown only once the list is long enough to need one. A
    * catalogue of a few hundred models cannot be scrolled through; it can be typed into.
@@ -95,6 +100,8 @@ export function ControlChip<T extends string>({
   filterPlaceholder?: string;
   /** Saved default, independent of the current conversation's selection. */
   defaultValue?: T;
+  defaultLabel?: string;
+  footer?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -104,6 +111,17 @@ export function ControlChip<T extends string>({
   const [keep, setKeep] = useState(false);
   const [hover, setHover] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    if (!open) return;
+    const resize = () => setViewportWidth(window.innerWidth);
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [open]);
+  const panelWidth = Math.min(menuWidth, Math.max(0, viewportWidth - 16));
+  const anchorLeft = boxRef.current?.getBoundingClientRect().left ?? 0;
+  const panelLeft = Math.max(8 - anchorLeft, Math.min(0, viewportWidth - anchorLeft - panelWidth - 8));
 
   // Every opening starts from the same place: the box is a decision about this one choice, not a setting
   // of its own that stays ticked.
@@ -115,15 +133,16 @@ export function ControlChip<T extends string>({
   }, [open]);
 
   const filtering = filterPlaceholder !== undefined && options.length > FILTER_THRESHOLD;
-  const needle = query.trim().toLowerCase();
+  // Words are matched one at a time against the whole row, so a query can mix a word from the name with
+  // one from the explanation ("opencode go flash"). Every word has to land somewhere; fields are joined
+  // rather than searched separately so that a word cannot be required in each of them at once.
+  const needles = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const shown =
-    filtering && needle
-      ? options.filter(
-          (option) =>
-            option.label.toLowerCase().includes(needle) ||
-            (option.hint ?? "").toLowerCase().includes(needle) ||
-            option.value.toLowerCase().includes(needle),
-        )
+    filtering && needles.length > 0
+      ? options.filter((option) => {
+          const row = `${option.label} ${option.hint ?? ""} ${option.value}`.toLowerCase();
+          return needles.every((needle) => row.includes(needle));
+        })
       : options;
 
   // Close on any click outside. mousedown rather than click, so the menu is gone before the click lands
@@ -169,8 +188,8 @@ export function ControlChip<T extends string>({
             fontFamily: "var(--chat-font)",
             top: "auto",
             bottom: "calc(100% + 4px)",
-            left: 0,
-            width: menuWidth,
+            left: panelLeft,
+            width: panelWidth,
             maxHeight: "none",
             overflow: "visible",
             display: "flex",
@@ -246,7 +265,7 @@ export function ControlChip<T extends string>({
                         lineHeight: 1.4,
                       }}
                     >
-                      Default
+                      {defaultLabel}
                     </span>
                   )}
                 </span>
@@ -268,6 +287,7 @@ export function ControlChip<T extends string>({
               </div>
             ))}
           </div>
+          {footer}
           {keepLabel ? (
             <label
               style={{
@@ -288,7 +308,11 @@ export function ControlChip<T extends string>({
               <input
                 type="checkbox"
                 checked={keep}
-                onChange={(e) => setKeep(e.target.checked)}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setKeep(checked);
+                  if (checked) onKeepCurrent?.(value);
+                }}
                 style={{ margin: 0, accentColor: "var(--accent)" }}
               />
               {keepLabel}

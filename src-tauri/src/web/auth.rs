@@ -150,7 +150,7 @@ impl PairingState {
                     },
                 ) {
                     // Nonfatal: the service still works for this run; only restart persistence degrades.
-                    eprintln!("failed to persist remote-access state: {e}");
+                    crate::diagnostic_warn!("failed to persist remote-access state: {e}");
                 }
                 (token, Vec::new(), HashSet::new())
             }
@@ -321,7 +321,7 @@ impl AuthState {
             });
         }
         if let Err(e) = self.pairing.persist(&inner) {
-            eprintln!("failed to persist remote-access state: {e}");
+            crate::diagnostic_warn!("failed to persist remote-access state: {e}");
         }
     }
 

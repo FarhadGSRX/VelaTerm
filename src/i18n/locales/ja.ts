@@ -3,7 +3,50 @@
 import type en from "./en";
 
 const ja: typeof en = {
-  // Project code intelligence and memory associations.
+  "tree.newPlanExecuteSession": "計画・実行セッションを新規作成…",
+  "launch.splitTasks": "複数のタスクに自動分割",
+  "launch.splitTasksHint": "計画セッションが独立したタスクを提案します。実行前に、各タスクの指示、エージェント、モデル、推論の強度を確認できます。",
+  "launch.splitReview": "実行タスクの確認",
+  "launch.splitReviewHint": "1つの計画セッションがすべての報告を受け取り、タスクごとに検証します。確認後に実行セッションが起動します。",
+  "launch.splitConfirmed": "これらのタスクは確認済みです。",
+  "launch.splitClosed": "この提案は確認待ちではありません。",
+  "launch.splitRetry": "未配信のメッセージを再送",
+  "launch.splitSharedDirectory": "すべての実行セッションは計画セッションの作業ディレクトリを使用します。ワークツリーを有効にした場合は、そのワークツリーを共有します。",
+  "launch.createIn": "作成先",
+  "launch.workingDirectory": "作業ディレクトリのパス",
+  "launch.createAndStart": "作成して起動",
+  "launch.planExecuteTaskHint": "計画に必要なタスクの目的、要件、受け入れ基準を入力してください。",
+  "launch.planExecuteResult": "まず計画セッションを開始し、計画が整ったら実行セッションを作成します。",
+  "launch.planExecuteWorktreeHint": "新しいワークツリーは現在のコミットから作成され、未コミットの変更は含まれません。作成に失敗した場合、該当セッションは起動しません。",
+  "launch.workflowDirectorySharedHint": "計画セッションとすべての実行セッションが、1つの新しいディレクトリとブランチを共有します。",
+  "launch.workflowDirectoryEachHint": "計画セッションと各実行セッションに、それぞれ専用のワークツリーとブランチを作成します。",
+  "launch.planTitle": "計画と検証",
+  "launch.execTitle": "実行",
+  "launch.planExecuteIntro": "専用の計画セッションが作業を指示し、結果を検証して、実行セッションに修正を依頼します。",
+  "chat.origin.plan": "計画",
+  "chat.origin.exec": "実行",
+
+  // Project code intelligence and knowledge entry associations.
+  "knowledge.callers": "呼び出し元",
+  "knowledge.callees": "呼び出し先",
+  "knowledge.explore": "コード探索",
+  "knowledge.exploreHint": "機能や呼び出しの流れを説明するか、ファイル名・シンボル名を入力…",
+  "knowledge.impact": "影響分析",
+  "knowledge.path": "呼び出し経路",
+  "knowledge.target": "到達先のシンボルを検索…",
+  "knowledge.depth": "探索の深さ",
+  "knowledge.noPath": "インデックスに有向の呼び出し経路が見つかりませんでした。",
+  "knowledge.watching": "自動同期が有効",
+  "knowledge.onDemand": "クエリ前に同期",
+  "knowledge.overview": "概要",
+  "knowledge.uncertain": "推定された関係",
+  "knowledge.kind": "シンボルの種類",
+  "knowledge.language": "言語",
+  "knowledge.results": "結果",
+  "knowledge.resultLarge": "結果が大きすぎるため表示できません。検索範囲を絞るか、探索の深さを下げてください。",
+  "knowledge.queryFailed": "コードのクエリに失敗しました。再試行するか、インデックスを同期してください。",
+  "knowledge.liveHelp": "クエリプロセスの実行中はファイルの変更を同期します。アイドル状態で終了した後は、次のクエリの前に変更を反映します。",
+  "knowledge.startHelp": "インデックスを有効にすると、コードの検索、呼び出しの追跡、変更の影響分析ができます。分析はバックエンドで行われ、AI モデルは使用しません。",
   "knowledge.title": "コードグラフ",
   "knowledge.intro": "コードの関係を調べ、保存された設計判断と関連付けます。",
   "knowledge.setup": "このバックエンドに CodeGraph をインストールすると、プロジェクトのインデックスを有効にできます。",
@@ -25,7 +68,7 @@ const ja: typeof en = {
   "knowledge.search": "シンボルやファイルパスを検索…",
   "knowledge.searchButton": "検索",
   "knowledge.noResults": "一致するシンボルはありません。",
-  "knowledge.selectSymbol": "シンボルを選択すると、ソース、関係、関連するメモリを表示します。",
+  "knowledge.selectSymbol": "シンボルを選択すると、ソース、関係、関連するナレッジ記事を表示します。",
   "knowledge.source": "ソース",
   "knowledge.incoming": "入力側の関係",
   "knowledge.outgoing": "出力側の関係",
@@ -33,22 +76,22 @@ const ja: typeof en = {
   "knowledge.analysisNote": "関係は静的解析によるものであり、不完全または不確かな場合があります。",
   "knowledge.changed": "検索中にファイルが変更されました。行番号の利用や確認の記録を行う前に、再度同期してください。",
   "knowledge.truncated": "表示件数を制限しています。一部の関係やソース行は表示されていません。",
-  "knowledge.linkMemory": "メモリを関連付ける",
-  "knowledge.chooseMemory": "メモリの項目を選択",
-  "knowledge.noLinks": "コードとの関連付けはありません。シンボルの詳細からメモリを関連付けられます。",
-  "knowledge.inspect": "コードとメモリを確認",
+  "knowledge.linkMemory": "記事を関連付ける",
+  "knowledge.chooseMemory": "ナレッジ記事を選択",
+  "knowledge.noLinks": "コードとの関連付けはありません。シンボルの詳細から記事を関連付けられます。",
+  "knowledge.inspect": "コードと記事を確認",
   "knowledge.unlink": "関連付けを削除",
   "knowledge.codeReferences": "コードへの参照",
   "knowledge.refresh": "再読み込み",
   "knowledge.current": "変更なし",
   "knowledge.review": "要確認",
   "knowledge.unavailable": "利用不可",
-  "knowledge.reviewHelp": "このメモリと表示中のコードを照合してください。確認すると現在のファイルバージョンを記録します。メモリの本文は変更しません。",
+  "knowledge.reviewHelp": "この記事と表示中のコードを照合してください。確認すると現在のファイルバージョンを記録します。記事の本文は変更しません。",
   "knowledge.confirmReview": "確認済みにする",
-  "knowledge.agentHint": "エージェントはこの作業ディレクトリで vknowledge search \"トピック\" を実行できます。有効なインデックスを同期し、コードとメモリを分けて返します。",
+  "knowledge.agentHint": "エージェントはこの作業ディレクトリで vkb search \"トピック\" を実行できます。有効なインデックスを同期し、コードとナレッジ記事を分けて返します。",
   "knowledge.busy": "インデックス処理を実行中です。このページを閉じることも、インデックスを無効にして処理を停止することもできます。",
-  "knowledge.disabledHelp": "コードを検索するには、このディレクトリのインデックスを有効にしてください。無効にしてもインデックスとメモリの関連付けは保持されます。",
-  "knowledge.conflict": "コードまたはメモリが変更されました。両方を再読み込みしてから関連付けを保存してください。",
+  "knowledge.disabledHelp": "コードを検索するには、このディレクトリのインデックスを有効にしてください。無効にしてもインデックスと記事の関連付けは保持されます。",
+  "knowledge.conflict": "コードまたは記事が変更されました。両方を再読み込みしてから関連付けを保存してください。",
   "knowledge.symbolMissing": "シンボルまたはソースを取得できません。同期してから再検索してください。",
   "knowledge.directoryMissing": "作業ディレクトリが存在しないか、変更されています。プロジェクトとセッションのパスを確認してください。",
   "knowledge.partial": "インデックスが不完全です。再度同期し、ソースファイルを読み取れるか確認してください。",
@@ -58,62 +101,168 @@ const ja: typeof en = {
   "knowledge.timeout": "インデックス処理がタイムアウトしました。リポジトリの規模を確認して再試行してください。",
   "knowledge.error": "操作に失敗しました。バックエンドのディレクトリへのアクセス権とランタイムを確認して再試行してください。",
 
-  // Global Memory: a thematic LLM Wiki shared across sessions.
-  "memory.title": "グローバルメモリ",
-  "memory.add": "グローバルメモリに追加",
-  "memory.intro": "知識、決定事項、教訓を更新し続ける Wiki にまとめ、セッションを越えて共有します。",
-  "memory.entries": "メモリ記事",
+  // Knowledge base: saved knowledge organized by project and session.
+  "memory.hierarchy": "プロジェクトとセッション",
+  "memory.manualGroup": "手動作成",
+  "memory.legacyGroup": "過去に統合された項目",
+  "memory.unknownProject": "元のプロジェクトが不明",
+  "nb.addLink": "リンクを挿入",
+  "nb.attach": "添付ファイルを追加",
+  "nb.browse": "参照",
+  "nb.chooseNote": "最初のノートを作成",
+  "nb.closeHint": "この保管庫を一覧から外します。ディスク上のファイルは残ります。",
+  "nb.closeVault": "保管庫を閉じる",
+  "nb.conflict": "ファイルが外部で変更されました。編集中の内容は保持されています。ファイルを再読み込みするか、新しいノートとして保存してください。",
+  "nb.copyTo": "ローカル保管庫にコピー",
+  "nb.createVault": "ナレッジベースを作成",
+  "nb.destination": "移動先のパス",
+  "nb.download": "ダウンロード",
+  "nb.downloadHint": "添付ファイルをダウンロードして、別のアプリで開けます。",
+  "nb.empty": "フォルダーを開くか、保管庫を新規作成して記録を始めましょう。",
+  "nb.emptyImport": "読み込み可能なファイルが選択されていません。",
+  "nb.emptyNotes": "ノートは Markdown ファイルとして保存されます。",
+  "nb.emptyOutline": "文書の見出しがここに表示されます。",
+  "nb.emptyTrash": "ごみ箱は空です。",
+  "nb.error": "保管庫にアクセスできません。接続とフォルダーを確認して、もう一度お試しください。",
+  "nb.exists": "移動先または同名のファイルが既に存在します。別の名前かフォルダーを選んでください。",
+  "nb.favorites": "お気に入り",
+  "nb.files": "ファイル",
+  "nb.folder": "フォルダー",
+  "nb.generatedHint": "セッションから整理されたナレッジで、出典と変更履歴も確認できます。",
+  "nb.homeHint": "セッションナレッジベースとローカルナレッジベースを閲覧できます。",
+  "nb.loadMore": "さらに読み込む",
+  "nb.import": "読み込む",
+  "nb.importFiles": "ファイルを選択",
+  "nb.importFolder": "フォルダーを選択",
+  "nb.importHint": "選択したフォルダーにファイルをコピーします。既存のファイルは上書きせず、非表示の設定フォルダーはスキップします。",
+  "nb.imported": "読み込み済み",
+  "nb.imports": "インポート履歴",
+  "nb.importsEmpty": "インポート履歴はまだありません。",
+  "nb.importRoot": "ナレッジベースのルート",
+  "nb.importBusy": "このナレッジベースでは既にインポートを実行中です。",
+  "nb.importDelete": "記録を削除",
+  "nb.importDeleteConfirm": "このインポート記録を削除しますか？ インポート済みのファイルは削除されません。",
+  "nb.importDone": "インポートが完了しました",
+  "nb.importDuration": (seconds: string) => `${seconds} 秒`,
+  "nb.importFailed": "インポートに失敗しました",
+  "nb.importFilePending": "未インポート",
+  "nb.importHideFiles": "ファイルを隠す",
+  "nb.importInterruptedHint": "インポートは完了する前に停止しました。",
+  "nb.importProgress": (done: string, total: string) => `${done} / ${total} ファイル`,
+  "nb.importShowFiles": (count: string) => `ファイル（${count}）`,
+  "nb.importSkipHidden": "隠しファイルまたはフォルダー",
+  "nb.importStatusCancelled": "キャンセル済み",
+  "nb.importStatusCompleted": "完了",
+  "nb.importStatusFailed": "失敗",
+  "nb.importStatusInterrupted": "中断",
+  "nb.importStatusRunning": "インポート中",
+  "nb.incomplete": "操作を完了できませんでした。ファイルを確認して、もう一度お試しください。",
+  "nb.info": "ノートの詳細",
+  "nb.invalid": "名前またはパスが無効です。",
+  "nb.links": "リンク先",
+  "nb.local": "ローカルファイル",
+  "nb.localVaults": "ローカルナレッジベース",
+  "nb.move": "名前の変更・移動",
+  "nb.moveHint": "保管庫のルートからの相対パスを入力してください。ファイルやフォルダーの移動時に、既存のノートのリンクも更新します。",
+  "nb.name": "名前",
+  "nb.newFolder": "新規フォルダー",
+  "nb.newNote": "新規ノート",
+  "nb.noLinks": "リンクされたノートはありません。",
+  "nb.tags": "タグ",
+  "nb.notes": "ノート",
+  "nb.openVault": "ナレッジベースを開く",
+  "nb.outline": "アウトライン",
+  "nb.quickOpen": "クイックオープン",
+  "nb.readOnly": "このファイルは UTF-8 の Markdown ノートとして編集できません。",
+  "nb.recent": "最近のノート",
+  "nb.restore": "復元",
+  "nb.reload": "ファイルを再読み込み",
+  "nb.root": "フォルダーのパス",
+  "nb.rootHint": "接続先のコンピューターにあるフォルダーを選んでください。既存の Markdown ファイルと添付ファイルは移動しません。",
+  "nb.saveCopy": "新しいノートとして保存",
+  "nb.saved": "ファイルに保存済み",
+  "nb.saving": "保存中…",
+  "nb.search": "ノートを検索…",
+  "nb.searchAllVaults": "すべてのナレッジベース",
+  "nb.searchCount": (count: string) => `${count} 件の結果`,
+  "nb.searchEmpty": "一致するノートはありません。",
+  "nb.searchLine": (line: string) => `${line} 行目`,
+  "nb.searchMatches": (count: string) => `${count} 件一致`,
+  "nb.searchMore": "先頭の結果のみ表示しています。キーワードを絞り込むと残りを確認できます。",
+  "nb.searchRelated": "関連ノート",
+  "nb.searchResults": "検索結果",
+  "nb.searchScope": "検索範囲",
+  "nb.searchThisVault": "このナレッジベース",
+  "nb.skipped": "スキップ済み",
+  "nb.split": "分割表示",
+  "nb.tooLarge": "ファイルまたは選択した内容が保管庫の上限を超えています。",
+  "nb.trash": "ごみ箱",
+  "nb.trashHint": "この項目を保管庫のごみ箱に移動します。後で復元できます。",
+  "nb.unsaved": "未保存の変更",
+  "nb.vaults": "ナレッジベース",
+  "nb.view": "表示モード",
+  "nb.welcome": "自分のノート保管庫",
+  "nb.welcomeText": "自由に書き、考えをつなぎ、通常のローカルファイルでノートを管理できます。既存の Markdown フォルダーを開くか、新しい保管庫に資料を読み込みましょう。",
+  "memory.globalMemory": "セッションナレッジベース",
+  "memory.title": "ナレッジベース",
+  "memory.add": "セッションナレッジベースに整理",
+  "memory.intro": "プロジェクトとセッションごとに知識を整理します。保存された記事は元の情報の変更に連動せず、手動で編集できます。",
+  "memory.entries": "ナレッジ記事",
   "memory.emptyJobs": "整理履歴はまだありません。",
   "memory.jobs": "整理履歴",
-  "memory.search": "メモリのタイトルと本文を検索…",
-  "memory.empty": "該当するメモリはありません。会話を追加して Wiki を作り始めましょう。",
+  "memory.search": "記事のタイトルと本文を検索…",
+  "memory.empty": "一致する記事はありません。セッションから記事を生成するか、手動で作成してください。",
   "memory.emptyDetail": "記事を選択すると、内容、関連項目、出典を確認できます。",
-  "memory.new": "メモリを新規作成",
+  "memory.new": "記事を新規作成",
   "memory.titleField": "タイトル",
   "memory.summary": "概要",
   "memory.content": "本文（Markdown）",
   "memory.tags": "タグ（カンマ区切り）",
-  "memory.related": "関連メモリ",
+  "memory.related": "関連記事",
   "memory.backlinks": "この記事へのリンク",
   "memory.sources": "出典",
   "memory.history": "変更履歴",
   "memory.restore": "この版を復元",
   "memory.restoreConfirm": "この版を新しいバージョンとして復元しますか？現在の版も履歴に残ります。",
-  "memory.deleteConfirm": "このメモリと変更履歴を削除しますか？元のセッションは削除されません。",
+  "memory.deleteConfirm": "この記事と変更履歴を削除しますか？元のセッションは削除されません。",
+  "memory.groupDeleteConfirm": (count: string) => `このグループのナレッジ記事 ${count} 件をすべて削除しますか？プロジェクトまたはセッション自体は残ります。`,
   "memory.export": "Markdown をエクスポート",
   "memory.selectAgent": "エージェント",
   "memory.model": "モデル（任意）",
   "memory.modelHint": "空欄の場合、エージェントに設定されたモデルを使用します。",
   "memory.compile": "整理して保存",
-  "memory.compileHelp": "選択したエージェントが会話をテーマ別に整理し、既存のメモリに統合します。会話のテキストと関連メモリは、設定済みのエージェントを通じてモデルに送信されます。",
+  "memory.compileHelp": "選択したエージェントがこのセッションを整理します。再生成すると、このセッションから生成済みの項目が手動での編集内容も含めて上書きされます。セッションのテキストは、設定済みのエージェントを通じてモデルに送信されます。",
   "memory.unavailable": "未インストールまたは未設定",
   "memory.allTags": "すべてのタグ",
   "memory.updated": "更新日時順",
   "memory.titleSort": "タイトル順",
   "memory.sourceNote": "整理に使用した会話のテキストを保存したスナップショットです。元のセッションを削除しても閲覧できます。",
-  "memory.noKnowledge": "再利用できる知識が見つからなかったため、記事は変更されませんでした。",
+  "memory.noKnowledge": "再利用できる知識は抽出されませんでした。このセッションから生成済みの項目は削除されました。",
+  "memory.queued": "開始待ち",
+  "memory.cancelling": "キャンセル中",
+  "memory.schedulingHint": "異なるセッションは並行して整理できます。再度送信すると、このセッションの未完了のタスクをキャンセルし、新しいタスクに置き換えます。",
+  "memory.waitingHint": "このセッションの前のタスクが停止すると、自動的に開始します。",
   "memory.running": "処理中",
   "memory.completed": "完了",
   "memory.failed": "失敗",
   "memory.cancelled": "キャンセル済み",
   "memory.extract": "テーマを抽出中",
   "memory.merge": "知識を統合中",
-  "memory.commit": "メモリを保存中",
+  "memory.commit": "記事を保存中",
   "memory.done": "保存済み",
   "memory.closeHint": "整理中にこのウィンドウを閉じても処理は続きます。整理履歴で進捗を確認できます。",
-  "memory.conflict": "操作中にこのメモリが変更されました。再読み込みしてからやり直してください。今回の変更は保存されていません。",
-  "memory.duplicate": "同じタイトルのメモリが既にあります。その記事を開いて内容を統合してください。",
-  "memory.busy": "別の整理処理が実行中です。完了を待つか、整理履歴からキャンセルしてください。",
-  "memory.notFound": "このメモリ、出典、または処理は存在しません。",
+  "memory.conflict": "操作中にこの記事が変更されました。再読み込みしてからやり直してください。今回の変更は保存されていません。",
+  "memory.duplicate": "同じタイトルの記事が既にあります。その記事を開いて内容を統合してください。",
+  "memory.notFound": "この記事、出典、または処理は存在しません。",
   "memory.noTranscript": "このセッションには読み取り可能な会話がありません。",
   "memory.agentUnavailable": "選択したエージェントを利用できません。設定で実行ファイルのパスを確認してください。",
-  "memory.invalid": "無効な項目またはリンクがあります。タイトル、本文、関連メモリを確認してください。",
+  "memory.invalid": "無効な項目またはリンクがあります。タイトル、本文、関連記事を確認してください。",
   "memory.processFailed": "エージェントが整理を完了できませんでした。ログイン状態、モデル、CLI 設定を確認して再試行してください。",
   "memory.timeout": "エージェントがタイムアウトしました。利用可能なモデルに変更するか、会話を短くして再試行してください。",
   "memory.interrupted": "整理処理が中断されました。保存済みの出典スナップショットから再試行できます。",
-  "memory.tooLarge": "出典、コンテキスト、または出力が対応サイズを超えています。内容の切り詰めやメモリへの保存は行われていません。",
+  "memory.tooLarge": "出典、コンテキスト、または出力が対応サイズを超えています。内容の切り詰めや記事の保存は行われていません。",
   "memory.invalidOutput": "エージェントが無効な構造化データを返しました。保存は行われていません。再試行するか、別のエージェントを選択してください。",
-  "memory.loadError": "メモリを読み込めません。接続を確認して再試行してください。",
+  "memory.loadError": "ナレッジベースを読み込めません。接続を確認して再試行してください。",
   "memory.unsaved": "未保存の変更を破棄しますか？",
   "memory.source": "出典スナップショット",
 
@@ -133,6 +282,7 @@ const ja: typeof en = {
   "common.paste": "貼り付け", // Paste
   "common.selectAll": "すべて選択", // Select All
   "common.copied": "コピーしました", // Copied
+  "common.copyFailed": "コピーできませんでした。もう一度お試しください。",
   "chat.sync.loading": "会話を同期中…",
   "chat.sync.failed": "同期できませんでした。読み込み済みのメッセージは引き続き表示できます。",
   "chat.sync.history": "以前のメッセージを読み込む",
@@ -179,6 +329,7 @@ const ja: typeof en = {
   "titlebar.themeSystem": (resolved) => `システムに従う（現在: ${resolved}）`, // Follow system (currently {resolved})
   "titlebar.themeDark": "ダーク", // Dark
   "titlebar.themeLight": "ライト", // Light
+  "titlebar.gameCenter": "ゲームセンター",
   "titlebar.browser": "内蔵ブラウザ", // Built-in Browser
   "titlebar.remoteAccess": "リモートアクセス（ブラウザ）", // Remote Access (Browser)
   "titlebar.connectRemote": "リモートサーバーに接続", // Connect to Remote Server
@@ -191,6 +342,7 @@ const ja: typeof en = {
   "titlebar.clientsTitle": "接続中のクライアント", // Attached clients
   "titlebar.clientUnnamed": "名前のないクライアント", // Unnamed client
   "titlebar.clientSince": (time: string) => `${time} から`, // since {time}
+  "titlebar.feedback": "フィードバック", // Feedback
   "titlebar.share": "共有", // Share
   // ── Alt-triggered menu bar (Windows/Linux) ──
   "menubar.file": "ファイル", // File
@@ -225,6 +377,14 @@ const ja: typeof en = {
   "settings.catTerminal": "ターミナル", // Terminal
   "settings.catBehavior": "動作", // Behavior
   "settings.catAgents": "エージェント", // Agents
+  "settings.agentDefaultsTitle": "新規セッションの既定値",
+  "settings.referSummaryTitle": "セッション参照のコンテキスト",
+  "settings.referSummaryMode": "コンテキスト方式",
+  "settings.referSummaryFull": "全文を使用",
+  "settings.referSummaryFirst": "先に要約",
+  "settings.referSummaryAgent": "要約エージェント",
+  "settings.referSummaryHint":
+    "既定では、vrefer --ask は回答エージェントに会話記録の全文を渡します。「先に要約」を有効にすると、ここで選択した単一のエージェント、モデル、思考レベルで圧縮し、最終回答には関連する原文の検索抜粋も渡します。",
   "settings.permDefault": "デフォルト", // Default
   "settings.permYolo": "YOLO", // YOLO
   "settings.yoloHint": (flag: string) =>
@@ -247,6 +407,9 @@ const ja: typeof en = {
     "例: ~/.local/bin/claude — 空欄なら PATH から検索", // e.g. path — empty = find on PATH
   "settings.agentPathHint":
     "設定すると、このタイプのセッションは PATH でコマンドを探す代わりに、この完全パスで起動します。インストール済みなのにシェルの PATH に無い場合に便利です。ワンクリックインストール成功後、場所を検出できた場合は自動で入力されます。", // Agent executable path hint
+  "settings.agentDefaultView": "既定のビュー", // Default view
+  "settings.agentDefaultViewHint":
+    "このエージェントの新しいセッションを開くときのビューです。既存のセッションは作成時のビューのままです。", // Agent default view hint
   "settings.appearance": "外観", // Appearance
   "settings.accent": "アクセント", // Accent
   "settings.accentAuto": "テーマに従う", // Follow theme
@@ -264,8 +427,6 @@ const ja: typeof en = {
   "settings.navTree": "標準", // Tree
   "settings.navCompact": "コンパクト", // Compact
   "settings.tabs": "タブ", // Tabs
-  "settings.defaultSessionEngine": "新規セッションの既定のビュー",
-  "settings.defaultSessionEngineHint": "すでにあるセッションは作成時のビューのままです。",
   "settings.dynamicStatusFilter": "状態フィルターへの動的追加",
   "settings.tabSingle": "シングル", // Single
   "settings.tabMulti": "マルチ", // Multi
@@ -288,39 +449,66 @@ const ja: typeof en = {
     "画像を貼り付けたときに入力する内容を選びます（ローカルデスクトップのみ）。ファイルパスを貼り付け：画像を一時保存し、そのパスを Claude または Codex に入力します。ネイティブ画像貼り付け：Claude または Codex がシステムのクリップボードを読み、独自の画像プレースホルダーを表示します。",
   "settings.imagePasteRemoteHint":
     "リモートセッションでは、エージェント側で画像を読めるよう常にファイルパスを貼り付けます。ネイティブ画像貼り付けはローカルデスクトップでのみ使用できます。",
-  "spawn.title": "Start spawned session?", // Start spawned session?
-  "spawn.fromSession": "From", // From
-  "spawn.promptLabel": "Prompt", // Prompt
-  "spawn.agentLabel": "Agent", // Agent
-  "spawn.worktreeLabel": "Separate git worktree", // Separate git worktree
-  "spawn.modelLabel": "モデル", // Model
-  "spawn.effortLabel": "推論強度", // Effort
-  "spawn.modelDefault": "デフォルト", // Default
-  "spawn.modelLoading": "モデルを取得中…", // Listing models…
-  "spawn.modelListUnavailable":
-    "モデル一覧を取得できません — 上の欄に識別子を入力してください", // No model list available — type an identifier above
-  "spawn.launch": "Launch", // Launch
-  "spawn.remaining": (n: number) => `${n} more pending`, // ${n} more pending
-  "spawn.notifyTitle": "Spawn session awaiting confirmation", // Spawn session awaiting confirmation
-  "orch.title": "これらのエージェントを起動しますか？",
-  "orch.notifyTitle": "オーケストレーションの確認待ち",
-  "orch.coordinatorName": "進捗",
+  "spawn.title": "子セッションを起動",
+  "spawn.fromSession": "起動元のセッション",
+  "spawn.promptLabel": "タスクの指示",
+  "spawn.agentLabel": "セッションの種類",
+  "spawn.worktreeLabel": "独立したワークツリー",
+  "spawn.modelLabel": "モデル",
+  "spawn.effortLabel": "推論強度",
+  "spawn.modelDefault": "エージェントの既定値",
+  "spawn.modelLoading": "モデルを取得中…",
+  "spawn.modelListUnavailable": "モデル一覧がありません。識別子を直接入力できます。",
+  "spawn.launch": "子セッションを起動",
+  "spawn.remaining": (n: number) => `ほか ${n} 件が確認待ち`,
+  "spawn.notifyTitle": "子セッションの起動確認待ち",
+  "orch.title": "子セッションを一括起動",
+  "orch.notifyTitle": "一括起動の確認待ち",
+  "orch.coordinatorName": "セッションの状態",
   "orch.sharedSettings": "共通設定",
-  "orch.agentLabel": "種類",
+  "orch.agentLabel": "エージェント",
   "orch.modelLabel": "モデル",
-  "orch.effortLabel": "推論の深さ",
-  "orch.nameLabel": "名前",
-  "orch.promptLabel": "タスク",
-  "orch.worktreeLabel": "ワークツリー",
-  "orch.worktreeNone": "現在のディレクトリを使う",
-  "orch.worktreeShared": "共有ワークツリー 1 つ",
-  "orch.worktreeEach": "各自にワークツリー",
-  "orch.follow": "共通設定に従う",
-  "orch.overridden": "変更済み",
-  "orch.remove": "削除",
-  "orch.launch": (n: number) => `${n} 件を起動`,
-  "orch.modelPlaceholder": "エージェント既定",
-  "orch.effortPlaceholder": "エージェント既定",
+  "orch.effortLabel": "推論強度",
+  "orch.nameLabel": "セッション名",
+  "orch.promptLabel": "タスクの指示",
+  "orch.worktreeLabel": "Git ワークツリー",
+  "orch.worktreeNone": "現在のディレクトリ",
+  "orch.worktreeShared": "ワークツリーを共有",
+  "orch.worktreeEach": "セッションごとに作成",
+  "orch.follow": "共通設定を使用",
+  "orch.overridden": "個別設定",
+  "orch.remove": "タスクを除外",
+  "orch.launch": (n: number) => `${n} 件のセッションを起動`,
+  "orch.modelPlaceholder": "エージェントの既定値",
+  "orch.effortPlaceholder": "エージェントの既定値",
+  "launch.terminalHint": "通常のターミナルで作業ディレクトリを開きます。タスクの指示は自動実行されません。",
+  "launch.optionsError": "起動オプションを読み込めません。再試行してから起動してください。",
+  "launch.singleIntro": "起動前に、子セッションのタスクと設定を確認してください。",
+  "launch.taskHint": "この内容が子セッションへの最初のメッセージになります。",
+  "launch.runtime": "実行設定",
+  "launch.directory": "作業ディレクトリ",
+  "launch.directoryCurrentHint": "元のディレクトリでファイルを編集します。",
+  "launch.directorySharedHint": "全セッションが同じ新規ディレクトリとブランチを使います。",
+  "launch.directoryEachHint": "各セッションに専用のディレクトリとブランチを作成します。",
+  "launch.worktreeHint": "ワークツリーは現在のコミットから作成され、未コミットの変更は含まれません。作成に失敗した場合は元のディレクトリを使います。",
+  "launch.singleResult": "子セッションはサイドバーの起動元セッションの下に表示されます。",
+  "launch.startError": "起動に失敗しました。設定を確認して再試行してください。",
+  "launch.starting": "起動中…",
+  "launch.batchIntro": "共通設定を確認し、各タスクを選択して指示を編集してください。",
+  "launch.sessionCount": (n: number) => `セッション数: ${n}`,
+  "launch.batchName": "タスクグループ名",
+  "launch.sharedHint": "個別に変更していないセッションに適用されます。",
+  "launch.tasks": "タスク一覧",
+  "launch.incomplete": "入力が必要",
+  "launch.undoRemove": "除外を取り消す",
+  "launch.taskNumber": (n: number) => `タスク ${n}`,
+  "launch.taskSettings": "このセッションの設定",
+  "launch.taskAgent": "このセッションのエージェント",
+  "launch.sharedDirectoryLocked": "このグループの全セッションで1つのワークツリーを共有します。",
+  "launch.resetSettings": "共通設定に戻す",
+  "launch.monitorHint": "起動後に「セッションの状態」ターミナルが開き、処理中か入力待ちかを表示します。タスクの完了率は示しません。",
+  "launch.taskIncomplete": (n: number) => `タスク ${n} の名前と指示を入力してください。`,
+  "launch.batchResult": "タスクごとに、個別に操作できる子セッションを起動します。",
   "tree.worktreeMenu": "Worktree",
   "tree.gitMenu": "Git",
   "tree.viewChanges": "変更を表示…",
@@ -430,7 +618,8 @@ const ja: typeof en = {
   "settings.chatLineHeight": "会話の行の高さ",
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
-  "settings.fontUnavailable": "このデバイスにインストールされていません",
+  "settings.fontListUnavailable": "システムフォントの一覧を取得できません。フォント名を手動で入力できます。",
+  "settings.fontUnconfirmed": "このフォントが利用可能か確認できません。",
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -596,6 +785,7 @@ const ja: typeof en = {
   "info.recentCommits": "最近のコミット", // Recent Commits
   "info.noCommits": "コミットなし", // No commits
   "tree.killProcess": "プロセスを終了", // Kill Process
+  "tree.killProcessConfirm": (name: string) => `「${name}」のプロセスを終了しますか？実行中のタスクは中断されます。保存済みの会話履歴とファイルは保持されます。`,
   "tree.archiveSession": "セッションをアーカイブ", // Archive Session
   "tree.archiveGroup": "グループをアーカイブ", // Archive Group
   // Temporary (draft) sessions
@@ -963,7 +1153,11 @@ const ja: typeof en = {
 
   // ── Document tabs ──
   "doc.wysiwyg": "WYSIWYG", // WYSIWYG
-  "doc.source": "ソース", // Source
+  "doc.visual": "ビジュアル",
+  "doc.source": "ソース",
+  "doc.compare": "比較",
+  "doc.editorLoadFailed": "Markdown エディターを読み込めませんでした。",
+  "doc.imageOnly": "ここには画像ファイルのみ挿入できます。",
   "doc.searchPlaceholder": "検索", // Find
   "doc.searchReplacePlaceholder": "置換", // Replace
   "doc.searchReplace": "置換", // Replace
@@ -1014,6 +1208,8 @@ const ja: typeof en = {
 
   // ── Right information panel ──
   "panel.noSession": "セッション未選択", // No session selected
+  "panel.collapseSection": "セクションを折りたたむ", // Collapse section
+  "panel.expandSection": "セクションを展開する", // Collapse section
   "panel.openInEditor": "エディタで開く", // Open in Editor
   "panel.openInEditorTooltip":
     "中央のドキュメントエディタで開く（view コマンドと同じ）", // Open in the document editor…
@@ -1102,6 +1298,9 @@ const ja: typeof en = {
   "transport.imgUploadHttp": (status) => `画像のアップロードに失敗 (${status})`, // Image upload failed ({status})
 
   // ── Login gate, directory selection, and connection banner ──
+  "login.showPassword": "表示",
+  "login.hidePassword": "非表示",
+  "login.passwordSaveFailed": "接続しましたが、パスワードをこの端末に保存できませんでした。もう一度お試しください。",
   "login.connecting": "接続中…", // Connecting…
   "login.remoteAccess": "リモートアクセス", // Remote Access
   "login.desc":
@@ -1147,6 +1346,31 @@ const ja: typeof en = {
   "errlog.close": "閉じる", // Close
 
   // ── Mobile ──
+  "mobile.backConnections": "接続一覧に戻る",
+  "mobile.loadSlow": "読み込みに時間がかかっています。再試行するか、接続一覧に戻れます。",
+  "mobile.connectionUnavailable": "接続できません",
+  "mobile.pushTitle": "タスクの通知",
+  "mobile.pushHint": "アプリの使用中、バックグラウンド、画面ロック中に、セッション名と返信の短いプレビューを通知します。このテキストは velaterm.com とプッシュ通知サービスに送信されます。接続用パスワードや SSH 秘密鍵は送信されません。",
+  "mobile.pushEnable": "通知を有効にする",
+  "mobile.pushDisable": "通知を無効にする",
+  "mobile.pushTest": "テスト通知を送信",
+  "mobile.pushTestSent": "テスト通知を送信待ちに追加しました。システムの通知センターをご確認ください。",
+  "mobile.pushDisabled": "バックグラウンド通知は無効です。",
+  "mobile.pushEnabled": "バックグラウンド通知は有効です。",
+  "mobile.pushNotConfigured": "このビルドにはプッシュ通知サービスが設定されていません。",
+  "mobile.pushDenied": "システム設定で通知を許可してください。",
+  "mobile.pushRegistrationFailed": "デバイスの登録に失敗しました。もう一度お試しください。",
+  "mobile.pushRelayUnavailable": "通知の中継サービスを利用できません。もう一度お試しください。",
+  "mobile.pushHostUnavailable": "接続先でバックグラウンド通知が有効になっていません。接続先を更新して再接続してください。",
+  "mobile.pushDisclosure": "バックグラウンド通知には、Getui と端末メーカーのプッシュ通知サービスを使用します。通知の配信に必要な端末識別子、ネットワーク情報、セッション名、返信の短いプレビューが処理されます。接続用パスワードや SSH 秘密鍵は送信されません。",
+  "mobile.pushConnectHint": "通知を有効にした後、通知を受け取りたい接続をそれぞれ一度開いてください。",
+  "mobile.pushTarget": "テストする接続",
+  "mobile.copyConnection": "コピーして編集",
+  "mobile.copyConnectionHint": "この接続をもとに設定を編集します。保存済みの認証情報は安全に引き継がれます。元の接続は変更されず、設定が同じ場合は既存の接続を使用します。",
+  "mobile.copyConnectionReused": "この設定は保存済みです。既存の接続をそのまま使用します。",
+  "mobile.inputOptions": "入力オプション",
+  "mobile.connections": "接続管理",
+  "mobile.more": "その他の操作",
   "mobile.toDesktop": "デスクトップ版に切り替え", // Switch to desktop
   "mobile.empty1": "セッションがありません。", // No sessions.
   "mobile.noMatch": "一致するセッションがありません", // No matching sessions
@@ -1259,6 +1483,7 @@ const ja: typeof en = {
   "session.switchTitle": "ビューを切り替えるとエージェントが再起動します",
   "session.switchBody": "進行中のターンは中断されます。会話の内容は残ります。",
   "session.switchConfirm": "切り替える",
+  "session.terminalViewHint": "ここをクリックすると、ターミナルビューに戻れます。",
   "session.loading": "会話を読み込んでいます…",
   "session.unavailable": "この会話はまだ読み取れません",
   "session.working": "実行中…",
@@ -1289,13 +1514,43 @@ const ja: typeof en = {
   "chat.collaborationMode.defaultHint": "作業を進め、判断が必要な場合のみ質問します",
   "chat.collaborationMode.plan": "プラン",
   "chat.collaborationMode.planHint": "調査して計画を作成し、質問には選択式カードを使用できます",
+  "chat.moreOptions": "その他",
   "chat.modelTooltip": "モデル",
   "chat.keepChoice": "既定にする",
   "chat.keepChoiceFor": (model) => `${model} の既定にする`,
+  "chat.followModelDefault": (agent: string) => `${agent} の既定設定を使用`,
+  "chat.followModelDefaultHint": "エージェントの設定に基づくモデルを使用します。",
+  "chat.savedModelDefault": "アプリの既定",
+  "chat.catalogWebsite": "ウェブサイトのモデル一覧",
+  "chat.catalogCache": "キャッシュ済みのモデル一覧",
+  "chat.catalogBundled": "内蔵のモデル一覧",
+  "chat.catalogChecked": (time: string) => `最終確認：${time}`,
+  "chat.catalogFailed": "更新に失敗しました。既存の一覧は引き続き使用できます。",
+  "chat.catalogRefresh": "更新",
   "chat.modelDefault": "既定のモデル",
   "chat.mode.default": "毎回確認",
+  "chat.mode.agentDefault": "エージェント既定",
   "chat.mode.acceptEdits": "編集を自動承認",
   "chat.mode.plan": "計画モード",
+  "chat.permissionRestart.unconfirmed": "接続が切れたため、権限の切り替え結果を確認できません。再接続して、会話の現在の権限を確認してください。",
+  "permission.stateUnavailable": "権限の状態を取得できません",
+  "permission.currentUnknown": "現在の権限は未確認",
+  "permission.notRunning": "停止中",
+  "permission.launch": (mode: string) => "起動時の設定：" + mode,
+  "permission.unconfirmedHint": "現在の権限はまだ確認されていません。カスタム引数やエージェント内での変更により、起動時の設定と実際の動作が異なる場合があります。",
+  "permission.applied": "適用済み",
+  "permission.nextTurn": "次のメッセージから適用",
+  "permission.restart": "このセッションの再起動後に適用",
+  "permission.nextStart": "次回起動時に適用",
+  "permission.defaultHint": "新しく作成するセッションの既定の権限です。既存のセッションの権限設定は変わりません。",
+  "chat.permissionRestart.title": "再起動して確認をスキップしますか？",
+  "chat.permissionRestart.body": "確認をスキップするには Claude の再起動が必要です。現在の応答は中断されますが、会話履歴は保持されます。切り替えが成功すると、権限の確認が省略されます。",
+  "chat.permissionRestart.confirm": "再起動して適用",
+  "chat.permissionRestart.busy": "再起動中…",
+  "chat.permissionRestart.failed": (detail: string) => "権限の切り替えに失敗しました。元の権限モードを保持しています。" + detail,
+  "chat.permissionRestart.tasks": "キュー内のメッセージを処理または削除し、バックグラウンドタスクを停止してから再起動してください。",
+  "chat.permissionRestart.stale": "会話のプロセスが変更されました。「確認なし」をもう一度選択してください。",
+  "chat.permissionRestart.noHistory": "この会話はまだ再開できません。初期化が完了してから再試行してください。",
   "chat.mode.bypassPermissions": "確認なし",
   "chat.mode.readOnly": "読み取り専用",
   "chat.mode.fullAccess": "フルアクセス",
@@ -1344,6 +1599,7 @@ const ja: typeof en = {
   "chat.placeholderBusy": "メッセージを入力してください。このターンの終了後に送信されます",
   "chat.queueTooltip": (combo: string) => `このターンの終了後に送信 · ${combo} で今すぐ送信`,
   "chat.queue.pending": "送信待ち",
+  "chat.queue.view": "メッセージ全体を表示",
   "chat.queue.edit": "編集",
   "chat.queue.remove": "削除",
 
@@ -1360,6 +1616,12 @@ const ja: typeof en = {
   // N steps
   "chat.subagent.steps": (n: number) => `${n} ステップ`,
   "chat.subagent.tokens": (tokens: string) => `${tokens}トークン`,
+  "chat.rewind.edit": "編集",
+  "chat.rewind.editSend": "確認して再送信",
+  "chat.rewind.editConfirm": "削除して再送信",
+  "chat.rewind.editWarning": "元のメッセージとそれ以降のすべてのメッセージが完全に削除され、編集した内容がこの位置から送信されます。ファイルの変更は元に戻りません。",
+  "chat.rewind.inactive": "会話のプロセスが起動していません。起動後にこれらの操作を利用できます。",
+  "chat.rewind.unsupported": "接続中のエージェントは現在この操作に対応していません。",
   "chat.rewind.title": "ここから巻き戻す",
   "chat.rewind.warning": "この操作は元に戻せません。",
   "chat.rewind.conversation": "会話を巻き戻す",
@@ -1414,6 +1676,45 @@ const ja: typeof en = {
   "chat.fastMode.label": "高速",
   "chat.fastMode.on": "高速モードはオンです",
   "chat.fastMode.off": "高速モードはオフです",
+  "chat.auth.login": "ログイン",
+  "chat.auth.logout": "ログアウト",
+  "chat.auth.confirmLogout": "ログアウトを確定",
+  "chat.auth.logoutConfirm": (provider: string) => `このホストの ${provider} アカウントからログアウトしますか？共有の認証情報が削除され、それを使用する他のセッションにも影響します。会話履歴は保持されます。`,
+  "chat.auth.signingOut": "ログアウトしています…",
+  "chat.auth.signedOut": (provider: string) => `${provider} からログアウトしました。ログインすると、この会話を続けられます。`,
+  "chat.auth.logoutFailed": "ログアウトの結果を確認できませんでした。もう一度お試しください。",
+  "chat.auth.wait": "現在の処理が完了してからアカウントを切り替えてください。",
+  "chat.auth.title": (provider: string) => `${provider} アカウント`,
+  "chat.auth.start": "再ログイン",
+  "chat.auth.required": (provider: string) => `${provider} の認証が無効になりました。再ログインして続行してください。`,
+  "chat.auth.starting": "ログインを準備しています…",
+  "chat.auth.pending": "認証ページを開き、このコードを入力してください。ログインが完了すると、この画面が自動的に更新されます。",
+  "chat.auth.success": "ログインしました。メッセージを送信して、この会話を続けられます。",
+  "chat.auth.failed": "ログインを完了できませんでした。もう一度お試しください。ChatGPT でデバイスコード認証を有効にし、対応する Codex CLI を使用していることを確認してください。",
+  "chat.auth.canceled": "ログインをキャンセルしました。いつでも再試行できます。",
+  "chat.auth.scope": (provider: string) => `このホストで使用する ${provider} アカウントが更新されます。同じ認証情報を共有する他のセッションでも、そのアカウントが使用されます。`,
+  "chat.auth.canceling": "ログインをキャンセルしています…",
+  "chat.auth.submitting": "認証コードを確認しています…",
+  "chat.auth.claude.pending": "認証ページを開いてログインし、表示されたコードを省略せずに貼り付けてください。",
+  "chat.auth.claude.failed": "ログインを完了できませんでした。Claude CLI がアカウント認証に対応していることを確認し、もう一度お試しください。",
+  "chat.auth.claude.code": "認証コード",
+  "chat.auth.claude.submit": "コードを送信",
+  "chat.auth.claude.invalidCode": "今回の認証ページに表示されたコードを、# 以降も含めて貼り付けてください。",
+  "chat.auth.claude.externalAuth": "API キーやその他の設定済みの認証方法は変更されません。",
+  "chat.auth.open": "認証ページを開く",
+  "chat.resetCredits.label": (n: string) => `リセット券：${n} 枚`,
+  "chat.resetCredits.title": "Codex 利用上限のリセット券",
+  "chat.resetCredits.unknown": "リセット券の枚数を取得できません。",
+  "chat.resetCredits.confirm": "リセット券を 1 枚使って、対象となる Codex の利用上限をリセットします。この操作は取り消せません。",
+  "chat.resetCredits.reset": "利用上限をリセットしました。",
+  "chat.resetCredits.alreadyRedeemed": "このリクエストはすでに成功しています。",
+  "chat.resetCredits.nothingToReset": "リセット対象の利用上限はありません。",
+  "chat.resetCredits.noCredit": "利用できるリセット券はありません。",
+  "chat.resetCredits.error": "リクエストに失敗したか、最新の残高を取得できません。残高を更新するか、結果が未確認のリセットを再試行してください。",
+  "chat.resetCredits.busy": "処理中…",
+  "chat.resetCredits.retry": "リセットを再試行",
+  "chat.resetCredits.use": "1 枚使う",
+  "chat.resetCredits.refresh": "更新",
   "chat.usage.context": (used: string, max: string, pct: number) =>
     `コンテキスト: ${max} トークン中 ${used} を使用（${pct}%）`,
   "chat.usage.cost": (usd: string) => `セッションの費用: $${usd}`,
@@ -1442,6 +1743,14 @@ const ja: typeof en = {
   "chat.retry.line": (attempt: number, max: number, seconds: number, message: string) =>
     `${seconds} 秒後に再試行します（${attempt}/${max}）: ${message}`,
   "chat.notify.dismiss": "閉じる",
+  "settings.completionMode": "コマンドの補完候補",
+  "settings.completionAuto": "自動表示",
+  "settings.completionTab": "Tab で表示",
+  "settings.completionOff": "オフ",
+  "settings.completionUnavailable": "設定を読み込めないか、保存できませんでした。",
+  "settings.completionHint": "新しい Zsh、Bash 4+、Fish、PowerShell のターミナルに適用されます。CMD では標準の Tab 動作を維持します。Tab で選択した候補を入力し、Enter で候補を適用せずに現在のコマンドを実行します。",
+
+
 };
 
 export default ja;

@@ -6,7 +6,8 @@
 //! Security model—do not weaken:
 //! - `browser-*` child labels are outside the `windows:["main"]` capability, so external pages cannot call
 //!   Tauri commands.
-//! - Injection only rewrites `window.open`; never expose tokens or internal objects to third-party pages.
+//! - No script is injected into third-party pages. Popups (`window.open` / `target=_blank`) are denied at the
+//!   native layer and forwarded to the main window as an app-level new-tab request instead.
 //! - Allow only HTTP, HTTPS, and about:blank through both normalization and `on_navigation`.
 //! - Commands accept tabId only; BrowserManager owns labels and never trusts frontend labels.
 //!
@@ -22,6 +23,9 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 /// Full Safari UA. WKWebView's default omits the Version/Safari suffix Google uses to detect and reject
 /// embedded WebViews; this UA has been verified with Google login.
 const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
@@ -30,15 +34,6 @@ const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWe
 /// shares site login state across tabs, and lets the system persist cookies/localStorage/IndexedDB without
 /// application access to plaintext credentials. Requires macOS 14+.
 const VLX_BROWSER_STORE: [u8; 16] = *b"vlx-browser-v1\0\0";
-
-/// Rewrite `window.open` and `target=_blank` to navigate the current tab; inject no VelaTerm objects.
-const POPUP_REWRITE_JS: &str = r#"(function () {
-  window.open = function (u) { if (u) location.href = u; return null; };
-  document.addEventListener("click", function (e) {
-    const a = e.target && e.target.closest && e.target.closest("a[target=_blank]");
-    if (a && a.href) { e.preventDefault(); location.href = a.href; }
-  }, true);
-})();"#;
 
 /// Managed tabId-to-child-label state. Commands resolve through tabId and quietly return when a tab has
 /// already closed, preserving idempotence.
@@ -54,28 +49,49 @@ impl BrowserManager {
     }
 }
 
-/// `browser://state/{tabId}` payload. V1 uses URL host as title until native page-title support.
+/// `browser://state/{tabId}` payload. Every field is optional so the document-title handler can reuse the
+/// channel for title-only updates; the frontend merges each payload as a patch.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loading: Option<bool>,
+}
+
+/// `browser://popup/{tabId}` payload: a new-window request from the page, opened as an app browser tab.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPopup {
     url: String,
-    title: String,
-    loading: bool,
 }
 
 /// Emit only to main because this desktop-only feature must not broadcast remotely.
 fn emit_state(app: &AppHandle, tab_id: &str, url: &url::Url, loading: bool) {
-    let title = url
-        .host_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| url.to_string());
     let _ = app.emit_to(
         "main",
         &format!("browser://state/{tab_id}"),
         BrowserState {
-            url: url.to_string(),
-            title,
-            loading,
+            url: Some(url.to_string()),
+            title: None,
+            loading: Some(loading),
+        },
+    );
+}
+
+/// Forward the real document title, which native page-title observers deliver after load. The tab strip
+/// shows it instead of the URL host; Electron emits its equivalent through `page-title-updated`.
+fn emit_title(app: &AppHandle, tab_id: &str, title: &str) {
+    let _ = app.emit_to(
+        "main",
+        &format!("browser://state/{tab_id}"),
+        BrowserState {
+            url: None,
+            title: Some(title.to_string()),
+            loading: None,
         },
     );
 }
@@ -183,10 +199,13 @@ pub async fn browser_open(
     let nav_tab = tab_id.clone();
     let load_app = app.clone();
     let load_tab = tab_id.clone();
+    let popup_app = app.clone();
+    let popup_tab = tab_id.clone();
+    let title_app = app.clone();
+    let title_tab = tab_id.clone();
     let builder = tauri::webview::WebviewBuilder::new(&label, tauri::WebviewUrl::External(parsed))
         .user_agent(SAFARI_UA)
         .data_store_identifier(VLX_BROWSER_STORE)
-        .initialization_script(POPUP_REWRITE_JS)
         // Enforce the scheme allowlist for in-page navigation and report URL changes.
         .on_navigation(move |url| {
             if !scheme_allowed(url) {
@@ -199,10 +218,33 @@ pub async fn browser_open(
             let loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
             emit_state(&load_app, &load_tab, payload.url(), loading);
         })
+        // Deny native popups and let the frontend open them as app browser tabs instead.
+        .on_new_window(move |url, _features| {
+            if scheme_allowed(&url) {
+                let _ = popup_app.emit_to(
+                    "main",
+                    &format!("browser://popup/{popup_tab}"),
+                    BrowserPopup {
+                        url: url.to_string(),
+                    },
+                );
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_document_title_changed(move |_webview, title| {
+            emit_title(&title_app, &title_tab, &title)
+        })
         // Disable wry native drag/drop interception so macOS pages receive HTML5 file drops.
         .disable_drag_drop_handler();
 
     let offset = y_offset(&window, css_viewport_h);
+    #[cfg(target_os = "macos")]
+    if let Some(host) = app.get_webview("main") {
+        host.with_webview(|platform| unsafe {
+            macos::isolate_host_mouse_tracking(platform.inner().cast());
+        })
+        .map_err(|e| format!("Failed to configure browser mouse tracking: {e}"))?;
+    }
     window
         .add_child(
             builder,

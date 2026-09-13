@@ -20,7 +20,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, RawQuery, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
@@ -50,7 +50,6 @@ pub async fn ws_handler(
     // Authentication accepts only `?token=` because browser WebSocket APIs cannot set custom headers and the
     // cookie mechanism has been removed (see auth.rs). Preserve missing/invalid/valid state in a fingerprint
     // used by rejection logs and error frames, distinguishing absent credentials from expired sessions.
-    let _ = &headers; // Retained only for the axum extractor signature; E2EE authentication bypasses it.
     let query_token = token_from_query(query.as_deref());
     let query_authed = query_token
         .as_deref()
@@ -64,7 +63,32 @@ pub async fn ws_handler(
             (true, true) => "valid",
         },
     );
-    ws.on_upgrade(move |socket| handle_socket(socket, ctx, query_authed, auth_fp, addr.ip()))
+    // The share relay tunnel injects the grant and account it authorized for this request. In share mode this
+    // is the only accepted admission: the loopback instance has no usable password and no pairing tokens.
+    let share = if ctx.mode == ServeMode::ShareTunnel {
+        match share_scope_from_headers(&ctx.app, &headers) {
+            Some(scope) => Some(scope),
+            None => {
+                crate::diagnostic_warn!("[ws] rejected: share tunnel request without a valid grant");
+                return (StatusCode::FORBIDDEN, "Missing share authorization").into_response();
+            }
+        }
+    } else {
+        None
+    };
+    ws.on_upgrade(move |socket| handle_socket(socket, ctx, query_authed, auth_fp, addr.ip(), share))
+}
+
+/// Reads the tunnel-injected grant and account headers and resolves them against the host's local share
+/// records. The tunnel gate guarantees the request came through the in-process tunnel client, so a valid
+/// local share is sufficient authorization.
+fn share_scope_from_headers(app: &AppCtx, headers: &HeaderMap) -> Option<super::share_policy::ShareScope> {
+    let share_id = headers.get("x-vlx-share")?.to_str().ok()?;
+    let account_id = headers
+        .get("x-vlx-account")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    super::public_relay::share_scope_for(app, share_id, account_id)
 }
 
 /// Extracts the `token` value from a raw query string such as `a=b&token=xxx&c=d`.
@@ -96,7 +120,11 @@ async fn handle_socket(
     token_authed: bool,
     auth_fp: String,
     ip: std::net::IpAddr,
+    share: Option<super::share_policy::ShareScope>,
 ) {
+    let conn_source = format!("ws-{}", NEXT_CONN_ID.fetch_add(1, Ordering::SeqCst));
+    let mut diagnostic=crate::diagnostics::Span::new("ws_connection",serde_json::json!({"clientId":conn_source}));
+    diagnostic.step("handshake");
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // ---- E2EE negotiation prelude: inspect the first frame ----
@@ -111,7 +139,7 @@ async fn handle_socket(
     match ws_rx.next().await {
         Some(Ok(Message::Text(first))) => {
             if let Some(client_pub) = e2ee::parse_hello(&first) {
-                match handshake(&ctx, &mut ws_tx, &mut ws_rx, &client_pub, ip).await {
+                match handshake(&ctx, &mut ws_tx, &mut ws_rx, &client_pub, ip, share.as_ref()).await {
                     Some((c, did, dname)) => {
                         cipher = Some(c);
                         device_id = did;
@@ -128,7 +156,7 @@ async fn handle_socket(
                 // previously left clients with an unexplained disconnect and made initial tree-load failures
                 // difficult to diagnose (see the closed SSH reconnect issue under docs/issues).
                 if ctx.mode == ServeMode::LanTls {
-                    eprintln!("[ws] rejected: pairing (E2EE) required in LanTls mode, got plaintext first frame");
+                    crate::diagnostic_warn!("[ws] rejected: pairing (E2EE) required in LanTls mode, got plaintext first frame");
                     let _ = ws_tx
                         .send(Message::Text(
                             json!({"t":"error","code":"pairing_required","message":"WebSocket rejected: this server requires pairing (E2EE); plaintext connections are not accepted"}).to_string(),
@@ -138,7 +166,7 @@ async fn handle_socket(
                 }
                 // Plaintext mode requires a valid `?token=`; otherwise send an error, log, and close.
                 if !token_authed {
-                    eprintln!("[ws] rejected: unauthenticated connection ({auth_fp})");
+                    crate::diagnostic_warn!("[ws] rejected: unauthenticated connection ({auth_fp})");
                     let _ = ws_tx
                         .send(Message::Text(
                             json!({"t":"error","code":"unauthorized","message":format!("WebSocket rejected: not authenticated ({auth_fp})")}).to_string(),
@@ -154,7 +182,8 @@ async fn handle_socket(
 
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
     // Source ID for this connection. Each browser page has an independent WS, distinct from desktop.
-    let conn_source = format!("ws-{}", NEXT_CONN_ID.fetch_add(1, Ordering::SeqCst));
+    diagnostic.step("read");
+
 
     // The hello message is the **first application frame** and gives the frontend its source ID for comparing
     // against Resized/SpawnResult.owner in fit and mirror decisions. The writer encrypts it in E2EE mode and
@@ -211,12 +240,18 @@ async fn handle_socket(
     let mut listened: HashSet<String> = HashSet::new();
     let mut chat_listened: HashSet<String> = HashSet::new();
 
-    // Register session-independent global forwarding for spawn, orchestration, document-open, tree, and
-    // clone events.
-    for name in [
+    // Register session-independent global forwarding. Share connections receive only the events the shared
+    // session view consumes: tree refreshes, settings sync, and session state dots. Spawn/orchestration
+    // requests, mirror layout, presence, clone progress, knowledge and usage stay host-private.
+    let share_events: [&str; 3] = [
+        crate::host::TREE_CHANGED,
+        crate::host::SETTINGS_CHANGED,
+        crate::session_state::STATE_EVENT,
+    ];
+    let full_events: [&str; 15] = [
         "spawn://request",
         "spawn://resolved",
-        "orch://request",
+        "plan-execute://proposal",
         "view://request",
         "knowledge://changed",
         crate::host::TREE_CHANGED,
@@ -234,7 +269,14 @@ async fn handle_socket(
         crate::web::presence::CLIENTS_EVENT,
         // Account usage is polled once per machine; every client is told when that copy changes.
         crate::agent::usage_store::USAGE_EVENT,
-    ] {
+        crate::agent::remote_model_catalog::EVENT,
+    ];
+    let global_events: &[&str] = if share.is_some() {
+        &share_events
+    } else {
+        &full_events
+    };
+    for name in global_events {
         event_ids.push(listen_forward(&ctx.app, name, out_tx.clone()));
     }
 
@@ -249,6 +291,7 @@ async fn handle_socket(
             &mut listened,
             &mut chat_listened,
             &mut event_ids,
+            share.clone(),
         );
     }
 
@@ -284,6 +327,7 @@ async fn handle_socket(
                             &mut listened,
                             &mut chat_listened,
                             &mut event_ids,
+                            share.clone(),
                         );
                     }
                     Message::Close(_) => break,
@@ -324,6 +368,7 @@ async fn handle_socket(
         mgr.detach(&ctx.app, &sid, sub, &conn_source);
     }
     writer.abort();
+    diagnostic.success();
 }
 
 /// E2EE handshake after receiving the client public key: derive the shared key, return plaintext `e2ee_ready`,
@@ -342,6 +387,7 @@ async fn handshake(
     ws_rx: &mut SplitStream<WebSocket>,
     client_pub_b64: &str,
     ip: std::net::IpAddr,
+    share: Option<&super::share_policy::ShareScope>,
 ) -> Option<(Cipher, Option<String>, Option<String>)> {
     let cipher = ctx.e2ee_keys.derive(client_pub_b64).ok()?;
     // Send ready in plaintext so the client knows the shared key is available for encrypted authentication.
@@ -357,6 +403,14 @@ async fn handshake(
     let (token, password, device_id, device_name) = cipher
         .decrypt_text(&auth_raw)
         .and_then(|p| e2ee::parse_auth(&p))?;
+    // Share visitors hold no host password and no pairing token: the relay already authorized this grant, and
+    // the tunnel client injected the matching scope, so E2EE only proves key agreement. Device registration
+    // and the host blocklist do not apply to them.
+    if share.is_some() {
+        let ct = cipher.encrypt_text(e2ee::MSG_AUTHENTICATED)?;
+        ws_tx.send(Message::Text(ct)).await.ok()?;
+        return Some((cipher, device_id, device_name));
+    }
     // Rate limit before any credential verification; the explicit encrypted reason lets clients distinguish
     // throttling from a wrong password.
     // The RAII guard covers the whole credential check; a cancelled handshake future (client
@@ -416,6 +470,8 @@ fn handle_text(
     // both a PTY and a chat engine, registered at different moments.
     chat_listened: &mut HashSet<String>,
     event_ids: &mut Vec<ListenerId>,
+    // Present on share-tunnel connections; all commands are filtered through the grant's scope.
+    share: Option<super::share_policy::ShareScope>,
 ) {
     let msg: Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -430,15 +486,23 @@ fn handle_text(
                 .unwrap_or("")
                 .to_string();
             let args = msg.get("args").cloned().unwrap_or(Value::Null);
+            let trace_request=msg.get("diagnostic").and_then(|v|v.get("requestId")).and_then(Value::as_str)
+                .filter(|v|v.len()==36 && uuid::Uuid::parse_str(v).is_ok()).map(str::to_owned);
+            let trace_operation=msg.get("diagnostic").and_then(|v|v.get("operationId")).and_then(Value::as_str)
+                .filter(|v|v.len()==36 && uuid::Uuid::parse_str(v).is_ok()).map(str::to_owned);
             // The caller's trust classification follows this instance's serve mode: Electron's loopback
-            // sidecar clients are local; LAN-exposed instances serve remote paired devices.
+            // sidecar clients are local; LAN-exposed and share-tunnel instances serve remote clients.
             let origin = CallOrigin::for_serve_mode(ctx.mode);
             // A chat session has no PTY, so its events have no pty-spawn to hang registration off. Register
             // them when the client first asks about that session — starting the engine or reading its state —
-            // and do it before dispatching, since starting emits its first events synchronously.
+            // and do it before dispatching, since starting emits its first events synchronously. Share clients
+            // only register sessions their grant covers, so no other session's events reach them.
             if matches!(cmd.as_str(), "chat_start" | "chat_snapshot") {
                 if let Some(sid) = args.get("sessionId").and_then(Value::as_str) {
-                    if chat_listened.insert(sid.to_string()) {
+                    let covered = share
+                        .as_ref()
+                        .is_none_or(|scope| scope.covers_session(&ctx.app, sid));
+                    if covered && chat_listened.insert(sid.to_string()) {
                         event_ids.push(listen_forward(
                             &ctx.app,
                             &crate::agent::chat::engine::event_name(sid),
@@ -458,10 +522,11 @@ fn handle_text(
             }
             if matches!(cmd.as_str(), "pty_write" | "pty_resize") {
                 // Keep frequent, lightweight keyboard and resize operations synchronous in the read loop for responsiveness.
-                let reply = match dispatch(&ctx.app, &cmd, &args, conn_source, origin) {
-                    Ok(result) => json!({"t":"reply","id":id,"ok":true,"result":result}),
-                    Err(e) => json!({"t":"reply","id":id,"ok":false,"error":e}),
-                };
+                let reply =
+                    match dispatch_scoped(&ctx.app, share.as_ref(), &cmd, &args, conn_source, origin) {
+                        Ok(result) => json!({"t":"reply","id":id,"ok":true,"result":result}),
+                        Err(e) => json!({"t":"reply","id":id,"ok":false,"error":e}),
+                    };
                 let _ = out_tx.send(Message::Text(reply.to_string()));
             } else {
                 // Other commands commonly block on SQLite's global lock, subprocesses, or file reads. Move them
@@ -470,9 +535,14 @@ fn handle_text(
                 let ctx = ctx.clone();
                 let out_tx = out_tx.clone();
                 let conn_source = conn_source.to_string();
+                let share = share.clone();
+                let queued = std::time::Instant::now();
                 tokio::task::spawn_blocking(move || {
+                    let _context=crate::diagnostics::Context::enter(trace_request.as_deref());
+                    let _operation=crate::diagnostics::Operation::enter(trace_operation.as_deref());
+                    crate::diagnostics::record("DEBUG", "rpc_queue", serde_json::json!({"command":cmd,"requestId":trace_request,"queueMs":queued.elapsed().as_millis() as u64}));
                     let started = std::time::Instant::now();
-                    let reply = match dispatch(&ctx.app, &cmd, &args, &conn_source, origin) {
+                    let reply = match dispatch_scoped(&ctx.app, share.as_ref(), &cmd, &args, &conn_source, origin) {
                         Ok(result) => json!({"t":"reply","id":id,"ok":true,"result":result}),
                         Err(e) => json!({"t":"reply","id":id,"ok":false,"error":e}),
                     };
@@ -480,11 +550,7 @@ fn handle_text(
                     let encoding = std::time::Instant::now();
                     let encoded = reply.to_string();
                     if cmd == "chat_snapshot" {
-                        let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-                        let timestamp = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", now.year(), u8::from(now.month()), now.day(), now.hour(), now.minute(), now.second());
-                        eprintln!("{} [INFO ] [{}-{}] event=chat_sync method=snapshot prepareMs={} encodeMs={} bytes={} status={}",
-                            timestamp, conn_source, id.as_u64().unwrap_or(0),
-                            prepare_ms, encoding.elapsed().as_millis(), encoded.len(), reply["ok"]);
+                        crate::diagnostics::record("INFO","chat_sync",serde_json::json!({"requestId":trace_request,"prepareMs":prepare_ms as u64,"encodeMs":encoding.elapsed().as_millis() as u64,"bytes":encoded.len(),"success":reply["ok"]}));
                     }
                     let _ = out_tx.send(Message::Text(encoded));
                 });
@@ -492,6 +558,13 @@ fn handle_text(
         }
         "pty-spawn" => {
             let id = msg.get("id").cloned().unwrap_or(Value::Null);
+            if share.is_some() {
+                // Share visitors never get a terminal, so no PTY may be started for them.
+                let _ = out_tx.send(Message::Text(
+                    json!({"t":"reply","id":id,"ok":false,"error":"Terminals are unavailable through a public share"}).to_string(),
+                ));
+                return;
+            }
             let sid = msg
                 .get("sid")
                 .and_then(Value::as_str)
@@ -549,6 +622,23 @@ fn handle_text(
     }
 }
 
+/// Routes a command through the share policy when the connection belongs to a share tunnel, and through the
+/// regular dispatch otherwise. Keeping one entry point means share connections can never reach an arm that
+/// bypasses their scope.
+fn dispatch_scoped(
+    app: &AppCtx,
+    share: Option<&super::share_policy::ShareScope>,
+    cmd: &str,
+    args: &Value,
+    who: &str,
+    origin: CallOrigin,
+) -> Result<Value, String> {
+    match share {
+        Some(scope) => super::share_policy::dispatch_shared(app, scope, cmd, args, who, origin),
+        None => dispatch(app, cmd, args, who, origin),
+    }
+}
+
 /// Registers forwarding for one event name, sending `{t:"event",name,payload}` through the outbound channel.
 fn listen_forward(app: &AppCtx, name: &str, out_tx: mpsc::UnboundedSender<Message>) -> ListenerId {
     let name_owned = name.to_string();
@@ -571,6 +661,9 @@ fn web_pty_spawn(
     attach_only: bool,
     out_tx: mpsc::UnboundedSender<Message>,
 ) -> Result<SpawnResult, String> {
+    let _context=crate::diagnostics::Context::enter(args.get("diagnosticRequestId").and_then(Value::as_str));
+    let _operation=crate::diagnostics::Operation::enter(args.get("diagnosticOperationId").and_then(Value::as_str));
+    let mut diagnostic=crate::diagnostics::Span::new("pty_prepare",serde_json::json!({"sessionId":sid}));
     let kind: SessionKind =
         serde_json::from_value(args.get("kind").cloned().unwrap_or(Value::Null))
             .map_err(|e| format!("Invalid kind: {e}"))?;
@@ -659,6 +752,8 @@ fn web_pty_spawn(
         out_tx.send(Message::Binary(frame)).is_ok()
     });
 
+    diagnostic.success();
+    drop(diagnostic);
     let mgr = app.pty();
     mgr.spawn(
         app.clone(),
@@ -707,6 +802,7 @@ mod tests {
                 .expect("failed to create test server keys")),
             mode,
             limiter: Arc::new(super::super::rate_limit::LoginRateLimiter::new()),
+            tunnel_secret: None,
         }
     }
 
@@ -728,6 +824,7 @@ mod tests {
             &mut listened,
             &mut chat_listened,
             &mut event_ids,
+            None,
         );
         match out_rx.recv().await.expect("expected a reply frame") {
             Message::Text(t) => serde_json::from_str(&t).expect("reply must be JSON"),

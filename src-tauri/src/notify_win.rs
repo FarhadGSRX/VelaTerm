@@ -99,7 +99,7 @@ pub fn send(
     // Create and show on the main STA/message-pump thread so activation callbacks are delivered.
     app.run_on_main_thread(move || {
         if let Err(e) = show_on_main(&app_for_main, id, &aumid, &xml) {
-            eprintln!("failed to send Windows toast: {e:?}");
+            crate::diagnostic_warn!("failed to send Windows toast: {e:?}");
             live_remove(id);
         }
     })

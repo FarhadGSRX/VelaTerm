@@ -5,7 +5,7 @@ import { dateLocale, t, type I18nKey } from "../../i18n";
 import { memoryNavigate } from "./navigation";
 
 const errors: Record<string, I18nKey> = {
-  memory_models_unavailable: "memory.loadError", memory_conflict: "memory.conflict", memory_duplicate_title: "memory.duplicate", memory_busy: "memory.busy",
+  memory_models_unavailable: "memory.loadError", memory_conflict: "memory.conflict", memory_duplicate_title: "memory.duplicate",
   memory_not_found: "memory.notFound", memory_no_transcript: "memory.noTranscript", memory_agent_unavailable: "memory.agentUnavailable",
   memory_invalid: "memory.invalid", memory_process_failed: "memory.processFailed", memory_timeout: "memory.timeout",
   memory_interrupted: "memory.interrupted", memory_source_too_large: "memory.tooLarge", memory_context_too_large: "memory.tooLarge",
@@ -23,7 +23,7 @@ export function memoryEffortLabel(effort: string) {
 export function memoryTime(stamp: number) { return new Date(stamp).toLocaleString(dateLocale()); }
 export function StateLabel({ value }: { value: string }) {
   const key = `memory.${value}`;
-  const allowed = ["running", "completed", "failed", "cancelled", "extract", "merge", "commit", "done"];
+  const allowed = ["queued", "cancelling", "running", "completed", "failed", "cancelled", "extract", "merge", "commit", "done"];
   return <span>{allowed.includes(value) ? t(key as I18nKey) : value}</span>;
 }
 export function useMemoryLoad<T>(loader: () => Promise<T>, deps: unknown[]) {

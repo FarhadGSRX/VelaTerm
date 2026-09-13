@@ -7,6 +7,7 @@ import type { ITheme, Terminal } from "@xterm/xterm";
 import { ptyRedraw } from "../ipc/commands";
 
 const registry = new Map<string, Terminal>();
+const terminalWatchers = new Map<string, Set<(term: Terminal | undefined) => void>>();
 const searchAddons = new Map<string, SearchAddon>();
 // Per-session hard-redraw callbacks registered by usePtySession, which alone owns the fit addon,
 // sizing mode, and PTY channel. Refresh prefers this complete manual-resize path.
@@ -14,6 +15,7 @@ const redrawHandlers = new Map<string, () => void>();
 
 export function registerTerminal(id: string, term: Terminal) {
   registry.set(id, term);
+  terminalWatchers.get(id)?.forEach((listener) => listener(term));
 }
 
 export function unregisterTerminal(id: string, term: Terminal) {
@@ -21,7 +23,23 @@ export function unregisterTerminal(id: string, term: Terminal) {
   if (registry.get(id) === term) {
     registry.delete(id);
     osc52Copies.delete(id);
+    terminalWatchers.get(id)?.forEach((listener) => listener(undefined));
   }
+}
+
+/** Observe terminal creation after font loading and replacement after a restart. */
+export function watchTerminal(id: string, listener: (term: Terminal | undefined) => void): () => void {
+  let listeners = terminalWatchers.get(id);
+  if (!listeners) {
+    listeners = new Set();
+    terminalWatchers.set(id, listeners);
+  }
+  listeners.add(listener);
+  listener(registry.get(id));
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) terminalWatchers.delete(id);
+  };
 }
 
 export function clearTerminal(id: string) {
@@ -48,8 +66,8 @@ export function unregisterRedraw(id: string, fn: () => void) {
  *     A frontend-only refresh cannot repair a mismatched terminal grid.
  *  2. Content corruption rendered under old dimensions: `ptyRedraw` pulses SIGWINCH so a full-screen
  *     TUI resends its screen even when fit is otherwise a no-op.
- *  3. Renderer defects such as missing cells, offsets, or ghosts: `term.refresh` redraws the buffer,
- *     then a one-line scroll round trip forces viewport recalculation.
+ *  3. Renderer defects such as missing cells, offsets, or ghosts: `term.refresh` redraws the buffer
+ *     and lets xterm synchronize viewport geometry without changing the scroll position.
  *
  * If no callback was registered because of early startup or failure, fall back to frontend redraw plus
  * backend resize pulse, covering only cases 2 and 3. */
@@ -63,11 +81,8 @@ export function redrawTerminal(id: string) {
   if (!term) return;
   try {
     term.refresh(0, term.rows - 1);
-    // Force viewport recalculation with a one-line round trip and zero net movement.
-    term.scrollLines(-1);
-    term.scrollLines(1);
   } catch {
-    /* Ignore rare refresh/scroll failures. */
+    /* Ignore rare refresh failures. */
   }
   ptyRedraw(id).catch(() => {});
 }

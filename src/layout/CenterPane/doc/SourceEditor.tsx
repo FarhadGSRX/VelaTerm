@@ -14,7 +14,6 @@ import { basicSetup, EditorView } from "codemirror";
 import { indentWithTab } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import {
-  HighlightStyle,
   LanguageDescription,
   syntaxHighlighting,
 } from "@codemirror/language";
@@ -22,7 +21,7 @@ import { languages } from "@codemirror/language-data";
 import { Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, keymap } from "@codemirror/view";
 import { SearchCursor } from "@codemirror/search";
-import { tags } from "@lezer/highlight";
+import { vlxHighlight } from "./docHighlight";
 import { EMPTY_STATUS, type DocSearchControl, type SearchStatus } from "./docSearch";
 import { uploadDocImage } from "../../../ipc/transport";
 import { env } from "../../../platform";
@@ -33,8 +32,14 @@ import {
 } from "../../../terminal/imageInput";
 
 export interface SourceHandle {
+  /** Restore keyboard focus without changing the current selection. */
+  focus: () => void;
   /** Return the complete editor text, or null before initialization. */
   getText: () => string | null;
+  /** Apply a companion editor update without reporting it as a user edit. */
+  setText: (value: string) => void;
+  /** Insert a note reference or attachment at the current selection. */
+  insertText: (value: string) => void;
   /** Scroll to a zero-based line and place the cursor at its start, clamping to the final line. */
   scrollToLine: (line: number) => void;
   /** Unified find/replace controls shared with WYSIWYG mode. */
@@ -63,42 +68,6 @@ const matchField = StateField.define<DecorationSet>({
   },
   provide: (f) => EditorView.decorations.from(f),
 });
-
-/** Shared Markdown/code highlight palette mapped to Vlinx semantic colors and text levels. */
-const vlxHighlight = HighlightStyle.define([
-  // ── Markdown ──
-  { tag: tags.heading, color: "var(--accent)", fontWeight: "600" },
-  { tag: tags.strong, fontWeight: "700" },
-  { tag: tags.emphasis, fontStyle: "italic" },
-  { tag: tags.strikethrough, textDecoration: "line-through" },
-  { tag: tags.monospace, color: "var(--mag)" },
-  { tag: tags.link, color: "var(--cyan)" },
-  { tag: tags.url, color: "var(--cyan)", textDecoration: "underline" },
-  { tag: tags.quote, color: "var(--text-mid)", fontStyle: "italic" },
-  { tag: tags.contentSeparator, color: "var(--text-dim)" },
-  // ── General code ──
-  { tag: tags.comment, color: "var(--text-dim)", fontStyle: "italic" },
-  { tag: tags.meta, color: "var(--text-dim)" },
-  { tag: tags.processingInstruction, color: "var(--text-dim)" },
-  { tag: tags.keyword, color: "var(--mag)" },
-  { tag: tags.string, color: "var(--green)" },
-  { tag: tags.number, color: "var(--yellow)" },
-  { tag: tags.typeName, color: "var(--yellow)" },
-  { tag: tags.className, color: "var(--yellow)" },
-  { tag: tags.bool, color: "var(--yellow)" },
-  { tag: tags.atom, color: "var(--yellow)" },
-  { tag: tags.null, color: "var(--yellow)" },
-  { tag: tags.attributeName, color: "var(--yellow)" },
-  { tag: tags.function(tags.variableName), color: "var(--cyan)" },
-  { tag: tags.function(tags.propertyName), color: "var(--cyan)" },
-  { tag: tags.tagName, color: "var(--red)" },
-  { tag: tags.regexp, color: "var(--red)" },
-  { tag: tags.escape, color: "var(--red)" },
-  { tag: tags.definition(tags.variableName), color: "var(--text)" },
-  { tag: tags.operator, color: "var(--text-mid)" },
-  { tag: tags.punctuation, color: "var(--text-mid)" },
-  { tag: tags.bracket, color: "var(--text-mid)" },
-]);
 
 /** CodeMirror theme using CSS variables to follow Vlinx theme and accent changes. */
 const cmTheme = EditorView.theme({
@@ -182,6 +151,7 @@ export const SourceEditor = forwardRef<
 }, ref) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const syncingRef = useRef(false);
   const onEditedRef = useRef(onEdited);
   onEditedRef.current = onEdited;
   const onRequestSearchRef = useRef(onRequestSearch);
@@ -297,7 +267,7 @@ export const SourceEditor = forwardRef<
           },
         }),
         EditorView.updateListener.of((u) => {
-          if (u.docChanged) onEditedRef.current();
+          if (u.docChanged && !syncingRef.current) onEditedRef.current();
         }),
         cmTheme,
       ],
@@ -374,7 +344,22 @@ export const SourceEditor = forwardRef<
   };
 
   useImperativeHandle(ref, () => ({
+    focus: () => viewRef.current?.focus(),
     getText: () => viewRef.current?.state.doc.toString() ?? null,
+    insertText: (value) => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch(view.state.replaceSelection(value));
+      view.focus();
+    },
+    setText: (value) => {
+      const view = viewRef.current;
+      if (!view || view.state.doc.toString() === value) return;
+      syncingRef.current = true;
+      try {
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+      } finally { syncingRef.current = false; }
+    },
     scrollToLine: (line) => {
       const view = viewRef.current;
       if (!view) return;

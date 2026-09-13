@@ -159,6 +159,32 @@ describe("openBrowserTab: creating and activating", () => {
     expect(s.browserTabs[ids[1]].url).toBe("https://example.com");
     expect(s.activeTabId).toBe(ids[1]);
   });
+
+  it("keeps browser chrome by default and hides it only when requested for a standalone page", () => {
+    seed();
+    useTermStore.getState().openBrowserTab("https://velaterm.com/game-center", { chromeHidden: true });
+    useTermStore.getState().openBrowserTab("https://github.com");
+    const s = useTermStore.getState();
+    const ids = s.openTabs.filter((t) => s.browserTabs[t]);
+    expect(s.browserTabs[ids[0]].chromeHidden).toBe(true);
+    expect(s.browserTabs[ids[1]].chromeHidden).toBe(false);
+  });
+
+  it("records the opening tab and URL for popup-created tabs", () => {
+    seed();
+    useTermStore.getState().openBrowserTab("https://velaterm.com/zh-CN/game-center");
+    const parentId = soleBrowserId();
+    useTermStore.getState().openBrowserTab("https://velaterm.com/games/shooter/index.html", {
+      chromeHidden: true,
+      openerTabId: parentId,
+      openerUrl: "https://velaterm.com/zh-CN/game-center",
+    });
+    const s = useTermStore.getState();
+    const ids = s.openTabs.filter((t) => s.browserTabs[t]);
+    expect(s.browserTabs[ids[1]].openerTabId).toBe(parentId);
+    expect(s.browserTabs[ids[1]].openerUrl).toBe("https://velaterm.com/zh-CN/game-center");
+    expect(s.browserTabs[parentId].openerTabId).toBeUndefined();
+  });
 });
 
 describe("applyBrowserState: feeding state events back in", () => {

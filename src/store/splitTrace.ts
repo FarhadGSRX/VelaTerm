@@ -5,7 +5,7 @@
 //! pane tree is persisted, so a split created without notice looks like it appeared on its own days later.
 //! This records each event so the source can be identified after the fact.
 //!
-//! Entries are retained in memory and persisted by the backend to logs/split.log. Native remote
+//! Entries are retained in memory and persisted by the backend to the application runtime log. Native remote
 //! windows use their local host so the file retains the originating window label. Plain browsers
 //! use their connected server. Read the recent entries via `window.__vlxSplitLog` (newest last).
 
@@ -42,17 +42,17 @@ const entries: SplitTraceEntry[] = [];
 let pendingWrite: Promise<void> = Promise.resolve();
 
 /** Record a split event and echo it to the console. */
-export function traceSplit(source: SplitSource, detail: string, context: SplitTraceContext): void {
+export function traceSplit(source: SplitSource, _detail: string, context: SplitTraceContext): void {
   const now = new Date();
   const entry: SplitTraceEntry = {
     at: now.toISOString(),
     source,
-    detail,
+    detail: `sessionCount=${context.sessionIds.length}`,
     persistence: "pending",
   };
   entries.push(entry);
   if (entries.length > LIMIT) entries.shift();
-  console.info("[split]", entry.at, source, detail);
+  console.info("[split]", entry.at, source, entry.detail);
   try {
     (window as unknown as { __vlxSplitLog?: SplitTraceEntry[] }).__vlxSplitLog =
       entries;

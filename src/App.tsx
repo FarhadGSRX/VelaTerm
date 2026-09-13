@@ -8,13 +8,15 @@ import { MergeModal } from "./components/MergeModal";
 import { ChangesModal } from "./components/diff/ChangesModal";
 import { NotifyGuideModal } from "./components/NotifyGuideModal";
 import { QuitConfirmModal } from "./components/QuitConfirmModal";
-import { OrchConfirmModal } from "./components/OrchConfirmModal";
+import { SplitTaskConfirmModal } from "./components/SplitTaskConfirmModal";
 import { SpawnConfirmModal } from "./components/SpawnConfirmModal";
 import { UpdateModal } from "./components/UpdateModal";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useNotifications } from "./hooks/useNotifications";
+import { SharedProjectsRoute } from "./sharing/SharedProjects";
 import { CenterPane } from "./layout/CenterPane/CenterPane";
 import { KnowledgeRoute } from "./layout/Knowledge/KnowledgeRoute";
+import { SecurityRoute } from "./layout/Security/SecurityRoute";
 import { ImportSessionsRoute } from "./layout/ImportSessions";
 import { LeftSidebar } from "./layout/LeftSidebar/LeftSidebar";
 import { RightPanel } from "./layout/RightPanel/RightPanel";
@@ -24,7 +26,6 @@ import { runMenuAction } from "./layout/TitleBar/appMenuActions";
 import { listShells } from "./ipc/commands";
 import {
   onMenuAction,
-  onOrchRequest,
   onSpawnRequest,
   onSpawnResolved,
   onPresetsChanged,
@@ -37,6 +38,8 @@ import {
   startSettingsWatch,
 } from "./store/settingsWatch";
 import { getClientSource, isTauri } from "./ipc/transport";
+import { isShareSurface } from "./ipc/shareBase";
+import { useSharedSessionNavigation } from "./sharing/useSharedSessionNavigation";
 import { wsClient } from "./ipc/wsClient";
 import { startUpdateSchedule } from "./ipc/updater";
 import { env, platform } from "./platform";
@@ -68,6 +71,7 @@ function App() {
   const applyAppearance = useTermStore((s) => s.applyAppearance);
 
   useKeyboardShortcuts();
+  useSharedSessionNavigation();
 
   // Apply appearance, load the SQLite tree, and register global child-task listeners at startup.
   // Reapply appearance on system theme changes while following the system.
@@ -115,10 +119,6 @@ function App() {
       if (useTermStore.getState().theme === "system") applyAppearance();
     });
     const unlisten = onSpawnRequest((req) => void handleSpawnRequest(req));
-    // An orchestration proposal only queues the confirmation dialog; nothing starts until the user confirms.
-    const unlistenOrch = onOrchRequest((req) =>
-      useTermStore.getState().handleOrchRequest(req),
-    );
     const unlistenResolved = onSpawnResolved((ev) => {
       // Skip our own echo — we already removed the card locally.
       if (ev.source === getClientSource()) return;
@@ -190,7 +190,6 @@ function App() {
       unwatch();
       offConnState?.();
       void unlisten.then((fn) => fn());
-      void unlistenOrch.then((fn) => fn());
       void unlistenResolved.then((fn) => fn());
       void unlistenOpenProject.then((fn) => fn());
       void unlistenView.then((fn) => fn());
@@ -235,7 +234,7 @@ function App() {
 
         <CenterPane />
 
-        {!rightCollapsed && (
+        {!rightCollapsed && !isShareSurface && (
           <>
             <Splitter onDrag={resizeRight} />
             <RightPanel />
@@ -245,12 +244,14 @@ function App() {
       <StatusBar />
       <ImportSessionsRoute />
       <KnowledgeRoute />
+      <SecurityRoute />
+      <SharedProjectsRoute />
       <DirectoryPickerModal />
       <CreateProjectModal />
       <CloneProjectModal />
       <SaveAsModal />
       <SpawnConfirmModal />
-      <OrchConfirmModal />
+      {!isShareSurface && <SplitTaskConfirmModal />}
       <QuitConfirmModal />
       <MergeModal />
       <ChangesModal />

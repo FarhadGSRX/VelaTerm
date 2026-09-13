@@ -16,6 +16,23 @@ function Harness({ initial = "low" }: { initial?: string }) {
 }
 
 describe("Select", () => {
+  it("keeps a portaled menu outside clipping parents and preserves keyboard selection", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <div style={{ overflow: "hidden" }}>
+        <Select menuPortal value="low" onChange={onChange} options={OPTIONS} ariaLabel="font" />
+      </div>,
+    );
+    const trigger = screen.getByRole("combobox", { name: "font" });
+    fireEvent.click(trigger);
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(screen.getByRole("listbox").parentElement).toBe(document.body);
+    fireEvent.keyDown(trigger, { key: "End" });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("high");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
   it("opens on click, commits the clicked option and closes", () => {
     render(<Harness />);
     const trigger = screen.getByRole("combobox");

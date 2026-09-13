@@ -11,23 +11,10 @@
 //! and every one of them narrows permissions rather than widens them, so a button reading "allow" would
 //! misdescribe what it does; they are left out, as is an `addRules` whose behavior is not `allow`.
 
-import type { SessionKind } from "../../../types";
-
-/** Permission modes the agent accepts, listed the way its own interface lists them. */
-export const CLAUDE_MODES = ["plan", "default", "acceptEdits", "auto", "bypassPermissions"] as const;
-export const CODEX_MODES = ["read-only", "auto", "full-access"] as const;
-/** OpenCode either asks, or answers every permission itself the way its own `--auto` flag does. */
-export const OPENCODE_MODES = ["default", "bypassPermissions"] as const;
-export type Mode = (typeof CLAUDE_MODES)[number] | (typeof CODEX_MODES)[number];
-
-export function modesFor(kind: SessionKind): readonly Mode[] {
-  if (kind === "codex") return CODEX_MODES;
-  if (kind === "opencode") return OPENCODE_MODES;
-  return CLAUDE_MODES;
-}
-
+/** Wire-level permission names; the backend supplies each agent's supported options. */
+export type Mode = "plan" | "default" | "acceptEdits" | "auto" | "bypassPermissions" | "read-only" | "full-access";
 export function isMode(value: string): value is Mode {
-  return ([...CLAUDE_MODES, ...CODEX_MODES] as readonly string[]).includes(value);
+  return ["plan", "default", "acceptEdits", "auto", "bypassPermissions", "read-only", "full-access"].includes(value);
 }
 
 /** A standing rule the agent offered, exactly as it arrived; it travels back unchanged. */

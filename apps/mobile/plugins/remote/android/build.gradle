@@ -1,0 +1,35 @@
+plugins {
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.android' version '2.2.20'
+}
+android {
+    namespace 'com.velaterm.remote'
+    compileSdk 36
+    defaultConfig { minSdk 24; manifestPlaceholders += rootProject.ext.mobilePushPlaceholders }
+    sourceSets { main.assets.srcDirs += '../shared' }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_21; targetCompatibility JavaVersion.VERSION_21 }
+    kotlinOptions { jvmTarget = '21' }
+}
+dependencies {
+    implementation 'com.getui:gtsdk:3.3.15.0'
+    implementation 'com.getui:gtc:3.3.3.0'
+    implementation 'com.getui.opt:hwp:3.1.4'
+    implementation 'com.huawei.hms:push:6.12.0.300'
+    implementation 'com.getui.opt:xmp:3.3.7'
+    implementation 'com.assist-v3:oppo:3.6.0'
+    implementation 'com.assist-v3:vivo:3.2.0'
+    implementation 'com.getui.opt:mzp:3.3.2'
+    implementation 'com.getui.opt:honor:3.6.0'
+    implementation 'com.getui.opt:ups:3.0.3'
+    implementation 'com.hihonor.mcs:push:7.0.61.303'
+    implementation 'androidx.browser:browser:1.9.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    implementation project(':capacitor-android')
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.webkit:webkit:1.14.0'
+    implementation 'com.hierynomus:sshj:0.40.0'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.80'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.80'
+}

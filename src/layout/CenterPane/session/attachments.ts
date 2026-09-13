@@ -6,7 +6,7 @@
 //! drop, and that part is reused rather than written twice.
 
 import { genId } from "../../../genId";
-import type { ChatImage } from "../../../ipc/chat";
+import type { ChatImage, ChatImageValue } from "../../../ipc/chat";
 
 /**
  * How much can ride along with one message.
@@ -34,9 +34,9 @@ export type Rejection =
   | { reason: "tooLarge"; name: string }
   | { reason: "unreadable"; name: string };
 
-export interface AttachResult {
+export interface AttachResult<T extends ChatImageValue = Attachment> {
   /** The attachments the composer should hold now: what it had, plus whatever was accepted. */
-  attachments: Attachment[];
+  attachments: (T | Attachment)[];
   /** Everything left out, in the order it was offered. Empty when all of it was taken. */
   rejected: Rejection[];
 }
@@ -46,14 +46,26 @@ export function dataUrl(image: ChatImage): string {
   return `data:${image.mimeType};base64,${image.data}`;
 }
 
+/** Restore a sent image to the composer. History retains its bytes and type, but not its filename. */
+export function restoreAttachment(image: ChatImage, index: number): Attachment {
+  const padding = image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0;
+  return {
+    ...image,
+    id: genId(),
+    name: `image-${index + 1}.${image.mimeType.split("/")[1] || "png"}`,
+    bytes: Math.floor(image.data.length * 3 / 4) - padding,
+  };
+}
+
 /**
  * Read files into attachments, refusing what does not fit.
  *
  * A file that is too large, or one file too many, is left out while the rest are taken: dropping a folder
  * of screenshots should attach what it can and say what it could not, rather than fail as a whole.
+ * Retained history references keep their object identity so their snapshot context remains available.
  */
-export async function attachImages(current: Attachment[], files: File[]): Promise<AttachResult> {
-  const attachments = current.slice();
+export async function attachImages<T extends ChatImageValue = Attachment>(current: T[], files: File[]): Promise<AttachResult<T>> {
+  const attachments: (T | Attachment)[] = current.slice();
   const rejected: Rejection[] = [];
   for (const file of files) {
     if (attachments.length >= MAX_IMAGES) {

@@ -81,9 +81,15 @@ export function MemoryDocument({ id, version }: { id: string; version?: number }
       event.preventDefault(); if (dirty) void save();
     }
   }}>
+    {data.location && <nav className="memory-row memory-breadcrumbs" aria-label={t("memory.hierarchy")}>
+      <MemoryLink route="library" values={{ memoryProject: data.location.projectId, memorySession: null, memoryPage: null }}>{data.location.projectName || t(data.location.kind === "manual" ? "memory.manualGroup" : data.location.kind === "legacy" ? "memory.legacyGroup" : "memory.unknownProject")}</MemoryLink>
+      <span aria-hidden="true">/</span>
+      <MemoryLink route="library" values={{ memoryProject: data.location.projectId, memorySession: data.location.sessionId, memoryPage: null }}>{data.location.sessionName || t(data.location.kind === "legacy" ? "memory.legacyGroup" : "memory.manualGroup")}</MemoryLink>
+    </nav>}
     <div className="memory-row memory-actions">
       <span className="memory-muted">v{entry.version} · {memoryTime(entry.updatedAt)}</span><span className="memory-spacer" />
       <button className="btn" onClick={() => void exportMarkdown()}>{t("memory.export")}</button>
+      {version == null && <MemoryLink className="btn" route="notebooks/copy" values={{memoryEntry:id}}>{t("nb.copyTo")}</MemoryLink>}
       {version == null ? <><button className="btn btn-primary" disabled={!dirty || busy} onClick={() => void save()}>{t(busy ? "common.loading" : "common.save")}{dirty ? " *" : ""}</button><MemoryLink className="btn" route={`edit/${id}`}>{t("common.edit")}</MemoryLink><button className="btn" disabled={busy} onClick={() => setAction("delete")}>{t("common.delete")}</button></> : <>
         <MemoryLink className="btn" route={`entry/${id}`}>{t("common.cancel")}</MemoryLink><button className="btn" disabled={version === data.entry.version} onClick={() => setAction("restore")}>{t("memory.restore")}</button>
       </>}

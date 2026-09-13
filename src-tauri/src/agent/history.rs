@@ -209,12 +209,7 @@ fn project_directory(conn: &Connection, project_id: &str) -> Result<String, Stri
 
 /// Audit counts and timings only; history titles, prompts and paths never enter logs.
 fn audit(job_id: &str, step: &str, status: &str, input: usize, output: usize, duration: u128) {
-    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    eprintln!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{:<5}] [system] event=session_import step={} method=native_history inputCount={} outputCount={} jobId={} status={} durationMs={}",
-        now.year(), u8::from(now.month()), now.day(), now.hour(), now.minute(), now.second(),
-        if status == "failed" { "ERROR" } else { "INFO" }, step, input, output, job_id, status, duration,
-    );
+    crate::diagnostics::record(if status=="failed"{"ERROR"}else{"INFO"},"session_import",serde_json::json!({"jobId":job_id,"step":step,"status":status,"inputCount":input,"outputCount":output,"durationMs":duration as u64}));
 }
 
 pub fn discover(ctx: &AppCtx, project_id: &str) -> Result<History, String> {

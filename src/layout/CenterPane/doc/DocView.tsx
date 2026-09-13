@@ -1,3 +1,4 @@
+import { safeError } from "../../../ipc/diagnosticSafety";
 //! Document-tab body: loading/error state, header (name/path, mode switch, save), editor, external-change banner,
 //! and close/conflict confirmation dialogs.
 //!
@@ -22,7 +23,7 @@ import { DocSearchBar } from "./DocSearchBar";
 import type { DocSearchControl } from "./docSearch";
 import { ImageDocView } from "./ImageDocView";
 import { SourceEditor, type SourceHandle } from "./SourceEditor";
-import { WysiwygEditor, type WysiwygHandle } from "./WysiwygEditor";
+import { MarkdownEditor, type MarkdownHandle } from "./MarkdownEditor";
 import "./docTheme.css";
 
 /** External-change polling interval. Only the active tab stats mtime, a microsecond-scale operation. */
@@ -36,7 +37,7 @@ let lastSideWidth = 220;
 const SIDE_MIN_W = 150;
 const SIDE_MAX_W = 480;
 
-/** Outline debounce after typing stops; WYSIWYG mode must serialize, so avoid doing it too often. */
+/** Debounce heading extraction while typing. */
 const OUTLINE_DEBOUNCE_MS = 600;
 
 /** Routes images to ImageViewer and markdown/code to the TextDocView editing path. */
@@ -100,7 +101,9 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
   /** Ref guard preventing save closures from overwriting a file with truncated content. */
   const truncatedRef = useRef(false);
   truncatedRef.current = readonlyTrunc;
-  const wysiwygRef = useRef<WysiwygHandle | null>(null);
+  const markdownRef = useRef<MarkdownHandle | null>(null);
+  const useMarkdownEditor = tab.kind === "markdown" && !readonlyTrunc;
+  const [editorReadyEpoch, setEditorReadyEpoch] = useState(0);
   const sourceRef = useRef<SourceHandle | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -122,17 +125,17 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     if (base == null) return null;
     if (!editedRef.current) return base;
     const fromEditor =
-      tab.mode === "wysiwyg"
-        ? wysiwygRef.current?.getMarkdown()
+      useMarkdownEditor
+        ? markdownRef.current?.getText()
         : sourceRef.current?.getText();
     return fromEditor ?? base;
-  }, [tab.mode]);
+  }, [useMarkdownEditor]);
 
   /** Gets search controls for the active editor mode, or null before it is ready. */
   const getSearchControl = useCallback(
     (): DocSearchControl | null =>
-      (tab.mode === "wysiwyg" ? wysiwygRef.current?.search : sourceRef.current?.search) ?? null,
-    [tab.mode],
+      (useMarkdownEditor ? markdownRef.current?.search : sourceRef.current?.search) ?? null,
+    [useMarkdownEditor],
   );
 
   // Parse headings from current content; onEdited schedules debounced outline refreshes.
@@ -156,23 +159,16 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     [],
   );
 
-  /** Outline navigation: source mode scrolls by line; WYSIWYG mode scrolls to the Nth heading element. Both
+  /** Outline navigation: source mode scrolls by line; preview scrolls to the Nth heading element. Both
    *  derive from the same markdown and skip fenced-code headings, so their indices align naturally. */
   const jumpToHeading = useCallback(
     (idx: number) => {
       const h = outline[idx];
       if (!h) return;
-      if (tab.mode === "source") {
-        sourceRef.current?.scrollToLine(h.line);
-        return;
-      }
-      const nodes = rootRef.current?.querySelectorAll<HTMLElement>(
-        ".ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4, .ProseMirror h5, .ProseMirror h6",
-      );
-      if (!nodes || nodes.length === 0) return;
-      nodes[Math.min(idx, nodes.length - 1)].scrollIntoView({ block: "start" });
+      if (useMarkdownEditor) markdownRef.current?.scrollToHeading(idx, h.line);
+      else sourceRef.current?.scrollToLine(h.line);
     },
-    [outline, tab.mode],
+    [outline, useMarkdownEditor],
   );
 
   // Loading and reloading.
@@ -213,17 +209,17 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
   /** Silently reloads an external change while preserving scroll position on a best-effort basis. */
   const reloadPreservingScroll = useCallback(async () => {
     const scroller =
-      rootRef.current?.querySelector(".cm-scroller") ??
+      rootRef.current?.querySelector(tab.mode === "source" ? ".doc-markdown-code .cm-scroller" : ".doc-markdown-visual") ??
       rootRef.current?.querySelector(".docview-body");
     const scrollTop = scroller?.scrollTop ?? 0;
     await load();
     requestAnimationFrame(() => {
       const el =
-        rootRef.current?.querySelector(".cm-scroller") ??
+        rootRef.current?.querySelector(tab.mode === "source" ? ".doc-markdown-code .cm-scroller" : ".doc-markdown-visual") ??
         rootRef.current?.querySelector(".docview-body");
       if (el) el.scrollTop = scrollTop;
     });
-  }, [load]);
+  }, [load, tab.mode]);
 
   // Explicit refresh (reloadNonce increments when viewing the same file again or choosing Refresh File).
   // With no edits, always reread disk because refresh explicitly asks for the latest content. With unsaved edits,
@@ -354,44 +350,16 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     return () => window.removeEventListener(DOC_SAVE_EVENT, onSave);
   }, [tab.id, save]);
 
-  // On mode switch, pull text only after edits to avoid serializer churn during reading, then rebuild the editor.
+  // Keep the editor mounted while changing its presentation mode.
   const switchMode = (mode: DocTab["mode"]) => {
     if (mode === tab.mode) return;
     // Mode switching rebuilds the editor, invalidating its search state; close the search bar until Cmd+F reopens it.
     setSearchOpen(false);
-    // The modes have different containers and heights, so preserve a scroll ratio to approximate reading position.
-    const getScroller = () =>
-      rootRef.current?.querySelector(".cm-scroller") ??
-      rootRef.current?.querySelector(".docview-body");
-    const from = getScroller();
-    const ratio =
-      from && from.scrollHeight > from.clientHeight
-        ? from.scrollTop / (from.scrollHeight - from.clientHeight)
-        : 0;
-    const t = pullText();
-    if (t != null) setText(t);
-    editedRef.current = false; // The new editor instance has not been edited.
+    // Keep Markdown editor instances and their undo history across view changes.
     setDocTabMode(tab.id, mode);
-    setEditorEpoch((n) => n + 1);
-    if (ratio > 0) {
-      // WYSIWYG initializes asynchronously; poll for several frames until content becomes scrollable before restoring.
-      let tries = 0;
-      const restore = () => {
-        const el = getScroller();
-        if (el && el.scrollHeight > el.clientHeight) {
-          el.scrollTop = ratio * (el.scrollHeight - el.clientHeight);
-        } else if (++tries < 60) {
-          requestAnimationFrame(restore);
-        }
-      };
-      requestAnimationFrame(restore);
-    }
   };
 
-  /** Exports the current document as a vector PDF through react-pdf, with automatic pagination, consistent
-   *  margins, unbroken text lines, and selectable text. WYSIWYG mode can provide ProseMirror HTML without
-   *  serialization; source mode can render markdown in a temporary headless Crepe instance. Layout and pagination
-   *  live in ./docPdf; this function supplies content, theme colors, and persistence. */
+  /** Export current Markdown through the existing vector PDF renderer, independently of the active view. */
   const exportPdf = useCallback(async () => {
     const content = pullText();
     if (content == null || loading || !!error) return;
@@ -435,7 +403,7 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
       const { buildDocPdfBlob } = await import("./docPdf");
       pdfBlob = await buildDocPdfBlob(content, theme);
     } catch (e) {
-      console.error("[exportPdf] failed to generate the PDF:", e);
+      console.error("[exportPdf] failed to generate the PDF:", safeError(e));
       return;
     }
 
@@ -489,51 +457,13 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     }
   }, [tab.id, setDocTabDirty, refreshOutline]);
 
-  /** Typora-like behavior: clicking whitespace beside or below the document focuses the editor and places the
-   *  caret nearby. Handle only clicks on the container itself, leaving editor content and overlays unaffected. */
-  const onBodyMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Leave right-click to the custom menu without moving the caret or clearing selection.
-    if (tab.mode !== "wysiwyg") return;
-    const cls = (e.target as HTMLElement).classList;
-    if (
-      !cls.contains("docview-body") &&
-      !cls.contains("docview-wysiwyg") &&
-      !cls.contains("milkdown")
-    )
-      return;
-    const pm = rootRef.current?.querySelector<HTMLElement>(".ProseMirror");
-    if (!pm) return;
-    e.preventDefault();
-    // Clamp the click inside the document rectangle and use caretRangeFromPoint for the nearest text position.
-    const rect = pm.getBoundingClientRect();
-    const x = Math.min(Math.max(e.clientX, rect.left + 2), rect.right - 2);
-    const y = Math.min(Math.max(e.clientY, rect.top + 2), rect.bottom - 2);
-    const range = document.caretRangeFromPoint?.(x, y);
-    pm.focus();
-    const sel = window.getSelection();
-    if (!sel) return;
-    try {
-      if (range) {
-        sel.removeAllRanges();
-        sel.addRange(range);
-      } else {
-        sel.selectAllChildren(pm);
-        sel.collapseToEnd();
-      }
-    } catch {
-      /* If caret placement fails, focus only and keep the interaction uninterrupted. */
-    }
-  };
-
-  // Editor-body context menu replacing WebView's browser menu. Find the focused editable body: .ProseMirror
-  // in WYSIWYG mode or CodeMirror's .cm-content in source mode.
-  const editableEl = () =>
-    rootRef.current?.querySelector<HTMLElement>(".ProseMirror, .cm-content") ?? null;
+  // Code files keep the existing clipboard menu. Markdown editors keep their native editing menus.
+  const editableEl = () => rootRef.current?.querySelector<HTMLElement>(".cm-content") ?? null;
   const [editMenu, setEditMenu] = useState<{ x: number; y: number; hasSel: boolean } | null>(null);
 
   const onEditorContextMenu = (e: React.MouseEvent) => {
     // Handle only the document body; controls such as the search input retain their default behavior.
-    if (!(e.target as HTMLElement).closest(".ProseMirror, .cm-content")) return;
+    if (useMarkdownEditor || !(e.target as HTMLElement).closest(".cm-content")) return;
     e.preventDefault();
     // The body still owns focus and its DOM selection; neither right-click nor ContextMenu mousedown steals it.
     setEditMenu({ x: e.clientX, y: e.clientY, hasSel: !!window.getSelection()?.toString() });
@@ -545,8 +475,7 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     {
       label: t("common.cut"),
       disabled: !editMenu?.hasSel,
-      // execCommand targets the focused editable element, allowing ProseMirror/CodeMirror handlers to serialize
-      // cut/copy correctly, including rich structure from WYSIWYG mode.
+      // execCommand targets the focused CodeMirror editor and its clipboard handlers.
       onClick: () => {
         document.execCommand("cut");
       },
@@ -589,6 +518,15 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
       ref={rootRef}
       className="docview"
       style={hidden ? { display: "none" } : undefined}
+      onKeyDownCapture={(e) => {
+        if (!useMarkdownEditor || e.nativeEvent.isComposing || e.altKey || e.shiftKey) return;
+        if (!(e.metaKey || e.ctrlKey) || (e.key !== "/" && e.code !== "Slash")) return;
+        if (!(e.target as HTMLElement).closest(".doc-markdown-pane")) return;
+        // Handle this before CodeMirror consumes Mod-/ as a source-code comment command.
+        e.preventDefault();
+        e.stopPropagation();
+        switchMode(tab.mode === "source" ? "visual" : "source");
+      }}
       onKeyDown={(e) => {
         // Cmd+F opens the shared search bar and stops propagation so global terminal search does not open.
         if ((e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F" || e.code === "KeyF")) {
@@ -604,6 +542,8 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
           <button
             className={"docview-treetoggle" + (sideVisible ? " on" : "")}
             title={t("doc.sidebar")}
+            aria-label={t("doc.sidebar")}
+            aria-expanded={sideVisible}
             onClick={() => setSideVisible((v) => !v)}
           >
             {sideVisible ? <Icons.panelLeftFill size={14} /> : <Icons.panelLeft size={14} />}
@@ -615,21 +555,17 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
         </span>
         {tab.kind === "markdown" && (
           <div className="docview-seg">
-            {/* Truncated read-only files are locked to the source view: switching to WYSIWYG would run incomplete markdown through the serializer. */}
-            <button
-              className={tab.mode === "wysiwyg" && !readonlyTrunc ? "on" : ""}
-              disabled={readonlyTrunc}
-              onClick={() => switchMode("wysiwyg")}
-            >
-              {t("doc.wysiwyg")}
-            </button>
-            <button
-              className={tab.mode === "source" || readonlyTrunc ? "on" : ""}
-              disabled={readonlyTrunc}
-              onClick={() => switchMode("source")}
-            >
-              {t("doc.source")}
-            </button>
+            {(["visual", "source", "compare"] as const).map(mode => (
+              <button
+                key={mode}
+                className={(readonlyTrunc ? mode === "source" : tab.mode === mode) ? "on" : ""}
+                disabled={readonlyTrunc}
+                aria-pressed={readonlyTrunc ? mode === "source" : tab.mode === mode}
+                onClick={() => switchMode(mode)}
+              >
+                {t(mode === "visual" ? "doc.visual" : mode === "compare" ? "doc.compare" : "doc.source")}
+              </button>
+            ))}
           </div>
         )}
         <button
@@ -759,17 +695,20 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
         {!loading && !error && text != null && (
           <div
             className="docview-body"
-            onMouseDown={onBodyMouseDown}
             onContextMenu={onEditorContextMenu}
           >
-            {/* Truncated read-only files are forced into the read-only source view, never WYSIWYG, to avoid serializing incomplete markdown. */}
-            {tab.mode === "wysiwyg" && !readonlyTrunc ? (
-              <WysiwygEditor
-                key={`w:${editorEpoch}`}
-                ref={wysiwygRef}
+            {/* Truncated files retain the existing read-only CodeMirror fallback. */}
+            {useMarkdownEditor ? (
+              <MarkdownEditor
+                key={`md:${editorEpoch}`}
+                ref={markdownRef}
                 defaultValue={text}
                 docPath={tab.path}
+                mode={tab.mode}
                 onEdited={onEdited}
+                onReady={() => setEditorReadyEpoch(n => n + 1)}
+                onImageError={showImagePasteError}
+                onRequestSearch={() => setSearchOpen(true)}
               />
             ) : (
               <SourceEditor
@@ -798,7 +737,8 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
         {searchOpen && !loading && !error && text != null && (
           <DocSearchBar
             getControl={getSearchControl}
-            epoch={editorEpoch}
+            epoch={editorEpoch + editorReadyEpoch}
+            readOnly={readonlyTrunc}
             onClose={() => setSearchOpen(false)}
             onEdited={onEdited}
           />

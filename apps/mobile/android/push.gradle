@@ -1,0 +1,12 @@
+// App identifiers and client keys come from a local Gradle property or CI environment.
+// Provider master secrets belong only on velaterm.com and must never enter an APK.
+def pushValue = { String name -> providers.gradleProperty(name).orElse(providers.environmentVariable(name)).getOrElse("") }
+ext.mobilePushPlaceholders = [
+    GETUI_APPID: pushValue('VELA_GETUI_APP_ID'),
+    HUAWEI_APP_ID: pushValue('VELA_HUAWEI_APP_ID'),
+    XIAOMI_APP_ID: pushValue('VELA_XIAOMI_APP_ID'), XIAOMI_APP_KEY: pushValue('VELA_XIAOMI_APP_KEY'),
+    OPPO_APP_KEY: pushValue('VELA_OPPO_APP_KEY'), OPPO_APP_SECRET: pushValue('VELA_OPPO_APP_SECRET'),
+    VIVO_APP_ID: pushValue('VELA_VIVO_APP_ID'), VIVO_APP_KEY: pushValue('VELA_VIVO_APP_KEY'),
+    MEIZU_APP_ID: pushValue('VELA_MEIZU_APP_ID'), MEIZU_APP_KEY: pushValue('VELA_MEIZU_APP_KEY'),
+    HONOR_APP_ID: pushValue('VELA_HONOR_APP_ID')
+]

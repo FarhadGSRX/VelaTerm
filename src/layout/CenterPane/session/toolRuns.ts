@@ -13,10 +13,26 @@ import type { ChatRow } from "../../../ipc/chat";
 /** A tool call row, named separately because a fold is a list of exactly these. */
 export type ToolRow = Extract<ChatRow, { kind: "tool" }>;
 
+/**
+ * What the line that opens an agent turn says, gathered from the replies in that turn.
+ *
+ * The line is drawn once, above the turn's first entry, so reasoning and tool calls read as the agent's
+ * rather than as rows left over from the prompt. It is filled from whichever reply first reports each
+ * fact: the turn's replies are the only rows that carry a model or a timestamp.
+ */
+export interface TurnHead {
+  /** Model reported for the turn's first reply, when the agent reports one per reply. */
+  who?: string;
+  /** When that reply was written. */
+  at?: number;
+  /** Wall-clock time for the whole turn; only the last reply of a turn reports it, and only when done. */
+  durationMs?: number;
+}
+
 /** One drawable entry: a conversation row, or a folded run of tool calls standing in for several. */
 export type DisplayRow =
-  | { kind: "row"; id: string; row: ChatRow }
-  | { kind: "run"; id: string; calls: ToolRow[]; running: boolean };
+  | { kind: "row"; id: string; row: ChatRow; head?: TurnHead }
+  | { kind: "run"; id: string; calls: ToolRow[]; running: boolean; head?: TurnHead };
 
 /**
  * Fewest consecutive calls worth folding.
@@ -83,6 +99,50 @@ export function groupToolRuns(rows: readonly ChatRow[], minRun = MIN_RUN): Displ
   return out;
 }
 
+/** Whether an entry is work the agent did in a turn, rather than a remark about the conversation itself. */
+function isAgentWork(entryRow: DisplayRow): boolean {
+  if (entryRow.kind === "run") return true;
+  return entryRow.row.kind === "assistant" || entryRow.row.kind === "reasoning" || entryRow.row.kind === "tool";
+}
+
+/**
+ * Put the agent's author line on the first entry of each turn.
+ *
+ * A turn is everything between one prompt and the next. The agent's name, model and duration are carried
+ * by its replies, which come after its reasoning and its tool calls; without this pass the work that
+ * opens a turn has no author of its own and reads as though the prompt above it had produced it. Marking
+ * the first entry lets the view draw one author line above the whole turn instead of one per message.
+ */
+export function markAgentTurns(entries: readonly DisplayRow[]): DisplayRow[] {
+  const out = [...entries];
+  let start = -1;
+  let head: TurnHead | null = null;
+  const close = () => {
+    if (start < 0 || !head) return;
+    out[start] = { ...out[start], head };
+    start = -1;
+    head = null;
+  };
+  for (let index = 0; index < out.length; index += 1) {
+    const entryRow = out[index];
+    if (entryRow.kind === "row" && entryRow.row.kind === "user") {
+      close();
+      continue;
+    }
+    if (!isAgentWork(entryRow)) continue;
+    if (start < 0) {
+      start = index;
+      head = {};
+    }
+    if (entryRow.kind !== "row" || entryRow.row.kind !== "assistant") continue;
+    if (head!.who === undefined && entryRow.row.model) head!.who = entryRow.row.model;
+    if (head!.at === undefined && entryRow.row.at !== undefined) head!.at = entryRow.row.at;
+    if (entryRow.row.durationMs !== undefined) head!.durationMs = entryRow.row.durationMs;
+  }
+  close();
+  return out;
+}
+
 /** How many times each tool was called, in the order the names first appear: `Read ×4 · Grep ×2`. */
 export function runSummary(calls: readonly ToolRow[]): { name: string; count: number }[] {
   const counts = new Map<string, number>();
@@ -126,21 +186,23 @@ function isTurnStart(entryRow: DisplayRow | undefined): boolean {
 /** Rough height in pixels, used for the parts of the list that have not been drawn yet. */
 export function estimateRowHeight(row: DisplayRow | undefined): number {
   if (!row) return 120;
-  if (row.kind === "run") return 34;
+  // The turn's author line rides on the first entry, so that entry is taller by the line's own height.
+  const head = row.head ? 34 : 0;
+  if (row.kind === "run") return 34 + head;
   switch (row.row.kind) {
     case "tool":
-      return 34;
+      return 34 + head;
     case "reasoning":
-      return 28;
+      return 28 + head;
     case "error":
     case "notice":
     case "compaction":
-      return 36;
+      return 36 + head;
     case "user":
       return textHeight(row.row.text, 46);
     case "assistant":
     case "command":
-      return textHeight(row.row.text, 40);
+      return textHeight(row.row.text, 40) + head;
   }
 }
 

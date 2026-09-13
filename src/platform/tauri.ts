@@ -27,10 +27,12 @@ import { env } from "./env";
 import type {
   BadgeCapability,
   BrowserCapability,
+  BrowserPopupPayload,
   BrowserRect,
   BrowserStatePayload,
   ClipboardCapability,
   DialogCapability,
+  FontCapability,
   NotifyCapability,
   OpenerCapability,
   Platform,
@@ -44,6 +46,19 @@ import type {
 const transport: TransportCapability = {
   invoke: transportInvoke,
   listen: transportListen,
+};
+
+const fonts: FontCapability = {
+  async catalog() {
+    if (!env.hasNativeHost) return transportInvoke("bundled_font_catalog");
+    // Do not use transportInvoke: remote windows route it to the remote server.
+    const { invoke } = await import("@tauri-apps/api/core");
+    try {
+      return await invoke("plugin:local-fonts|catalog");
+    } catch {
+      return transportInvoke("bundled_font_catalog");
+    }
+  },
 };
 
 const dialog: DialogCapability = {
@@ -235,10 +250,13 @@ const browser: BrowserCapability = {
   close: (tabId) => transportInvoke("browser_close", { tabId }),
   onState: (tabId, cb) =>
     transportListen<BrowserStatePayload>(`browser://state/${tabId}`, (payload) => cb(payload)),
+  onPopup: (tabId, cb) =>
+    transportListen<BrowserPopupPayload>(`browser://popup/${tabId}`, (payload) => cb(payload)),
 };
 
 /** Tauri platform implementation, including browser remote access fallbacks. */
 export const tauriPlatform: Platform = {
+  fonts,
   env,
   transport,
   dialog,

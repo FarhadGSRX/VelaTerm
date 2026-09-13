@@ -1,0 +1,4 @@
+{
+  "posix": "for d in \"$HOME/Library/Application Support/io.vlinx.vlxterm.release\" \"${XDG_DATA_HOME:-$HOME/.local/share}/io.vlinx.vlxterm.release\"; do if [ -r \"$d/vlx-local-link.json\" ]; then cat \"$d/vlx-local-link.json\"; exit 0; fi; done; for f in \"$HOME/.velaterm/run.json\" \"$HOME/.velaterm/mobile-run.json\"; do if [ -r \"$f\" ]; then cat \"$f\"; exit 0; fi; done; exit 1",
+  "windows": "$paths=@(\"$env:APPDATA\\io.vlinx.vlxterm.release\\vlx-local-link.json\",\"$env:USERPROFILE\\.velaterm\\run.json\",\"$env:USERPROFILE\\.velaterm\\mobile-run.json\"); foreach($p in $paths){if(Test-Path -LiteralPath $p){Get-Content -Raw -LiteralPath $p; exit 0}}; exit 1"
+}

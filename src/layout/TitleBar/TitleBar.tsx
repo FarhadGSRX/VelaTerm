@@ -1,13 +1,16 @@
 //! Vela-style application header with branding, theme toggle, appearance settings, and panel controls.
 //! The window retains native decorations; this row sits below the system title bar.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Icons from "../../components/Icons";
-import { useT } from "../../i18n";
+import { getLocale, useT } from "../../i18n";
+import { SharingLink, sharingNavigate, useSharingLocation } from "../../sharing/navigation";
+import { sharingText } from "../../sharing/copy";
 import { getBackendVersion } from "../../ipc/commands";
+import { apiUrl, isShareSurface } from "../../ipc/shareBase";
 import { invoke, isTauri } from "../../ipc/transport";
 import { webServerStatus, type WebServerStatus } from "../../ipc/webServer";
-import { env } from "../../platform";
+import { env, platform } from "../../platform";
 import { useTermStore } from "../../store/termStore";
 import { resolveTheme } from "../../theme";
 import { ShareModal } from "../../components/ShareModal";
@@ -15,6 +18,8 @@ import { AppMenuBar } from "./AppMenuBar";
 import { ConnectRemotePanel } from "./ConnectRemotePanel";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
 import { SettingsModal } from "./SettingsModal";
+
+const FEEDBACK_URL = "https://velaterm.com/feedback";
 
 /**
  * Format MM-DD HH:mm:ss for the development badge's latest hot-update time.
@@ -100,7 +105,13 @@ export function TitleBar() {
   // Hidden error-log entry through Option/Alt-clicking the gear; a normal click opens settings.
   const setErrorLogOpen = useTermStore((s) => s.setErrorLogOpen);
   const [remoteOpen, setRemoteOpen] = useState(false);
-  const [connectOpen, setConnectOpen] = useState(false);
+  const connectOpen = new URLSearchParams(useSharingLocation()).has("connect");
+  const setConnectOpen = (open: boolean | ((value: boolean) => boolean)) => {
+    const visible = typeof open === "function" ? open(connectOpen) : open;
+    const url = new URL(location.href);
+    if (visible) url.searchParams.set("connect", env.isElectron ? "remote" : "ssh"); else url.searchParams.delete("connect");
+    sharingNavigate(url.href);
+  };
   // Show the hidden remote-database reuse checkbox only when the remote-connect button is opened with
   // Option/Alt. Normal opening always uses an independent database; each click decides afresh.
   const [connectSharedDb, setConnectSharedDb] = useState(false);
@@ -108,6 +119,9 @@ export function TitleBar() {
   // value here and synchronize subsequent changes through the panel callback.
   const [remoteRunning, setRemoteRunning] = useState(false);
   const [remotePort, setRemotePort] = useState<number | null>(null);
+  // Account link state lights the account icon. The relay is authoritative; query it once here and
+  // refresh when the account panel reports a link change in this window.
+  const [accountLinked, setAccountLinked] = useState(false);
   // Frontend/backend versions for the mismatch banner; null when equal or not yet checked.
   const [versionMismatch, setVersionMismatch] = useState<{
     frontend: string;
@@ -160,6 +174,27 @@ export function TitleBar() {
     setRemotePort(s?.port ?? null);
   };
 
+  useEffect(() => {
+    // Browser clients never show the account entry, and the relay status is not part of their session.
+    if (env.isBrowser) return;
+    let alive = true;
+    const refresh = () => {
+      invoke<{ linked: boolean }>("public_account_status")
+        .then((status) => {
+          if (alive) setAccountLinked(status.linked);
+        })
+        .catch(() => {
+          // Keep the last known state while the account service is unreachable; the icon is decoration.
+        });
+    };
+    refresh();
+    window.addEventListener("public-account-changed", refresh);
+    return () => {
+      alive = false;
+      window.removeEventListener("public-account-changed", refresh);
+    };
+  }, []);
+
   const remoteInfo = (window as any).__VLX_REMOTE__ as
     { address: string } | undefined;
 
@@ -170,7 +205,8 @@ export function TitleBar() {
           className="logo"
           // CSS content on `.brand .logo` follows data-theme so system-mode changes do not require a
           // TitleBar rerender. This light src is only a fallback when CSS content is unavailable.
-          src="/velaterm-light.svg"
+          src={apiUrl("/velaterm-light.svg")}
+          style={{"--brand-logo-light":`url("${apiUrl("/velaterm-light.svg")}")`,"--brand-logo-dark":`url("${apiUrl("/velaterm-dark.svg")}")`} as CSSProperties}
           alt="VelaTerm"
           draggable={false}
         />
@@ -421,20 +457,22 @@ export function TitleBar() {
         </button>
       )}
 
-      {/* Remote connect is Tauri-desktop-only, using a wry window and local TLS-termination tunnel.
-          Electron lacks the equivalent capability and is intentionally excluded. */}
-      {isTauri && (
-        <button
+      {/* Native clients open account Remote in a separate window. */}
+      {(isTauri || env.isElectron) && (
+        <a
           className="tb-btn"
           title={t("titlebar.connectRemote")}
+          href={(() => {const url=new URL(location.href);if(connectOpen)url.searchParams.delete("connect");else url.searchParams.set("connect",env.isElectron ? "remote" : "ssh");return url.href;})()}
           onClick={(e) => {
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+            e.preventDefault();
             // Option/Alt-click reveals the hidden remote desktop database reuse option.
             if (!connectOpen) setConnectSharedDb(e.altKey);
             setConnectOpen((o) => !o);
           }}
         >
           <Icons.connect size={15} />
-        </button>
+        </a>
       )}
 
       {/* DevTools appears only in desktop development builds. The backend open_devtools command is
@@ -451,29 +489,56 @@ export function TitleBar() {
         </button>
       )}
 
-      {/* Share appears on every platform and shares its dialog with the macOS native menu action. */}
+      {/* Feedback opens the feedback page in the system browser on every platform and surface. */}
       <button
         className="tb-btn"
-        title={t("titlebar.share")}
-        onClick={() => setShareOpen(!shareOpen)}
-      >
-        <Icons.share size={15} />
-      </button>
-
-      <button
-        className="tb-btn"
-        title={t("settings.title")}
-        onClick={(e) => {
-          // Hidden debug action: Option/Alt-click opens the error log; normal click opens settings.
-          if (e.altKey) {
-            setErrorLogOpen(true);
-            return;
-          }
-          setSettingsOpen(!settingsOpen);
+        title={t("titlebar.feedback")}
+        onClick={() => {
+          void platform.opener.openExternal(FEEDBACK_URL).catch(() => {});
         }}
       >
-        <Icons.gear size={15} />
+        <Icons.feedback size={15} />
       </button>
+
+      {/* Share appears on every platform and shares its dialog with the macOS native menu action. Public
+          share windows serve a single grant, so sharing and settings stay hidden there. */}
+      {!isShareSurface && (
+        <button
+          className="tb-btn"
+          title={t("titlebar.share")}
+          onClick={() => setShareOpen(!shareOpen)}
+        >
+          <Icons.share size={15} />
+        </button>
+      )}
+
+      {!isShareSurface && (
+        <button
+          className="tb-btn"
+          title={t("settings.title")}
+          onClick={(e) => {
+            // Hidden debug action: Option/Alt-click opens the error log; normal click opens settings.
+            if (e.altKey) {
+              setErrorLogOpen(true);
+              return;
+            }
+            setSettingsOpen(!settingsOpen);
+          }}
+        >
+          <Icons.gear size={15} />
+        </button>
+      )}
+
+      {!env.isBrowser && (
+        <SharingLink
+          className={`tb-btn${accountLinked ? " account-on" : ""}`}
+          values={{ publicAccount: "1" }}
+          title={`${sharingText("Account", getLocale())} · ${t("common.experimental")}`}
+          aria-label={`${sharingText("Account", getLocale())} · ${t("common.experimental")}`}
+        >
+          <Icons.account size={15} />
+        </SharingLink>
+      )}
 
       {/* VS Code-style panel toggles sit at the far right and fill their corresponding side when open. */}
       <div className="tb-pair">

@@ -10,14 +10,16 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { authLostCbs, pairingMode, session, wsClientMock } = vi.hoisted(() => {
+const { authLostCbs, connCbs, pairingMode, session, wsClientMock } = vi.hoisted(() => {
   const authLostCbs = new Set<(reason?: "rate_limited" | "unauthorized") => void>();
+  const connCbs = new Set<(state: string) => void>();
   const pairingMode = { value: true };
   // Stateful token so the mode-check effect's getSessionToken sees the token the autologin stored,
   // exactly like the real wsClient.
   const session = { token: null as string | null };
   return {
     authLostCbs,
+    connCbs,
     pairingMode,
     session,
     wsClientMock: {
@@ -25,6 +27,10 @@ const { authLostCbs, pairingMode, session, wsClientMock } = vi.hoisted(() => {
       onAuthLost: (cb: (reason?: "rate_limited" | "unauthorized") => void) => {
         authLostCbs.add(cb);
         return () => authLostCbs.delete(cb);
+      },
+      onConnState: (cb: (state: string) => void) => {
+        connCbs.add(cb);
+        return () => { connCbs.delete(cb); };
       },
       getSessionToken: () => session.token,
       authHeaders: () => ({}),
@@ -50,6 +56,8 @@ import { LoginGate } from "./LoginGate";
 afterEach(() => {
   cleanup();
   authLostCbs.clear();
+  connCbs.clear();
+  delete (window as { __VELATERM_LOGIN__?: unknown }).__VELATERM_LOGIN__;
   pairingMode.value = true;
   session.token = null;
   delete (window as { __VLX_AUTOLOGIN__?: unknown }).__VLX_AUTOLOGIN__;
@@ -193,5 +201,92 @@ describe("LoginGate relogin latch", () => {
     fireAuthLost();
     await waitFor(() => screen.getByPlaceholderText("login.passwordPlaceholder"));
     expect(fetchMock.mock.calls.filter(([u]) => u === "/api/login").length).toBe(2);
+  });
+});
+
+function installNative(savePassword = vi.fn(async (_value: string) => {})) {
+  const bridge = {savePassword, back: vi.fn()};
+  Object.assign(window, {__VELATERM_LOGIN__: bridge});
+  return bridge;
+}
+function submitPairing() {
+  fireEvent.change(screen.getByPlaceholderText("login.passwordPlaceholder"), {target: {value: "fixture-password"}});
+  fireEvent.click(screen.getByText("login.connect"));
+}
+function online() { act(() => { for (const cb of connCbs) cb("online"); }); }
+
+describe("mobile login password storage and navigation", () => {
+  it("saves once after pairing authentication succeeds, never just on submit", async () => {
+    const bridge = installNative();
+    render(<LoginGate>APP</LoginGate>);
+    submitPairing();
+    expect(bridge.savePassword).not.toHaveBeenCalled();
+    online();
+    await waitFor(() => expect(bridge.savePassword).toHaveBeenCalledWith("fixture-password"));
+    online();
+    expect(bridge.savePassword).toHaveBeenCalledTimes(1);
+  });
+  it("does not overwrite a saved password after a rejected handshake", () => {
+    const bridge = installNative();
+    render(<LoginGate>APP</LoginGate>);
+    submitPairing(); fireAuthLost("unauthorized"); online();
+    expect(bridge.savePassword).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("mobile.back"));
+    expect(bridge.back).toHaveBeenCalledOnce();
+  });
+  it("returns directly from the password form without saving or logging in", () => {
+    const bridge = installNative();
+    render(<LoginGate>APP</LoginGate>);
+    fireEvent.click(screen.getByText("mobile.back"));
+    expect(bridge.back).toHaveBeenCalledOnce();
+    expect(bridge.savePassword).not.toHaveBeenCalled();
+    expect(wsClientMock.setPairingPassword).not.toHaveBeenCalled();
+  });
+  it("clears the saved password only after successful login when remember is unchecked", async () => {
+    const bridge = installNative();
+    render(<LoginGate>APP</LoginGate>);
+    fireEvent.click(screen.getByLabelText("connect.rememberPassword"));
+    submitPairing();
+    expect(bridge.savePassword).not.toHaveBeenCalled();
+    online();
+    await waitFor(() => expect(bridge.savePassword).toHaveBeenCalledWith(""));
+  });
+  it("reports storage failure and retries saving without repeating authentication", async () => {
+    const bridge = installNative(vi.fn().mockRejectedValueOnce(new Error("fixture failure")).mockResolvedValue(undefined));
+    render(<LoginGate>APP</LoginGate>);
+    submitPairing(); online();
+    await screen.findByText("login.passwordSaveFailed");
+    expect(screen.getByText("APP")).toBeTruthy();
+    fireEvent.click(screen.getByText("common.retry"));
+    await waitFor(() => expect(screen.queryByText("login.passwordSaveFailed")).toBeNull());
+    expect(bridge.savePassword).toHaveBeenCalledTimes(2);
+    expect(wsClientMock.setPairingPassword).toHaveBeenCalledTimes(1);
+  });
+  it("persists after a valid token response, but not a 200 without a token", async () => {
+    const bridge = installNative();
+    pairingMode.value = false;
+    stubFetch([resp(200), resp(200, {token: "fixture-token"})]);
+    render(<LoginGate>APP</LoginGate>);
+    await screen.findByPlaceholderText("login.passwordPlaceholder");
+    submitPairing();
+    await screen.findByText("login.failed");
+    expect(bridge.savePassword).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("login.connect"));
+    await screen.findByText("APP");
+    expect(bridge.savePassword).toHaveBeenCalledWith("fixture-password");
+  });
+  it("uses an injected password without rewriting it during automatic login", async () => {
+    const bridge = installNative();
+    pairingMode.value = false;
+    Object.assign(window, {__VLX_AUTOLOGIN__: {password: "saved-fixture-password"}});
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url === "/api/login" ? resp(200, {token: "fixture-token"}) : resp(200, {requirePairing: false})));
+    render(<LoginGate>APP</LoginGate>);
+    await screen.findByText("APP");
+    expect(bridge.savePassword).not.toHaveBeenCalled();
+  });
+  it("does not offer native password storage in an ordinary browser", () => {
+    render(<LoginGate>APP</LoginGate>);
+    expect(screen.queryByLabelText("connect.rememberPassword")).toBeNull();
+    expect(screen.getByPlaceholderText("login.passwordPlaceholder").getAttribute("autocomplete")).toBe("current-password");
   });
 });

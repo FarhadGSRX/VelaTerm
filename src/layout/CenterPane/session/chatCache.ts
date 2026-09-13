@@ -31,13 +31,20 @@ export function mergeRows(base: ChatRow[], incoming: ChatRow[], retainWindow = f
 export function reconcileChat(snapshot: ChatSnapshot, current: ChatRow[], events: ChatEvent[]): ChatSnapshot {
   let result = { ...snapshot, rows: snapshot.pageKind === "delta" ? mergeRows(current, snapshot.rows) : snapshot.rows };
   for (const event of events) {
+    if (event.type === "extras") { result = { ...result, auth: event.extras.auth }; continue; }
     if (event.type !== "rows" && event.type !== "replaceRows" && event.type !== "queued" && event.type !== "reset") continue;
     const epoch = event.epoch ?? result.startedAt;
     if (epoch !== undefined && result.startedAt !== undefined && epoch < result.startedAt) continue;
     if (epoch !== undefined && epoch !== result.startedAt) {
-      result = { ...result, startedAt: epoch, rows: [], queue: [], rowsRevision: 0, queueRevision: 0, hasMore: false };
+      result = { ...result, auth: undefined, startedAt: epoch, rows: [], queue: [], rowsRevision: 0, queueRevision: 0, hasMore: false };
     }
-    if (event.type === "reset") continue;
+    if (event.type === "reset") {
+      result = { ...result, auth: undefined };
+      if (event.rows && (event.revision === undefined || event.revision > (result.rowsRevision ?? -1))) {
+        result = { ...result, rows: event.rows, rowsRevision: event.revision, hasMore: event.hasMore ?? false };
+      }
+      continue;
+    }
     if (event.type === "queued") {
       if (event.revision === undefined || event.revision > (result.queueRevision ?? -1)) {
         result = { ...result, queue: event.items, queueRevision: event.revision };

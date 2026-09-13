@@ -10,7 +10,7 @@
 //! - **Existence checks** verify conversation files before resume. Missing Codex history fails explicitly;
 //!   other agents retain their existing fallback policy.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -90,8 +90,18 @@ fn walk_jsonl(root: &Path) -> Vec<PathBuf> {
 
 // Codex capture.
 
-/// Parses a rollout's first `session_meta` line into `(session_id, cwd?)`; returns None for another type or missing ID.
-fn parse_rollout_meta(line: &str) -> Option<(String, Option<String>)> {
+/// Identity of a rollout's first `session_meta` line.
+struct RolloutMeta {
+    id: String,
+    cwd: Option<String>,
+    /// Whether the rollout belongs to a foreground user conversation. Internal helper threads
+    /// (title generation, subagent review) share both the sessions directory and the cwd; binding
+    /// one of them to a VelaTerm session would make resume, export, and fork target the wrong history.
+    user_thread: bool,
+}
+
+/// Parses a rollout's first `session_meta` line; returns None for another type or missing ID.
+fn parse_rollout_meta(line: &str) -> Option<RolloutMeta> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     if v.get("type").and_then(|t| t.as_str()) != Some("session_meta") {
         return None;
@@ -102,11 +112,35 @@ fn parse_rollout_meta(line: &str) -> Option<(String, Option<String>)> {
         .get("cwd")
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
-    Some((id, cwd))
+    Some(RolloutMeta {
+        id,
+        cwd,
+        user_thread: is_user_thread_payload(payload),
+    })
+}
+
+/// Whether a Codex `session_meta` payload describes a foreground conversation.
+///
+/// Newer rollouts carry `thread_source` (`user`, `subagent`, or a structured feature tag); older ones
+/// only carry `source`, either a provider string (`cli`, `vscode`) or an object such as
+/// `{"subagent": {...}}`. Only the user kind may own a VelaTerm session. Missing metadata keeps the
+/// permissive legacy behavior so rollouts written before either field appeared still resume.
+fn is_user_thread_payload(payload: &serde_json::Value) -> bool {
+    match payload.get("thread_source") {
+        Some(serde_json::Value::String(source)) => return source == "user",
+        // Any structured value is a feature or helper source, never the foreground conversation.
+        Some(_) => return false,
+        None => {}
+    }
+    match payload.get("source") {
+        Some(serde_json::Value::String(source)) => source != "subagent",
+        Some(serde_json::Value::Object(map)) => !map.contains_key("subagent"),
+        _ => true,
+    }
 }
 
 /// Reads and parses the first line of a rollout file.
-fn read_rollout_meta(path: &Path) -> Option<(String, Option<String>)> {
+fn read_rollout_meta(path: &Path) -> Option<RolloutMeta> {
     let file = std::fs::File::open(path).ok()?;
     let mut reader = std::io::BufReader::new(file);
     let mut line = String::new();
@@ -218,17 +252,22 @@ fn capture_codex_candidates(
 
     let mut matches = Vec::new();
     for (_, path) in cands {
-        let Some((id, meta_cwd)) = read_rollout_meta(&path) else {
+        let Some(meta) = read_rollout_meta(&path) else {
             continue;
         };
+        // Internal helper threads (title generation, subagent review) share the cwd and are written
+        // more recently than the foreground conversation; without this filter a scan could bind one.
+        if !meta.user_thread {
+            continue;
+        }
         match cwd {
             Some(want) => {
-                if meta_cwd.as_deref().is_some_and(|c| same_dir(want, c)) {
-                    matches.push(id);
+                if meta.cwd.as_deref().is_some_and(|c| same_dir(want, c)) {
+                    matches.push(meta.id);
                 }
                 // Skip a candidate whose cwd does not match the requested directory.
             }
-            None => matches.push(id),
+            None => matches.push(meta.id),
         }
     }
     matches
@@ -488,6 +527,15 @@ pub fn spawn_pi_capture(
     });
 }
 
+/// Outcome of a Codex notify `thread-id` callback.
+pub struct CodexCallback {
+    /// The ID resolves to a foreground conversation rollout and may own this session. An internal
+    /// helper thread's rollout fails this check even though the file itself exists.
+    pub verified: bool,
+    /// The stored value changed; callers broadcast a tree reload only then.
+    pub changed: bool,
+}
+
 /// Persist a Codex callback only after its ID is confirmed by the rollout metadata.
 /// Notify payload IDs are not necessarily durable thread IDs. An unverified callback must
 /// neither overwrite a captured anchor nor finish a pending fork. A later hook can retry
@@ -496,9 +544,12 @@ pub fn store_codex_callback_id(
     conn: &rusqlite::Connection,
     sid: &str,
     id: &str,
-) -> Result<bool, String> {
+) -> Result<CodexCallback, String> {
     let Some(home) = codex_home() else {
-        return Ok(false);
+        return Ok(CodexCallback {
+            verified: false,
+            changed: false,
+        });
     };
     store_codex_callback_id_in(conn, sid, id, &home.join("sessions"))
 }
@@ -508,19 +559,33 @@ fn store_codex_callback_id_in(
     sid: &str,
     id: &str,
     sessions: &Path,
-) -> Result<bool, String> {
-    let Some(path) = find_codex_rollout_in(sessions, id) else {
-        return Ok(false);
+) -> Result<CodexCallback, String> {
+    let unverified = || CodexCallback {
+        verified: false,
+        changed: false,
     };
-    if !read_rollout_meta(&path).is_some_and(|(actual, _)| actual == id) {
-        return Ok(false);
+    let Some(path) = find_codex_rollout_in(sessions, id) else {
+        return Ok(unverified());
+    };
+    let Some(meta) = read_rollout_meta(&path) else {
+        return Ok(unverified());
+    };
+    if meta.id != id || !meta.user_thread {
+        return Ok(unverified());
     }
     if repo::get_fork_pending(conn, sid)?
         && repo::get_agent_session_id(conn, sid)?.as_deref() == Some(id)
     {
-        return Ok(false);
+        return Ok(CodexCallback {
+            verified: true,
+            changed: false,
+        });
     }
-    repo::set_agent_session_id(conn, sid, id, SessionKind::Codex)
+    let changed = repo::set_agent_session_id(conn, sid, id, SessionKind::Codex)?;
+    Ok(CodexCallback {
+        verified: true,
+        changed,
+    })
 }
 
 /// Both desktop and remote PTYs must preserve a failed Codex resume instead of
@@ -781,6 +846,70 @@ pub(crate) fn read_claude_transcript(id: &str) -> Result<String, String> {
     Ok(claude_active_branch(&content))
 }
 
+/// The state directory Pi or OMP owns: sessions live under `sessions/`, and the model catalogue the CLI
+/// caches beside it is what supplies a model's context window. Returns None for any other kind.
+pub(crate) fn pi_agent_home(kind: SessionKind) -> Option<PathBuf> {
+    match kind {
+        SessionKind::Pi => pi_home(),
+        SessionKind::Omp => omp_home(),
+        _ => None,
+    }
+}
+
+/// Locates the Pi or OMP session file whose name carries the native session id.
+///
+/// Both store sessions as `<home>/sessions/<cwd-dir>/<timestamp>_<id>.jsonl`; the cwd directory differs in
+/// shape between them but the id in the file name does not, so the same walk works for both.
+pub(crate) fn find_pi_session(kind: SessionKind, id: &str) -> Option<PathBuf> {
+    let home = pi_agent_home(kind)?;
+    find_codex_rollout_in(&home.join("sessions"), id)
+}
+
+/// The entries on a Pi or OMP recording's active branch, oldest first.
+///
+/// Both record an append-only tree rather than a log: each entry carries `id` and `parentId`, and a fork or
+/// `/tree` jump appends new entries under an earlier parent, so a flat read would count abandoned turns as
+/// if they still existed. The active branch is the chain from the last entry carrying an id back to the root.
+pub(crate) fn pi_active_branch(content: &str) -> Vec<serde_json::Value> {
+    let entries: Vec<serde_json::Value> = content
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let by_id: HashMap<&str, &serde_json::Value> = entries
+        .iter()
+        .filter_map(|entry| Some((entry.get("id")?.as_str()?, entry)))
+        .collect();
+    let mut last_id: Option<&str> = None;
+    for entry in &entries {
+        if let Some(id) = entry.get("id").and_then(serde_json::Value::as_str) {
+            last_id = Some(id);
+        }
+    }
+    let mut branch: Vec<serde_json::Value> = Vec::new();
+    let mut cursor = last_id;
+    let mut guard = 0usize;
+    while let Some(id) = cursor {
+        guard += 1;
+        if guard > 100_000 {
+            break;
+        }
+        let Some(entry) = by_id.get(id) else {
+            break;
+        };
+        branch.push((*entry).clone());
+        cursor = entry.get("parentId").and_then(serde_json::Value::as_str);
+    }
+    branch.reverse();
+    branch
+}
+
+/// Read a Pi or OMP session recording. Branch selection happens in the parser, which sees the tree.
+pub(crate) fn read_pi_transcript(kind: SessionKind, id: &str) -> Result<String, String> {
+    let path = find_pi_session(kind, id)
+        .ok_or("The agent's session recording could not be found")?;
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read transcript: {e}"))
+}
+
 /// Keep only the lines on the active branch of a Claude transcript tree.
 ///
 /// Chain nodes are the lines carrying both `uuid` and `parentUuid` (user, assistant, attachment, system).
@@ -1000,18 +1129,20 @@ mod tests {
             );
         };
         // A callback arriving before the file is flushed cannot establish an invalid anchor.
-        assert!(!store_codex_callback_id_in(&conn, &session.id, invalid, &root).unwrap());
+        let store = |sid: &str, id: &str| store_codex_callback_id_in(&conn, sid, id, &root).unwrap();
+        assert!(!store(&session.id, invalid).changed);
         assert_eq!(
             repo::get_agent_session_id(&conn, &session.id).unwrap(),
             None
         );
         write_rollout(original, original);
-        assert!(store_codex_callback_id_in(&conn, &session.id, original, &root).unwrap());
-        assert!(!store_codex_callback_id_in(&conn, &session.id, invalid, &root).unwrap());
+        assert!(store(&session.id, original).changed);
+        assert!(store(&session.id, original).verified);
+        assert!(!store(&session.id, invalid).changed);
         // A filename match alone is insufficient; the persisted metadata must agree.
         write_rollout(invalid, original);
-        assert!(!store_codex_callback_id_in(&conn, &session.id, invalid, &root).unwrap());
-        assert!(!store_codex_callback_id_in(&conn, &session.id, &original[..8], &root).unwrap());
+        assert!(!store(&session.id, invalid).verified);
+        assert!(!store(&session.id, &original[..8]).verified);
         assert_eq!(
             repo::get_agent_session_id(&conn, &session.id)
                 .unwrap()
@@ -1020,12 +1151,12 @@ mod tests {
         );
 
         let fork = repo::fork_session(&conn, &session.id).unwrap();
-        assert!(!store_codex_callback_id_in(&conn, &fork.id, original, &root).unwrap());
-        assert!(!store_codex_callback_id_in(&conn, &fork.id, invalid, &root).unwrap());
+        assert!(!store(&fork.id, original).changed);
+        assert!(!store(&fork.id, invalid).changed);
         assert!(repo::get_fork_pending(&conn, &fork.id).unwrap());
         let fork_id = "01a07c5f-e50d-7e21-88b0-4029824043eb";
         write_rollout(fork_id, fork_id);
-        assert!(store_codex_callback_id_in(&conn, &fork.id, fork_id, &root).unwrap());
+        assert!(store(&fork.id, fork_id).changed);
         assert!(!repo::get_fork_pending(&conn, &fork.id).unwrap());
         assert_eq!(
             repo::get_agent_session_id(&conn, &session.id)
@@ -1036,7 +1167,30 @@ mod tests {
         // An explicit new conversation may replace an anchor when it has real persisted history.
         let new_id = "01a07ad4-20d7-7e31-ba9a-f6abc6e3133a";
         write_rollout(new_id, new_id);
-        assert!(store_codex_callback_id_in(&conn, &session.id, new_id, &root).unwrap());
+        assert!(store(&session.id, new_id).changed);
+        // An internal helper thread (for example a guardian review) has a durable rollout of its own
+        // and must never take ownership back from the real conversation.
+        let helper = "01a07c9a-1111-7e21-88b0-4029824043eb";
+        write_file(
+            &root.join(format!("rollout-test-{helper}.jsonl")),
+            &serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": helper,
+                    "cwd": root.to_string_lossy(),
+                    "thread_source": "subagent",
+                    "source": {"subagent": {"thread_spawn": {}}},
+                },
+            })
+            .to_string(),
+        );
+        assert!(!store(&session.id, helper).verified);
+        assert_eq!(
+            repo::get_agent_session_id(&conn, &session.id)
+                .unwrap()
+                .as_deref(),
+            Some(new_id)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1114,10 +1268,31 @@ mod tests {
     #[test]
     fn parse_rollout_meta_extracts_id_and_cwd() {
         let line = r#"{"timestamp":"t","type":"session_meta","payload":{"id":"uuid-1","cwd":"/private/tmp","source":"exec"}}"#;
-        assert_eq!(
-            parse_rollout_meta(line),
-            Some(("uuid-1".to_string(), Some("/private/tmp".to_string())))
-        );
+        let meta = parse_rollout_meta(line).unwrap();
+        assert_eq!(meta.id, "uuid-1");
+        assert_eq!(meta.cwd.as_deref(), Some("/private/tmp"));
+        assert!(meta.user_thread);
+        // Older rollouts predate both fields and keep the permissive legacy behavior.
+        let legacy =
+            parse_rollout_meta(r#"{"type":"session_meta","payload":{"id":"uuid-2"}}"#).unwrap();
+        assert!(legacy.user_thread);
+        // Newer rollouts carry the authoritative thread kind.
+        let subagent = parse_rollout_meta(
+            r#"{"type":"session_meta","payload":{"id":"uuid-3","thread_source":"subagent"}}"#,
+        )
+        .unwrap();
+        assert!(!subagent.user_thread);
+        let feature = parse_rollout_meta(
+            r#"{"type":"session_meta","payload":{"id":"uuid-4","thread_source":{"feature":"system"}}}"#,
+        )
+        .unwrap();
+        assert!(!feature.user_thread);
+        // Without thread_source, a structured source still identifies a helper thread.
+        let guardian = parse_rollout_meta(
+            r#"{"type":"session_meta","payload":{"id":"uuid-5","source":{"subagent":{"thread_spawn":{}}}}}"#,
+        )
+        .unwrap();
+        assert!(!guardian.user_thread);
         // A non-session_meta line, such as a normal message, returns None.
         assert!(parse_rollout_meta(r#"{"type":"message","payload":{}}"#).is_none());
         // Missing ID returns None.
@@ -1277,6 +1452,20 @@ mod tests {
         write_file(
             &home.join("sessions/2026/06/03/rollout-2-id-b.jsonl"),
             &meta("id-b", &dir_b),
+        );
+        // An internal subagent rollout in the same cwd is never a capture candidate, even when newer.
+        write_file(
+            &home.join("sessions/2026/06/03/rollout-3-helper.jsonl"),
+            &serde_json::json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": "helper",
+                    "cwd": dir_a.to_string_lossy(),
+                    "thread_source": "subagent",
+                    "source": {"subagent": {}},
+                },
+            })
+            .to_string(),
         );
 
         // Use an earlier since value so both files pass the mtime threshold.

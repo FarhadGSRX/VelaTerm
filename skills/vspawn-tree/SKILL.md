@@ -5,7 +5,7 @@ description: >-
   Only use when the user explicitly invokes /vspawn-tree or $vspawn-tree; never auto-trigger. This is a real session run by its
   own process in the vlx-term left-panel tree — not an in-process sub-agent, and not a background Task. Available only
   inside vlx-term-hosted sessions.
-argument-hint: "[--cwd <path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] <task>"
+argument-hint: "[--plan-execute] [--split-tasks] [--worktree-mode <shared|each>] [--plan-agent <agent>] [--plan-model <model>] [--plan-effort <level>] [--exec-agent <agent>] [--exec-model <model>] [--exec-effort <level>] [--cwd <path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] <task>"
 disable-model-invocation: true
 allowed-tools: Bash(vspawn-tree:*)
 ---
@@ -25,6 +25,31 @@ workspace and want the child task to run on an isolated branch.
 User input:
 
 $ARGUMENTS
+
+## Planning and execution mode
+
+When the user requests planning and execution, add `--plan-execute`. Keep this conversation as the
+initiator; a new planner performs planning and review, then dispatches to persistent execution sessions.
+Add `--split-tasks` when the user requests task decomposition. Do not plan, split or implement the task
+in this conversation, and do not use in-process subagents.
+
+For a skill invocation with both flags, **automatically add `--yes`** unless the user explicitly requests
+the initial configuration dialog. The planner starts without a launch dialog, but its proposed tasks
+still require the user's final review before any executor starts. Never confirm tasks for the user.
+Without splitting, retain the ordinary confirmation behavior.
+
+Pass only explicit role selections through `--plan-agent`, `--plan-model`, `--plan-effort`, `--exec-agent`,
+`--exec-model` and `--exec-effort`. The backend resolves omitted values from the initiating session and
+supported defaults. Only backend chat-capable agents can run the workflow. The final review can edit
+each executor's settings, but cannot change the already-started planner's settings or directory mode.
+
+By default, the planner and all executors share the one new worktree requested by this command. For
+separate worktrees, pass `--worktree-mode each`: the planner gets its own worktree and each executor gets
+another. `--worktree-mode shared` explicitly selects the shared mode. These options require
+`--plan-execute` and override the wrapper's legacy `--worktree` flag. For all roles in the current
+directory, use the `vspawn` skill with `--worktree-mode none` instead. Keep correction rounds in the same
+sessions and worktrees. Include existing modifications and the required delivery location in the task;
+new worktrees do not include uncommitted changes. The backend supplies the workflow protocol to both roles.
 
 ## Step 1: Expand the user input into a "self-contained" rich prompt (critical)
 
@@ -46,11 +71,12 @@ Don't write "see above / as mentioned / continuing from earlier" — the new ses
 ## Step 2: Detect type options
 
 Detect "specifying claude / codex" from the user input (or a leading `--claude` / `--codex`) → add the matching
-flag, and **don't** write it into the prompt. The default follows the current session type. (This command always
-opens a worktree, so there's nothing to detect there.)
+flag, and **don't** write it into the prompt. The default follows the current session type. For planning
+and execution, also detect the shared or separate worktree choice described above.
 
 Also detect "no dialog / don't ask me / just start it" (or a leading `--yes` / `-y`) → add `--yes`, which starts
-the child session immediately with the default settings instead of showing the confirmation card.
+the child session immediately with the default settings instead of showing the initial confirmation card.
+This never skips split-task review; split-task skill invocations add it automatically as described above.
 
 Detect a named model ("run it on opus / sonnet / gpt-5.5", or a leading `--model`) → add `--model <name>`, passing
 the name through as the user wrote it; vlx-term turns it into the running agent's own model flag. Detect a named
@@ -70,8 +96,15 @@ Pass the prompt you expanded in Step 1 **as a single argument** (escaping any qu
 vspawn-tree [--cwd <absolute-path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] "<expanded self-contained prompt>"
 ```
 
-After it succeeds, give the user a one-line summary: "Spawned a child session in vlx-term (dedicated worktree):
-<brief task summary>".
+For a split-task workflow, use this form, adding explicit role settings when supplied:
+
+```bash
+vspawn-tree --plan-execute --split-tasks --yes [--worktree-mode <shared|each>] [--cwd <absolute-path>] "<expanded self-contained prompt>"
+```
+
+After it succeeds, give a one-line summary that the launch request was submitted, including the task,
+workflow mode and worktree choice. Submission does not prove that the user confirmed the tasks or the
+workflow passed. Leave this conversation free; do not poll after submitting.
 
 ## Notes
 

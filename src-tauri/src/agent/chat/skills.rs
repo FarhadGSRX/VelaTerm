@@ -111,6 +111,7 @@ pub fn with_inputs(mut request: Value, text: &str, commands: &[Value]) -> Value 
 /// A catalogue probe opens no conversation and sends no model turn. This also serves an empty composer.
 pub fn lookup(kind: SessionKind, bin: &str, cwd: Option<&str>, args: &[String]) -> Result<Vec<Value>, String> {
     let mut command = Command::new(bin);
+    crate::agent::executable::prepare_command(&mut command, bin);
     match kind {
         SessionKind::Codex => { command.arg("app-server").args(crate::agent::codex_models::app_server_args(args)); }
         SessionKind::Claude => {

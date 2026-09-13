@@ -2,7 +2,8 @@
 //! agent creation, and session restoration. Extracted from sessionMenu.tsx; useSessionMenu renders them
 //! on demand, while shared helpers such as kindLabel, worktreeLabel, and InfoRow live in sessionMenuShared.
 
-import { useEffect, useState } from "react";
+import { AgentPermissionSelect } from "../components/AgentPermissionSelect";
+import { useEffect, useRef, useState } from "react";
 import { normalizeArgDashes } from "../args";
 import { Backdrop } from "../components/Backdrop";
 import Icons from "../components/Icons";
@@ -19,6 +20,7 @@ import {
 import { invoke } from "../ipc/transport";
 import { env, platform } from "../platform";
 import { useTermStore } from "../store/termStore";
+import { defaultEngineFor } from "../store/settings";
 import {
   effectiveStatus,
   projectRoot,
@@ -409,7 +411,7 @@ export function SessionInfo({
         {session.agentArgs && (
           <InfoRow label={t("info.agentArgs")} value={session.agentArgs} mono copy={session.agentArgs} />
         )}
-        {session.permissionMode === "skip" && (
+        {["skip", "bypassPermissions", "full-access"].includes(session.permissionMode ?? "") && (
           <InfoRow label={t("info.permission")} value={t("info.permissionSkip")} />
         )}
         {/* Advanced view, opened by holding Option: the full launch command the backend actually wrote to
@@ -1147,12 +1149,15 @@ export function NewAgentSession({
   const [permissionMode, setPermissionMode] = useState(
     () => agentDefaults["claude"]?.permissionMode ?? "",
   );
-  // Which of the two views this session opens in, which is the same thing as which engine drives it. The
-  // dialog starts on the app-wide setting; kinds the chat engine cannot drive are forced back to the
-  // terminal below.
-  const [engine, setEngine] = useState<SessionEngine>(
-    () => useTermStore.getState().defaultSessionEngine,
+  // Which of the two views this session opens in, which is the same thing as which engine drives it.
+  // The dialog starts on the selected agent's configured default; kinds the chat engine cannot drive are
+  // forced back to the terminal below.
+  const [engine, setEngine] = useState<SessionEngine>(() =>
+    defaultEngineFor(kind, useTermStore.getState().agentDefaults),
   );
+  // Whether the user chose a view in this dialog. Changing the type then lands on the new type's default,
+  // while a deliberate choice survives the switch.
+  const engineChosen = useRef(false);
   // Executable for this session alone. Empty falls back to the kind's global default and then to PATH; a
   // value here is what lets two sessions of one kind run different drop-in binaries at the same time.
   const [execPath, setExecPath] = useState("");
@@ -1225,8 +1230,12 @@ export function NewAgentSession({
     );
     setPermissionMode(agentDefaults[k]?.permissionMode ?? "");
     // Only some agents can be driven as a conversation. Switching to one that cannot must not leave a
-    // choice behind that the backend would refuse the moment the session opened.
+    // choice behind that the backend would refuse the moment the session opened. Otherwise the view
+    // follows the new type's configured default.
     if (!supportsChatEngine(k)) setEngine("tui");
+    else if (!engineChosen.current) {
+      setEngine(defaultEngineFor(k, useTermStore.getState().agentDefaults));
+    }
     setKind(k);
   };
 
@@ -1238,6 +1247,9 @@ export function NewAgentSession({
     setAgentArgs(p.agentArgs ?? "");
     setPermissionMode(p.permissionMode ?? "");
     if (!supportsChatEngine(p.baseKind)) setEngine("tui");
+    else if (!engineChosen.current) {
+      setEngine(defaultEngineFor(p.baseKind, useTermStore.getState().agentDefaults));
+    }
   };
 
   /** Read a chosen image, downscale it to a square icon and keep it as a data URL. */
@@ -1367,10 +1379,13 @@ export function NewAgentSession({
             </div>
             <Select
               value={engine}
-              onChange={(v) => setEngine(v as SessionEngine)}
+              onChange={(v) => {
+                engineChosen.current = true;
+                setEngine(v as SessionEngine);
+              }}
               options={[
                 { value: "tui", label: t("tree.engineTui") },
-                { value: "chat", label: `${t("tree.engineChat")} · ${t("common.experimental")}` },
+                { value: "chat", label: t("tree.engineChat") },
               ]}
               width="100%"
               ariaLabel={t("tree.engineLabel")}
@@ -1576,9 +1591,9 @@ export function NewAgentSession({
           )}
         </div>
 
-        {/* Two-position switch for the permission mode. opencode has no matching flag, so it is disabled with a short explanation. */}
+        {/* Supported agents use the backend permission catalogue; other agents retain the bypass switch. */}
         <div style={{ marginTop: 12 }}>
-          <label
+          <div role="group" aria-label={t("info.permission")}
             style={{
               display: "flex",
               alignItems: "center",
@@ -1588,21 +1603,13 @@ export function NewAgentSession({
               cursor: permSupported ? "pointer" : "default",
             }}
           >
-            {kind === "codex" ? (
+            {["claude", "codex", "opencode"].includes(kind) ? (
               <>
                 {t("info.permission")}
-                <Select
-                  value={permissionMode === "skip" || permissionMode === "full-access" ? "skip" : permissionMode === "read-only" ? "read-only" : "auto"}
-                  options={[
-                    { value: "read-only", label: t("chat.mode.readOnly") },
-                    { value: "auto", label: t("chat.mode.auto") },
-                    { value: "skip", label: t("chat.mode.fullAccess") },
-                  ]}
-                  onChange={setPermissionMode}
-                />
+                <AgentPermissionSelect key={kind} kind={kind} value={permissionMode} onChange={setPermissionMode} />
               </>
             ) : (
-              <>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input
                   type="checkbox"
                   disabled={!permSupported}
@@ -1610,9 +1617,9 @@ export function NewAgentSession({
                   onChange={(e) => setPermissionMode(e.target.checked ? "skip" : "")}
                 />
                 {t("tree.permissionSkipLabel")}
-              </>
+              </label>
             )}
-          </label>
+          </div>
           <div
             style={{
               fontSize: 11,
@@ -1622,7 +1629,7 @@ export function NewAgentSession({
               marginLeft: 24,
             }}
           >
-            {kind === "codex" ? null : permSupported
+            {["claude", "codex", "opencode"].includes(kind) ? null : permSupported
               ? t("tree.permissionSkipHint")
               : kind === "pi"
                 ? t("tree.permissionUnsupportedPi")
@@ -1821,9 +1828,9 @@ export function ResumeSession({
           />
         </label>
 
-        {/* Two-position switch for the permission mode. opencode has no matching flag, so it is disabled with a short explanation. */}
+        {/* Supported agents use the backend permission catalogue; other agents retain the bypass switch. */}
         <div style={{ marginTop: 12 }}>
-          <label
+          <div role="group" aria-label={t("info.permission")}
             style={{
               display: "flex",
               alignItems: "center",
@@ -1833,21 +1840,13 @@ export function ResumeSession({
               cursor: permSupported ? "pointer" : "default",
             }}
           >
-            {kind === "codex" ? (
+            {["claude", "codex", "opencode"].includes(kind) ? (
               <>
                 {t("info.permission")}
-                <Select
-                  value={permissionMode === "skip" || permissionMode === "full-access" ? "skip" : permissionMode === "read-only" ? "read-only" : "auto"}
-                  options={[
-                    { value: "read-only", label: t("chat.mode.readOnly") },
-                    { value: "auto", label: t("chat.mode.auto") },
-                    { value: "skip", label: t("chat.mode.fullAccess") },
-                  ]}
-                  onChange={setPermissionMode}
-                />
+                <AgentPermissionSelect key={kind} kind={kind} value={permissionMode} onChange={setPermissionMode} />
               </>
             ) : (
-              <>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <input
                   type="checkbox"
                   disabled={!permSupported}
@@ -1855,9 +1854,9 @@ export function ResumeSession({
                   onChange={(e) => setPermissionMode(e.target.checked ? "skip" : "")}
                 />
                 {t("tree.permissionSkipLabel")}
-              </>
+              </label>
             )}
-          </label>
+          </div>
           <div
             style={{
               fontSize: 11,
@@ -1867,7 +1866,7 @@ export function ResumeSession({
               marginLeft: 24,
             }}
           >
-            {kind === "codex" ? null : permSupported
+            {["claude", "codex", "opencode"].includes(kind) ? null : permSupported
               ? t("tree.permissionSkipHint")
               : kind === "pi"
                 ? t("tree.permissionUnsupportedPi")

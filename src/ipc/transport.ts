@@ -11,6 +11,7 @@ import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { t } from "../i18n";
 import { recordRequestError } from "./reqLog";
+import { safeCommand, safeError, diagnosticOperation } from "./diagnosticSafety";
 import { wsClient, bytesToB64 } from "./wsClient";
 import type { SessionKind } from "../types";
 
@@ -43,6 +44,9 @@ export const remoteSshSession: string | null =
 // PTY launch arguments and results.
 
 export interface PtySpawnArgs {
+  /** Diagnostic correlation only; never persisted as session configuration. */
+  diagnosticRequestId?: string;
+  diagnosticOperationId?: string;
   sessionId: string;
   kind: SessionKind;
   shell?: string;
@@ -106,6 +110,7 @@ const DIRECT_DESKTOP_CMDS = new Set([
   "pty_write",
   "pty_resize",
   "open_remote_window",
+  "open_account_remote_window",
   "probe_remote_fingerprint",
   "url_trust_fingerprint",
   "open_devtools",
@@ -133,7 +138,14 @@ const DIRECT_DESKTOP_CMDS = new Set([
  *  console, ring buffer, and UI banner. It never retries; callers own retry policy. Errors remain visible even
  *  when a caller intentionally swallows rejection, such as `void loadTree()` during startup. */
 export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  return invokeInner<T>(cmd, args).catch((err) => {
+  const requestId = crypto.randomUUID();
+  const started = performance.now();
+  const tracked = !["pty_write", "pty_resize", "diagnostic_event", "diagnostic_health"].includes(cmd);
+  return invokeInner<T>(cmd, args, tracked ? { requestId, operationId: diagnosticOperation(args?.sessionId ?? args?.id) } : undefined).then((result) => {
+    if (tracked) diagnosticEvent("request", { requestId, command: safeCommand(cmd), status: "success", clientDurationMs: Math.round(performance.now() - started) });
+    return result;
+  }).catch((err) => {
+    if (tracked) diagnosticEvent("request", { requestId, command: safeCommand(cmd), status: "failed", errorCode: safeError(err), clientDurationMs: Math.round(performance.now() - started) });
     // User-canceled clone is handled control flow, not a global error; cleanup failures return another error.
     const message = String(err);
     if (!(cmd === "clone_project" && (message === "CLONE_CANCELLED" || message === "Error: CLONE_CANCELLED"))) {
@@ -143,13 +155,37 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
   });
 }
 
-function invokeInner<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+let pendingDiagnostics = 0;
+
+/** Submit only fixed diagnostic events. Delivery failure never re-enters request error logging. */
+export function diagnosticEvent(event: "request" | "shell_switch" | "restart" | "pty_output" | "ws_state" | "pty_spawn", fields: Record<string, unknown>): void {
+  if (pendingDiagnostics >= 24 || (!isTauri && !wsClient.isDiagnosticReady())) return;
+  pendingDiagnostics++;
+  void invokeInner("diagnostic_event", { operationId: diagnosticOperation(fields.sessionId), ...fields, event })
+    .catch(() => {}).finally(() => { pendingDiagnostics--; });
+}
+
+function invokeInner<T>(cmd: string, args?: Record<string, unknown>, diagnostic?: { requestId: string; operationId?: string }): Promise<T> {
+  if (cmd === "open_account_remote_window" && (window as unknown as {__VLX_ELECTRON__?:boolean}).__VLX_ELECTRON__) {
+    // Electron cannot use the Tauri command: ask the sidecar for the relay URL over the existing
+    // authenticated WebSocket, then open it in a dedicated window through the preload bridge.
+    return (async () => {
+      const result = await wsClient.invoke<{ url: string }>("public_account_remote_url", {
+        deviceId: String(args?.deviceId ?? ""),
+        grantId: args?.grantId ?? null,
+      });
+      await (
+        window as unknown as { vlxNative: { openAccountRemoteWindow: (url: string) => Promise<void> } }
+      ).vlxNative.openAccountRemoteWindow(result.url);
+      return undefined as T;
+    })();
+  }
   // Browser/remote continues through WebSocket and web/dispatch.rs.
-  if (!isTauri) return wsClient.invoke<T>(cmd, args);
+  if (!isTauri) return wsClient.invoke<T>(cmd, args, diagnostic);
   // Desktop invokes whitelisted native commands directly and routes everything else through desktop_call.
   return DIRECT_DESKTOP_CMDS.has(cmd)
-    ? tauriInvoke<T>(cmd, args)
-    : tauriInvoke<T>("desktop_call", { cmd, args: args ?? {} });
+    ? tauriInvoke<T>(cmd, diagnostic ? { ...args, diagnosticRequestId: diagnostic.requestId, diagnosticOperationId: diagnostic.operationId } : args)
+    : tauriInvoke<T>("desktop_call", { cmd, args: args ?? {}, diagnosticRequestId: diagnostic?.requestId, diagnosticOperationId: diagnostic?.operationId });
 }
 
 /** Listens for a backend event and returns an unsubscribe function. */
@@ -182,7 +218,7 @@ export async function emitNative(name: string, payload?: unknown): Promise<void>
  */
 export function invokeNative<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const native = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-  return native ? tauriInvoke<T>(cmd, args) : invoke<T>(cmd, args);
+  return native ? tauriInvoke<T>(cmd, args).catch((error) => { recordRequestError(cmd, error); throw error; }) : invoke<T>(cmd, args);
 }
 
 /**
@@ -209,12 +245,34 @@ export function spawnPty(
   args: PtySpawnArgs,
   onBytes: (bytes: Uint8Array) => void,
 ): Promise<PtySpawnResult> {
+  const requestId = crypto.randomUUID();
+  const started = performance.now();
+  let first = true;
+  const receive = (bytes: Uint8Array) => {
+    if (first && bytes.length) {
+      first = false;
+      diagnosticEvent("pty_output", { requestId, sessionId: args.sessionId, step: "first_output", bytes: bytes.length, clientDurationMs: Math.round(performance.now() - started) });
+    }
+    onBytes(bytes);
+  };
+  diagnosticEvent("pty_spawn", { requestId, sessionId: args.sessionId, status: "started" });
+  const traced = { ...args, diagnosticRequestId: requestId, diagnosticOperationId: diagnosticOperation(args.sessionId) };
+  let result: Promise<PtySpawnResult>;
   if (isTauri) {
     const channel = new Channel<ArrayBuffer>();
-    channel.onmessage = (msg) => onBytes(new Uint8Array(msg));
-    return tauriInvoke<PtySpawnResult>("pty_spawn", { ...args, onOutput: channel });
+    channel.onmessage = (msg) => receive(new Uint8Array(msg));
+    result = tauriInvoke<PtySpawnResult>("pty_spawn", { ...traced, onOutput: channel });
+  } else {
+    result = wsClient.spawnPty(traced, receive);
   }
-  return wsClient.spawnPty(args, onBytes);
+  return result.then((value) => {
+    diagnosticEvent("pty_spawn", { requestId, sessionId: args.sessionId, status: "success", attached: value.attached, clientDurationMs: Math.round(performance.now() - started) });
+    return value;
+  }).catch((error) => {
+    recordRequestError("pty_spawn", error);
+    diagnosticEvent("pty_spawn", { requestId, sessionId: args.sessionId, status: "failed", errorCode: safeError(error), clientDurationMs: Math.round(performance.now() - started) });
+    throw error;
+  });
 }
 
 /**
@@ -335,7 +393,7 @@ export async function uploadDocImage(
 }
 
 /** Copies text to clipboard, falling back to execCommand when plaintext HTTP disables navigator.clipboard. */
-export async function copyText(text: string): Promise<void> {
+export async function copyText(text: string, options?: { reportFailure?: boolean }): Promise<void> {
   // In local wry windows, macOS WebView's async clipboard writes are incomplete (including OSC 52 selection-copy),
   // so use a local native command for the local clipboard. Real browsers handle the standard API correctly.
   if (isTauri || isRemoteWindow) {
@@ -361,44 +419,47 @@ export async function copyText(text: string): Promise<void> {
   // Plain HTTP remote access disables async clipboard. Prefer intercepting a copy event and setting its data,
   // which works in insecure contexts and does not depend on selection/focus changes. Callers run within a user
   // gesture. Keep textarea+execCommand as the final fallback.
-  if (copyViaEvent(text)) return;
+  if (copyViaEvent(text, options?.reportFailure)) return;
+  const ta = document.createElement("textarea");
   try {
-    const ta = document.createElement("textarea");
     ta.value = text;
     ta.style.position = "fixed";
     ta.style.opacity = "0";
     document.body.appendChild(ta);
     ta.focus();
     ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
+    if (document.execCommand("copy")) return;
   } catch {
-    /* Silently ignore when no clipboard path is available. */
+    /* Preserve the legacy best-effort behavior unless the caller requests failure feedback. */
+  } finally {
+    ta.remove();
   }
+  if (options?.reportFailure) throw new Error(t("common.copyFailed"));
 }
 
 /** Writes through a one-shot copy listener, the most reliable insecure-context path, and reports success. */
-function copyViaEvent(text: string): boolean {
+function copyViaEvent(text: string, reportFailure = false): boolean {
   let wrote = false;
+  let succeeded = false;
   const handler = (e: ClipboardEvent) => {
     e.preventDefault();
     e.stopImmediatePropagation();
     try {
       e.clipboardData?.setData("text/plain", text);
-      wrote = true;
+      wrote = !reportFailure || e.clipboardData !== null;
     } catch {
       /* Leave failure to the next fallback. */
     }
   };
   document.addEventListener("copy", handler, true);
   try {
-    document.execCommand("copy");
+    succeeded = document.execCommand("copy");
   } catch {
     /* Treat an execCommand exception as failure. */
   } finally {
     document.removeEventListener("copy", handler, true);
   }
-  return wrote;
+  return wrote && (!reportFailure || succeeded);
 }
 
 /**
@@ -431,4 +492,10 @@ export type { UnlistenFn };
 export function onTransportReconnect(callback: () => void): () => void {
   if (isTauri) return () => {};
   return wsClient.onConnState(state => { if (state === "online") callback(); });
+}
+
+/** Runtime evidence becomes stale as soon as the remote connection is lost. */
+export function onTransportDisconnect(callback: () => void): () => void {
+  if (isTauri) return () => {};
+  return wsClient.onConnState(state => { if (state === "offline") callback(); });
 }

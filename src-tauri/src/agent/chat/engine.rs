@@ -32,10 +32,15 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+mod auth;
 mod codex;
+mod generation;
 mod opencode;
+mod permission_restart;
+mod pi;
 
 use super::codex_protocol;
+use super::pi_protocol;
 use super::skills;
 use super::config_schema::{self, ConfigKey};
 use super::opencode_protocol;
@@ -653,6 +658,13 @@ pub struct ChatSnapshot {
 #[derive(Clone, Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeExtras {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<auth::AuthState>,
+    /// Numeric, provider-reported cumulative token counters for background workflow accounting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_usage: Option<Value>,
+    #[serde(skip)]
+    generation: generation::GenerationTiming,
     /// Context the last API call carried: input plus cache reads and cache writes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_tokens: Option<u64>,
@@ -686,6 +698,9 @@ pub struct ClaudeExtras {
 struct ChatProcess {
     kind: SessionKind,
     cwd: Option<String>,
+    bin: String,
+    auth_settings_args: Vec<String>,
+    auth_restart: AtomicBool,
     action: Mutex<()>,
     stdin: Mutex<Option<ChildStdin>>,
     child: Mutex<Child>,
@@ -707,6 +722,8 @@ struct ChatProcess {
     codex_pending_child_events: Mutex<HashMap<String, Vec<(String, Value)>>>,
     /// The OpenCode server behind this conversation and what the engine has learned from it.
     opencode: Mutex<opencode::OpencodeState>,
+    /// The Pi/OMP side of this conversation: its variant, model catalogue, and pending extension dialogs.
+    pi: Mutex<pi::PiState>,
     /// Codex service tier (`fast`, or another id from its model catalogue) for subsequent turns. None
     /// keeps whatever the thread was opened with.
     service_tier: Mutex<Option<String>>,
@@ -725,6 +742,10 @@ struct ChatProcess {
     model: Mutex<Option<String>>,
     effort: Mutex<Option<String>>,
     mode: Mutex<String>,
+    permission_confirmed: AtomicBool,
+    /// Claude only: whether this process was launched with the capability to switch to `bypassPermissions`
+    /// at runtime. A process without it rejects the control request, so the engine offers a restart instead.
+    bypass_capable: bool,
     /// Selected permissions are independent of the policy accepted by the active Codex turn.
     codex_permission_state: Mutex<CodexPermissionState>,
     /// `default` or `plan` for Codex. Kept separate from `mode`, which controls approvals and sandboxing.
@@ -735,6 +756,7 @@ struct ChatProcess {
     current_turn: Mutex<Option<String>>,
     /// Codex cannot accept turns until initialize and thread start/resume have both answered.
     ready: AtomicBool,
+    codex_initialized: AtomicBool,
     /// Text accumulated per streaming block, keyed by row id.
     buffers: Mutex<HashMap<String, String>>,
     /// Id of the message currently being written. Fragments do not carry it, and without it the rows they
@@ -883,6 +905,9 @@ fn initial_mode(kind: SessionKind, stored: Option<&str>) -> String {
             _ => "auto",
         },
         SessionKind::Opencode => opencode::initial_mode(stored),
+        SessionKind::Omp => crate::agent::permission_catalog::normalize(SessionKind::Omp, stored)
+            .unwrap_or("default"),
+        SessionKind::Pi => "default",
         _ => protocol::cli_permission_mode(stored).unwrap_or("default"),
     }
     .to_string()
@@ -892,6 +917,8 @@ fn initial_mode(kind: SessionKind, stored: Option<&str>) -> String {
 #[derive(Default)]
 pub struct ChatManager {
     sessions: Mutex<HashMap<String, Arc<ChatProcess>>>,
+    permission_restarts: Mutex<HashSet<String>>,
+    auth_change: Mutex<()>,
 }
 
 impl ChatManager {
@@ -911,7 +938,36 @@ impl ChatManager {
             .is_some_and(|proc| proc.alive.load(Ordering::Relaxed))
     }
 
+    pub fn turn_in_progress(&self, session_id: &str) -> bool {
+        self.sessions.lock().unwrap().get(session_id).cloned()
+            .is_some_and(|proc| proc.turn.lock().unwrap().running)
+    }
+
+    /// Read notification prose without cloning the timeline or starting/changing an agent process.
+    pub fn notification_excerpt(&self, session_id: &str, asking: bool, at: i64) -> Option<String> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        if asking {
+            let permissions = proc.permissions.lock().unwrap();
+            for request in permissions.values() {
+                let text = request.get("description").and_then(Value::as_str)
+                    .or_else(|| request.get("message").and_then(Value::as_str))
+                    .or_else(|| request.pointer("/input/questions/0/question").and_then(Value::as_str));
+                if let Some(text) = text {
+                    let text = crate::mobile_push::preview::plain(text, 240);
+                    if !text.is_empty() { return Some(text); }
+                }
+            }
+        }
+        let timeline = proc.timeline.lock().unwrap();
+        Some(crate::mobile_push::preview::latest_reply(timeline.rows.iter().rev().map(|row| match row {
+            ChatRow::User { text, at, .. } => ("user", text.as_str(), *at),
+            ChatRow::Assistant { text, at, .. } => ("assistant", text.as_str(), *at),
+            _ => ("", "", None),
+        }), at))
+    }
+
     fn get(&self, session_id: &str) -> Result<Arc<ChatProcess>, String> {
+        self.check_permission_restart(session_id)?;
         self.sessions
             .lock()
             .unwrap()
@@ -926,6 +982,33 @@ impl ChatManager {
     /// TUI, since both engines write the same file.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
+        &self,
+        app: &AppCtx,
+        session_id: &str,
+        kind: SessionKind,
+        cwd: Option<&str>,
+        bin: &str,
+        resume: Option<&str>,
+        model: Option<&str>,
+        effort: Option<&str>,
+        permission_mode: Option<&str>,
+        collaboration_mode: Option<&str>,
+        // The session's own launch arguments, as typed in its settings. Appended last, so a flag written
+        // there overrides the one this engine would otherwise pass.
+        extra_args: &[String],
+        // Claude only: switch fast mode on once the handshake completes.
+        fast_mode: bool,
+    ) -> Result<(), String> {
+        let mut diagnostic=crate::diagnostics::Span::new("agent_start",json!({"sessionId":session_id}));
+        self.check_permission_restart(session_id)?;
+        let result=self.start_inner(app, session_id, kind, cwd, bin, resume, model, effort,
+            permission_mode, collaboration_mode, extra_args, fast_mode);
+        diagnostic.finish(&result);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_inner(
         &self,
         app: &AppCtx,
         session_id: &str,
@@ -961,13 +1044,14 @@ impl ChatManager {
         let mut cmd = Command::new(bin);
         // OpenCode is reached over HTTP: the port it listens on and the password that guards it.
         let mut opencode_launch: Option<(u16, String)> = None;
+        let claude_permission = protocol::cli_permission_mode(permission_mode);
         match kind {
             SessionKind::Claude => {
                 cmd.args(protocol::launch_args(
                     resume,
                     model,
                     effort,
-                    protocol::cli_permission_mode(permission_mode),
+                    claude_permission,
                 ));
                 cmd.args(extra_args);
             }
@@ -991,6 +1075,16 @@ impl ChatManager {
                 // that session's identity on top of what this engine reports itself.
                 cmd.env_remove(crate::agent::inject::OPENCODE_CONFIG_ENV);
                 opencode_launch = Some((port, password));
+            }
+            SessionKind::Pi | SessionKind::Omp => {
+                let variant = pi_protocol::PiVariant::of(kind)
+                    .expect("Pi and OMP have a protocol variant");
+                let bypass = initial_mode(kind, permission_mode) == "bypassPermissions"
+                    && !extra_args.iter().any(|arg| {
+                        arg.contains("yolo") || arg.contains("auto-approve") || arg.contains("approval-mode")
+                    });
+                cmd.args(pi_protocol::launch_args(variant, resume, model, bypass));
+                cmd.args(extra_args);
             }
             _ => return Err(format!("The chat engine does not support {} sessions", kind.as_str())),
         }
@@ -1041,9 +1135,10 @@ impl ChatManager {
             crate::db::repo::codex_chat_settings(&conn, session_id)?
         };
 
+        crate::agent::executable::prepare_command(&mut cmd, bin);
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("Failed to start the agent: {e}"))?;
+            .map_err(|e| format!("Failed to start the agent {bin:?} in {}: {e}", cwd.unwrap_or("the inherited working directory")))?;
         let pid = child.id();
         let stdin = child.stdin.take().ok_or("The agent has no input stream")?;
         let stdout = child.stdout.take().ok_or("The agent has no output stream")?;
@@ -1051,6 +1146,9 @@ impl ChatManager {
 
         let proc = Arc::new(ChatProcess {
             kind,
+            bin: bin.to_string(),
+            auth_settings_args: auth::claude::settings_args(extra_args),
+            auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
             cwd: cwd.map(str::to_string),
             stdin: Mutex::new(Some(stdin)),
@@ -1063,12 +1161,13 @@ impl ChatManager {
             codex_subagent_ids: Mutex::new(HashMap::new()),
             codex_pending_child_events: Mutex::new(HashMap::new()),
             opencode: Mutex::new(opencode::OpencodeState::default()),
+            pi: Mutex::new(pi::PiState::default()),
             service_tier: Mutex::new(service_tier),
             personality: Mutex::new(personality),
             codex_turn_error: Mutex::new(None),
             extras: Mutex::new(ClaudeExtras { fast_mode, ..ClaudeExtras::default() }),
             claude_models: Mutex::new(Vec::new()),
-            agent_session_id: Mutex::new(if matches!(kind, SessionKind::Codex | SessionKind::Opencode) {
+            agent_session_id: Mutex::new(if matches!(kind, SessionKind::Codex | SessionKind::Opencode | SessionKind::Pi | SessionKind::Omp) {
                 resume.map(str::to_string)
             } else {
                 None
@@ -1077,6 +1176,9 @@ impl ChatManager {
             model: Mutex::new(model.map(str::to_string)),
             effort: Mutex::new(effort.map(str::to_string)),
             mode: Mutex::new(initial_mode(kind, permission_mode)),
+            permission_confirmed: AtomicBool::new(matches!(kind, SessionKind::Opencode | SessionKind::Omp)),
+            bypass_capable: kind == SessionKind::Claude
+                && permission_restart::claude_bypass_capable(permission_mode, extra_args),
             codex_permission_state: Mutex::new(CodexPermissionState::default()),
             collaboration_mode: Mutex::new(match kind {
                 SessionKind::Codex => Some(
@@ -1096,6 +1198,7 @@ impl ChatManager {
             collaboration_modes: Mutex::new(Vec::new()),
             current_turn: Mutex::new(None),
             ready: AtomicBool::new(kind == SessionKind::Claude),
+            codex_initialized: AtomicBool::new(false),
             buffers: Mutex::new(HashMap::new()),
             current_message: Mutex::new(None),
             frame_blocks: Mutex::new(HashMap::new()),
@@ -1114,15 +1217,8 @@ impl ChatManager {
             compactions: AtomicU64::new(0),
         });
 
-        // This timeline is new, so a client still showing the previous process's rows has to drop them.
-        // Without that, replayed history lands underneath rows describing the same messages and the
-        // conversation reads as if everything happened twice. Emitted before the flusher exists, so no row
-        // can arrive ahead of it.
-        emit(app, session_id, json!({"type":"reset","epoch":proc.started_at}));
-
-        // A resumed conversation lives only in the agent's memory; this timeline starts empty. Without
-        // replaying the recording the view would sit blank in front of an agent that remembers every word
-        // of it. Reading happens here, before any client can take a snapshot, so nobody sees the gap.
+        // Restore history before notifying clients of the new process. The reset carries this
+        // timeline so a pending submission never becomes the only visible message during replay.
         if let Some(id) = resume {
             match super::history::replay(kind, id) {
                 Ok(rows) => {
@@ -1131,14 +1227,23 @@ impl ChatManager {
                 }
                 // A recording that was deleted, or belongs to a conversation held elsewhere, is no reason
                 // to refuse the session: the agent still has the context, only the view starts empty.
-                Err(e) => eprintln!("chat: no history replayed for {id}: {e}"),
+                Err(e) => crate::diagnostic_warn!("chat: no history replayed for {id}: {e}"),
             }
         }
+
+        let restored_auth = self.sessions.lock().unwrap().get(session_id)
+            .is_some_and(|previous| auth::claude::restore(previous, &proc));
 
         self.sessions
             .lock()
             .unwrap()
             .insert(session_id.to_string(), proc.clone());
+
+        emit(app, session_id, reset_event(&proc));
+        if restored_auth {
+            emit_extras(app, session_id, &proc);
+            emit_queue(app, session_id, &proc);
+        }
 
         // Say which process is behind this conversation. The snapshot carries the same two facts, but a
         // pane that opened before the agent started has already read it, and nothing else in the product
@@ -1201,6 +1306,10 @@ impl ChatManager {
                     resume.map(str::to_string),
                 );
             }
+            SessionKind::Pi | SessionKind::Omp => {
+                proc.pi.lock().unwrap().variant = pi_protocol::PiVariant::of(kind);
+                pi::bootstrap(&proc);
+            }
             _ => unreachable!(),
         }
         Ok(())
@@ -1216,6 +1325,16 @@ impl ChatManager {
         state.server.clone()
     }
 
+    /// The model catalogue a running Pi or OMP process reported, or None when none owns the session.
+    pub fn pi_models(&self, session_id: &str) -> Option<Vec<Value>> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        if !proc.alive.load(Ordering::Relaxed) {
+            return None;
+        }
+        let models = pi::chat_models(&proc);
+        (!models.is_empty()).then_some(models)
+    }
+
     /// Send a user turn, or decide what to do with it when one is already running.
     ///
     /// Nothing is in flight: the message goes straight out, which is what happens whenever the agent is
@@ -1227,6 +1346,8 @@ impl ChatManager {
     ///   drops what it was doing and takes the new instruction.
     /// - `steer` writes it into the running turn. The agent reads it at its next step and answers it
     ///   together with the turn already under way — one result for both, verified against claude 2.1.258.
+    ///   With no turn to join — idle, still starting, or already being stopped — it is sent as if `queue`
+    ///   had been asked for, so an accidental steer gesture is never an error.
     ///
     /// `images` ride along with the text as part of the same turn, and wait with it when it is queued.
     ///
@@ -1246,8 +1367,13 @@ impl ChatManager {
         &self, app: &AppCtx, session_id: &str, text: &str,
         images: Vec<ChatImage>, behavior: &str, message_id: Option<&str>,
     ) -> Result<&'static str, String> {
+        crate::diagnostics::record("INFO","agent_submission",json!({"sessionId":session_id,"originalChars":text.chars().count(),"imageCount":images.len(),"status":"started"}));
         let proc = self.get(session_id)?;
         let _action = proc.action.lock().unwrap();
+        self.check_permission_restart(session_id)?;
+        if auth::active(&proc) {
+            return Err("Finish or cancel Codex sign-in before sending a message.".into());
+        }
         // Steering is a prompt, never a local command or a queued replacement.
         if proc.kind == SessionKind::Opencode && behavior != "steer" && proc.ready.load(Ordering::Relaxed) {
             if let Some(handled) = opencode::local_command(app, session_id, &proc, text)? {
@@ -1256,13 +1382,14 @@ impl ChatManager {
         }
         let mut turn = proc.turn.lock().unwrap();
         if behavior == "steer" {
-            if !proc.ready.load(Ordering::Relaxed) || !turn.running || turn.interrupted {
-                return Err("There is no running turn available to steer. Send the message normally or retry when the agent is working.".into());
+            // Steering only means something against a turn that is actually running. With nothing to
+            // steer, the request falls through to the ordinary paths below instead of failing.
+            if proc.ready.load(Ordering::Relaxed) && turn.running && !turn.interrupted {
+                drop(turn);
+                dispatch_steer(app, session_id, &proc, text, &images, message_id)
+                    .map_err(|error| if message_id.is_some() { "chat_submission_pending".into() } else { error })?;
+                return Ok("sent");
             }
-            drop(turn);
-            dispatch_steer(app, session_id, &proc, text, &images, message_id)
-                .map_err(|error| if message_id.is_some() { "chat_submission_pending".into() } else { error })?;
-            return Ok("sent");
         }
         if !proc.ready.load(Ordering::Relaxed) {
             let item = QueuedMessage {
@@ -1436,6 +1563,9 @@ impl ChatManager {
                 remember,
             );
         }
+        if proc.kind == SessionKind::Omp {
+            return pi::respond_extension_ui(app, session_id, &proc, request_id, allow);
+        }
         proc.permissions.lock().unwrap().remove(request_id);
         if proc.kind == SessionKind::Codex {
             // The rule the card adopted, if any, travels inside `updated_permissions`; the wire module
@@ -1502,21 +1632,25 @@ impl ChatManager {
     /// Save Codex permissions for its next turn; other agents can apply their modes immediately.
     pub fn set_mode(&self, app: &AppCtx, session_id: &str, mode: &str) -> Result<(), String> {
         let proc = self.get(session_id)?;
-        let valid = match proc.kind {
-            SessionKind::Codex => matches!(mode, "read-only" | "auto" | "full-access"),
-            SessionKind::Opencode => matches!(mode, "default" | "bypassPermissions"),
-            _ => matches!(mode, "plan" | "default" | "acceptEdits" | "auto" | "bypassPermissions"),
-        };
+        let valid = crate::agent::permission_catalog::modes(proc.kind).contains(&mode);
         if !valid {
             return Err(format!("{} does not support chat mode {mode}", proc.kind.as_str()));
         }
         let _change = proc.settings_change.lock().unwrap();
+        self.check_permission_restart(session_id)?;
+        // A Claude process launched without the bypass capability refuses the control request. That is
+        // knowable before asking, so report the restart the UI should offer right away instead of waiting
+        // out the request timeout for a rejection that already has an answer.
+        if proc.kind == SessionKind::Claude && mode == "bypassPermissions" && !proc.bypass_capable {
+            return Err(permission_restart::restart_required(&proc));
+        }
         if proc.kind == SessionKind::Claude {
             proc.request_and_wait("set_permission_mode", |id| {
                 protocol::control_request(id, protocol::set_permission_mode(mode))
-            })?;
+            }).map_err(|error| permission_restart::mode_error(&proc, mode, error))?;
         }
         *proc.mode.lock().unwrap() = mode.to_string();
+        proc.permission_confirmed.store(true, Ordering::Relaxed);
         if proc.kind == SessionKind::Codex {
             return Ok(());
         }
@@ -1528,7 +1662,28 @@ impl ChatManager {
             }
             return Ok(());
         }
+        if proc.kind == SessionKind::Omp {
+            // OMP's approval policy is fixed at launch, so bypass is honoured by answering the engine's
+            // extension dialogs itself from now on, including any already waiting.
+            if mode == "bypassPermissions" {
+                pi::approve_pending(app, session_id, &proc);
+            }
+            return Ok(());
+        }
         Ok(())
+    }
+
+    /// Selected policy and independently confirmed runtime policy, without serializing the timeline.
+    pub fn permission_state(&self, session_id: &str) -> Option<(String, Option<String>)> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        if !proc.alive.load(Ordering::Relaxed) { return None; }
+        let selected = proc.mode.lock().unwrap().clone();
+        let current = if proc.kind == SessionKind::Codex {
+            proc.codex_permission_state.lock().unwrap().applied.clone()
+        } else if proc.permission_confirmed.load(Ordering::Relaxed) {
+            Some(selected.clone())
+        } else { None };
+        Some((selected, current))
     }
 
     pub fn pending_permission_mode(&self, session_id: &str) -> Option<PendingPermissionMode> {
@@ -1593,6 +1748,10 @@ impl ChatManager {
             proc.request_and_wait("set_model", |id| {
                 protocol::control_request(id, protocol::set_model(model))
             })?;
+        } else if matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
+            if let Some(model) = model {
+                pi::set_model(&proc, model)?;
+            }
         }
         *proc.model.lock().unwrap() = model.map(str::to_string);
         Ok(())
@@ -1626,6 +1785,11 @@ impl ChatManager {
                 proc.write(&protocol::control_request(&id, protocol::set_max_thinking_tokens(None)))?;
             }
             self.send(app, session_id, &format!("/effort {}", effort.unwrap_or("auto")), Vec::new(), "queue")?;
+        } else if matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
+            // Pi and OMP expose the reasoning level as a first-class command rather than a slash command.
+            if let Some(level) = effort {
+                pi::set_effort(&proc, level)?;
+            }
         }
         Ok(())
     }
@@ -1649,11 +1813,67 @@ impl ChatManager {
         Ok(())
     }
 
-    /// `/compact`: ask Codex to summarize the conversation now.
-    pub fn compact(&self, session_id: &str) -> Result<(), String> {
-        let proc = self.codex(session_id)?;
+    fn account_process(&self, session_id: &str) -> Result<Arc<ChatProcess>, String> {
+        let proc = self.get(session_id)?;
+        if !matches!(proc.kind, SessionKind::Claude | SessionKind::Codex) {
+            return Err("Account operations require a Claude or Codex conversation.".into());
+        }
+        if proc.kind == SessionKind::Codex {
+            for _ in 0..500 {
+                if proc.codex_initialized.load(Ordering::Relaxed) || !proc.alive.load(Ordering::Relaxed) { break; }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        Ok(proc)
+    }
+
+    pub fn auth_start(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
+        let _change = self.auth_change.lock().unwrap();
+        let proc = self.account_process(session_id)?;
         let _action = proc.action.lock().unwrap();
-        codex::compact(&proc)
+        if self.sessions.lock().unwrap().iter().any(|(id, other)| id != session_id && other.kind == proc.kind && auth::active(other)) {
+            return Err("An account operation for this provider is already in progress in another conversation.".into());
+        }
+        if proc.kind == SessionKind::Claude { auth::claude::start(app, session_id, &proc) }
+        else { auth::start(app, session_id, &proc) }
+    }
+
+    pub fn auth_logout(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
+        let _change = self.auth_change.lock().unwrap();
+        let proc = self.account_process(session_id)?;
+        let _action = proc.action.lock().unwrap();
+        if self.sessions.lock().unwrap().iter().any(|(id, other)| id != session_id && other.kind == proc.kind && auth::active(other)) {
+            return Err("An account operation for this provider is already in progress in another conversation.".into());
+        }
+        if proc.kind == SessionKind::Claude { auth::claude::logout(app, session_id, &proc) }
+        else { auth::logout(app, session_id, &proc) }
+    }
+
+    pub fn auth_cancel(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
+        let proc = self.account_process(session_id)?;
+        let _action = proc.action.lock().unwrap();
+        if proc.kind == SessionKind::Claude { auth::claude::cancel(app, session_id, &proc) }
+        else { auth::cancel(app, session_id, &proc) }
+    }
+
+    pub fn auth_submit(&self, app: &AppCtx, session_id: &str, code: &str) -> Result<(), String> {
+        let proc = self.claude(session_id)?;
+        let _action = proc.action.lock().unwrap();
+        auth::claude::submit(app, session_id, &proc, code)
+    }
+
+    /// `/compact`: ask the agent to summarize the conversation now.
+    pub fn compact(&self, session_id: &str) -> Result<(), String> {
+        let proc = self.get(session_id)?;
+        let _action = proc.action.lock().unwrap();
+        match proc.kind {
+            SessionKind::Codex => codex::compact(&proc),
+            SessionKind::Pi | SessionKind::Omp => pi::compact(&proc),
+            other => Err(format!(
+                "{} does not support manual compaction",
+                other.as_str()
+            )),
+        }
     }
 
     /// `/review`: run Codex's code review on the working tree, a branch, a commit, or free-form instructions.
@@ -1744,6 +1964,34 @@ impl ChatManager {
         }
         let list = proc.claude_models.lock().unwrap().clone();
         (!list.is_empty()).then(|| crate::agent::claude_models::from_live(&list))
+    }
+
+    /// Add a measured stream rate when this process observed matching output and usage events.
+    pub fn enrich_turn_stats(&self, session_id: &str, stats: &mut crate::agent::transcript::TurnStats) {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned();
+        if let Some(proc) = proc {
+            // Only a measured live stream overrides the value the recording already produced; an idle
+            // process must not clear a rate the store can still provide (OpenCode computes its own).
+            if let Some(rate) = proc.extras.lock().unwrap().generation.rate() {
+                stats.generation_tokens_per_second = Some(rate);
+            }
+        }
+    }
+
+    /// The context window the running agent reports for a model, for the Pi and OMP Info panel.
+    ///
+    /// Neither agent records the window in its session file, and the catalogue it caches on disk can lag
+    /// behind the one the CLI itself answers with, so a live process is the better source while it lasts.
+    pub fn model_context_window(&self, session_id: &str, model: &str) -> Option<u64> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        if !matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
+            return None;
+        }
+        pi::chat_models(&proc)
+            .into_iter()
+            .find(|entry| entry.get("id").and_then(Value::as_str) == Some(model))
+            .and_then(|entry| entry.get("contextWindow").and_then(Value::as_u64))
+            .filter(|window| *window > 0)
     }
 
     /// Model and context usage from the running Claude or Codex process, for the Info panel.
@@ -2070,11 +2318,19 @@ impl ChatManager {
 
     /// End the conversation and let the process go.
     pub fn stop(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
-        let Some(proc) = self.sessions.lock().unwrap().remove(session_id) else {
+        self.check_permission_restart(session_id)?;
+        let Some(proc) = self.sessions.lock().unwrap().get(session_id).cloned() else {
             return Ok(());
         };
         let _action = proc.action.lock().unwrap();
-        crate::session_state::set_alive(app, session_id, false);
+        // Keep removal and its terminal notifications ordered before a replacement can be installed.
+        // Acquire the process action first, matching permission restart's lock order.
+        let mut sessions = self.sessions.lock().unwrap();
+        if !sessions.get(session_id).is_some_and(|current| Arc::ptr_eq(current, &proc)) {
+            return Ok(());
+        }
+        sessions.remove(session_id);
+        crate::session_state::set_stopped(app, session_id);
         proc.alive.store(false, Ordering::Relaxed);
         proc.released.store(true, Ordering::Relaxed);
         {
@@ -2087,6 +2343,9 @@ impl ChatManager {
         // Closing stdin asks the agent to finish; killing is the fallback for one that does not.
         *proc.stdin.lock().unwrap() = None;
         let _ = proc.child.lock().unwrap().kill();
+        // The stdout reader skips removed processes, so explicit stop owns these notifications.
+        emit(app, session_id, json!({"type":"exited","code":-1,"stderr":"","released":true}));
+        emit_state(app, session_id, AgentState::Waiting);
         Ok(())
     }
 
@@ -2108,6 +2367,7 @@ impl ChatManager {
     /// is not cut off. Unlike `stop`, the session stays in the table with its timeline, so a pane opened
     /// later — here or on another device — still shows the conversation and restarts the agent lazily.
     pub fn detach(&self, app: &AppCtx, session_id: &str) {
+        if self.check_permission_restart(session_id).is_err() { return; }
         let Some(proc) = self.sessions.lock().unwrap().get(session_id).cloned() else {
             return;
         };
@@ -2121,10 +2381,14 @@ impl ChatManager {
 
 /// The turn lock keeps a new send or attach from racing the final idle check and process release.
 fn release_if_idle(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
+    // Background audits retain their protocol peer while the user visits another view.
+    if crate::security::session_active(session_id) { return; }
+    if crate::agent::plan_execute::active(app, session_id) { return; }
     let turn = proc.turn.lock().unwrap();
     if proc.release_when_idle.load(Ordering::Relaxed)
         && proc.alive.load(Ordering::Relaxed)
         && !turn.running
+        && !auth::active(proc)
         && turn.waiting.is_empty()
         && turn.active_tasks.is_empty()
         && turn.background_tasks.is_empty()
@@ -2434,7 +2698,9 @@ fn spawn_stdout_reader(
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            handle_line(&app, &session_id, &proc, &line);
+            if !proc.released.load(Ordering::Relaxed) {
+                handle_line(&app, &session_id, &proc, &line);
+            }
         }
         proc.alive.store(false, Ordering::Relaxed);
         for (_, waiter) in proc.waiters.lock().unwrap().drain() {
@@ -2446,8 +2712,9 @@ fn spawn_stdout_reader(
             let mut turn = proc.turn.lock().unwrap();
             turn.running = false;
             turn.started_at = None;
-            turn.waiting.clear();
+            if !proc.auth_restart.load(Ordering::Relaxed) { turn.waiting.clear(); }
         }
+        auth::claude::exited(&app, &session_id, &proc);
         let code = proc
             .child
             .lock()
@@ -2466,7 +2733,7 @@ fn spawn_stdout_reader(
             .unwrap()
             .get(&session_id)
             .is_none_or(|current| !Arc::ptr_eq(current, &proc));
-        if superseded {
+        if superseded || app.chat().permission_restarts.lock().unwrap().contains(&session_id) {
             return;
         }
         crate::session_state::set_alive(&app, &session_id, false);
@@ -2512,6 +2779,18 @@ fn spawn_stderr_reader(proc: Arc<ChatProcess>, stderr: std::process::ChildStderr
     });
 }
 
+/// Replace the previous process's rows atomically, using the same bounded window as live replacements.
+fn reset_event(proc: &ChatProcess) -> Value {
+    let timeline = proc.timeline.lock().unwrap();
+    let start = timeline.rows.len().saturating_sub(SNAPSHOT_PAGE_ROWS);
+    let rows = &timeline.rows[start..];
+    let positions: HashMap<_, _> = rows.iter().enumerate()
+        .map(|(index, row)| (row.id(), start + index)).collect();
+    json!({"type":"reset", "epoch":proc.started_at, "revision":timeline.revision,
+        "rows":rows.iter().map(snapshot_row).collect::<Vec<_>>(),
+        "positions":positions, "hasMore":start > 0})
+}
+
 fn spawn_flusher(app: AppCtx, session_id: String, proc: Arc<ChatProcess>) {
     std::thread::spawn(move || {
         loop {
@@ -2548,9 +2827,17 @@ fn handle_line(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, line: &s
     if proc.kind == SessionKind::Opencode {
         return;
     }
+    if matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
+        pi::handle_line(app, session_id, proc, line);
+        return;
+    }
     if proc.kind == SessionKind::Codex {
         handle_codex_line(app, session_id, proc, line);
         return;
+    }
+    auth::claude::observe(app, session_id, proc, line);
+    if let Ok(value) = serde_json::from_str::<Value>(line) {
+        proc.extras.lock().unwrap().generation.claude(&value, now_ms());
     }
     match protocol::parse_line(line) {
         Incoming::Init { session_id: agent_id, model } => {
@@ -2662,9 +2949,17 @@ fn handle_line(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, line: &s
             release_if_idle(app, session_id, proc);
         }
         Incoming::Result { subtype, duration_ms, total_cost_usd, model_usage } => {
+            if subtype == "success" { auth::turn_succeeded(app, session_id, proc); }
             {
                 let mut extras = proc.extras.lock().unwrap();
                 extras.api_retry = None;
+                if let Some(models) = model_usage.as_object() {
+                    let sum = |field: &str| {
+                        let values: Vec<_> = models.values().filter_map(|v| v.get(field).and_then(Value::as_u64)).collect();
+                        (!values.is_empty()).then(|| values.iter().copied().fold(0u64,u64::saturating_add))
+                    };
+                    extras.native_usage = Some(json!({"scope":"session","inputTokens":sum("inputTokens"),"outputTokens":sum("outputTokens"),"cacheReadInputTokens":sum("cacheReadInputTokens"),"cacheCreationInputTokens":sum("cacheCreationInputTokens")}));
+                }
                 if total_cost_usd.is_some() {
                     extras.total_cost_usd = total_cost_usd;
                 }
@@ -2880,6 +3175,7 @@ fn handle_codex_response(
     error: Option<String>,
 ) {
     let kind = proc.pending.lock().unwrap().remove(request_id);
+    if auth::response(app, session_id, proc, kind, request_id, &result, error.as_deref()) { return; }
     let sent_mode = proc.codex_permission_state.lock().unwrap().requests.remove(request_id);
     if let Some(waiter) = proc.waiters.lock().unwrap().remove(request_id) {
         let answer = match error {
@@ -2890,6 +3186,7 @@ fn handle_codex_response(
         return;
     }
     if let Some(message) = error {
+        auth::require(app, session_id, proc, &json!(message));
         // Collaboration modes are experimental. An older app-server may not expose their catalogue; the
         // conversation still works in its native Default mode. Clear the selection as well as the
         // catalogue so later turns do not send an experimental field that this server has just rejected.
@@ -2910,7 +3207,7 @@ fn handle_codex_response(
         // replaced when the new thread's start response is remembered.
         if kind == Some("thread_resume") && message.to_lowercase().contains("no rollout") {
             let abandoned = proc.agent_session_id.lock().unwrap().take();
-            eprintln!(
+            crate::diagnostic_warn!(
                 "chat: Codex could not resume thread {}; starting a new one",
                 abandoned.as_deref().unwrap_or("?")
             );
@@ -2924,7 +3221,16 @@ fn handle_codex_response(
         }
         emit(app, session_id, json!({"type":"error","message":message,"request":kind}));
         if matches!(kind, Some("initialize" | "thread_start" | "thread_resume")) {
-            fail_codex_start(app, session_id, proc);
+            if matches!(kind, Some("thread_start" | "thread_resume")) && auth::is_auth_error(&json!(message)) {
+                // Keep the initialized peer available for login, but stop automatic prompt delivery.
+                let mut turn = proc.turn.lock().unwrap();
+                turn.running = false;
+                turn.started_at = None;
+                drop(turn);
+                emit_state(app, session_id, AgentState::Waiting);
+            } else {
+                fail_codex_start(app, session_id, proc);
+            }
         } else if matches!(kind, Some("turn_start" | "review_start")) {
             proc.current_turn.lock().unwrap().take();
             handle_turn_end(app, session_id, proc, "request_failed", None);
@@ -2946,6 +3252,7 @@ fn handle_codex_response(
     }
     match kind {
         Some("initialize") => {
+            proc.codex_initialized.store(true, Ordering::Relaxed);
             if let Err(message) = proc.write(&codex_protocol::initialized()) {
                 emit(app, session_id, json!({"type":"error","message":message}));
                 fail_codex_start(app, session_id, proc);
@@ -3113,6 +3420,7 @@ fn remember_codex_thread(
 }
 
 fn start_waiting_message(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
+    if auth::blocks_queue(proc) { return; }
     let next = {
         let mut turn = proc.turn.lock().unwrap();
         if turn.running || turn.steering || turn.waiting.is_empty() {
@@ -3290,6 +3598,7 @@ fn handle_codex_notification(
     method: &str,
     params: Value,
 ) {
+    if auth::notification(app, session_id, proc, method, &params) { return; }
     if method == "skills/changed" {
         proc.commands.lock().unwrap().clear();
         emit(app, session_id, json!({"type":"commands","commands":[]}));
@@ -3324,6 +3633,7 @@ fn handle_codex_notification(
             return;
         }
     }
+    proc.extras.lock().unwrap().generation.codex(method, &params, now_ms());
     // What Codex says around its items: failures and warnings, context usage, streamed plan and summary
     // parts, the turn's diff, and typed input to a running command.
     if codex::handle_notification(app, session_id, proc, method, &params) {
@@ -3374,8 +3684,10 @@ fn handle_codex_notification(
             } else {
                 status
             };
+            if subtype == "success" { auth::turn_succeeded(app, session_id, proc); }
             // Read before the turn ends, which is what clears the interrupt mark.
             let interrupted = proc.turn.lock().unwrap().interrupted;
+            if let Some(error) = params.pointer("/turn/error") { auth::require(app, session_id, proc, error); }
             let failure = codex::turn_failure(proc, &params);
             handle_turn_end(app, session_id, proc, subtype, None);
             // The generic "ended with: failed" row is replaced in place by Codex's own reason — the
@@ -3956,7 +4268,7 @@ fn handle_turn_end(
         let mut turn = proc.turn.lock().unwrap();
         let interrupted = std::mem::take(&mut turn.interrupted);
         let started_at = turn.started_at.take();
-        let next = if turn.steering || turn.waiting.is_empty() {
+        let next = if turn.steering || turn.waiting.is_empty() || auth::blocks_queue(proc) {
             turn.running = false;
             None
         } else {
@@ -3970,6 +4282,7 @@ fn handle_turn_end(
     }) {
         proc.timeline.lock().unwrap().finish_latest_turn(duration_ms);
     }
+    crate::diagnostics::record("INFO","agent_turn_end",json!({"sessionId":session_id,"status":if interrupted{"cancelled"}else if subtype=="success"{"success"}else{"completed"},"durationMs":reported_duration_ms.or_else(||started_at.map(|started|completed_at.saturating_sub(started)))}));
     // A turn stopped on purpose reports itself as failed. That is the interrupt working, not a fault.
     if subtype != "success" && !interrupted {
         proc.timeline.lock().unwrap().upsert(ChatRow::Error {
@@ -4019,6 +4332,12 @@ fn send_interrupt_locked(proc: &Arc<ChatProcess>, turn: &mut TurnQueue) -> Resul
             return Ok(());
         }
         return opencode::abort(proc);
+    }
+    if matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
+        if !turn.running {
+            return Ok(());
+        }
+        return pi::abort(proc);
     }
     if proc.kind == SessionKind::Codex {
         if !turn.running {
@@ -4071,6 +4390,7 @@ fn dispatch_steer(
             });
         }
         SessionKind::Opencode => opencode::steer(proc, &row_id, text, images)?,
+        SessionKind::Pi | SessionKind::Omp => pi::steer(proc, text, images)?,
         _ => proc.write(&protocol::user_message(text, images))?,
     }
     if proc.kind != SessionKind::Opencode {
@@ -4108,6 +4428,7 @@ fn dispatch(
             }
         }
     };
+    if newly_started { proc.extras.lock().unwrap().generation = generation::GenerationTiming::default(); }
     let row_id = message_id.map(str::to_owned).unwrap_or_else(|| format!("u-{}", proc.next_request.fetch_add(1, Ordering::Relaxed)));
     proc.timeline.lock().unwrap().upsert(ChatRow::User {
         at: Some(sent_at as i64),
@@ -4117,6 +4438,8 @@ fn dispatch(
     });
     if proc.kind == SessionKind::Opencode {
         opencode::dispatch(app, session_id, proc, &row_id, text, images)?;
+    } else if matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
+        pi::dispatch(proc, text, images)?;
     } else if proc.kind == SessionKind::Codex {
         let thread_id = proc
             .agent_session_id
@@ -4501,6 +4824,7 @@ fn handle_control_response(
     error: Option<String>,
 ) {
     let kind = proc.pending.lock().unwrap().remove(request_id);
+    if auth::claude::response(app, session_id, proc, request_id, kind, &response, error.as_deref()) { return; }
     if let Some(waiter) = proc.waiters.lock().unwrap().remove(request_id) {
         let answer = match error {
             Some(message) => Err(message),
@@ -4510,6 +4834,9 @@ fn handle_control_response(
         return;
     }
     if let Some(message) = error {
+        // A response can arrive after the waiter timed out. A bypass rejection is still the same answer,
+        // so it must reach the UI as a restart request instead of a bare error it cannot act on.
+        let message = permission_restart::mode_error(proc, "bypassPermissions", message);
         emit(
             app,
             session_id,
@@ -4591,7 +4918,9 @@ fn frame_context_tokens(message: &Value) -> Option<u64> {
 
 // ─────────────────────────── Emission ───────────────────────────
 
-fn emit(app: &AppCtx, session_id: &str, payload: Value) {
+fn emit(app: &AppCtx, session_id: &str, mut payload: Value) {
+    super::super::plan_execute::observe(app, session_id, &payload);
+    super::super::tell::decorate(app, session_id, &mut payload);
     app.emit(&event_name(session_id), payload);
 }
 
@@ -4650,9 +4979,33 @@ mod tests {
         }
     }
 
+    /// Pi and OMP leave the context limit to the model catalogue: a running process answers with the one
+    /// the CLI itself reports, and every other kind has nothing to add.
+    #[test]
+    fn a_running_pi_process_supplies_the_context_window_for_its_model() {
+        let manager = ChatManager::new();
+        let proc = inert_process(SessionKind::Pi);
+        manager.sessions.lock().unwrap().insert("s".into(), proc.clone());
+        proc.pi.lock().unwrap().models = vec![
+            json!({"id": "deepseek-v4-flash", "contextWindow": 1_000_000}),
+            json!({"id": "no-window"}),
+        ];
+        assert_eq!(manager.model_context_window("s", "deepseek-v4-flash"), Some(1_000_000));
+        assert_eq!(manager.model_context_window("s", "no-window"), None);
+        assert_eq!(manager.model_context_window("s", "missing"), None);
+        let claude = inert_process(SessionKind::Claude);
+        manager.sessions.lock().unwrap().insert("c".into(), claude.clone());
+        claude.pi.lock().unwrap().models =
+            vec![json!({"id": "deepseek-v4-flash", "contextWindow": 1_000_000})];
+        assert_eq!(manager.model_context_window("c", "deepseek-v4-flash"), None);
+    }
+
     pub(super) fn inert_process(kind: SessionKind) -> Arc<ChatProcess> {
         Arc::new(ChatProcess {
             kind,
+            bin: "true".into(),
+            auth_settings_args: Vec::new(),
+            auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
             cwd: None,
             stdin: Mutex::new(None),
@@ -4665,6 +5018,7 @@ mod tests {
             codex_subagent_ids: Mutex::new(HashMap::new()),
             codex_pending_child_events: Mutex::new(HashMap::new()),
             opencode: Mutex::new(opencode::OpencodeState::default()),
+            pi: Mutex::new(pi::PiState::default()),
             service_tier: Mutex::new(None),
             personality: Mutex::new(None),
             codex_turn_error: Mutex::new(None),
@@ -4675,11 +5029,14 @@ mod tests {
             model: Mutex::new(None),
             effort: Mutex::new(None),
             mode: Mutex::new("default".to_string()),
+            permission_confirmed: AtomicBool::new(false),
+            bypass_capable: false,
             codex_permission_state: Mutex::new(CodexPermissionState::default()),
             collaboration_mode: Mutex::new(None),
             collaboration_modes: Mutex::new(Vec::new()),
             current_turn: Mutex::new(None),
             ready: AtomicBool::new(true),
+            codex_initialized: AtomicBool::new(true),
             buffers: Mutex::new(HashMap::new()),
             current_message: Mutex::new(None),
             frame_blocks: Mutex::new(HashMap::new()),
@@ -5239,6 +5596,93 @@ mod tests {
         AppCtx::Headless(Arc::new(crate::host::HeadlessHost::new(dir, db)))
     }
 
+    /// OMP's opening frames, streamed deltas, tool card and final answer all land as the right rows.
+    ///
+    /// Frame shapes are copied from a real `omp --mode rpc` run, including the `ready` frame and the
+    /// pushed `available_commands_update`.
+    #[test]
+    fn omp_frames_build_the_timeline() {
+        let app = ctx("omp-frames");
+        let proc = inert_process(SessionKind::Omp);
+        proc.pi.lock().unwrap().variant = Some(pi_protocol::PiVariant::Omp);
+        for line in [
+            r#"{"type":"ready","protocolVersion":1,"supportedProtocolVersions":[1,2]}"#,
+            r#"{"type":"available_commands_update","commands":[{"name":"security","description":"Scan the project"}]}"#,
+            r#"{"id":"1","type":"response","command":"get_state","success":true,"data":{"sessionId":"sess-1","model":{"id":"deepseek-v4-pro"},"thinkingLevel":"high"}}"#,
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"turn_start"}"#,
+            r#"{"type":"message_start","message":{"role":"assistant"}}"#,
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"think"}}"#,
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":1,"id":"call_1","toolName":"bash"}}"#,
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":1,"delta":"{\"command\":\"echo hi\"}"}}"#,
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":1,"toolCall":{"id":"call_1","name":"bash","arguments":{"command":"echo hi"}}}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"think"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"echo hi"}}]}}"#,
+            r#"{"type":"tool_execution_start","toolCallId":"call_1","toolName":"bash","args":{"command":"echo hi"}}"#,
+            r#"{"type":"tool_execution_end","toolCallId":"call_1","toolName":"bash","result":{"content":[{"type":"text","text":"hi"}]},"isError":false}"#,
+            r#"{"type":"message_start","message":{"role":"assistant"}}"#,
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"done"}}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+        ] {
+            pi::handle_line(&app, "s", &proc, line);
+        }
+        assert!(proc.ready.load(Ordering::Relaxed));
+        assert_eq!(proc.agent_session_id.lock().unwrap().as_deref(), Some("sess-1"));
+        assert_eq!(proc.model.lock().unwrap().as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(proc.effort.lock().unwrap().as_deref(), Some("high"));
+        assert!(proc
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command["name"] == "security"));
+        let rows = proc.timeline.lock().unwrap().rows.clone();
+        assert!(rows.iter().any(|row| matches!(row, ChatRow::Reasoning { text, .. } if text == "think")));
+        assert!(rows.iter().any(|row| matches!(row, ChatRow::Tool { id, name, output, status, .. }
+            if id == "call_1" && name == "bash" && output.as_deref() == Some("hi") && *status == "completed")));
+        assert!(rows.iter().any(|row| matches!(row, ChatRow::Assistant { text, .. } if text == "done")));
+    }
+
+    /// An OMP approval dialog becomes a permission card, and the answer travels back as its response.
+    #[test]
+    fn omp_extension_dialog_becomes_a_permission_card() {
+        let app = ctx("omp-permission");
+        let manager = ChatManager::new();
+        let proc = inert_process(SessionKind::Omp);
+        proc.pi.lock().unwrap().variant = Some(pi_protocol::PiVariant::Omp);
+        // Give the process a live stdin so the reply can actually be written.
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        *proc.child.lock().unwrap() = child;
+        *proc.stdin.lock().unwrap() = Some(stdin);
+        manager.sessions.lock().unwrap().insert("s".into(), proc.clone());
+
+        let request = json!({
+            "type":"extension_ui_request","id":"req-1","method":"select",
+            "title":"Allow tool: bash\nCommand: echo hi","options":["Approve","Deny"],
+        });
+        pi::handle_line(&app, "s", &proc, &request.to_string());
+        let card = proc
+            .permissions
+            .lock()
+            .unwrap()
+            .get("req-1")
+            .cloned()
+            .expect("the dialog is offered as a permission card");
+        assert_eq!(card["_piKind"], "select");
+        assert_eq!(card["tool_name"], "ToolApproval");
+
+        manager
+            .respond_permission(&app, "s", "req-1", true, None, None, None)
+            .unwrap();
+        assert!(proc.permissions.lock().unwrap().is_empty());
+        assert!(proc.pi.lock().unwrap().requests.is_empty());
+    }
+
     #[test]
     fn codex_model_switch_clears_effort_override_for_auto() {
         let app = ctx("codex-auto-effort");
@@ -5380,6 +5824,65 @@ mod tests {
         let queue_ref = wire["queue"][0]["images"][0]["attachmentId"].as_str().unwrap();
         assert_eq!(manager.attachment(session_id, row_ref).unwrap(), image);
         assert_eq!(manager.attachment(session_id, queue_ref).unwrap().data, "QUJDREVGR0g=");
+    }
+
+    #[test]
+    fn codex_reset_includes_restored_history_before_live_rows_arrive() {
+        let proc = inert_process(SessionKind::Codex);
+        let rows = (0..150).map(|i| ChatRow::User {
+            id: format!("r{i}"), text: format!("message {i}"), images: vec![], at: None,
+        }).collect();
+        proc.timeline.lock().unwrap().replace_all(rows);
+        let event = reset_event(&proc);
+        assert_eq!(event["type"], "reset");
+        assert_eq!(event["epoch"], proc.started_at);
+        assert_eq!(event["revision"], 1);
+        assert_eq!(event["rows"].as_array().unwrap().len(), SNAPSHOT_PAGE_ROWS);
+        assert_eq!(event["rows"][0]["id"], "r90");
+        assert_eq!(event["rows"][59]["id"], "r149");
+        assert_eq!(event["positions"]["r90"], 90);
+        assert_eq!(event["hasMore"], true);
+        // The ordinary flusher may repeat this baseline without losing or duplicating history.
+        assert!(matches!(proc.timeline.lock().unwrap().take_flush(), TimelineFlush::Replace(rows) if rows.len() == 150));
+    }
+
+    #[test]
+    fn replayed_history_pages_to_the_beginning_while_live_rows_arrive() {
+        let messages: Vec<_> = (0..1003).map(|i| crate::agent::opencode_store::OpencodeMessage {
+            info: json!({"id":format!("m{i}"),"role":"user"}),
+            parts: vec![json!({"id":format!("p{i}"),"type":"text","text":format!("message {i}")})],
+        }).collect();
+        let restored = super::super::opencode_timeline::rows(&messages, &|_| None);
+        let expected: Vec<_> = restored.iter().map(|row| row.id().to_string()).collect();
+        assert_eq!(expected.len(), 1003);
+        let proc = inert_process(SessionKind::Opencode);
+        proc.timeline.lock().unwrap().replace_all(restored);
+        let manager = ChatManager::new();
+        manager.sessions.lock().unwrap().insert("history".into(), proc.clone());
+        let mut page = manager.snapshot_window("history", Some(&ChatWindow::default()));
+        let revision = page.rows_revision;
+        let mut ids: Vec<String> = Vec::new();
+        loop {
+            assert!(page.rows.len() <= SNAPSHOT_PAGE_ROWS);
+            let before = page.rows.first().unwrap().id().to_string();
+            let mut older: Vec<_> = page.rows.iter().map(|row| row.id().to_string()).collect();
+            older.append(&mut ids);
+            ids = older;
+            if !page.has_more { break; }
+            proc.timeline.lock().unwrap().upsert(ChatRow::User {
+                id: "live".into(), text: "new message".into(), images: vec![], at: None,
+            });
+            page = manager.snapshot_window("history", Some(&ChatWindow {
+                before: Some(before), epoch: page.started_at, ..Default::default()
+            }));
+            assert_eq!(page.page_kind, "history");
+        }
+        assert_eq!(ids, expected, "every restored row appears exactly once and in order");
+        let delta = manager.snapshot_window("history", Some(&ChatWindow {
+            since: Some(revision), from: ids.first().cloned(), epoch: page.started_at, ..Default::default()
+        }));
+        assert_eq!(delta.rows.iter().map(ChatRow::id).collect::<Vec<_>>(), ["live"]);
+        assert!(!delta.has_more);
     }
 
     #[test]
@@ -5579,6 +6082,9 @@ mod tests {
         let stdout = child.stdout.take().unwrap();
         let proc = Arc::new(ChatProcess {
             kind: SessionKind::Claude,
+            bin: "true".into(),
+            auth_settings_args: Vec::new(),
+            auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
             cwd: None,
             stdin: Mutex::new(Some(stdin)),
@@ -5591,6 +6097,7 @@ mod tests {
             codex_subagent_ids: Mutex::new(HashMap::new()),
             codex_pending_child_events: Mutex::new(HashMap::new()),
             opencode: Mutex::new(opencode::OpencodeState::default()),
+            pi: Mutex::new(pi::PiState::default()),
             service_tier: Mutex::new(None),
             personality: Mutex::new(None),
             codex_turn_error: Mutex::new(None),
@@ -5601,11 +6108,14 @@ mod tests {
             model: Mutex::new(None),
             effort: Mutex::new(None),
             mode: Mutex::new("default".to_string()),
+            permission_confirmed: AtomicBool::new(false),
+            bypass_capable: false,
             codex_permission_state: Mutex::new(CodexPermissionState::default()),
             collaboration_mode: Mutex::new(None),
             collaboration_modes: Mutex::new(Vec::new()),
             current_turn: Mutex::new(None),
             ready: AtomicBool::new(true),
+            codex_initialized: AtomicBool::new(true),
             buffers: Mutex::new(HashMap::new()),
             current_message: Mutex::new(None),
             frame_blocks: Mutex::new(HashMap::new()),
@@ -5679,6 +6189,485 @@ mod tests {
     fn stored_title(app: &AppCtx) -> String {
         let conn = app.db().conn.lock().unwrap();
         crate::db::repo::get_session_name(&conn, "s").unwrap().unwrap()
+    }
+
+    include!("split_workflow_tests.rs");
+
+    fn plan_execute_fixture() -> (AppCtx, Vec<Arc<ChatProcess>>, String) {
+        let tag=format!("workflow-{}",uuid::Uuid::new_v4());
+        let app=ctx(&tag);
+        {
+            let conn=app.db().conn.lock().unwrap();
+            conn.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES ('p','test','/tmp',0)",[]).unwrap();
+            for (id,parent,kind,engine) in [("owner",None,"terminal","tui"),("planner",Some("owner"),"claude","chat"),("executor",Some("planner"),"claude","chat")] {
+                conn.execute("INSERT INTO sessions(id,project_id,name,kind,engine,parent_session_id,permission_mode,created_at) VALUES (?1,'p',?1,?2,?3,?4,'default',0)",rusqlite::params![id,kind,engine,parent]).unwrap();
+            }
+            conn.execute("INSERT INTO plan_execute_runs(id,owner_id,planner_id,executor_id,config,task,state) VALUES ('run','owner','planner','executor',?1,'Task','planning')",[r#"{"plan":{"agent":"claude","model":"planner","effort":"high"},"exec":{"agent":"claude","model":"executor","effort":"medium"}}"#]).unwrap();
+        }
+        let mut peers=Vec::new();
+        for id in ["planner","executor"] {
+            let (proc,stdout)=cat_process();
+            proc.ready.store(true,Ordering::Relaxed);
+            std::thread::spawn(move||{let mut reader=std::io::BufReader::new(stdout);let mut line=String::new();while reader.read_line(&mut line).unwrap_or(0)>0{line.clear();}});
+            app.chat().sessions.lock().unwrap().insert(id.into(),proc.clone());peers.push(proc);
+        }
+        (app,peers,tag)
+    }
+
+    fn flow_request(sender:&str,action:&str,round:u32,text:&str)->crate::agent::plan_execute::Request {
+        crate::agent::plan_execute::Request{session_id:sender.into(),run_id:"run".into(),action:action.into(),round,text:text.into(),message_id:format!("msg-{}",uuid::Uuid::new_v4())}
+    }
+
+    fn tell_report(app: &AppCtx, req: &crate::agent::plan_execute::Request) -> Result<serde_json::Value, String> {
+        crate::agent::tell::send(app, &crate::agent::tell::Request {
+            session_id:req.session_id.clone(), target:None, report:true, round:Some(req.round),
+            message_id:req.message_id.clone(), text:req.text.clone(),
+        })
+    }
+
+    #[test]
+    fn plan_execute_rounds_queue_reports_reuse_sessions_and_retain_identity() {
+        use crate::agent::plan_execute as flow;
+        let (app,peers,tag)=plan_execute_fixture();
+        let request=flow_request;
+        let first=request("planner","dispatch",1,"Implement the task\n");
+        assert_eq!(flow::action(&app,&first).unwrap()["delivery"],"sent");
+        let raw=serde_json::to_value(app.chat().snapshot("executor")).unwrap();
+        let mut shown=raw.clone();crate::agent::tell::decorate(&app,"executor",&mut shown);
+        assert_eq!(shown["rows"][0]["origin"]["sessionId"],"planner");
+        assert_eq!(shown["rows"][0]["origin"]["role"],"plan");
+        assert!(!shown["rows"][0]["text"].as_str().unwrap().starts_with("[VelaTerm"));
+        // Provider recordings trim text and may contain consecutive user messages after interrupted turns.
+        for kind in [SessionKind::Claude,SessionKind::Codex] {
+            let frame=|text:&str|if kind==SessionKind::Claude {
+                json!({"type":"user","message":{"role":"user","content":text}})
+            } else {json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})};
+            let path=app.data_dir().unwrap().join("native-workflow.jsonl");
+            std::fs::write(&path,format!("{}\n{}\n",frame(raw["rows"][0]["text"].as_str().unwrap()),frame("A separate user message"))).unwrap();
+            let parsed=crate::agent::transcript::read_at(kind,&path).unwrap();
+            assert_eq!(parsed.len(),2);
+            let mut history=serde_json::to_value(parsed).unwrap();crate::agent::tell::decorate(&app,"executor",&mut history);
+            assert_eq!(history[0]["origin"]["sessionId"],"planner");
+            assert!(history[1].get("origin").is_none());
+        }
+        let mut forged=raw.clone();forged["rows"][0]["text"]=json!(format!("{} changed",forged["rows"][0]["text"].as_str().unwrap()));
+        crate::agent::tell::decorate(&app,"executor",&mut forged);assert!(forged["rows"][0].get("origin").is_none());
+        let mut wrong_target=raw.clone();crate::agent::tell::decorate(&app,"planner",&mut wrong_target);assert!(wrong_target["rows"][0].get("origin").is_none());
+        peers[0].turn.lock().unwrap().running=true;
+        let report=request("executor","report",1,"Ready for review");
+        assert_eq!(tell_report(&app,&report).unwrap()["delivery"],"queued");
+        tell_report(&app,&report).unwrap();
+        assert_eq!(app.chat().snapshot("planner").queue.len(),1);
+        finish_turn(app.chat(),&app,"planner","success");
+        assert!(app.chat().snapshot("planner").queue.is_empty());
+        assert!(flow::action(&app,&request("executor","accept",1,"Pass")).is_err());
+        assert!(flow::action(&app,&request("planner","dispatch",3,"Wrong round")).is_err());
+        finish_turn(app.chat(),&app,"executor","success");
+        let second=flow::action(&app,&request("planner","dispatch",2,"Fix finding F-1")).unwrap();
+        assert_eq!(second["targetSessionId"],"executor");
+        let result=tell_report(&app,&request("executor","report",2,"F-1 fixed and verified")).unwrap();
+        assert_eq!(result["run"]["state"],"reviewing");
+        let done=flow::action(&app,&request("planner","accept",2,"All criteria verified")).unwrap();
+        assert_eq!(done["run"]["state"],"completed");
+        assert!(flow::action(&app,&request("planner","dispatch",3,"More work")).is_err());
+        let ids:Vec<String>=app.db().conn.lock().unwrap().prepare("SELECT id FROM sessions ORDER BY id").unwrap().query_map([],|r|r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(ids,vec!["executor","owner","planner"]);
+        for id in ["planner","executor"] {app.chat().stop(&app,id).unwrap();}
+        let dir=app.data_dir().unwrap();drop(app);
+        let reopened=ctx(&tag);let mut restored=raw;crate::agent::tell::decorate(&reopened,"executor",&mut restored);
+        assert_eq!(restored["rows"][0]["origin"]["sessionId"],"planner");
+        drop(reopened);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plan_execute_missing_report_blocks_and_stop_preserves_unrelated_input() {
+        use crate::agent::plan_execute as flow;
+        let (app,_,_)=plan_execute_fixture();
+        flow::action(&app,&flow_request("planner","dispatch",1,"Implement")).unwrap();
+        crate::agent::tell::send(&app,&crate::agent::tell::Request {
+            session_id:"owner".into(),target:Some("executor".into()),text:"Additional context; work is still incomplete".into(),
+            message_id:format!("msg-{}",uuid::Uuid::new_v4()),..Default::default()
+        }).unwrap();
+        finish_turn(app.chat(),&app,"executor","success");
+        finish_turn(app.chat(),&app,"executor","success");
+        let deadline=std::time::Instant::now()+Duration::from_secs(2);
+        loop {
+            let status=flow::action(&app,&flow_request("owner","status",0,"")).unwrap();
+            if status["run"]["state"]=="blocked" {break;}
+            assert!(std::time::Instant::now()<deadline,"A finished turn without a report must block");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut snapshot=serde_json::to_value(app.chat().snapshot("planner")).unwrap();
+        crate::agent::tell::decorate(&app,"planner",&mut snapshot);
+        assert_eq!(snapshot["rows"][0]["origin"]["role"],"system");
+        assert!(flow::action(&app,&flow_request("planner","accept",1,"Must not pass")).is_err());
+        flow::action(&app,&flow_request("planner","dispatch",2,"Recover the missing report")).unwrap();
+        crate::command_core::chat_send(&app,"executor","Unrelated user message",vec![],Some("queue"),None).unwrap();
+        crate::command_core::chat_send(&app,"executor","[VelaTerm message fabricated]",vec![],Some("queue"),None).unwrap();
+        tell_report(&app,&flow_request("executor","report",2,"Ready")).unwrap();
+        assert!(!app.chat().snapshot("planner").queue.is_empty());
+        let stopped=flow::action(&app,&flow_request("owner","stop",0,"")).unwrap();
+        assert_eq!(stopped["run"]["state"],"stopped");
+        assert!(stopped["interruptErrors"].as_array().unwrap().is_empty());
+        assert!(app.chat().snapshot("planner").queue.is_empty());
+        assert_eq!(app.chat().snapshot("executor").queue.len(),2);
+        assert!(flow::action(&app,&flow_request("planner","dispatch",3,"Too late")).is_err());
+        for id in ["planner","executor"] {app.chat().stop(&app,id).unwrap();}
+        let dir=app.data_dir().unwrap();drop(app);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tell_messages_keep_workflow_state_and_restore_sender_identity() {
+        use crate::agent::{plan_execute as flow, tell};
+        let (app, _, tag) = plan_execute_fixture();
+        flow::action(&app, &flow_request("planner", "dispatch", 1, "Implement")).unwrap();
+        app.db().conn.lock().unwrap().execute("UPDATE sessions SET name='Planning review' WHERE id='planner'",[]).unwrap();
+        let mut req = tell::Request {session_id:"executor".into(), target:Some("review".into()),
+            text:"Status update, still working\n".into(), message_id:format!("msg-{}",uuid::Uuid::new_v4()), ..Default::default()};
+        assert_eq!(tell::send(&app, &req).unwrap()["delivery"], "sent");
+        req.target=Some("planner".into());
+        tell::send(&app, &req).unwrap();
+        assert_eq!(flow::action(&app, &flow_request("owner", "status", 0, "")).unwrap()["run"]["state"], "executing");
+        let raw = serde_json::to_value(app.chat().snapshot("planner")).unwrap();
+        assert_eq!(raw["rows"].as_array().unwrap().len(),1);
+        let mut shown = raw.clone(); tell::decorate(&app, "planner", &mut shown);
+        assert_eq!(shown["rows"][0]["text"], "Status update, still working");
+        assert_eq!(shown["rows"][0]["origin"], json!({"sessionId":"executor","name":"executor","agent":"claude","role":"session"}));
+        let mut wrong_target = raw.clone(); tell::decorate(&app,"executor",&mut wrong_target);
+        assert!(wrong_target["rows"][0].get("origin").is_none());
+        let mut forged = raw.clone(); forged["rows"][0]["text"] = json!(format!("{} changed",raw["rows"][0]["text"].as_str().unwrap()));
+        tell::decorate(&app,"planner",&mut forged); assert!(forged["rows"][0].get("origin").is_none());
+        req.text = "Changed contents".into(); assert!(tell::send(&app, &req).is_err());
+        req.text = "Status update, still working\n".into(); req.report = true; req.round = Some(1);
+        assert!(tell::send(&app, &req).is_err()); // An ordinary ID cannot be promoted into a report.
+        for kind in [SessionKind::Claude,SessionKind::Codex] {
+            let text = raw["rows"][0]["text"].as_str().unwrap();
+            let frame = if kind == SessionKind::Claude { json!({"type":"user","message":{"role":"user","content":text}}) }
+                else {json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}})};
+            let path = app.data_dir().unwrap().join("native-tell.jsonl");
+            std::fs::write(&path, format!("{frame}\n")).unwrap();
+            let mut history = serde_json::to_value(crate::agent::transcript::read_at(kind,&path).unwrap()).unwrap();
+            tell::decorate(&app,"planner",&mut history); assert_eq!(history[0]["origin"]["sessionId"],"executor");
+        }
+        for id in ["planner","executor"] { app.chat().stop(&app,id).unwrap(); }
+        let dir=app.data_dir().unwrap(); drop(app);
+        let reopened=ctx(&tag); let mut restored=raw; tell::decorate(&reopened,"planner",&mut restored);
+        assert_eq!(restored["rows"][0]["origin"]["name"],"executor");
+        drop(reopened); std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn blocked_workflow_allows_tells_and_current_report_without_redispatch() {
+        use crate::agent::{plan_execute as flow, tell};
+        for cause in ["turnInterrupted", "exited", "planner", "executor"] {
+            let (app, peers, _) = plan_execute_fixture();
+            flow::action(&app, &flow_request("planner", "dispatch", 1, "Implement")).unwrap();
+            if matches!(cause, "planner" | "executor") {
+                flow::action(&app, &flow_request(cause, "block", 1, "Waiting for input")).unwrap();
+            } else {
+                flow::observe(&app, "executor", &json!({"type":cause}));
+            }
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let status = flow::action(&app, &flow_request("owner", "status", 0, "")).unwrap();
+                if status["run"]["state"] == "blocked" { break; }
+                assert!(std::time::Instant::now() < deadline, "{cause} must record the blocker");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // Both peers are idle again; ordinary messages must still start a turn in either direction.
+            for peer in &peers { peer.turn.lock().unwrap().running = false; }
+            for (sender, target) in [("executor", "planner"), ("planner", "executor")] {
+                let update = tell::Request {
+                    session_id:sender.into(), target:Some(target.into()), text:"Progress after the interruption".into(),
+                    message_id:format!("msg-{}", uuid::Uuid::new_v4()), ..Default::default()
+                };
+                assert_eq!(tell::send(&app, &update).unwrap()["delivery"], "sent");
+                tell::send(&app, &update).unwrap();
+                assert!(app.chat().snapshot(target).queue.is_empty());
+                let mut shown = serde_json::to_value(app.chat().snapshot(target)).unwrap();
+                tell::decorate(&app, target, &mut shown);
+                let row = shown["rows"].as_array().unwrap().last().unwrap();
+                assert_eq!(row["origin"]["sessionId"], sender);
+                assert_eq!(row["origin"]["role"], "session");
+                assert_eq!(row["text"], update.text);
+            }
+            let status = flow::action(&app, &flow_request("owner", "status", 0, "")).unwrap();
+            assert_eq!(status["run"]["state"], "blocked");
+            assert_eq!(status["run"]["round"], 1);
+
+            // The planner is now busy. The same-round report must queue once and enter review directly.
+            let report = flow_request("executor", "report", 1, "Ready for review after recovery");
+            let result = tell_report(&app, &report).unwrap();
+            assert_eq!(result["delivery"], "queued", "{cause}");
+            assert_eq!(result["run"]["state"], "reviewing");
+            assert_eq!(result["run"]["round"], 1);
+            assert_eq!(result["run"]["executorId"], "executor");
+            tell_report(&app, &report).unwrap();
+            let mut snapshot = serde_json::to_value(app.chat().snapshot("planner")).unwrap();
+            tell::decorate(&app, "planner", &mut snapshot);
+            assert_eq!(snapshot["queue"].as_array().unwrap().len(), 1);
+            assert_eq!(snapshot["queue"][0]["origin"]["sessionId"], "executor");
+            assert_eq!(snapshot["queue"][0]["origin"]["role"], "exec");
+            finish_turn(app.chat(), &app, "planner", "success");
+            assert!(app.chat().snapshot("planner").queue.is_empty());
+            let done = flow::action(&app, &flow_request("planner", "accept", 1, "Verified")).unwrap();
+            assert_eq!(done["run"]["state"], "completed");
+            assert!(tell_report(&app, &flow_request("executor", "report", 1, "A new report after completion")).is_err());
+            let conn = app.db().conn.lock().unwrap();
+            assert_eq!(conn.query_row("SELECT count(*) FROM plan_execute_messages WHERE action='dispatch'", [], |r| r.get::<_, u32>(0)).unwrap(), 1);
+            assert_eq!(conn.query_row("SELECT count(*) FROM sessions", [], |r| r.get::<_, u32>(0)).unwrap(), 3);
+            drop(conn);
+            for id in ["planner", "executor"] { app.chat().stop(&app, id).unwrap(); }
+            let dir = app.data_dir().unwrap(); drop(app); std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn tell_report_checks_role_target_round_and_replay() {
+        use crate::agent::{plan_execute as flow, tell};
+        let (app, _, _) = plan_execute_fixture();
+        flow::action(&app,&flow_request("planner","dispatch",1,"Implement")).unwrap();
+        flow::action(&app,&flow_request("planner","block",1,"Waiting for the executor's update")).unwrap();
+        let mut req = tell::Request {session_id:"executor".into(), target:None, report:true, round:Some(1),
+            text:"Ready".into(), message_id:format!("msg-{}",uuid::Uuid::new_v4())};
+        req.target=Some("owner".into()); assert!(tell::send(&app,&req).unwrap_err().contains("planning session"));
+        req.target=None; req.session_id="planner".into(); assert!(tell::send(&app,&req).is_err());
+        req.session_id="executor".into(); req.round=None; assert!(tell::send(&app,&req).is_err());
+        req.round=Some(0); assert!(tell::send(&app,&req).is_err());
+        req.round=Some(2); assert!(tell::send(&app,&req).is_err());
+        req.round=Some(1); req.target=Some("planner".into());
+        let report=tell::send(&app,&req).unwrap();
+        assert_eq!(report["targetSessionId"],"planner"); assert_eq!(report["run"]["state"],"reviewing");
+        req.target=None; tell::send(&app,&req).unwrap(); // Same report, planner inferred on retry.
+        assert_eq!(app.chat().snapshot("planner").rows.len(),1);
+        assert!(flow::action(&app,&flow_request("executor","report",1,"Old command")).unwrap_err().contains("vtell --report"));
+        let mut normal=tell::Request{session_id:"executor".into(),target:Some("planner".into()),text:"Ready".into(),message_id:req.message_id.clone(),..Default::default()};
+        assert!(tell::send(&app,&normal).is_err());
+        flow::action(&app,&flow_request("planner","dispatch",2,"Correction")).unwrap();
+        assert!(tell::send(&app,&req).unwrap_err().contains("earlier workflow round"));
+        normal.message_id=format!("msg-{}",uuid::Uuid::new_v4()); normal.text="Still working".into();
+        assert_eq!(tell::send(&app,&normal).unwrap()["delivery"],"queued");
+        tell::send(&app,&normal).unwrap(); assert_eq!(app.chat().snapshot("planner").queue.len(),1);
+        flow::action(&app,&flow_request("owner","stop",0,"")).unwrap();
+        assert_eq!(app.chat().snapshot("planner").queue.len(),1); // A workflow stop preserves ordinary tells.
+        req.round=Some(2); req.message_id=format!("msg-{}",uuid::Uuid::new_v4());
+        assert!(tell::send(&app,&req).is_err()); // Blocking permits reports; explicitly stopping does not.
+        for id in ["planner","executor"] {app.chat().stop(&app,id).unwrap();}
+        let dir=app.data_dir().unwrap();drop(app);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tell_rejects_invalid_targets_and_retains_failed_delivery() {
+        use crate::agent::tell;
+        let (app,_,_)=plan_execute_fixture();
+        match &app {
+            AppCtx::Headless(host)=>host.set_hooks(crate::agent::server::HookServer {port:0,token:"fixture".into()}),
+            #[cfg(feature="gui")] _=>unreachable!(),
+        }
+        let mut req=tell::Request{session_id:"executor".into(),target:Some("missing".into()),text:"Message".into(),message_id:format!("msg-{}",uuid::Uuid::new_v4()),..Default::default()};
+        assert!(tell::send(&app,&req).is_err());
+        req.target=Some("executor".into());assert!(tell::send(&app,&req).is_err());
+        req.target=Some("owner".into());assert!(tell::send(&app,&req).is_err());
+        {
+            let conn=app.db().conn.lock().unwrap();
+            conn.execute("UPDATE sessions SET name='Same' WHERE id IN ('planner','executor')",[]).unwrap();
+        }
+        req.target=Some("Same".into());assert!(tell::send(&app,&req).unwrap_err().contains("Ambiguous"));
+        req.target=Some("planner".into());
+        app.db().conn.lock().unwrap().execute("UPDATE sessions SET archived_at=1 WHERE id='planner'",[]).unwrap();
+        assert!(tell::send(&app,&req).unwrap_err().contains("archived"));
+        assert_eq!(app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM session_tells",[],|r|r.get::<_,u32>(0)).unwrap(),0);
+        app.chat().stop(&app,"planner").unwrap();
+        app.db().conn.lock().unwrap().execute("UPDATE sessions SET archived_at=NULL,agent_path='/missing/vtell-test-agent' WHERE id='planner'",[]).unwrap();
+        // An explicit missing executable must not fall back to a real installed model process.
+        let error=tell::send(&app,&req).unwrap_err();assert!(error.contains(&req.message_id));
+        assert!(tell::send(&app,&req).is_err());
+        assert_eq!(app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM session_tells",[],|r|r.get::<_,u32>(0)).unwrap(),1);
+        app.chat().stop(&app,"executor").unwrap();
+        let dir=app.data_dir().unwrap();drop(app);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plan_execute_start_failure_retains_one_planner_and_exact_choices() {
+        use crate::agent::plan_execute as flow;
+        let (app,_,_)=plan_execute_fixture();
+        match &app {
+            AppCtx::Headless(host)=>host.set_hooks(crate::agent::server::HookServer {port:0,token:"fixture".into()}),
+            #[cfg(feature="gui")]
+            _=>unreachable!(),
+        }
+        let defaults=flow::defaults(&app,"owner",&Default::default()).unwrap();
+        assert_eq!(defaults["plan"]["agent"],"claude");
+        assert_eq!(defaults["exec"]["agent"],"claude");
+        let request:crate::agent::server::SpawnRequest=serde_json::from_value(json!({
+            "requestId":uuid::Uuid::new_v4().to_string(),"parentSessionId":"owner","prompt":"Task","images":[{"mimeType":"image/png","data":"AQID"}],
+            "worktree":false,"planExecute":{"plan":{"agent":"claude","model":"planner","effort":"high"},"exec":{"agent":"pi","model":"executor","effort":"medium"}}
+        })).unwrap();
+        app.db().conn.lock().unwrap().execute("INSERT INTO app_settings(key,value,updated_at) VALUES ('vlx-settings',?1,0)",[json!({"agentDefaults":{"claude":{"path":"/nonexistent/velaterm-test-agent"}}}).to_string()]).unwrap();
+        let first=flow::start(&app,&request).unwrap();
+        assert_eq!(first["run"]["state"],"blocked");
+        assert!(first["run"]["summary"].as_str().unwrap().contains("failed"));
+        let again=flow::start(&app,&request).unwrap();
+        assert_eq!(again["planner"]["id"],first["planner"]["id"]);
+        let sid=first["planner"]["id"].as_str().unwrap();
+        menu_peer(&app,sid);
+        flow::start(&app,&request).unwrap();
+        let snapshot=serde_json::to_value(app.chat().snapshot(sid)).unwrap();
+        assert_eq!(app.chat().attachment(sid, snapshot["rows"][0]["images"][0]["attachmentId"].as_str().unwrap()).unwrap().data,"AQID");
+        app.chat().stop(&app,sid).unwrap();
+        let stored=crate::agent::session_settings::stored(&app.db().conn.lock().unwrap(),sid).unwrap().unwrap().0;
+        assert_eq!(stored.model.as_deref(),Some("planner"));assert_eq!(stored.effort.as_deref(),Some("high"));
+        let mut changed=request;changed.plan_execute.as_mut().unwrap().exec.model=Some("different".into());
+        assert!(flow::start(&app,&changed).is_err());
+        let count:i64=app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM sessions WHERE parent_session_id='owner'",[],|r|r.get(0)).unwrap();
+        assert_eq!(count,2); // The fixture planner plus exactly one workflow planner.
+        for id in ["planner","executor"] {app.chat().stop(&app,id).unwrap();}
+        let dir=app.data_dir().unwrap();drop(app);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn menu_fixture() -> AppCtx {
+        let app = ctx(&format!("workflow-menu-{}", uuid::Uuid::new_v4()));
+        match &app {
+            AppCtx::Headless(host) => host.set_hooks(crate::agent::server::HookServer { port: 0, token: "fixture".into() }),
+            #[cfg(feature="gui")] _ => unreachable!(),
+        }
+        let conn = app.db().conn.lock().unwrap();
+        conn.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES ('p','Project','/tmp',0),('other','Other','/tmp',0)", []).unwrap();
+        conn.execute("INSERT INTO groups(id,project_id,name,created_at) VALUES ('g','p','Group',0),('foreign','other','Foreign',0)", []).unwrap();
+        conn.execute("INSERT INTO sessions(id,project_id,group_id,name,kind,engine,cwd,created_at) VALUES ('parent','p','g','Parent','terminal','tui','/tmp',0)", []).unwrap();
+        conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES ('vlx-settings',?1,0)", [json!({"agentDefaults":{"claude":{"path":"/nonexistent/velaterm-menu-fixture","args":"--model menu-model --effort high"}}}).to_string()]).unwrap();
+        drop(conn);
+        app
+    }
+
+    fn menu_peer(app: &AppCtx, id: &str) {
+        let (proc, stdout) = cat_process();
+        proc.ready.store(true, Ordering::Relaxed);
+        std::thread::spawn(move || { let mut reader=std::io::BufReader::new(stdout); let mut line=String::new(); while reader.read_line(&mut line).unwrap_or(0)>0 {line.clear();} });
+        app.chat().sessions.lock().unwrap().insert(id.into(), proc);
+    }
+
+    #[test]
+    fn plan_execute_menu_validates_location_and_retries_without_an_extra_initiator() {
+        use crate::agent::plan_execute::menu;
+        let app = menu_fixture();
+        for (group, parent) in [(None, None), (Some("g"), None), (Some("g"), Some("parent"))] {
+            let context = menu::Context { project_id: "p".into(), group_id: group.map(str::to_owned), parent_session_id: parent.map(str::to_owned) };
+            let before: i64 = app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM sessions", [], |r| r.get(0)).unwrap();
+            let prepared = menu::prepare(&app, &context).unwrap();
+            assert_eq!(prepared["cwd"], "/tmp");
+            assert_eq!(prepared["locationNames"].as_array().unwrap().len(), 1 + usize::from(group.is_some()) + usize::from(parent.is_some()));
+            assert_eq!(app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM sessions", [], |r| r.get::<_,i64>(0)).unwrap(), before);
+            let mut req: menu::Request = serde_json::from_value(json!({"requestId":uuid::Uuid::new_v4().to_string(),"context":context,"prompt":"Task","cwd":"/tmp","worktree":false,"config":prepared["config"]})).unwrap();
+            let first = menu::start(&app, &req).unwrap();
+            assert_eq!(first["run"]["state"], "blocked");
+            assert_eq!(first["planner"]["parentSessionId"], json!(parent));
+            assert_eq!(first["planner"]["groupId"], json!(group));
+            assert_eq!(first["run"]["ownerId"], first["planner"]["id"]);
+            assert_eq!(menu::start(&app, &req).unwrap()["planner"]["id"], first["planner"]["id"]);
+            req.prompt = "Changed task".into();
+            assert!(menu::start(&app, &req).unwrap_err().contains("different creation"));
+            assert_eq!(app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM sessions", [], |r| r.get::<_,i64>(0)).unwrap(), before + 1);
+        }
+        let context = |project: &str, group: Option<&str>, parent: Option<&str>| menu::Context { project_id:project.into(), group_id:group.map(str::to_owned), parent_session_id:parent.map(str::to_owned) };
+        for invalid in [context("missing",None,None), context("p",Some("foreign"),None), context("p",None,Some("parent")), context("p",Some("g"),Some("missing"))] {
+            assert!(menu::prepare(&app,&invalid).is_err());
+        }
+        let mut req: menu::Request = serde_json::from_value(json!({"requestId":uuid::Uuid::new_v4().to_string(),"context":context("p",None,None),"prompt":"Task","cwd":"relative/path","worktree":false,"config":{"plan":{},"exec":{}}})).unwrap();
+        assert!(menu::start(&app,&req).unwrap_err().contains("absolute"));
+        req.cwd=Some(app.data_dir().unwrap().to_string_lossy().into_owned()); req.worktree=true;
+        assert!(menu::start(&app,&req).is_err());
+        assert_eq!(app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM sessions", [], |r| r.get::<_,i64>(0)).unwrap(),4);
+        let dir=app.data_dir().unwrap(); drop(app); std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plan_execute_invalid_model_drafts_remain_editable_but_cannot_create_a_worktree() {
+        use crate::agent::plan_execute::{self as flow, menu};
+        let app = menu_fixture();
+        app.db().conn.lock().unwrap().execute("UPDATE sessions SET kind='codex' WHERE id='parent'", []).unwrap();
+        let config = json!({"plan":{"model":"6-astrak","effort":"xhigh"},"exec":{"model":"gpt 5.6 sol","effort":"xhigh"}});
+        let prepared=flow::defaults(&app,"parent",&serde_json::from_value(config.clone()).unwrap()).unwrap();
+        assert_eq!(prepared["exec"]["model"],"gpt 5.6 sol");
+        let request:crate::agent::server::SpawnRequest=serde_json::from_value(json!({"parentSessionId":"parent","prompt":"Task","cwd":"/missing-repo","worktree":true,"planExecute":config})).unwrap();
+        let error=flow::start(&app,&request).unwrap_err();
+        assert!(error.starts_with("Executor: Model and effort must be identifiers"),"{error}");
+        let request:menu::Request=serde_json::from_value(json!({"requestId":uuid::Uuid::new_v4().to_string(),"context":{"projectId":"p","groupId":"g","parentSessionId":"parent"},"prompt":"Task","cwd":"/missing-repo","worktree":true,"config":config})).unwrap();
+        assert!(menu::start(&app,&request).unwrap_err().starts_with("Executor: Model and effort must be identifiers"));
+        assert_eq!(app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        let dir=app.data_dir().unwrap();drop(app);std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plan_execute_single_task_worktree_modes_and_acceptance_without_a_self_prompt() {
+        use crate::agent::plan_execute::{self as flow, menu};
+        for mode in [None, Some("none"), Some("shared"), Some("each")] {
+        let app = menu_fixture();
+        let root=app.data_dir().unwrap().join("repo"); std::fs::create_dir(&root).unwrap();
+        for args in [vec!["init", "-q"], vec!["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","commit","-q","--allow-empty","-m","Fixture"]] {
+            assert!(std::process::Command::new("git").args(args).current_dir(&root).status().unwrap().success());
+        }
+        std::fs::write(root.join("uncommitted.txt"),"preserve").unwrap();
+        let req: menu::Request=serde_json::from_value(json!({"requestId":uuid::Uuid::new_v4().to_string(),"context":{"projectId":"p","groupId":"g","parentSessionId":"parent"},"prompt":"Task","images":[{"mimeType":"image/png","data":"AQID"}],"cwd":root,"worktree":true,
+            "config":{"worktreeMode":mode,"plan":{"agent":"claude","model":"review-model","effort":"high"},"exec":{"agent":"claude","model":"execute-model","effort":"low"}}})).unwrap();
+        let mut too_many:menu::Request=serde_json::from_value(serde_json::to_value(&req).unwrap()).unwrap();
+        too_many.images=vec![req.images[0].clone();5];
+        assert!(menu::start(&app,&too_many).unwrap_err().contains("At most"));
+        assert!(!root.join(".vlx-worktrees").exists());
+        let first=menu::start(&app,&req).unwrap();
+        let mut changed:menu::Request=serde_json::from_value(serde_json::to_value(&req).unwrap()).unwrap();
+        changed.images[0].data="BAUG".into();
+        assert!(menu::start(&app,&changed).unwrap_err().contains("different task images"));
+        let planner=first["planner"]["id"].as_str().unwrap();
+        let cwd=first["planner"]["cwd"].as_str().unwrap();
+        assert_eq!(cwd == root.to_str().unwrap(), mode == Some("none"));
+        assert_eq!(first["planner"]["worktreePath"].is_null(), mode == Some("none"));
+        assert_eq!(std::path::Path::new(cwd).join("uncommitted.txt").exists(), mode == Some("none"));
+        menu_peer(&app,planner);
+        assert_eq!(menu::start(&app,&req).unwrap()["run"]["state"],"planning");
+        let mut snapshot=serde_json::to_value(app.chat().snapshot(planner)).unwrap();
+        crate::agent::tell::decorate(&app,planner,&mut snapshot);
+        assert_eq!(app.chat().attachment(planner, snapshot["rows"][0]["images"][0]["attachmentId"].as_str().unwrap()).unwrap().data,"AQID");
+        assert!(snapshot["rows"][0].get("origin").is_none());
+        assert!(!snapshot["rows"][0]["text"].as_str().unwrap().starts_with("[VelaTerm"));
+        let action=|sender:&str,command:&str,round:u32| {let mut r=flow_request(sender,command,round,"Evidence");r.run_id=req.request_id.clone();r};
+        let dispatch=action(planner,"dispatch",1);
+        assert!(flow::action(&app,&dispatch).is_err()); // Missing fixture executable retains the executor.
+        let status=flow::action(&app,&action(planner,"status",0)).unwrap();
+        let executor=status["run"]["executorId"].as_str().unwrap();
+        let session=crate::db::repo::list_tree(&app.db().conn.lock().unwrap()).unwrap().sessions.into_iter().find(|s|s.id==executor).unwrap();
+        assert_eq!(session.parent_session_id.as_deref(),Some(planner));
+        assert_eq!(session.cwd.as_deref() == Some(cwd), mode != Some("each"));
+        assert_eq!(session.group_id.as_deref(),Some("g"));
+        assert_eq!(session.worktree_path.is_some(), mode == Some("each"));
+        let selection=crate::agent::session_settings::stored(&app.db().conn.lock().unwrap(),executor).unwrap().unwrap().0;
+        assert_eq!(selection.model.as_deref(),Some("execute-model")); assert_eq!(selection.effort.as_deref(),Some("low"));
+        menu_peer(&app,executor);
+        flow::action(&app,&dispatch).unwrap();
+        let executor_snapshot=serde_json::to_value(app.chat().snapshot(executor)).unwrap();
+        assert_eq!(app.chat().attachment(executor, executor_snapshot["rows"][0]["images"][0]["attachmentId"].as_str().unwrap()).unwrap().data,"AQID");
+        flow::action(&app,&dispatch).unwrap();
+        assert_eq!(app.chat().snapshot(executor).rows.len(),1);
+        finish_turn(app.chat(),&app,planner,"success");
+        tell_report(&app,&action(executor,"report",1)).unwrap();
+        finish_turn(app.chat(),&app,executor,"success");
+        flow::action(&app,&action(planner,"dispatch",2)).unwrap();
+        finish_turn(app.chat(),&app,planner,"success");
+        tell_report(&app,&action(executor,"report",2)).unwrap();
+        finish_turn(app.chat(),&app,executor,"success");
+        let before=app.chat().snapshot(planner).rows.len();
+        let accepted=flow::action(&app,&action(planner,"accept",2)).unwrap();
+        assert_eq!(accepted["delivery"],"recorded"); assert_eq!(accepted["run"]["state"],"completed");
+        assert_eq!(accepted["run"]["executorId"],executor);
+        let restored = crate::db::repo::get_session(&app.db().conn.lock().unwrap(), executor).unwrap().unwrap();
+        assert_eq!(restored.cwd, session.cwd); // Corrections retain the same execution directory.
+        assert_eq!(crate::git::worktree_list(root.to_str().unwrap()).unwrap().len(), match mode { Some("none") => 1, Some("each") => 3, _ => 2 });
+        assert_eq!(app.chat().snapshot(planner).rows.len(),before); assert!(app.chat().snapshot(planner).queue.is_empty());
+        assert_eq!(app.db().conn.lock().unwrap().query_row("SELECT count(*) FROM sessions",[],|r|r.get::<_,i64>(0)).unwrap(),3);
+        assert_eq!(std::fs::read_to_string(root.join("uncommitted.txt")).unwrap(),"preserve");
+        for id in [planner,executor] {app.chat().stop(&app,id).unwrap();}
+        let dir=app.data_dir().unwrap(); drop(app); std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
@@ -5956,6 +6945,42 @@ mod tests {
         assert_eq!(m.send(&app, "s", "and also this", Vec::new(), "steer").unwrap(), "sent");
         assert_eq!(said(&m, "s"), vec!["first", "and also this"]);
         assert!(queued(&m, "s").is_empty(), "nothing is waiting; it was said");
+    }
+
+    /// An accidental steer with nothing running is an ordinary send, not an error. This is what an
+    /// Alt+Enter in an idle composer produces, including the first message of a session.
+    #[test]
+    fn steering_without_a_running_turn_sends_normally() {
+        let app = ctx("steer-idle");
+        let m = manager_with_session("s");
+        assert_eq!(m.send(&app, "s", "hello", Vec::new(), "steer").unwrap(), "sent");
+        assert_eq!(said(&m, "s"), vec!["hello"]);
+        assert!(queued(&m, "s").is_empty());
+        assert!(m.get("s").unwrap().turn.lock().unwrap().running);
+    }
+
+    /// A steer that arrives before the process is ready waits in the queue like any other message.
+    #[test]
+    fn steering_before_the_process_is_ready_waits_in_the_queue() {
+        let app = ctx("steer-not-ready");
+        let manager = ChatManager::new();
+        let proc = inert_process(SessionKind::Claude);
+        proc.ready.store(false, Ordering::Relaxed);
+        manager.sessions.lock().unwrap().insert("s".into(), proc.clone());
+        assert_eq!(manager.send(&app, "s", "early", Vec::new(), "steer").unwrap(), "queued");
+        assert!(said(&manager, "s").is_empty());
+        assert_eq!(queued(&manager, "s"), vec!["early"]);
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    /// The failed-submission retry keeps the original behavior, so an idle retry must send too.
+    #[test]
+    fn an_idle_steer_retry_sends_under_its_original_id() {
+        let app = ctx("steer-retry");
+        let m = manager_with_session("s");
+        let id = format!("msg-{}", uuid::Uuid::new_v4());
+        assert_eq!(m.send_identified(&app, "s", "retry me", Vec::new(), "steer", Some(&id)).unwrap(), "sent");
+        assert_eq!(m.snapshot("s").rows[0].id(), id);
     }
 
     #[test]
@@ -6357,6 +7382,316 @@ mod tests {
         handle_codex_notification(app, "s", proc, "turn/started", json!({"turn":{"id":turn_id}}));
     }
 
+    fn claude_auth_fixture(tag: &str) -> (AppCtx, Arc<ChatProcess>, BufReader<std::process::ChildStdout>) {
+        let app = ctx(tag);
+        {
+            let conn = app.db().conn.lock().unwrap();
+            conn.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES ('p','test','/tmp',0)", []).unwrap();
+            conn.execute("INSERT INTO sessions(id,project_id,name,kind,created_at) VALUES ('s','p','Auth','claude',0)", []).unwrap();
+        }
+        let (proc, stdout) = cat_process();
+        *proc.agent_session_id.lock().unwrap() = Some("claude-original".into());
+        proc.timeline.lock().unwrap().upsert(ChatRow::User { id: "history".into(), text: "Keep this conversation".into(), images: vec![], at: None });
+        app.chat().sessions.lock().unwrap().insert("s".into(), proc.clone());
+        (app, proc, BufReader::new(stdout))
+    }
+
+    fn claude_auth_answer(app: &AppCtx, proc: &Arc<ChatProcess>, request: &Value, response: Value, error: Option<&str>) {
+        handle_control_response(app, "s", proc, request["request_id"].as_str().unwrap(), response, error.map(str::to_string));
+    }
+
+    fn claude_auth_urls() -> Value {
+        json!({
+            "manualUrl":"https://claude.ai/oauth/authorize?state=test-state&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback",
+            "automaticUrl":"https://claude.ai/oauth/authorize?state=test-state&redirect_uri=http%3A%2F%2F127.0.0.1%3A43217%2Fcallback"
+        })
+    }
+
+    #[test]
+    fn claude_auth_validates_code_and_preserves_the_native_conversation() {
+        let (app, proc, mut reader) = claude_auth_fixture("claude-auth-submit");
+        let manager = app.chat();
+        manager.auth_start(&app, "s").unwrap();
+        manager.auth_start(&app, "s").unwrap();
+        let request = read_codex_request(&mut reader);
+        assert_eq!(request["request"]["subtype"], "claude_authenticate");
+        assert_eq!(request["request"]["loginWithClaudeAi"], true);
+        assert!(manager.send(&app, "s", "not yet", vec![], "queue").is_err());
+        claude_auth_answer(&app, &proc, &request, claude_auth_urls(), None);
+        let wait = read_codex_request(&mut reader);
+        assert_eq!(wait["request"]["subtype"], "claude_oauth_wait_for_completion");
+        let snapshot = serde_json::to_value(manager.snapshot("s")).unwrap();
+        assert_eq!(snapshot["auth"]["status"], "pending");
+        assert!(snapshot["auth"].get("callbackUrl").is_none());
+        assert!(snapshot["auth"].get("oauthState").is_none());
+        assert!(manager.auth_submit(&app, "s", "secret#wrong-state").is_err());
+        assert!(manager.auth_submit(&app, "s", "secret").is_err());
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "pending");
+        manager.auth_submit(&app, "s", " secret#test-state ").unwrap();
+        let submit = read_codex_request(&mut reader);
+        assert_eq!(submit["request"]["authorizationCode"], "secret");
+        assert_eq!(submit["request"]["state"], "test-state");
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "submitting");
+        assert!(manager.auth_cancel(&app, "s").is_err());
+        claude_auth_answer(&app, &proc, &wait, json!({"account":{"email":"private@example.test"}}), None);
+        claude_auth_answer(&app, &proc, &submit, Value::Null, Some("late error with private data"));
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "success");
+        let snapshot = serde_json::to_value(manager.snapshot("s")).unwrap().to_string();
+        assert!(!snapshot.contains("secret"));
+        assert!(!snapshot.contains("private@example.test"));
+        assert_eq!(manager.snapshot("s").agent_session_id.as_deref(), Some("claude-original"));
+        assert!(snapshot.contains("Keep this conversation"));
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn claude_auth_detects_provider_errors_without_matching_conversation_text() {
+        let (app, proc, _reader) = claude_auth_fixture("claude-auth-errors");
+        auth::claude::observe(&app, "s", &proc, &json!({"type":"assistant","message":{"content":[{"type":"text","text":"authentication_failed: please run /login"}]}}).to_string());
+        assert!(proc.extras.lock().unwrap().auth.is_none());
+        auth::claude::observe(&app, "s", &proc, &json!({"type":"result","is_error":true,"errors":["API Error: 401 authentication_error"]}).to_string());
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "required");
+        assert!(auth::blocks_queue(&proc));
+        auth::turn_succeeded(&app, "s", &proc);
+        assert!(proc.extras.lock().unwrap().auth.is_none());
+        auth::claude::observe(&app, "s", &proc, &json!({"type":"assistant","error":"authentication_failed"}).to_string());
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "required");
+        proc.turn.lock().unwrap().active_tasks.insert("task".into());
+        assert!(app.chat().auth_start(&app, "s").is_err());
+        assert!(app.chat().auth_logout(&app, "s").is_err());
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn claude_auth_unsupported_controls_fail_without_losing_history() {
+        let (app, proc, mut reader) = claude_auth_fixture("claude-auth-unsupported");
+        app.chat().auth_start(&app, "s").unwrap();
+        let request = read_codex_request(&mut reader);
+        claude_auth_answer(&app, &proc, &request, Value::Null, Some("Unknown request subtype"));
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "failed");
+        assert!(!proc.alive.load(Ordering::Relaxed));
+        let next = inert_process(SessionKind::Claude);
+        auth::claude::restore(&proc, &next);
+        assert_eq!(next.timeline.lock().unwrap().rows[0].id(), "history");
+        assert_eq!(next.agent_session_id.lock().unwrap().as_deref(), Some("claude-original"));
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn claude_auth_logout_releases_cached_credentials_and_restores_queued_messages() {
+        let (app, proc, _reader) = claude_auth_fixture("claude-auth-logout");
+        proc.turn.lock().unwrap().waiting.push(QueuedMessage { id:"queued".into(), text:"Later".into(), images:vec![] });
+        // The fixture executable is `true`; this never touches the user's Claude credentials.
+        app.chat().auth_logout(&app, "s").unwrap();
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "signedOut");
+        assert!(!proc.alive.load(Ordering::Relaxed));
+        let next = inert_process(SessionKind::Claude);
+        auth::claude::restore(&proc, &next);
+        assert_eq!(next.timeline.lock().unwrap().rows[0].id(), "history");
+        assert_eq!(next.turn.lock().unwrap().waiting[0].text, "Later");
+        assert_eq!(next.agent_session_id.lock().unwrap().as_deref(), Some("claude-original"));
+        assert!(auth::blocks_queue(&next));
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn claude_auth_logout_failure_is_not_reported_as_signed_out() {
+        let (app, mut proc, _reader) = claude_auth_fixture("claude-auth-logout-failed");
+        app.chat().sessions.lock().unwrap().remove("s");
+        Arc::get_mut(&mut proc).unwrap().bin = "false".into();
+        app.chat().sessions.lock().unwrap().insert("s".into(), proc.clone());
+        assert_eq!(app.chat().auth_logout(&app, "s"), Err("claude_auth_logout_failed".into()));
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "logoutFailed");
+        assert!(auth::blocks_queue(&proc));
+        assert_eq!(proc.timeline.lock().unwrap().rows[0].id(), "history");
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn claude_auth_cancel_waits_for_a_native_outcome_and_success_wins_the_race() {
+        for succeeded in [false, true] {
+            let (app, proc, mut reader) = claude_auth_fixture(if succeeded { "claude-auth-race" } else { "claude-auth-cancel" });
+            app.chat().auth_start(&app, "s").unwrap();
+            let request = read_codex_request(&mut reader);
+            app.chat().auth_cancel(&app, "s").unwrap();
+            assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "canceling");
+            assert!(auth::active(&proc));
+            // Exercise the native completion handler without opening an OAuth listener.
+            auth::claude::response(&app, "s", &proc, request["request_id"].as_str().unwrap(), Some("claude_auth_wait"),
+                &json!({"account":{}}), if succeeded { None } else { Some("Authorization canceled") });
+            assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, if succeeded { "success" } else { "canceled" });
+            proc.child.lock().unwrap().kill().unwrap();
+            proc.child.lock().unwrap().wait().unwrap();
+        }
+    }
+
+    #[test]
+    fn codex_auth_login_preserves_thread_and_resumes_with_the_new_credentials() {
+        let (app, proc, mut reader) = codex_permission_fixture("codex-auth-recovery");
+        let manager = app.chat();
+        let original = manager.snapshot("s").agent_session_id;
+        auth::require(&app, "s", &proc, &json!({"codexErrorInfo":"unauthorized","message":"refresh token was revoked"}));
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "required");
+        manager.auth_start(&app, "s").unwrap();
+        manager.auth_start(&app, "s").unwrap();
+        let request = read_codex_request(&mut reader);
+        assert_eq!(request["method"], "account/login/start");
+        assert_eq!(request["params"]["type"], "chatgptDeviceCode");
+        assert!(manager.send(&app, "s", "not yet", vec![], "queue").is_err());
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{
+            "type":"chatgptDeviceCode","loginId":"login-1","verificationUrl":"https://auth.openai.com/codex/device","userCode":"ABCD-1234"
+        }}).to_string());
+        let snapshot = serde_json::to_value(manager.snapshot("s")).unwrap();
+        assert_eq!(snapshot["auth"]["status"], "pending");
+        assert_eq!(snapshot["auth"]["userCode"], "ABCD-1234");
+        assert!(snapshot["auth"].get("loginId").is_none());
+        manager.detach(&app, "s");
+        assert!(manager.is_alive("s"));
+        manager.attach("s");
+        handle_codex_notification(&app, "s", &proc, "account/login/completed", json!({"loginId":"unrelated","success":true}));
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "pending");
+        handle_codex_notification(&app, "s", &proc, "account/login/completed", json!({"loginId":"login-1","success":true}));
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "success");
+        assert!(manager.snapshot("s").extras.auth.unwrap().user_code.is_none());
+        assert_eq!(manager.snapshot("s").agent_session_id, original);
+        manager.send(&app, "s", "continue", vec![], "queue").unwrap();
+        let next = read_codex_request(&mut reader);
+        assert_eq!(next["method"], "turn/start");
+        assert_eq!(next["params"]["threadId"], original.unwrap());
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn codex_auth_cancels_late_login_responses_and_rejects_invalid_destinations() {
+        let (app, proc, mut reader) = codex_permission_fixture("codex-auth-cancel");
+        let manager = app.chat();
+        manager.auth_start(&app, "s").unwrap();
+        let request = read_codex_request(&mut reader);
+        manager.auth_cancel(&app, "s").unwrap();
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{
+            "type":"chatgptDeviceCode","loginId":"late","verificationUrl":"https://auth.openai.com/codex/device","userCode":"ABCD-1234"
+        }}).to_string());
+        let cancel = read_codex_request(&mut reader);
+        assert_eq!(cancel["method"], "account/login/cancel");
+        assert_eq!(cancel["params"]["loginId"], "late");
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "canceled");
+        manager.auth_start(&app, "s").unwrap();
+        let request = read_codex_request(&mut reader);
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{
+            "type":"chatgptDeviceCode","loginId":"unsafe","verificationUrl":"javascript:alert(1)","userCode":"ABCD-1234"
+        }}).to_string());
+        assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "failed");
+        assert!(manager.snapshot("s").extras.auth.unwrap().verification_url.is_none());
+        assert_eq!(read_codex_request(&mut reader)["method"], "account/login/cancel");
+        assert!(!auth::is_auth_error(&json!({"codexErrorInfo":"usageLimitExceeded","message":"Usage limit exceeded"})));
+        assert!(auth::is_auth_error(&json!("Your access token could not be refreshed because your refresh token was revoked.")));
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn codex_auth_cancel_waits_for_native_confirmation_and_pauses_failed_turn_queues() {
+        let (app, proc, mut reader) = codex_permission_fixture("codex-auth-cancel-ack");
+        {
+            let mut turn = proc.turn.lock().unwrap();
+            turn.running = true;
+            turn.waiting.push(QueuedMessage { id: "queued".into(), text: "keep queued".into(), images: vec![] });
+        }
+        handle_codex_notification(&app, "s", &proc, "turn/completed", json!({"turn":{"status":"failed","error":{"codexErrorInfo":"unauthorized","message":"refresh token revoked"}}}));
+        assert!(!proc.turn.lock().unwrap().running);
+        assert_eq!(app.chat().snapshot("s").queue.len(), 1);
+        app.chat().auth_start(&app, "s").unwrap();
+        let request = read_codex_request(&mut reader);
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{
+            "type":"chatgptDeviceCode","loginId":"pending","verificationUrl":"https://auth.openai.com/codex/device","userCode":"ABCD-1234"
+        }}).to_string());
+        let caller = app.clone();
+        let cancel = std::thread::spawn(move || caller.chat().auth_cancel(&caller, "s"));
+        let request = read_codex_request(&mut reader);
+        assert_eq!(request["method"], "account/login/cancel");
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "pending");
+        handle_codex_notification(&app, "s", &proc, "account/login/completed", json!({"loginId":"pending","success":false}));
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{"status":"canceled"}}).to_string());
+        cancel.join().unwrap().unwrap();
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "canceled");
+        assert_eq!(app.chat().snapshot("s").queue.len(), 1);
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn codex_auth_rejected_by_an_older_cli_releases_a_detached_peer() {
+        let (app, proc, mut reader) = codex_permission_fixture("codex-auth-unsupported");
+        app.chat().auth_start(&app, "s").unwrap();
+        let request = read_codex_request(&mut reader);
+        app.chat().detach(&app, "s");
+        assert!(app.chat().is_alive("s"));
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"error":{"code":-32602,"message":"unknown login type"}}).to_string());
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "failed");
+        assert!(!app.chat().is_alive("s"));
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn codex_auth_logout_uses_native_account_api_and_retains_history() {
+        let (app, proc, mut reader) = codex_permission_fixture("codex-auth-logout");
+        proc.timeline.lock().unwrap().upsert(ChatRow::User { id:"original".into(), text:"keep history".into(), images:vec![], at:None });
+        proc.turn.lock().unwrap().waiting.push(QueuedMessage { id:"waiting".into(), text:"keep queued".into(), images:vec![] });
+        let original_thread = app.chat().snapshot("s").agent_session_id;
+        let caller = app.clone();
+        let worker = std::thread::spawn(move || caller.chat().auth_logout(&caller, "s"));
+        let request = read_codex_request(&mut reader);
+        assert_eq!(request["method"], "account/logout");
+        assert_eq!(request["params"], json!({}));
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "signingOut");
+        app.chat().detach(&app, "s");
+        assert!(app.chat().is_alive("s"));
+        app.chat().attach("s");
+        handle_codex_notification(&app, "s", &proc, "account/updated", json!({"authMode":null}));
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "signingOut");
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{}}).to_string());
+        worker.join().unwrap().unwrap();
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "signedOut");
+        assert_eq!(app.chat().snapshot("s").rows[0].id(), "original");
+        assert_eq!(app.chat().snapshot("s").agent_session_id, original_thread);
+        start_waiting_message(&app, "s", &proc);
+        assert_eq!(app.chat().snapshot("s").queue.len(), 1);
+        app.chat().auth_logout(&app, "s").unwrap(); // Already signed out; no duplicate provider request.
+        app.chat().auth_start(&app, "s").unwrap();
+        assert_eq!(read_codex_request(&mut reader)["method"], "account/login/start");
+        app.chat().auth_cancel(&app, "s").unwrap();
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn codex_auth_logout_rejects_busy_sessions_and_does_not_claim_success_on_failure() {
+        let (app, proc, mut reader) = codex_permission_fixture("codex-auth-logout-failure");
+        proc.turn.lock().unwrap().running = true;
+        assert!(app.chat().auth_logout(&app, "s").is_err());
+        proc.turn.lock().unwrap().running = false;
+        app.chat().auth_start(&app, "s").unwrap();
+        assert_eq!(read_codex_request(&mut reader)["method"], "account/login/start");
+        assert!(app.chat().auth_logout(&app, "s").is_err());
+        app.chat().auth_cancel(&app, "s").unwrap();
+        let caller = app.clone();
+        let worker = std::thread::spawn(move || caller.chat().auth_logout(&caller, "s"));
+        let request = read_codex_request(&mut reader);
+        assert_eq!(request["method"], "account/logout");
+        handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"error":{"code":-32603,"message":"Could not clear credentials"}}).to_string());
+        assert_eq!(worker.join().unwrap().unwrap_err(), "codex_auth_logout_failed");
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "logoutFailed");
+        handle_codex_notification(&app, "s", &proc, "account/updated", json!({"authMode":null}));
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "signedOut");
+        handle_codex_notification(&app, "s", &proc, "account/updated", json!({"authMode":"chatgpt"}));
+        assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "success");
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
     #[test]
     fn codex_permissions_wait_for_the_next_turn_without_interrupting_or_approving() {
         let (app, proc, mut reader) = codex_permission_fixture("codex-permission-next-turn");
@@ -6680,6 +8015,77 @@ mod tests {
         };
         assert_eq!(exited.get("released"), Some(&Value::Bool(true)));
         assert!(!app.chat().snapshot("s").running);
+    }
+
+    #[test]
+    fn explicit_stop_notifies_clients_and_late_exit_cannot_stop_a_replacement() {
+        let _state_guard = crate::session_state::test_lock();
+        for replace in [false, true] {
+            let app = ctx(if replace { "stop-replaced" } else { "stop-working" });
+            let sid = format!("stop-{}", uuid::Uuid::new_v4());
+            let events = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let captured = events.clone();
+            app.listen(&event_name(&sid), move |payload| {
+                captured.lock().unwrap().push(serde_json::from_str(payload).unwrap());
+            });
+            let states = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let captured = states.clone();
+            app.listen(&StatusSignal::event_name(&sid), move |payload| {
+                captured.lock().unwrap().push(serde_json::from_str(payload).unwrap());
+            });
+            let (proc, stdout) = cat_process();
+            app.chat().sessions.lock().unwrap().insert(sid.clone(), proc.clone());
+            app.emit(&StatusSignal::event_name(&sid), StatusSignal::Agent {
+                agent: Some("claude".into()), state_source: None,
+            });
+            crate::session_state::set_alive(&app, &sid, true);
+            app.chat().send(&app, &sid, "first", Vec::new(), "queue").unwrap();
+            app.chat().send(&app, &sid, "pending", Vec::new(), "queue").unwrap();
+            assert!(app.chat().snapshot(&sid).turn_started_at.is_some());
+            events.lock().unwrap().clear();
+            states.lock().unwrap().clear();
+
+            app.chat().stop(&app, &sid).unwrap();
+
+            let snapshot = app.chat().snapshot(&sid);
+            assert!(!snapshot.running);
+            assert!(snapshot.turn_started_at.is_none());
+            assert!(snapshot.queue.is_empty());
+            assert!(!crate::session_state::snapshot()[&sid].alive);
+            assert_eq!(crate::session_state::snapshot()[&sid].agent_state.as_deref(), Some("waiting"));
+            let stopped = events.lock().unwrap().clone();
+            assert_eq!(stopped.iter().filter(|event| event["type"] == "exited").count(), 1);
+            let exit = stopped.iter().find(|event| event["type"] == "exited").unwrap();
+            assert_eq!(exit["released"], true);
+            assert_eq!(exit["stderr"], "");
+            assert!(stopped.iter().any(|event| event["type"] == "queued" && event["items"] == json!([])));
+            assert!(states.lock().unwrap().iter().any(|event| event["state"] == "waiting"));
+
+            let mut replacement_stdout = None;
+            if replace {
+                let (next, next_stdout) = cat_process();
+                replacement_stdout = Some(next_stdout);
+                app.chat().sessions.lock().unwrap().insert(sid.clone(), next);
+                crate::session_state::set_alive(&app, &sid, true);
+                app.chat().send(&app, &sid, "new turn", Vec::new(), "queue").unwrap();
+            }
+            let event_count = events.lock().unwrap().len();
+            let state_count = states.lock().unwrap().len();
+            // Delay the old reader until after removal/replacement to exercise the superseded guard.
+            spawn_stdout_reader(app.clone(), sid.clone(), proc.clone(), stdout);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while Arc::strong_count(&proc) > 1 {
+                assert!(std::time::Instant::now() < deadline, "the stopped process reader did not exit");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(events.lock().unwrap().len(), event_count, "old exit must not notify twice");
+            assert_eq!(states.lock().unwrap().len(), state_count, "old exit must not overwrite state");
+            assert_eq!(app.chat().snapshot(&sid).running, replace);
+            assert_eq!(app.chat().snapshot(&sid).turn_started_at.is_some(), replace);
+            assert_eq!(crate::session_state::snapshot()[&sid].alive, replace);
+            app.chat().stop(&app, &sid).unwrap();
+            drop(replacement_stdout);
+        }
     }
 
     /// A session that has no process, or whose process already went, has nothing to release.

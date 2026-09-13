@@ -31,3 +31,29 @@ it("merges reconnect deltas and discards events from older processes", () => {
   const result = reconcileChat(baseline, [row("middle", 90)], [{ type: "replaceRows", epoch: 100, revision: 99, rows: [] }]);
   expect(result.rows.map(item => item.id)).toEqual(["middle", "new"]);
 });
+
+it("restores a restarted process atomically while a previous snapshot is in flight", () => {
+  const baseline = { startedAt: 100, rowsRevision: 50, rows: [row("old-process", 0)], queue: [] } as unknown as ChatSnapshot;
+  const restored = row("restored-history", 90);
+  const result = reconcileChat(baseline, [], [
+    { type: "reset", epoch: 200, revision: 1, rows: [restored], hasMore: true },
+    { type: "rows", epoch: 200, revision: 2, rows: [row("new-message", 91)] },
+  ]);
+  expect(result.rows.map(item => item.id)).toEqual(["restored-history", "new-message"]);
+  expect(result.hasMore).toBe(true);
+  expect(result.startedAt).toBe(200);
+  expect(result.rowsRevision).toBe(2);
+  const newer = { ...result, rowsRevision: 3 };
+  expect(reconcileChat(newer, [], [
+    { type: "reset", epoch: 200, revision: 1, rows: [restored] },
+  ]).rows).toEqual(result.rows);
+});
+
+
+it("keeps a newer authorization event over a late snapshot and clears it on process reset", () => {
+  const snapshot = { running: true, rows: [], queue: [], permissions: [], commands: [], configKeys: [], startedAt: 100, auth: { status: "required" as const } };
+  const pending = { status: "pending" as const, verificationUrl: "https://auth.openai.com/codex/device", userCode: "ABCD-1234" };
+  const updated = reconcileChat(snapshot, [], [{ type: "extras", extras: { auth: pending } }]);
+  expect(updated.auth).toEqual(pending);
+  expect(reconcileChat(updated, [], [{ type: "reset", epoch: 200, rows: [], revision: 0 }]).auth).toBeUndefined();
+});

@@ -1771,7 +1771,7 @@ pub fn watch_tunnel(
             }
 
             // ── Dead child and port: bounded automatic rebuild with backoff ──
-            eprintln!("[ssh] tunnel for {host} ({session}) died; rebuilding…");
+            crate::diagnostic_warn!("[ssh] tunnel for {host} ({session}) died; rebuilding…");
             let mut recovered = false;
             let mut notified = false;
             for (i, secs) in BACKOFF_SECS.iter().enumerate() {
@@ -1780,16 +1780,16 @@ pub fn watch_tunnel(
                 }
                 match rebuild_tunnel(&host, &session, &identifier, local_port) {
                     Ok(()) => {
-                        eprintln!("[ssh] tunnel for {host} rebuilt on port {local_port}");
+                        crate::diagnostic_warn!("[ssh] tunnel for {host} rebuilt on port {local_port}");
                         recovered = true;
                         break;
                     }
                     Err(RebuildErr::Fatal(e)) => {
-                        eprintln!("[ssh] tunnel rebuild unrecoverable: {e}");
+                        crate::diagnostic_warn!("[ssh] tunnel rebuild unrecoverable: {e}");
                         break;
                     }
                     Err(RebuildErr::Retryable(e)) => {
-                        eprintln!("[ssh] tunnel rebuild attempt {} failed: {e}", i + 1);
+                        crate::diagnostic_warn!("[ssh] tunnel rebuild attempt {} failed: {e}", i + 1);
                         // Show the red banner only after the immediate attempt fails, avoiding brief flicker.
                         if !notified {
                             notify("reconnecting");
@@ -1816,12 +1816,12 @@ pub fn watch_tunnel(
                 notify("reconnecting");
                 match rebuild_tunnel(&host, &session, &identifier, local_port) {
                     Ok(()) => {
-                        eprintln!("[ssh] tunnel for {host} rebuilt on port {local_port} (manual)");
+                        crate::diagnostic_warn!("[ssh] tunnel for {host} rebuilt on port {local_port} (manual)");
                         notify("up");
                         break;
                     }
                     Err(RebuildErr::Fatal(e)) | Err(RebuildErr::Retryable(e)) => {
-                        eprintln!("[ssh] manual tunnel rebuild failed: {e}");
+                        crate::diagnostic_warn!("[ssh] manual tunnel rebuild failed: {e}");
                         notify("down");
                     }
                 }
@@ -1882,6 +1882,19 @@ pub fn connect(
     }
     let session = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
 
+    let diagnostic = std::sync::Mutex::new(crate::diagnostics::Span::new("ssh_connect", serde_json::json!({"operationId":uuid::Uuid::new_v4().to_string()})));
+    let last_phase = std::sync::Mutex::new(String::new());
+    let original_progress=progress;
+    let traced_progress=|phase: &str, percent: Option<u8>| {
+        if let (Ok(mut previous), Ok(mut span))=(last_phase.lock(), diagnostic.lock()) {
+            if previous.as_str()!=phase {
+                let step=match phase {"connect"=>"connect","probe"=>"probe","supply"=>"supply","upload"=>"upload","start"=>"start","forward"=>"forward",_=>"prepare"};
+                span.step(step); *previous=phase.to_string();
+            }
+        }
+        original_progress(phase,percent);
+    };
+    let progress: Progress=&traced_progress;
     progress("connect", None);
     // Authenticate and connect through the selected OpenSSH/russh backend.
     let transport = connect_transport(host, &session, auth, progress)?;
@@ -1889,6 +1902,7 @@ pub fn connect(
     // Register successful transport to keep it alive; on failure stop forwarding and disconnect cleanly.
     match connect_inner(app_data_dir, transport.as_ref(), shared_db, mirror, progress) {
         Ok(r) => {
+            if let Ok(mut span)=diagnostic.lock() {span.success();}
             transports()
                 .lock()
                 .unwrap()
@@ -1978,7 +1992,7 @@ fn connect_inner(
     // development-only end-to-end testing.
     let local_bin = match std::env::var("VLX_DEV_SERVER_BIN") {
         Ok(p) if !p.is_empty() && Path::new(&p).is_file() => {
-            eprintln!("[ssh] using dev-bypass vela-server: {p}");
+            crate::diagnostic_warn!("[ssh] using dev-bypass vela-server: {p}");
             PathBuf::from(p)
         }
         _ => crate::server_supply::ensure_supplied(app_data_dir, version, &platkey, &|pct| {

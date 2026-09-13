@@ -527,6 +527,7 @@ export function ServerBrowserView({
             const Icon = QUICK_ICON[it.kind];
             return (
               <button
+                type="button"
                 key={it.kind + it.path}
                 onClick={() => browser.setRoot(it.path)}
                 title={it.path}
@@ -566,6 +567,7 @@ export function ServerBrowserView({
         }}
       >
         <button
+          type="button"
           onClick={() => browser.setRoot(parentOf(browser.rootPath))}
           disabled={atRoot}
           title={t("dir.up")}
@@ -589,6 +591,7 @@ export function ServerBrowserView({
                   </span>
                 )}
                 <button
+                  type="button"
                   onClick={() => browser.setRoot(c.path)}
                   title={c.path}
                   style={{
@@ -611,6 +614,7 @@ export function ServerBrowserView({
         </div>
 
         <button
+          type="button"
           onClick={startCreate}
           disabled={!browser.selectedDir}
           title={t("dir.newFolder")}
@@ -619,6 +623,7 @@ export function ServerBrowserView({
           <Icons.folderPlus size={14} />
         </button>
         <button
+          type="button"
           onClick={() => browser.setShowHidden((v) => !v)}
           title={t("dir.showHidden")}
           aria-pressed={browser.showHidden}

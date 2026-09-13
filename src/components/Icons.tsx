@@ -35,6 +35,7 @@ const I =
 const r = React.createElement;
 
 const Icons: Record<string, IconComponent> = {
+  gamepad: I([r("path", { key: 1, d: "M5 4.5h6a2.5 2.5 0 012.4 1.9l1 4.4a1.5 1.5 0 01-2.5 1.4L9.8 10H6.2l-2.1 2.2a1.5 1.5 0 01-2.5-1.4l1-4.4A2.5 2.5 0 015 4.5z" }), r("path", { key: 2, d: "M5 6v3M3.5 7.5h3M10 7h.01M12 8.5h.01" })]),
   chevR: I(r("path", { key: 1, d: "M6 4l4 4-4 4" })),
   chevD: I(r("path", { key: 1, d: "M4 6l4 4 4-4" })),
   folder: I(r("path", { key: 1, d: "M2 5.5A1.5 1.5 0 013.5 4h2.8l1.2 1.4h5A1.5 1.5 0 0114 6.9V11A1.5 1.5 0 0112.5 12.5h-9A1.5 1.5 0 012 11z" })),
@@ -63,17 +64,25 @@ const Icons: Record<string, IconComponent> = {
   sliders: I([r("path", { key: 1, d: "M3 5h7M3 11h3" }), r("circle", { key: 2, cx: 12, cy: 5, r: 1.6 }), r("circle", { key: 3, cx: 8, cy: 11, r: 1.6 })]),
   gear: I([r("circle", { key: 1, cx: 8, cy: 8, r: 4.3 }), r("circle", { key: 2, cx: 8, cy: 8, r: 1.7 }), r("path", { key: 3, d: "M8 1.6v2.1M8 12.3v2.1M1.6 8h2.1M12.3 8h2.1M3.47 3.47L5 5M11 11l1.53 1.53M12.53 3.47L11 5M5 11l-1.53 1.53" })]),
   share: I([r("circle", { key: 1, cx: 11.5, cy: 4, r: 1.9 }), r("circle", { key: 2, cx: 4.5, cy: 8, r: 1.9 }), r("circle", { key: 3, cx: 11.5, cy: 12, r: 1.9 }), r("path", { key: 4, d: "M6.15 7.05l3.7-2.1M6.15 8.95l3.7 2.1" })]),
+  // Feedback: a speech bubble with an exclamation mark, distinct from the plain information icon.
+  feedback: I([r("path", { key: 1, d: "M4.2 2.5h7.6a1.7 1.7 0 0 1 1.7 1.7v4.6a1.7 1.7 0 0 1-1.7 1.7H7.6l-3 2.6v-2.6h-.4a1.7 1.7 0 0 1-1.7-1.7V4.2a1.7 1.7 0 0 1 1.7-1.7z" }), r("path", { key: 2, d: "M8 4.7v2.4" }), r("path", { key: 3, d: "M8 8.8h.01" })]),
+  // Account entry: a person bust, the standard account glyph, and distinct from the remote-connect arrow.
+  account: I([r("circle", { key: 1, cx: 8, cy: 5.4, r: 2.5 }), r("path", { key: 2, d: "M3.6 13.3v-.4a4.4 4.4 0 0 1 4.4-4.4 4.4 4.4 0 0 1 4.4 4.4v.4" })]),
   panel: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M10 3v10" })]),
   panelFill: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M10 3v10" }), r("rect", { key: 3, x: 10.5, y: 3.75, width: 2.25, height: 8.5, rx: 0.5, fill: "currentColor", stroke: "none" })]),
   panelLeft: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M6 3v10" })]),
   panelLeftFill: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M6 3v10" }), r("rect", { key: 3, x: 3.25, y: 3.75, width: 2.25, height: 8.5, rx: 0.5, fill: "currentColor", stroke: "none" })]),
   branch: I([r("circle", { key: 1, cx: 4, cy: 4, r: 1.4 }), r("circle", { key: 2, cx: 4, cy: 12, r: 1.4 }), r("circle", { key: 3, cx: 12, cy: 4, r: 1.4 }), r("path", { key: 4, d: "M4 5.4v5.2M12 5.4v1.1A3.5 3.5 0 018.5 10H6" })]),
+  // Planning and execution workflow: the plan is handed over to run, distinct from the worktree branch icon.
+  planExecute: I([r("path", { key: 1, d: "M2.6 4.2h4.2M2.6 7.4h4.2M2.6 10.6h2.6" }), r("path", { key: 2, d: "M8.4 7.4h2.2" }), r("path", { key: 3, d: "M11.4 4.8l3 2.6-3 2.6z" })]),
   info: I([r("circle", { key: 1, cx: 8, cy: 8, r: 5.5 }), r("path", { key: 2, d: "M8 7.3v3.4M8 5.4h.01" })]),
   rename: I([r("path", { key: 1, d: "M3 11.5l6.4-6.4 2 2L5 13.5H3z" }), r("path", { key: 2, d: "M9.4 5.1l1.5-1.5a1 1 0 011.4 0l.6.6a1 1 0 010 1.4l-1.5 1.5" })]),
   trash: I([r("path", { key: 1, d: "M3.5 4.5h9M6 4.5V3.2A.7.7 0 016.7 2.5h2.6a.7.7 0 01.7.7V4.5M5 4.5l.5 8h5l.5-8" })]),
   dup: I([r("rect", { key: 1, x: 5, y: 5, width: 8, height: 8, rx: 1.5 }), r("path", { key: 2, d: "M3 10V4.5A1.5 1.5 0 014.5 3H10" })]),
   // Virtual group: stacked plates, a container with nothing on disk behind it.
   layers: I([r("path", { key: 1, d: "M8 2.5l5.5 2.9L8 8.3 2.5 5.4z" }), r("path", { key: 2, d: "M2.5 8.6L8 11.5l5.5-2.9" })]),
+  // Generated knowledge entry: a sparkle, so distilled content is not mistaken for a stored file.
+  sparkle: I(r("path", { key: 1, d: "M8 2.6Q8.8 6.2 13.4 8Q8.8 9.8 8 13.4Q7.2 9.8 2.6 8Q7.2 6.2 8 2.6z" })),
   newGroup: I([r("path", { key: 1, d: "M2 5.5A1.5 1.5 0 013.5 4h2.8l1.2 1.4h5A1.5 1.5 0 0114 6.9V8" }), r("path", { key: 2, d: "M11.5 10v4M9.5 12h4" })]),
   dotsV: I([r("circle", { key: 1, cx: 8, cy: 3.5, r: 1, fill: "currentColor", stroke: "none" }), r("circle", { key: 2, cx: 8, cy: 8, r: 1, fill: "currentColor", stroke: "none" }), r("circle", { key: 3, cx: 8, cy: 12.5, r: 1, fill: "currentColor", stroke: "none" })]),
   check: I(r("path", { key: 1, d: "M3.5 8.5l3 3 6-7" })),

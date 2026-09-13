@@ -1,16 +1,19 @@
-//! Global Memory protocol. Business data and defaults are supplied by the backend.
+//! Knowledge base protocol. Business data and defaults are supplied by the backend.
 import { invoke } from "./transport";
 export interface MemoryEntry {
   id: string; title: string; summary: string; content: string; tags: string[]; related: string[];
   sources: string[]; version: number; createdAt: number; updatedAt: number;
 }
-export interface MemorySummary { id: string; title: string; summary: string; tags: string[]; version: number; updatedAt: number; sourceCount: number }
+export interface MemorySummary { id: string; sessionId?: string; title: string; summary: string; tags: string[]; version: number; updatedAt: number; sourceCount: number; related?: { id: string; title: string }[] }
 export interface MemorySource { id: string; sessionId: string; sessionName: string; kind: string; createdAt: number; digest: string; content?: string; agentSessionId?: string }
 export interface MemoryDetail {
+  location?: { sessionId: string; sessionName: string; projectId: string; projectName: string; kind: string };
   entry: MemoryEntry; revision: MemoryEntry | null; catalog: { id: string; title: string }[]; backlinks: { id: string; title: string }[];
   sources: MemorySource[]; versions: { version: number; author: string; createdAt: number }[];
 }
-export interface MemoryList { entries: MemorySummary[]; total: number; pageSize: number; tags: string[] }
+export interface MemorySessionGroup { id: string; name: string; kind: "session" | "manual" | "legacy"; count: number }
+export interface MemoryProjectGroup { id: string; name: string; kind: "project" | "unknown" | "manual" | "legacy"; count: number; sessions: MemorySessionGroup[] }
+export interface MemoryList { projects: MemoryProjectGroup[]; selectedSessionId: string | null; entries: MemorySummary[]; total: number; pageSize: number; tags: string[] }
 export interface MemoryJob {
   id: string; sourceId: string; sessionName: string; agent: string; model: string; effort: string; status: string; stage: string;
   progress: number; total: number; error: string; entries: string[]; createdAt: number; updatedAt: number;
@@ -20,9 +23,16 @@ export type MemoryEdit = Pick<MemoryEntry, "title" | "summary" | "content" | "ta
 export interface MemoryModel { id: string; label: string; effortLevels: string[] }
 export const memoryModels = (agent: string) => invoke<MemoryModel[]>("memory_models", { agent });
 export const memoryOptions = () => invoke<MemoryOptions>("memory_options");
-export const memoryList = (args: { query: string; tag: string; sort: string; page: number }) => invoke<MemoryList>("memory_list", args);
+export const memoryList = (args: { query: string; tag: string; sort: string; page: number; sessionId?: string; projectId?: string; selectedId?: string }) => invoke<MemoryList>("memory_list", args);
 export const memoryGet = (id: string, version?: number) => invoke<MemoryDetail>("memory_get", { id, version });
 export const memorySave = (args: MemoryEdit) => invoke<MemoryEntry>("memory_save", args);
+/** Rename one entry from the knowledge tree; the new title is recorded as a manual revision. */
+export const memoryRename = (id: string, version: number, title: string) => invoke<MemoryEntry>("memory_rename", { id, version, title });
+/** Reassign an entry to another session group; `__manual__` moves it to the manual collection. */
+export const memoryMove = (id: string, version: number, sessionId: string) => invoke<MemoryEntry>("memory_move", { id, version, sessionId });
+export const memoryGroupRename = (kind: "project" | "session", id: string, name: string) => invoke<void>("memory_group_rename", { kind, id, name });
+export const memoryGroupMove = (sessionId: string, targetProjectId: string) => invoke<void>("memory_group_move", { sessionId, targetProjectId });
+export const memoryGroupDelete = (kind: "project" | "session", id: string) => invoke<{ removed: number }>("memory_group_delete", { kind, id });
 export const memoryDelete = (id: string, version: number) => invoke<void>("memory_delete", { id, version });
 export const memoryRestore = (id: string, version: number, targetVersion: number) => invoke<MemoryEntry>("memory_restore", { id, version, targetVersion });
 export const memorySource = (id: string) => invoke<MemorySource>("memory_source", { id });

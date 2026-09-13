@@ -3,7 +3,50 @@
 import type en from "./en";
 
 const ko: typeof en = {
-  // Project code intelligence and memory associations.
+  "tree.newPlanExecuteSession": "새 계획 및 실행 세션…",
+  "launch.splitTasks": "여러 작업으로 자동 분할",
+  "launch.splitTasksHint": "계획 세션이 독립적인 작업을 제안합니다. 실행 전에 각 작업의 지시 사항, 에이전트, 모델 및 추론 강도를 검토할 수 있습니다.",
+  "launch.splitReview": "실행 작업 확인",
+  "launch.splitReviewHint": "하나의 계획 세션이 모든 보고를 받고 각 작업을 개별적으로 검토합니다. 확인 후에 실행 세션이 시작됩니다.",
+  "launch.splitConfirmed": "이 작업들은 이미 확인되었습니다.",
+  "launch.splitClosed": "이 제안은 더 이상 확인 대기 중이 아닙니다.",
+  "launch.splitRetry": "전달되지 않은 메시지 다시 보내기",
+  "launch.splitSharedDirectory": "모든 실행 세션은 계획 세션의 작업 디렉터리를 사용하며, 워크트리가 활성화되어 있으면 해당 워크트리를 공유합니다.",
+  "launch.createIn": "생성 위치",
+  "launch.workingDirectory": "작업 디렉터리 경로",
+  "launch.createAndStart": "생성 및 시작",
+  "launch.planExecuteTaskHint": "계획을 수립할 수 있도록 작업 목표, 요구 사항, 검수 기준을 입력하세요.",
+  "launch.planExecuteResult": "먼저 계획 세션을 시작하고, 계획이 준비되면 실행 세션을 생성합니다.",
+  "launch.planExecuteWorktreeHint": "새 워크트리는 현재 커밋을 기준으로 생성되며 커밋하지 않은 변경 사항은 포함되지 않습니다. 생성에 실패하면 해당 세션을 시작하지 않습니다.",
+  "launch.workflowDirectorySharedHint": "계획 세션과 모든 실행 세션이 하나의 새 디렉터리와 브랜치를 공유합니다.",
+  "launch.workflowDirectoryEachHint": "계획 세션과 각 실행 세션에 독립된 워크트리와 브랜치를 생성합니다.",
+  "launch.planTitle": "계획 및 검토",
+  "launch.execTitle": "실행",
+  "launch.planExecuteIntro": "별도의 계획 세션이 작업을 지시하고 결과를 검토한 뒤 실행 세션에 수정을 요청합니다.",
+  "chat.origin.plan": "계획",
+  "chat.origin.exec": "실행",
+
+  // Project code intelligence and knowledge entry associations.
+  "knowledge.callers": "호출하는 심볼",
+  "knowledge.callees": "호출되는 심볼",
+  "knowledge.explore": "코드 탐색",
+  "knowledge.exploreHint": "기능이나 호출 흐름을 설명하거나 파일 또는 심볼 이름을 입력하세요…",
+  "knowledge.impact": "영향 분석",
+  "knowledge.path": "호출 경로",
+  "knowledge.target": "대상 심볼 검색…",
+  "knowledge.depth": "탐색 깊이",
+  "knowledge.noPath": "인덱스에서 방향이 있는 호출 경로를 찾지 못했습니다.",
+  "knowledge.watching": "자동 동기화 활성",
+  "knowledge.onDemand": "쿼리 전 동기화",
+  "knowledge.overview": "개요",
+  "knowledge.uncertain": "추론된 관계",
+  "knowledge.kind": "심볼 유형",
+  "knowledge.language": "언어",
+  "knowledge.results": "결과",
+  "knowledge.resultLarge": "결과가 너무 커서 표시할 수 없습니다. 검색 범위를 좁히거나 탐색 깊이를 줄이세요.",
+  "knowledge.queryFailed": "코드 쿼리에 실패했습니다. 다시 시도하거나 인덱스를 동기화하세요.",
+  "knowledge.liveHelp": "쿼리 프로세스가 실행되는 동안 파일 변경 사항을 동기화합니다. 유휴 상태로 종료되면 다음 쿼리 전에 변경 사항을 반영합니다.",
+  "knowledge.startHelp": "인덱싱을 활성화하면 코드를 검색하고 호출을 추적하며 변경의 영향을 분석할 수 있습니다. 분석은 AI 모델 없이 백엔드에서 실행됩니다.",
   "knowledge.title": "코드 그래프",
   "knowledge.intro": "코드 관계를 살펴보고 저장된 설계 결정과 연결합니다.",
   "knowledge.setup": "이 백엔드에 CodeGraph를 설치하면 프로젝트 인덱싱을 활성화할 수 있습니다.",
@@ -25,7 +68,7 @@ const ko: typeof en = {
   "knowledge.search": "심볼 또는 파일 경로 검색…",
   "knowledge.searchButton": "검색",
   "knowledge.noResults": "일치하는 심볼이 없습니다.",
-  "knowledge.selectSymbol": "심볼을 선택하면 소스, 관계 및 연결된 메모리를 볼 수 있습니다.",
+  "knowledge.selectSymbol": "심볼을 선택하면 소스, 관계 및 연결된 지식 항목을 볼 수 있습니다.",
   "knowledge.source": "소스",
   "knowledge.incoming": "들어오는 관계",
   "knowledge.outgoing": "나가는 관계",
@@ -33,22 +76,22 @@ const ko: typeof en = {
   "knowledge.analysisNote": "관계는 정적 분석 결과이며 불완전하거나 불확실할 수 있습니다.",
   "knowledge.changed": "조회 중에 파일이 변경되었습니다. 행 번호를 사용하거나 검토를 확정하기 전에 다시 동기화하세요.",
   "knowledge.truncated": "표시 수가 제한되어 일부 관계 또는 소스 행이 생략되었습니다.",
-  "knowledge.linkMemory": "메모리 연결",
-  "knowledge.chooseMemory": "메모리 항목 선택",
-  "knowledge.noLinks": "코드 연결이 없습니다. 심볼 상세 화면에서 메모리를 연결할 수 있습니다.",
-  "knowledge.inspect": "코드와 메모리 검토",
+  "knowledge.linkMemory": "지식 항목 연결",
+  "knowledge.chooseMemory": "지식 항목 선택",
+  "knowledge.noLinks": "코드 연결이 없습니다. 심볼 상세 화면에서 지식 항목을 연결할 수 있습니다.",
+  "knowledge.inspect": "코드와 항목 검토",
   "knowledge.unlink": "연결 제거",
   "knowledge.codeReferences": "코드 참조",
   "knowledge.refresh": "새로 고침",
   "knowledge.current": "변경 없음",
   "knowledge.review": "검토 필요",
   "knowledge.unavailable": "사용 불가",
-  "knowledge.reviewHelp": "이 메모리를 표시된 코드와 비교하세요. 확인하면 현재 파일 버전만 기록하며 메모리 본문은 변경하지 않습니다.",
+  "knowledge.reviewHelp": "이 항목을 표시된 코드와 비교하세요. 확인하면 현재 파일 버전만 기록하며 항목 본문은 변경하지 않습니다.",
   "knowledge.confirmReview": "검토 완료 확인",
-  "knowledge.agentHint": "에이전트는 이 작업 디렉터리에서 vknowledge search \"주제\"를 실행할 수 있습니다. 활성화된 인덱스를 동기화하고 코드와 메모리를 별도로 반환합니다.",
+  "knowledge.agentHint": "에이전트는 이 작업 디렉터리에서 vkb search \"주제\"를 실행할 수 있습니다. 활성화된 인덱스를 동기화하고 코드와 지식 항목을 별도로 반환합니다.",
   "knowledge.busy": "인덱싱 작업이 진행 중입니다. 이 페이지를 닫거나 인덱싱을 비활성화하여 작업을 중지할 수 있습니다.",
-  "knowledge.disabledHelp": "코드를 조회하려면 이 디렉터리의 인덱싱을 활성화하세요. 비활성화해도 인덱스와 메모리 연결은 유지됩니다.",
-  "knowledge.conflict": "코드 또는 메모리가 변경되었습니다. 둘 다 다시 불러온 후 연결을 저장하세요.",
+  "knowledge.disabledHelp": "코드를 조회하려면 이 디렉터리의 인덱싱을 활성화하세요. 비활성화해도 인덱스와 지식 항목 연결은 유지됩니다.",
+  "knowledge.conflict": "코드 또는 항목이 변경되었습니다. 둘 다 다시 불러온 후 연결을 저장하세요.",
   "knowledge.symbolMissing": "심볼 또는 소스를 사용할 수 없습니다. 동기화한 후 다시 검색하세요.",
   "knowledge.directoryMissing": "작업 디렉터리가 없거나 변경되었습니다. 프로젝트와 세션 경로를 확인하세요.",
   "knowledge.partial": "인덱스가 불완전합니다. 다시 동기화하고 소스 파일을 읽을 수 있는지 확인하세요.",
@@ -58,62 +101,168 @@ const ko: typeof en = {
   "knowledge.timeout": "인덱싱 시간이 초과되었습니다. 저장소 크기를 확인한 후 다시 시도하세요.",
   "knowledge.error": "작업에 실패했습니다. 백엔드의 디렉터리 접근 권한과 런타임을 확인한 후 다시 시도하세요.",
 
-  // Global Memory: a thematic LLM Wiki shared across sessions.
-  "memory.title": "전역 메모리",
-  "memory.add": "전역 메모리에 추가",
-  "memory.intro": "지식, 결정 사항, 교훈을 지속적으로 갱신하는 Wiki로 정리하여 세션 간에 공유합니다.",
-  "memory.entries": "메모리 항목",
+  // Knowledge base: saved knowledge organized by project and session.
+  "memory.hierarchy": "프로젝트 및 세션",
+  "memory.manualGroup": "직접 만든 항목",
+  "memory.legacyGroup": "이전에 병합된 항목",
+  "memory.unknownProject": "원본 프로젝트를 알 수 없음",
+  "nb.addLink": "링크 삽입",
+  "nb.attach": "파일 첨부",
+  "nb.browse": "찾아보기",
+  "nb.chooseNote": "첫 노트 작성하기",
+  "nb.closeHint": "목록에서만 보관함을 제거합니다. 디스크의 파일은 그대로 유지됩니다.",
+  "nb.closeVault": "보관함 닫기",
+  "nb.conflict": "파일이 외부에서 변경되었습니다. 작성 중인 내용은 유지됩니다. 파일을 다시 불러오거나 새 노트로 저장하세요.",
+  "nb.copyTo": "로컬 보관함에 복사",
+  "nb.createVault": "지식 베이스 만들기",
+  "nb.destination": "대상 경로",
+  "nb.download": "다운로드",
+  "nb.downloadHint": "첨부 파일을 다운로드하면 다른 앱에서 열 수 있습니다.",
+  "nb.empty": "폴더를 열거나 새 보관함을 만들어 기록을 시작하세요.",
+  "nb.emptyImport": "가져올 수 있는 파일을 선택하지 않았습니다.",
+  "nb.emptyNotes": "노트는 Markdown 파일로 저장됩니다.",
+  "nb.emptyOutline": "문서의 제목이 여기에 표시됩니다.",
+  "nb.emptyTrash": "휴지통이 비어 있습니다.",
+  "nb.error": "보관함에 접근할 수 없습니다. 연결과 폴더를 확인한 후 다시 시도하세요.",
+  "nb.exists": "대상이 이미 존재합니다. 다른 이름이나 폴더를 선택하세요.",
+  "nb.favorites": "즐겨찾기",
+  "nb.files": "파일",
+  "nb.folder": "폴더",
+  "nb.generatedHint": "세션에서 정리된 지식으로, 출처와 수정 기록도 확인할 수 있습니다.",
+  "nb.homeHint": "세션 지식 베이스와 로컬 지식 베이스를 살펴보세요.",
+  "nb.loadMore": "더 불러오기",
+  "nb.import": "가져오기",
+  "nb.importFiles": "파일 선택",
+  "nb.importFolder": "폴더 선택",
+  "nb.importHint": "선택한 폴더에 파일을 복사합니다. 기존 파일은 덮어쓰지 않으며 숨겨진 설정 폴더는 건너뜁니다.",
+  "nb.imported": "가져온 파일",
+  "nb.imports": "가져오기 기록",
+  "nb.importsEmpty": "아직 가져오기 기록이 없습니다.",
+  "nb.importRoot": "지식 베이스 루트",
+  "nb.importBusy": "이 지식 베이스에서는 이미 가져오기가 진행 중입니다.",
+  "nb.importDelete": "기록 삭제",
+  "nb.importDeleteConfirm": "이 가져오기 기록을 삭제할까요? 이미 가져온 파일은 삭제되지 않습니다.",
+  "nb.importDone": "가져오기 완료",
+  "nb.importDuration": (seconds: string) => `${seconds}초`,
+  "nb.importFailed": "가져오기 실패",
+  "nb.importFilePending": "가져오지 않음",
+  "nb.importHideFiles": "파일 숨기기",
+  "nb.importInterruptedHint": "가져오기가 끝나기 전에 중단되었습니다.",
+  "nb.importProgress": (done: string, total: string) => `${done} / ${total}개 파일`,
+  "nb.importShowFiles": (count: string) => `파일 (${count})`,
+  "nb.importSkipHidden": "숨긴 파일 또는 폴더",
+  "nb.importStatusCancelled": "취소됨",
+  "nb.importStatusCompleted": "완료",
+  "nb.importStatusFailed": "실패",
+  "nb.importStatusInterrupted": "중단됨",
+  "nb.importStatusRunning": "가져오는 중",
+  "nb.incomplete": "작업을 완료하지 못했습니다. 파일을 확인한 후 다시 시도하세요.",
+  "nb.info": "노트 정보",
+  "nb.invalid": "이름 또는 경로가 올바르지 않습니다.",
+  "nb.links": "연결된 노트",
+  "nb.local": "로컬 파일",
+  "nb.localVaults": "로컬 지식 베이스",
+  "nb.move": "이름 변경 또는 이동",
+  "nb.moveHint": "보관함 루트를 기준으로 상대 경로를 입력하세요. 파일이나 폴더를 이동하면 기존 노트의 링크도 갱신됩니다.",
+  "nb.name": "이름",
+  "nb.newFolder": "새 폴더",
+  "nb.newNote": "새 노트",
+  "nb.noLinks": "연결된 노트가 없습니다.",
+  "nb.tags": "태그",
+  "nb.notes": "노트",
+  "nb.openVault": "지식 베이스 열기",
+  "nb.outline": "개요",
+  "nb.quickOpen": "빠른 열기",
+  "nb.readOnly": "이 파일은 UTF-8 Markdown 노트로 편집할 수 없습니다.",
+  "nb.recent": "최근 노트",
+  "nb.restore": "복원",
+  "nb.reload": "파일 다시 불러오기",
+  "nb.root": "폴더 경로",
+  "nb.rootHint": "현재 연결된 컴퓨터의 폴더를 선택하세요. 기존 Markdown 파일과 첨부 파일은 원래 위치에 유지됩니다.",
+  "nb.saveCopy": "새 노트로 저장",
+  "nb.saved": "파일에 저장됨",
+  "nb.saving": "저장 중…",
+  "nb.search": "노트 검색…",
+  "nb.searchAllVaults": "모든 지식 베이스",
+  "nb.searchCount": (count: string) => `${count}개 결과`,
+  "nb.searchEmpty": "일치하는 노트가 없습니다.",
+  "nb.searchLine": (line: string) => `${line}번째 줄`,
+  "nb.searchMatches": (count: string) => `${count}건 일치`,
+  "nb.searchMore": "앞부분의 결과만 표시합니다. 검색어를 좁히면 나머지를 확인할 수 있습니다.",
+  "nb.searchRelated": "관련 노트",
+  "nb.searchResults": "검색 결과",
+  "nb.searchScope": "검색 범위",
+  "nb.searchThisVault": "현재 지식 베이스",
+  "nb.skipped": "건너뛴 파일",
+  "nb.split": "분할 보기",
+  "nb.tooLarge": "파일 또는 선택한 항목이 보관함의 허용 범위를 초과합니다.",
+  "nb.trash": "휴지통",
+  "nb.trashHint": "이 항목을 보관함의 휴지통으로 이동합니다. 나중에 복원할 수 있습니다.",
+  "nb.unsaved": "저장하지 않은 변경 사항",
+  "nb.vaults": "지식 베이스",
+  "nb.view": "보기 모드",
+  "nb.welcome": "내 노트 보관함",
+  "nb.welcomeText": "자유롭게 기록하고 생각을 연결하며 일반 로컬 파일로 노트를 보관하세요. 기존 Markdown 폴더를 열거나 새 보관함에 자료를 가져올 수 있습니다.",
+  "memory.globalMemory": "세션 지식 베이스",
+  "memory.title": "지식 베이스",
+  "memory.add": "세션 지식 베이스로 정리",
+  "memory.intro": "프로젝트와 세션별로 지식을 정리합니다. 저장된 항목은 원본 변경에 따라 자동으로 갱신되지 않으며 직접 편집할 수 있습니다.",
+  "memory.entries": "지식 항목",
   "memory.emptyJobs": "아직 정리 기록이 없습니다.",
   "memory.jobs": "정리 기록",
-  "memory.search": "메모리 제목과 본문 검색…",
-  "memory.empty": "일치하는 메모리가 없습니다. 대화를 추가하여 Wiki를 만들어 보세요.",
+  "memory.search": "항목 제목과 본문 검색…",
+  "memory.empty": "일치하는 항목이 없습니다. 세션에서 지식 항목을 생성하거나 직접 만드세요.",
   "memory.emptyDetail": "항목을 선택하면 내용, 관련 항목, 출처를 확인할 수 있습니다.",
-  "memory.new": "새 메모리",
+  "memory.new": "새 항목",
   "memory.titleField": "제목",
   "memory.summary": "요약",
   "memory.content": "본문(Markdown)",
   "memory.tags": "태그(쉼표로 구분)",
-  "memory.related": "관련 메모리",
-  "memory.backlinks": "이 항목을 참조하는 메모리",
+  "memory.related": "관련 항목",
+  "memory.backlinks": "이 항목을 참조하는 항목",
   "memory.sources": "출처",
   "memory.history": "수정 이력",
   "memory.restore": "이 버전 복원",
   "memory.restoreConfirm": "이 버전을 새 버전으로 복원하시겠습니까? 현재 버전도 이력에 남습니다.",
-  "memory.deleteConfirm": "이 메모리와 수정 이력을 삭제하시겠습니까? 원본 세션은 유지됩니다.",
+  "memory.deleteConfirm": "이 항목과 수정 이력을 삭제하시겠습니까? 원본 세션은 유지됩니다.",
+  "memory.groupDeleteConfirm": (count: string) => `이 그룹의 지식 항목 ${count}개를 모두 삭제하시겠습니까? 프로젝트나 세션 자체는 유지됩니다.`,
   "memory.export": "Markdown 내보내기",
   "memory.selectAgent": "에이전트",
   "memory.model": "모델(선택 사항)",
   "memory.modelHint": "비워 두면 에이전트에 설정된 모델을 사용합니다.",
   "memory.compile": "정리 후 저장",
-  "memory.compileHelp": "선택한 에이전트가 대화를 주제별로 정리하고 기존 메모리에 통합합니다. 대화 텍스트와 관련 메모리는 설정된 에이전트를 통해 모델에 전송됩니다.",
+  "memory.compileHelp": "선택한 에이전트가 이 세션을 정리합니다. 다시 생성하면 직접 편집한 내용을 포함하여 이 세션에서 이전에 생성한 항목을 덮어씁니다. 세션 텍스트는 설정된 에이전트를 통해 모델로 전송됩니다.",
   "memory.unavailable": "설치 또는 설정되지 않음",
   "memory.allTags": "모든 태그",
   "memory.updated": "최근 수정순",
   "memory.titleSort": "제목순",
   "memory.sourceNote": "정리에 사용한 대화 텍스트를 보존한 스냅샷입니다. 원본 세션을 삭제해도 확인할 수 있습니다.",
-  "memory.noKnowledge": "재사용할 지식이 발견되지 않아 항목을 변경하지 않았습니다.",
+  "memory.noKnowledge": "재사용할 수 있는 지식이 추출되지 않았습니다. 이 세션에서 이전에 생성한 항목이 삭제되었습니다.",
+  "memory.queued": "시작 대기 중",
+  "memory.cancelling": "취소 중",
+  "memory.schedulingHint": "서로 다른 세션은 동시에 정리할 수 있습니다. 다시 제출하면 이 세션에서 아직 완료되지 않은 작업을 취소하고 새 작업으로 대체합니다.",
+  "memory.waitingHint": "이 세션의 이전 작업이 중지되면 자동으로 시작됩니다.",
   "memory.running": "진행 중",
   "memory.completed": "완료",
   "memory.failed": "실패",
   "memory.cancelled": "취소됨",
   "memory.extract": "주제 추출 중",
   "memory.merge": "지식 통합 중",
-  "memory.commit": "메모리 저장 중",
+  "memory.commit": "항목 저장 중",
   "memory.done": "저장됨",
   "memory.closeHint": "정리 중에 이 창을 닫아도 됩니다. 정리 기록에서 진행 상황을 확인할 수 있습니다.",
-  "memory.conflict": "작업 중 이 메모리가 변경되었습니다. 다시 불러온 후 재시도하세요. 이번 변경 사항은 저장되지 않았습니다.",
-  "memory.duplicate": "같은 제목의 메모리가 이미 있습니다. 해당 항목을 열어 내용을 통합하세요.",
-  "memory.busy": "다른 정리 작업이 진행 중입니다. 완료될 때까지 기다리거나 정리 기록에서 취소하세요.",
-  "memory.notFound": "이 메모리, 출처 또는 작업이 더 이상 존재하지 않습니다.",
+  "memory.conflict": "작업 중 이 항목이 변경되었습니다. 다시 불러온 후 재시도하세요. 이번 변경 사항은 저장되지 않았습니다.",
+  "memory.duplicate": "같은 제목의 항목이 이미 있습니다. 해당 항목을 열어 내용을 통합하세요.",
+  "memory.notFound": "이 항목, 출처 또는 작업이 더 이상 존재하지 않습니다.",
   "memory.noTranscript": "이 세션에는 읽을 수 있는 대화가 없습니다.",
   "memory.agentUnavailable": "선택한 에이전트를 사용할 수 없습니다. 설정에서 실행 파일 경로를 확인하세요.",
-  "memory.invalid": "유효하지 않은 필드나 링크가 있습니다. 제목, 본문, 관련 메모리를 확인하세요.",
+  "memory.invalid": "유효하지 않은 필드나 링크가 있습니다. 제목, 본문, 관련 항목을 확인하세요.",
   "memory.processFailed": "에이전트가 정리를 완료하지 못했습니다. 로그인 상태, 모델, CLI 설정을 확인한 후 재시도하세요.",
   "memory.timeout": "에이전트 호출 시간이 초과되었습니다. 사용 가능한 모델로 변경하거나 대화를 줄여 재시도하세요.",
   "memory.interrupted": "정리 작업이 중단되었습니다. 저장된 출처 스냅샷으로 재시도할 수 있습니다.",
-  "memory.tooLarge": "출처, 컨텍스트 또는 출력이 지원 크기를 초과했습니다. 내용을 잘라내거나 메모리에 저장하지 않았습니다.",
+  "memory.tooLarge": "출처, 컨텍스트 또는 출력이 지원 크기를 초과했습니다. 내용을 잘라내거나 항목을 저장하지 않았습니다.",
   "memory.invalidOutput": "에이전트가 유효하지 않은 구조화 데이터를 반환했습니다. 저장된 내용은 없습니다. 재시도하거나 다른 에이전트를 선택하세요.",
-  "memory.loadError": "메모리를 불러올 수 없습니다. 연결을 확인한 후 재시도하세요.",
+  "memory.loadError": "지식 베이스를 불러올 수 없습니다. 연결을 확인한 후 재시도하세요.",
   "memory.unsaved": "저장하지 않은 변경 사항을 버리시겠습니까?",
   "memory.source": "출처 스냅샷",
 
@@ -133,6 +282,7 @@ const ko: typeof en = {
   "common.paste": "붙여넣기", // Paste
   "common.selectAll": "모두 선택", // Select All
   "common.copied": "복사됨", // Copied
+  "common.copyFailed": "복사하지 못했습니다. 다시 시도해 주세요.",
   "chat.sync.loading": "대화 동기화 중…",
   "chat.sync.failed": "동기화하지 못했습니다. 이미 불러온 메시지는 계속 볼 수 있습니다.",
   "chat.sync.history": "이전 메시지 불러오기",
@@ -179,6 +329,7 @@ const ko: typeof en = {
   "titlebar.themeSystem": (resolved) => `시스템 따름 (현재: ${resolved})`, // Follow system (currently {resolved})
   "titlebar.themeDark": "다크", // Dark
   "titlebar.themeLight": "라이트", // Light
+  "titlebar.gameCenter": "게임 센터",
   "titlebar.browser": "내장 브라우저", // Built-in Browser
   "titlebar.remoteAccess": "원격 접속 (브라우저)", // Remote Access (Browser)
   "titlebar.connectRemote": "원격 서버에 연결", // Connect to Remote Server
@@ -191,6 +342,7 @@ const ko: typeof en = {
   "titlebar.clientsTitle": "연결된 클라이언트", // Attached clients
   "titlebar.clientUnnamed": "이름 없는 클라이언트", // Unnamed client
   "titlebar.clientSince": (time: string) => `${time}부터`, // since {time}
+  "titlebar.feedback": "피드백", // Feedback
   "titlebar.share": "공유", // Share
   // ── Alt-triggered menu bar (Windows/Linux) ──
   "menubar.file": "파일", // File
@@ -225,6 +377,14 @@ const ko: typeof en = {
   "settings.catTerminal": "터미널", // Terminal
   "settings.catBehavior": "동작", // Behavior
   "settings.catAgents": "에이전트", // Agents
+  "settings.agentDefaultsTitle": "새 세션 기본값",
+  "settings.referSummaryTitle": "세션 참조 컨텍스트",
+  "settings.referSummaryMode": "컨텍스트 방식",
+  "settings.referSummaryFull": "전체 기록 사용",
+  "settings.referSummaryFirst": "먼저 요약",
+  "settings.referSummaryAgent": "요약 에이전트",
+  "settings.referSummaryHint":
+    "기본적으로 vrefer --ask는 전체 대화 기록을 답변 에이전트에 전달합니다. ‘먼저 요약’을 사용하면 여기서 선택한 단일 에이전트, 모델 및 사고 수준으로 기록을 압축하며, 최종 답변에는 관련 원문 검색 발췌도 함께 전달됩니다.",
   "settings.permDefault": "기본", // Default
   "settings.permYolo": "YOLO", // YOLO
   "settings.yoloHint": (flag: string) =>
@@ -247,6 +407,9 @@ const ko: typeof en = {
     "예: ~/.local/bin/claude — 비워두면 PATH에서 검색", // e.g. path — empty = find on PATH
   "settings.agentPathHint":
     "설정하면 이 유형의 세션은 PATH에서 명령을 찾는 대신 이 전체 경로로 실행됩니다. 설치되어 있지만 셸 PATH에 없는 경우에 유용합니다. 원클릭 설치 성공 후 위치가 감지되면 자동으로 입력됩니다.", // Agent executable path hint
+  "settings.agentDefaultView": "기본 보기", // Default view
+  "settings.agentDefaultViewHint":
+    "이 에이전트의 새 세션이 열리는 보기입니다. 기존 세션은 만들 때의 보기를 유지합니다.", // Agent default view hint
   "settings.appearance": "외관", // Appearance
   "settings.accent": "강조색", // Accent
   "settings.accentAuto": "테마 따름", // Follow theme
@@ -264,8 +427,6 @@ const ko: typeof en = {
   "settings.navTree": "표준", // Tree
   "settings.navCompact": "조밀", // Compact
   "settings.tabs": "탭", // Tabs
-  "settings.defaultSessionEngine": "새 세션의 기본 보기",
-  "settings.defaultSessionEngineHint": "기존 세션은 만들 때의 보기를 유지합니다.",
   "settings.dynamicStatusFilter": "상태 필터 동적 추가",
   "settings.tabSingle": "단일", // Single
   "settings.tabMulti": "다중", // Multi
@@ -288,39 +449,66 @@ const ko: typeof en = {
     "이미지를 붙여넣을 때 입력할 내용을 선택합니다(로컬 데스크톱 전용). 파일 경로 붙여넣기: 이미지를 임시 저장하고 경로를 Claude 또는 Codex에 입력합니다. 기본 이미지 붙여넣기: Claude 또는 Codex가 시스템 클립보드를 읽고 자체 이미지 자리 표시자를 표시합니다.",
   "settings.imagePasteRemoteHint":
     "원격 세션에서는 에이전트가 자신의 컴퓨터에서 이미지를 읽을 수 있도록 항상 파일 경로를 붙여넣습니다. 기본 이미지 붙여넣기는 로컬 데스크톱에서만 사용할 수 있습니다.",
-  "spawn.title": "Start spawned session?", // Start spawned session?
-  "spawn.fromSession": "From", // From
-  "spawn.promptLabel": "Prompt", // Prompt
-  "spawn.agentLabel": "Agent", // Agent
-  "spawn.worktreeLabel": "Separate git worktree", // Separate git worktree
-  "spawn.modelLabel": "모델", // Model
-  "spawn.effortLabel": "추론 강도", // Effort
-  "spawn.modelDefault": "기본값", // Default
-  "spawn.modelLoading": "모델 목록 불러오는 중…", // Listing models…
-  "spawn.modelListUnavailable":
-    "모델 목록을 가져올 수 없음 — 위에 식별자를 입력하세요", // No model list available — type an identifier above
-  "spawn.launch": "Launch", // Launch
-  "spawn.remaining": (n: number) => `${n} more pending`, // ${n} more pending
-  "spawn.notifyTitle": "Spawn session awaiting confirmation", // Spawn session awaiting confirmation
-  "orch.title": "이 에이전트들을 시작할까요?",
-  "orch.notifyTitle": "오케스트레이션 확인 대기 중",
-  "orch.coordinatorName": "진행 상황",
+  "spawn.title": "하위 세션 시작",
+  "spawn.fromSession": "요청한 세션",
+  "spawn.promptLabel": "작업 지시",
+  "spawn.agentLabel": "세션 유형",
+  "spawn.worktreeLabel": "독립 워크트리",
+  "spawn.modelLabel": "모델",
+  "spawn.effortLabel": "추론 강도",
+  "spawn.modelDefault": "에이전트 기본값",
+  "spawn.modelLoading": "모델 목록 불러오는 중…",
+  "spawn.modelListUnavailable": "모델 목록이 없습니다. 식별자를 직접 입력할 수 있습니다.",
+  "spawn.launch": "하위 세션 시작",
+  "spawn.remaining": (n: number) => `추가 확인 대기 ${n}건`,
+  "spawn.notifyTitle": "하위 세션 시작 확인 대기",
+  "orch.title": "하위 세션 일괄 시작",
+  "orch.notifyTitle": "일괄 시작 확인 대기",
+  "orch.coordinatorName": "세션 상태",
   "orch.sharedSettings": "공통 설정",
-  "orch.agentLabel": "종류",
+  "orch.agentLabel": "에이전트",
   "orch.modelLabel": "모델",
   "orch.effortLabel": "추론 강도",
-  "orch.nameLabel": "이름",
-  "orch.promptLabel": "작업",
-  "orch.worktreeLabel": "워크트리",
+  "orch.nameLabel": "세션 이름",
+  "orch.promptLabel": "작업 지시",
+  "orch.worktreeLabel": "Git 워크트리",
   "orch.worktreeNone": "현재 디렉터리 사용",
-  "orch.worktreeShared": "공유 워크트리 하나",
-  "orch.worktreeEach": "각자 워크트리",
-  "orch.follow": "공통 설정 따름",
-  "orch.overridden": "변경됨",
-  "orch.remove": "제거",
-  "orch.launch": (n: number) => `${n}개 시작`,
+  "orch.worktreeShared": "워크트리 공유",
+  "orch.worktreeEach": "세션별 독립 워크트리",
+  "orch.follow": "공통 설정 사용",
+  "orch.overridden": "개별 설정",
+  "orch.remove": "작업 제외",
+  "orch.launch": (n: number) => `세션 ${n}개 시작`,
   "orch.modelPlaceholder": "에이전트 기본값",
   "orch.effortPlaceholder": "에이전트 기본값",
+  "launch.terminalHint": "일반 터미널에서 작업 디렉터리를 엽니다. 작업 지시 내용은 자동으로 실행되지 않습니다.",
+  "launch.optionsError": "시작 옵션을 불러오지 못했습니다. 다시 시도한 후 시작하세요.",
+  "launch.singleIntro": "시작하기 전에 하위 세션의 작업과 설정을 확인하세요.",
+  "launch.taskHint": "이 내용이 하위 세션의 첫 번째 메시지로 전달됩니다.",
+  "launch.runtime": "실행 설정",
+  "launch.directory": "작업 디렉터리",
+  "launch.directoryCurrentHint": "원래 디렉터리에서 파일을 직접 수정합니다.",
+  "launch.directorySharedHint": "모든 세션이 하나의 새 디렉터리와 브랜치를 사용합니다.",
+  "launch.directoryEachHint": "각 세션에 별도의 디렉터리와 브랜치를 만듭니다.",
+  "launch.worktreeHint": "워크트리는 현재 커밋을 기준으로 만들며 커밋하지 않은 변경 사항은 포함하지 않습니다. 생성에 실패하면 원래 디렉터리를 사용합니다.",
+  "launch.singleResult": "하위 세션은 사이드바에서 요청한 세션 아래에 표시됩니다.",
+  "launch.startError": "시작하지 못했습니다. 설정을 확인하고 다시 시도하세요.",
+  "launch.starting": "시작하는 중…",
+  "launch.batchIntro": "공통 설정을 확인한 다음 각 작업을 선택하여 지시 내용을 편집하세요.",
+  "launch.sessionCount": (n: number) => `세션 ${n}개`,
+  "launch.batchName": "작업 그룹 이름",
+  "launch.sharedHint": "개별 설정을 지정하지 않은 세션에 적용됩니다.",
+  "launch.tasks": "작업 목록",
+  "launch.incomplete": "내용 필요",
+  "launch.undoRemove": "제외 취소",
+  "launch.taskNumber": (n: number) => `작업 ${n}`,
+  "launch.taskSettings": "이 세션의 설정",
+  "launch.taskAgent": "이 세션의 에이전트",
+  "launch.sharedDirectoryLocked": "이 작업 그룹의 모든 하위 세션은 하나의 워크트리를 공유합니다.",
+  "launch.resetSettings": "공통 설정으로 복원",
+  "launch.monitorHint": "시작 후 “세션 상태” 터미널에서 각 세션의 작업 중 또는 입력 대기 상태를 표시합니다. 작업 완료율을 나타내지는 않습니다.",
+  "launch.taskIncomplete": (n: number) => `작업 ${n}의 이름과 지시 내용을 입력하세요.`,
+  "launch.batchResult": "각 작업은 개별적으로 조작할 수 있는 하위 세션에서 시작됩니다.",
   "tree.worktreeMenu": "Worktree",
   "tree.gitMenu": "Git",
   "tree.viewChanges": "변경 사항 보기…",
@@ -430,7 +618,8 @@ const ko: typeof en = {
   "settings.chatLineHeight": "대화 줄 높이",
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
-  "settings.fontUnavailable": "이 기기에 설치되어 있지 않음",
+  "settings.fontListUnavailable": "시스템 글꼴 목록을 가져올 수 없습니다. 글꼴 이름을 직접 입력할 수 있습니다.",
+  "settings.fontUnconfirmed": "이 글꼴을 사용할 수 있는지 확인할 수 없습니다.",
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -592,6 +781,7 @@ const ko: typeof en = {
   "info.recentCommits": "최근 커밋", // Recent Commits
   "info.noCommits": "커밋 없음", // No commits
   "tree.killProcess": "프로세스 종료", // Kill Process
+  "tree.killProcessConfirm": (name: string) => `“${name}”의 프로세스를 종료하시겠습니까? 현재 작업이 중단됩니다. 저장된 대화 기록과 파일은 유지됩니다.`,
   "tree.archiveSession": "세션 보관", // Archive Session
   "tree.archiveGroup": "그룹 보관", // Archive Group
   // Temporary (draft) sessions
@@ -951,7 +1141,11 @@ const ko: typeof en = {
 
   // ── Document tabs ──
   "doc.wysiwyg": "위지윅", // WYSIWYG
-  "doc.source": "소스", // Source
+  "doc.visual": "비주얼",
+  "doc.source": "소스",
+  "doc.compare": "비교",
+  "doc.editorLoadFailed": "Markdown 편집기를 불러오지 못했습니다.",
+  "doc.imageOnly": "여기에는 이미지 파일만 삽입할 수 있습니다.",
   "doc.searchPlaceholder": "찾기", // Find
   "doc.searchReplacePlaceholder": "바꾸기", // Replace
   "doc.searchReplace": "바꾸기", // Replace
@@ -1002,6 +1196,8 @@ const ko: typeof en = {
 
   // ── Right information panel ──
   "panel.noSession": "선택된 세션 없음", // No session selected
+  "panel.collapseSection": "섹션 접기", // Collapse section
+  "panel.expandSection": "섹션 펼치기", // Collapse section
   "panel.openInEditor": "편집기에서 열기", // Open in Editor
   "panel.openInEditorTooltip": "가운데 문서 편집기에서 열기 (view 명령과 동일)", // Open in the document editor…
   "panel.preview": "미리보기", // Preview
@@ -1088,6 +1284,9 @@ const ko: typeof en = {
   "transport.imgUploadHttp": (status) => `이미지 업로드 실패 (${status})`, // Image upload failed ({status})
 
   // ── Login gate, directory selection, and connection banner ──
+  "login.showPassword": "표시",
+  "login.hidePassword": "숨기기",
+  "login.passwordSaveFailed": "연결되었지만 이 기기에 비밀번호를 저장하지 못했습니다. 다시 시도하세요.",
   "login.connecting": "연결 중…", // Connecting…
   "login.remoteAccess": "원격 접속", // Remote Access
   "login.desc": "이 터미널에 연결하려면 접속 비밀번호를 입력하세요.", // Enter the access password to connect to this terminal.
@@ -1129,6 +1328,31 @@ const ko: typeof en = {
   "errlog.close": "닫기", // Close
 
   // ── Mobile ──
+  "mobile.backConnections": "연결 목록으로 돌아가기",
+  "mobile.loadSlow": "불러오는 데 시간이 걸리고 있습니다. 다시 시도하거나 연결 목록으로 돌아갈 수 있습니다.",
+  "mobile.connectionUnavailable": "연결할 수 없습니다",
+  "mobile.pushTitle": "작업 알림",
+  "mobile.pushHint": "앱 사용 중, 백그라운드 실행 중 또는 화면이 잠겨 있을 때 세션 이름과 짧은 응답 미리보기를 알림으로 표시합니다. 이 텍스트는 velaterm.com과 푸시 서비스에 전송됩니다. 연결 비밀번호와 SSH 개인 키는 전송되지 않습니다.",
+  "mobile.pushEnable": "알림 켜기",
+  "mobile.pushDisable": "알림 끄기",
+  "mobile.pushTest": "테스트 알림 보내기",
+  "mobile.pushTestSent": "테스트 알림이 대기열에 추가되었습니다. 시스템 알림 센터를 확인하세요.",
+  "mobile.pushDisabled": "백그라운드 알림이 꺼져 있습니다.",
+  "mobile.pushEnabled": "백그라운드 알림이 켜져 있습니다.",
+  "mobile.pushNotConfigured": "이 빌드에는 푸시 알림 서비스가 설정되어 있지 않습니다.",
+  "mobile.pushDenied": "시스템 설정에서 알림을 허용하세요.",
+  "mobile.pushRegistrationFailed": "기기 등록에 실패했습니다. 다시 시도하세요.",
+  "mobile.pushRelayUnavailable": "알림 전달 서비스를 사용할 수 없습니다. 다시 시도하세요.",
+  "mobile.pushHostUnavailable": "원격 호스트에서 백그라운드 알림이 활성화되지 않았습니다. 호스트를 업데이트한 후 다시 연결하세요.",
+  "mobile.pushDisclosure": "백그라운드 알림은 Getui와 기기 제조사의 푸시 서비스를 사용합니다. 알림 전송을 위해 기기 식별자, 네트워크 정보, 세션 이름, 짧은 응답 미리보기를 처리합니다. 연결 비밀번호와 SSH 개인 키는 전송되지 않습니다.",
+  "mobile.pushConnectHint": "알림을 켠 후 알림을 받을 연결을 각각 한 번 열어 구독을 완료하세요.",
+  "mobile.pushTarget": "테스트할 연결",
+  "mobile.copyConnection": "복사하여 편집",
+  "mobile.copyConnectionHint": "이 연결을 바탕으로 설정을 편집합니다. 저장된 인증 정보는 안전하게 유지됩니다. 원래 연결은 변경되지 않으며, 설정이 같으면 기존 연결을 사용합니다.",
+  "mobile.copyConnectionReused": "이미 저장된 설정입니다. 기존 연결을 유지했습니다.",
+  "mobile.inputOptions": "입력 옵션",
+  "mobile.connections": "연결 관리",
+  "mobile.more": "추가 작업",
   "mobile.toDesktop": "데스크톱 버전으로 전환", // Switch to desktop
   "mobile.empty1": "세션이 없습니다.", // No sessions.
   "mobile.noMatch": "일치하는 세션이 없습니다", // No matching sessions
@@ -1241,6 +1465,7 @@ const ko: typeof en = {
   "session.switchTitle": "보기를 전환하면 에이전트가 다시 시작됩니다",
   "session.switchBody": "진행 중인 턴이 중단됩니다. 대화 내용은 그대로 유지됩니다.",
   "session.switchConfirm": "전환",
+  "session.terminalViewHint": "여기를 클릭하면 터미널 보기로 돌아갈 수 있습니다.",
   "session.loading": "대화를 읽는 중…",
   "session.unavailable": "이 대화는 아직 읽을 수 없습니다",
   "session.working": "작업 중…",
@@ -1271,13 +1496,43 @@ const ko: typeof en = {
   "chat.collaborationMode.defaultHint": "작업을 진행하고 결정이 필요할 때만 질문합니다",
   "chat.collaborationMode.plan": "계획",
   "chat.collaborationMode.planHint": "먼저 조사하여 계획을 세우며, 질문에 대화형 카드를 사용할 수 있습니다",
+  "chat.moreOptions": "더 보기",
   "chat.modelTooltip": "모델",
   "chat.keepChoice": "기본값으로 설정",
   "chat.keepChoiceFor": (model) => `${model}의 기본값으로 설정`,
+  "chat.followModelDefault": (agent: string) => `${agent} 기본 설정 사용`,
+  "chat.followModelDefaultHint": "에이전트 설정에 따라 결정된 모델을 사용합니다.",
+  "chat.savedModelDefault": "앱 기본값",
+  "chat.catalogWebsite": "웹사이트 모델 목록",
+  "chat.catalogCache": "캐시된 모델 목록",
+  "chat.catalogBundled": "내장 모델 목록",
+  "chat.catalogChecked": (time: string) => `마지막 확인: ${time}`,
+  "chat.catalogFailed": "업데이트하지 못했습니다. 기존 목록은 계속 사용할 수 있습니다.",
+  "chat.catalogRefresh": "새로 고침",
   "chat.modelDefault": "기본 모델",
   "chat.mode.default": "매번 확인",
+  "chat.mode.agentDefault": "에이전트 기본값",
   "chat.mode.acceptEdits": "편집 자동 승인",
   "chat.mode.plan": "계획 모드",
+  "chat.permissionRestart.unconfirmed": "연결이 끊어져 권한 변경 결과를 확인할 수 없습니다. 다시 연결한 후 대화의 현재 권한을 확인하세요.",
+  "permission.stateUnavailable": "권한 상태를 확인할 수 없음",
+  "permission.currentUnknown": "현재 권한 미확인",
+  "permission.notRunning": "실행 중이 아님",
+  "permission.launch": (mode: string) => "시작 설정: " + mode,
+  "permission.unconfirmedHint": "현재 권한이 아직 확인되지 않았습니다. 사용자 지정 인수나 에이전트 내부의 변경 사항에 따라 시작 설정의 실제 적용 결과가 달라질 수 있습니다.",
+  "permission.applied": "적용됨",
+  "permission.nextTurn": "다음 메시지부터 적용",
+  "permission.restart": "이 세션을 다시 시작하면 적용",
+  "permission.nextStart": "다음 실행 시 적용",
+  "permission.defaultHint": "새로 만드는 세션의 기본 권한입니다. 기존 세션은 각자의 권한 설정을 유지합니다.",
+  "chat.permissionRestart.title": "다시 시작하여 확인을 생략할까요?",
+  "chat.permissionRestart.body": "권한 확인을 생략하려면 Claude를 다시 시작해야 합니다. 현재 응답은 중단되지만 대화 기록은 유지됩니다. 변경에 성공하면 권한 확인을 생략합니다.",
+  "chat.permissionRestart.confirm": "다시 시작 및 적용",
+  "chat.permissionRestart.busy": "다시 시작하는 중…",
+  "chat.permissionRestart.failed": (detail: string) => "권한 변경에 실패했습니다. 이전 권한 모드가 유지됩니다. " + detail,
+  "chat.permissionRestart.tasks": "대기 중인 메시지를 처리하거나 제거하고 백그라운드 작업을 중지한 후 다시 시작하세요.",
+  "chat.permissionRestart.stale": "대화 프로세스가 변경되었습니다. “확인 없음”을 다시 선택하세요.",
+  "chat.permissionRestart.noHistory": "아직 이 대화를 재개할 수 없습니다. 초기화가 완료된 후 다시 시도하세요.",
   "chat.mode.bypassPermissions": "확인 없음",
   "chat.mode.readOnly": "읽기 전용",
   "chat.mode.fullAccess": "전체 접근",
@@ -1326,6 +1581,7 @@ const ko: typeof en = {
   "chat.placeholderBusy": "메시지를 입력하세요. 이번 턴이 끝난 뒤 전송됩니다",
   "chat.queueTooltip": (combo: string) => `이번 턴이 끝난 뒤 전송 · ${combo} 키로 즉시 전송`,
   "chat.queue.pending": "전송 대기",
+  "chat.queue.view": "메시지 전체 보기",
   "chat.queue.edit": "편집",
   "chat.queue.remove": "삭제",
 
@@ -1342,6 +1598,12 @@ const ko: typeof en = {
   // N steps
   "chat.subagent.steps": (n: number) => `${n}단계`,
   "chat.subagent.tokens": (tokens: string) => `${tokens} 토큰`,
+  "chat.rewind.edit": "편집",
+  "chat.rewind.editSend": "확인 후 다시 보내기",
+  "chat.rewind.editConfirm": "삭제 후 다시 보내기",
+  "chat.rewind.editWarning": "원본 메시지와 이후의 모든 메시지가 영구적으로 삭제되고, 수정한 내용이 이 지점에서 전송됩니다. 변경된 파일은 복원되지 않습니다.",
+  "chat.rewind.inactive": "대화 프로세스가 실행 중이 아닙니다. 시작된 후 이 작업을 사용할 수 있습니다.",
+  "chat.rewind.unsupported": "현재 연결된 에이전트는 이 작업을 제공하지 않습니다.",
   "chat.rewind.title": "여기서부터 되돌리기",
   "chat.rewind.warning": "이 작업은 실행 후 되돌릴 수 없습니다.",
   "chat.rewind.conversation": "대화 되돌리기",
@@ -1396,6 +1658,45 @@ const ko: typeof en = {
   "chat.fastMode.label": "고속",
   "chat.fastMode.on": "고속 모드가 켜져 있습니다",
   "chat.fastMode.off": "고속 모드가 꺼져 있습니다",
+  "chat.auth.login": "로그인",
+  "chat.auth.logout": "로그아웃",
+  "chat.auth.confirmLogout": "로그아웃 확인",
+  "chat.auth.logoutConfirm": (provider: string) => `이 호스트의 ${provider} 계정에서 로그아웃하시겠습니까? 공유 계정 인증 정보가 삭제되며, 이를 사용하는 다른 세션에도 영향을 줍니다. 대화 기록은 유지됩니다.`,
+  "chat.auth.signingOut": "로그아웃 중…",
+  "chat.auth.signedOut": (provider: string) => `${provider}에서 로그아웃되었습니다. 로그인하면 현재 대화를 이어갈 수 있습니다.`,
+  "chat.auth.logoutFailed": "로그아웃 결과를 확인하지 못했습니다. 다시 시도하세요.",
+  "chat.auth.wait": "현재 작업이 끝난 후 계정을 변경하세요.",
+  "chat.auth.title": (provider: string) => `${provider} 계정`,
+  "chat.auth.start": "다시 로그인",
+  "chat.auth.required": (provider: string) => `${provider} 로그인 정보가 더 이상 유효하지 않습니다. 계속하려면 다시 로그인하세요.`,
+  "chat.auth.starting": "로그인 준비 중…",
+  "chat.auth.pending": "인증 페이지를 열고 이 코드를 입력하세요. 로그인이 완료되면 이 화면이 자동으로 업데이트됩니다.",
+  "chat.auth.success": "로그인되었습니다. 메시지를 보내 현재 대화를 이어갈 수 있습니다.",
+  "chat.auth.failed": "로그인을 완료하지 못했습니다. 다시 시도하세요. ChatGPT에서 기기 코드 인증을 활성화했는지, 현재 Codex CLI가 이 기능을 지원하는지 확인하세요.",
+  "chat.auth.canceled": "로그인이 취소되었습니다. 언제든지 다시 시도할 수 있습니다.",
+  "chat.auth.scope": (provider: string) => `로그인하면 이 호스트에서 사용하는 ${provider} 계정이 변경됩니다. 같은 인증 정보를 공유하는 다른 세션에서도 해당 계정을 사용하게 됩니다.`,
+  "chat.auth.canceling": "로그인을 취소하는 중…",
+  "chat.auth.submitting": "인증 코드를 확인하는 중…",
+  "chat.auth.claude.pending": "인증 페이지를 열어 로그인한 다음, 표시된 전체 코드를 붙여 넣으세요.",
+  "chat.auth.claude.failed": "로그인을 완료하지 못했습니다. 현재 Claude CLI가 계정 인증을 지원하는지 확인하고 다시 시도하세요.",
+  "chat.auth.claude.code": "인증 코드",
+  "chat.auth.claude.submit": "코드 제출",
+  "chat.auth.claude.invalidCode": "이번 인증 페이지에 표시된 코드를 # 뒤의 내용까지 모두 붙여 넣으세요.",
+  "chat.auth.claude.externalAuth": "API 키와 그 밖에 설정된 인증 방식은 변경되지 않습니다.",
+  "chat.auth.open": "인증 페이지 열기",
+  "chat.resetCredits.label": (n: string) => `초기화 이용권: ${n}개`,
+  "chat.resetCredits.title": "Codex 사용 한도 초기화 이용권",
+  "chat.resetCredits.unknown": "초기화 이용권 수를 확인할 수 없습니다.",
+  "chat.resetCredits.confirm": "이용권 1개를 사용하여 초기화 가능한 Codex 사용 한도를 초기화합니다. 이 작업은 취소할 수 없습니다.",
+  "chat.resetCredits.reset": "사용 한도가 초기화되었습니다.",
+  "chat.resetCredits.alreadyRedeemed": "이 요청은 이미 성공적으로 처리되었습니다.",
+  "chat.resetCredits.nothingToReset": "초기화 가능한 사용 한도가 없습니다.",
+  "chat.resetCredits.noCredit": "사용 가능한 초기화 이용권이 없습니다.",
+  "chat.resetCredits.error": "요청에 실패했거나 최신 잔액을 확인할 수 없습니다. 잔액을 새로고침하거나 결과가 확인되지 않은 초기화 요청을 다시 시도하세요.",
+  "chat.resetCredits.busy": "처리 중…",
+  "chat.resetCredits.retry": "초기화 다시 시도",
+  "chat.resetCredits.use": "1개 사용",
+  "chat.resetCredits.refresh": "새로고침",
   "chat.usage.context": (used: string, max: string, pct: number) =>
     `컨텍스트: ${max} 토큰 중 ${used} 사용(${pct}%)`,
   "chat.usage.cost": (usd: string) => `세션 비용: $${usd}`,
@@ -1424,6 +1725,14 @@ const ko: typeof en = {
   "chat.retry.line": (attempt: number, max: number, seconds: number, message: string) =>
     `${seconds}초 후 다시 시도합니다(${attempt}/${max}): ${message}`,
   "chat.notify.dismiss": "닫기",
+  "settings.completionMode": "명령어 자동 완성",
+  "settings.completionAuto": "자동 표시",
+  "settings.completionTab": "Tab으로 표시",
+  "settings.completionOff": "끄기",
+  "settings.completionUnavailable": "설정을 불러오거나 저장할 수 없습니다.",
+  "settings.completionHint": "새로 연 Zsh, Bash 4+, Fish 및 PowerShell 터미널에 적용됩니다. CMD는 기본 Tab 동작을 유지합니다. Tab은 선택한 후보를 입력하고, Enter는 후보를 적용하지 않고 현재 명령을 실행합니다.",
+
+
 };
 
 export default ko;

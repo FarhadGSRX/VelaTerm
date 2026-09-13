@@ -22,8 +22,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import type { WebglAddon } from "@xterm/addon-webgl";
-import type { CanvasAddon } from "@xterm/addon-canvas";
-import { loadCanvasCtor, loadWebglCtor, peekWebglCtor } from "../term/rendererAddons";
+import { loadWebglCtor, peekWebglCtor } from "../term/rendererAddons";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ClipboardAddon, type IClipboardProvider } from "@xterm/addon-clipboard";
@@ -65,6 +64,7 @@ import {
   unregisterTerminal,
 } from "../terminal/registry";
 import { installQueryReplyGuard } from "../terminal/queryReplyGuard";
+import { installCompletion } from "../terminal/completion/controller";
 import {
   discardTerminalOutput,
   flushTerminalOutput,
@@ -149,8 +149,8 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
   // Expose the terminal so reveal logic can recalculate the viewport scroll area.
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  // Active Canvas/WebGL renderer addon; DOM mode uses null. Dispose on rebuild/unmount.
-  const rendererRef = useRef<CanvasAddon | WebglAddon | null>(null);
+  // Active WebGL renderer addon; DOM mode uses null. Dispose on rebuild/unmount.
+  const rendererRef = useRef<WebglAddon | null>(null);
   // Timestamp display:none entry so reveal can rebuild a long-hidden, reclaimed WebGL context.
   const hiddenSinceRef = useRef<number | null>(null);
   // Keep current hidden state in a ref so output-scheduler closures do not use stale props.
@@ -238,7 +238,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
       // In mouse-reporting TUIs, enable macOS Option-drag forced selection like iTerm2; otherwise xterm
       // forwards all dragging to the app and users cannot select/copy text.
       macOptionClickForcesSelection: true,
-      // ─── Native xterm 5.5 rendering tuning ───
+      // ─── Terminal rendering options ───
       // Enforce minimum contrast so ANSI white remains readable on light themes.
       minimumContrastRatio: 4.5,
       // Slightly increase wheel speed and fast-scroll responsiveness.
@@ -249,13 +249,8 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
       // Use bright colors for clearer bold text.
       drawBoldTextInBrightColors: true,
       // Shrink glyphs that overflow their cell instead of letting them bleed into the neighbouring one.
-      // This targets Nerd Font / CJK fonts whose icons are wider than the measured cell and smear the
-      // next column. IMPORTANT: this option, and xterm's `customGlyphs` (default true, which draws
-      // box-drawing characters as vectors rather than trusting the font), are read **only by the
-      // canvas and webgl renderers**. Under the DOM renderer — the default, and the only usable one on
-      // macOS WKWebView — both are dead settings. Setting it costs nothing and takes effect for users
-      // who switch `termRenderer` to canvas/webgl in Settings, which on Windows/WebView2 is a working
-      // path; do not read these two lines as "the glyph corruption is handled".
+      // WebGL honors this option and custom glyph rendering; DOM remains the default and uses the
+      // configured font directly. Keep font readiness and WKWebView measurement correction separately.
       rescaleOverlappingGlyphs: true,
       // Override OSC 8 links because xterm's confirm/window.open flow fails under Tauri.
       linkHandler: terminalLinkHandler,
@@ -272,6 +267,8 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
     term.open(container);
+    const completion = session.kind === "terminal"
+      ? installCompletion(term, data => ptyWrite(session.id, data), session.id) : undefined;
 
     // Keep Windows/Linux Ctrl+Alt+letter app shortcuts from reaching xterm as Meta escape sequences,
     // including edge cases where the global capture handler has no active session. Plain-browser
@@ -281,6 +278,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     // The blocked set is derived from the bindings actually in effect, read at keypress time: a user who
     // rebinds an action to another letter would otherwise leak that combo into the terminal as Meta.
     term.attachCustomKeyEventHandler((e) => {
+      if (completion && !completion.key(e)) return false;
       if (e.type !== "keydown") return true;
       // Legacy terminal input has no encoding for a modified Enter, so xterm emits a bare CR for both
       // Enter and Shift+Enter and CLIs that treat Shift+Enter as "insert newline" (Claude Code, Codex)
@@ -296,6 +294,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
         !e.isComposing
       ) {
         e.preventDefault();
+        completion?.input("\x1b\r");
         void ptyWrite(session.id, "\x1b\r").catch(() => {});
         return false;
       }
@@ -334,33 +333,14 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     // renderer addons so ImageAddon observes renderer switches; terminal disposal releases it.
     term.loadAddon(new ImageAddon());
 
-    // Renderer setting applies to new terminals: DOM is the default and the only path verified under
-    // Tauri (WKWebView), where canvas mismeasures cell width against the configured font; canvas does
-    // draw custom glyphs (seamless TUI tables) without GPU-context loss, so it stays opt-in; WebGL is
-    // sharp/fast but advanced because hidden Tauri views can corrupt glyph atlases or lose contexts.
-    // Failure falls back to DOM.
-    // Load after open() and ImageAddon.
-    // Non-DOM renderers load their addon on demand (see term/rendererAddons.ts), so attaching is
-    // asynchronous. The terminal renders through DOM until the chunk arrives, which is what it would
-    // have fallen back to anyway had the addon been unavailable.
+    // DOM is the default. WebGL loads on demand and falls back to DOM if unavailable or its context
+    // is lost. Load after open() and ImageAddon so both observe renderer changes.
     //
     // The `termRef.current === term` guard is what keeps a late arrival from touching a disposed
     // terminal: termRef is assigned further down in this same synchronous block, so it is already set
     // by the time any await resumes, and cleanup clears it.
     const renderer = useTermStore.getState().termRenderer;
-    if (renderer === "canvas") {
-      void loadCanvasCtor().then((Ctor) => {
-        if (!Ctor || termRef.current !== term) return;
-        try {
-          const canvas = new Ctor();
-          term.loadAddon(canvas);
-          rendererRef.current = canvas;
-          dlog("canvas renderer attached ->", session.id);
-        } catch (e) {
-          dlog("canvas unavailable, fallback to DOM ->", session.id, e);
-        }
-      });
-    } else if (renderer === "webgl") {
+    if (renderer === "webgl") {
       void loadWebglCtor().then((Ctor) => {
         if (!Ctor || termRef.current !== term) return;
         try {
@@ -389,10 +369,45 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     termRef.current = term;
     fitRef.current = fitAddon;
 
+    // Codex inline TUI output has left viewportY behind baseY when parsing partial-region
+    // scroll sequences, causing a jump into history even without alternate-screen mode. Two triggers
+    // arm a short window that pulls parsed batches back to the live bottom: a standalone Esc while
+    // Codex is working, and a completed turn (the final redraw). Any next input cancels the window,
+    // and a deliberate scroll away cancels it too, so reading history is never yanked back.
+    let followCodexInterruptUntil = 0;
+    let userScrolledAway = false;
+    let wheelGestureAt = 0;
+    const syncViewportIntent = () => {
+      const buffer = term.buffer.active;
+      userScrolledAway = buffer.viewportY !== buffer.baseY;
+      if (userScrolledAway) followCodexInterruptUntil = 0;
+    };
+    // xterm 6 scrolls through its own model, so native DOM scroll events no longer report viewport
+    // changes. Read public onScroll after a wheel gesture; the custom scrollbar reports intent directly.
+    const onWheelIntent = () => {
+      wheelGestureAt = performance.now();
+    };
+    container.addEventListener("wheel", onWheelIntent, { passive: true, capture: true });
+    const scrollIntentSub = term.onScroll(() => {
+      if (performance.now() - wheelGestureAt < 250) syncViewportIntent();
+    });
+    container.addEventListener("vlx-terminal-user-scroll", syncViewportIntent);
+
     // Tell output scheduling when the user types so background draining yields. Capture keydown during
     // IME composition, composition events without keydown, and later onData paths; repeated signals only
     // refresh a timestamp.
-    const onUserInputSignal = () => noteUserInput();
+    const onUserInputSignal = (e?: Event) => {
+      noteUserInput();
+      // xterm scrolls the viewport itself for these keys after this capture listener runs, so read
+      // the resulting position on the next tick to record that the user left the bottom.
+      if (
+        e instanceof KeyboardEvent &&
+        e.shiftKey &&
+        (e.key === "PageUp" || e.key === "PageDown")
+      ) {
+        setTimeout(syncViewportIntent, 0);
+      }
+    };
     container.addEventListener("keydown", onUserInputSignal, true);
     container.addEventListener("compositionstart", onUserInputSignal, true);
     container.addEventListener("compositionupdate", onUserInputSignal, true);
@@ -484,10 +499,8 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
       }
       try {
         term.refresh(0, term.rows - 1);
-        term.scrollLines(-1);
-        term.scrollLines(1);
       } catch {
-        /* Defensive: refresh/scroll may throw in extreme cases. */
+        /* Defensive: refresh may throw in extreme cases. */
       }
       ptyRedraw(session.id).catch(() => {});
     };
@@ -757,6 +770,18 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
               .setRuntime(session.id, { agentMissing: true, agentInstalling: false });
             return;
           }
+          // A completed Codex turn triggers a final inline redraw whose partial-region scrolls can
+          // leave the viewport in history; follow the bottom briefly unless the user scrolled away.
+          if (
+            agentKind === "codex" &&
+            signal.kind === "state" &&
+            signal.state === "waiting" &&
+            !userScrolledAway
+          ) {
+            followCodexInterruptUntil = performance.now() + 2000;
+            const buffer = term.buffer.active;
+            if (buffer.viewportY !== buffer.baseY) term.scrollToBottom();
+          }
           useTermStore.getState().applyStatusSignal(session.id, signal);
         }),
       ]);
@@ -816,7 +841,9 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
 
         // Execute backend-generated agent launch or terminal initCmd only for a new PTY. Attach must skip
         // both, otherwise a browser attaching to a running terminal would rerun initCmd.
-        const autoCmd = attached ? undefined : (launch ?? session.initCmd?.trim());
+        const autoCmd = attached ? undefined : (session.kind === "terminal"
+          ? [launch, session.initCmd?.trim()].filter(Boolean).join("\n")
+          : (launch ?? session.initCmd?.trim()));
         if (autoCmd) {
           // Show the agent-launch placeholder across shell/Claude cold start, with a five-second fallback.
           if (agentKind) {
@@ -836,16 +863,11 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     // duplicate onData, avoiding delayed/out-of-order delivery.
     const imeFix = isWebkitEngine()
       ? installWebkitImeFix(term, (data) => {
+          completion?.input(data);
           ptyWrite(session.id, data).catch(() => {});
         })
       : null;
 
-    // Codex inline TUI finalization after Esc can leave xterm 5.5 viewportY behind baseY when parsing
-    // partial-region scroll sequences, causing a jump into history even without alternate-screen mode.
-    //
-    // For a brief window after a standalone Esc while Codex is working, keep parsed output at the live
-    // bottom. Any next input cancels this, preserving idle Esc and second-Esc interactions.
-    let followCodexInterruptUntil = 0;
     const writeParsedSub = term.onWriteParsed(() => {
       if (performance.now() > followCodexInterruptUntil) return;
       const buffer = term.buffer.active;
@@ -857,6 +879,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
       noteUserInput();
       // Swallow xterm's late duplicate of punctuation already sent by the WebKit fallback.
       if (imeFix?.shouldSwallow(data)) return;
+      completion?.input(data);
       ptyWrite(session.id, data).catch(() => {});
       // Ctrl+C or standalone Esc immediately ends working status because Claude emits no completion hook
       // after interruption. Ctrl+C may use includes; Esc must equal exactly `\x1b`, since arrows/Alt/function
@@ -920,8 +943,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
         enterFit();
       }
       openGate(true, () => {
-        termRef.current?.scrollLines(-1);
-        termRef.current?.scrollLines(1);
+        term.refresh(0, term.rows - 1);
       });
     });
 
@@ -939,10 +961,14 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
       container.removeEventListener("compositionstart", onUserInputSignal, true);
       container.removeEventListener("compositionupdate", onUserInputSignal, true);
       container.removeEventListener("compositionend", onCompositionEndReset, true);
+      container.removeEventListener("wheel", onWheelIntent, true);
+      scrollIntentSub.dispose();
+      container.removeEventListener("vlx-terminal-user-scroll", syncViewportIntent);
       imeCaret.dispose();
       imeFix?.dispose();
       writeParsedSub.dispose();
       dataSub.dispose();
+      completion?.dispose();
       unlistenExit?.();
       unlistenKilled?.();
       unlistenStatus?.();
@@ -996,13 +1022,9 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [termFontFamily, termFontSize, termLineHeight]);
 
-  // Repair scroll geometry when a hidden tab becomes visible.
-  //
-  // display:none tabs keep receiving output, but xterm computes scroll height with offsetHeight=0 and
-  // leaves it one screen short. If dimensions do not change on reveal, no normal path recalculates it.
-  //
-  // Force recalculation by scrolling one line up and back. Net position is unchanged, while each real
-  // scroll invokes syncScrollArea; fit/refresh at equal dimensions would not.
+  // Restore visible layout and recover optional WebGL contexts. xterm 6 derives scroll geometry from
+  // its render dimensions and resynchronizes it on redraw; scrolling up/down on reveal is unnecessary
+  // and can move a user away from the first history row.
   useEffect(() => {
     // Synchronize current hidden state for foreground output scheduling.
     hiddenRef.current = !!hidden;
@@ -1021,7 +1043,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     const hiddenMs = hiddenSinceRef.current ? Date.now() - hiddenSinceRef.current : 0;
     hiddenSinceRef.current = null;
     const STALE_RENDERER_MS = 30_000;
-    // Only WebGL needs context rebuild. Canvas/DOM do not. Full redraw is a separate opt-in advanced
+    // Only WebGL needs context rebuild. DOM does not. Full redraw is a separate opt-in advanced
     // setting so normal reveal remains smooth unless artifacts require the fallback.
     const termRenderer = useTermStore.getState().termRenderer;
     const redrawOnReveal = useTermStore.getState().redrawOnReveal;
@@ -1098,7 +1120,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
         }
 
         if (dimsChanged || redrawOnReveal || rebuiltWebgl) {
-          // Clear degraded Canvas/WebGL glyph atlases and redraw so the renderer rerasterizes everything.
+          // Clear degraded WebGL glyph atlases and redraw so the renderer rerasterizes everything.
           try {
             rendererRef.current?.clearTextureAtlas();
           } catch {
@@ -1106,9 +1128,6 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
           }
           term.refresh(0, term.rows - 1);
         }
-        // Recalculate viewport scroll area by scrolling one line up and back; cheap and always required.
-        term.scrollLines(-1);
-        term.scrollLines(1);
       });
     };
     recover(0);

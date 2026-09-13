@@ -37,6 +37,9 @@ impl CallOrigin {
         match mode {
             super::ServeMode::LoopbackHttp => CallOrigin::Local,
             super::ServeMode::LanTls | super::ServeMode::LanHttp => CallOrigin::Remote,
+            // The share tunnel surface is loopback, but reaching it is not local shell access: the relay
+            // authorized the visitor, so it gets the remote (non-management) command surface.
+            super::ServeMode::ShareTunnel => CallOrigin::Remote,
         }
     }
 }
@@ -169,7 +172,33 @@ pub fn dispatch(
     source: &str,
     origin: CallOrigin,
 ) -> Result<Value, String> {
-    if cmd.starts_with("public_account_") || cmd.starts_with("public_share_") {
+    // Keystrokes, resize and diagnostics must not generate one log event per frame.
+    if matches!(cmd, "pty_write" | "pty_resize" | "diagnostic_event" | "diagnostic_health") {
+        return dispatch_inner(app, cmd, args, source, origin);
+    }
+    let inherited=crate::diagnostics::current_context().0;
+    let _context = crate::diagnostics::Context::enter(Some(&inherited));
+    let mut span = crate::diagnostics::Span::new("rpc", serde_json::json!({"command":cmd,"clientId":source,"sessionId":args.get("sessionId").or_else(||args.get("id"))}));
+    let result = dispatch_inner(app, cmd, args, source, origin);
+    if let Err(error)=&result { crate::diagnostics::record("WARN","rpc_failure",serde_json::json!({"command":cmd,"errorCode":crate::diagnostics::error_code(error)})); }
+    span.finish(&result);
+    result
+}
+
+fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: CallOrigin) -> Result<Value, String> {
+    if cmd == "mobile_notification_preview" {
+        return to_value(crate::mobile_push::notification_preview(app, &req_str(args, "sessionId")?)?);
+    }
+    if cmd == "mobile_push_bind" {
+        return crate::mobile_push::bind(app, None, args);
+    }
+    if cmd == "diagnostic_health" {
+        return if origin == CallOrigin::Local { Ok(crate::diagnostics::health()) } else { Err("remote_cmd_forbidden:diagnostic_health".into()) };
+    }
+    if cmd == "diagnostic_event" {
+        return crate::diagnostics::client_event(source, args);
+    }
+    if cmd.starts_with("public_account_") || cmd.starts_with("public_share_") || cmd == "public_remote_options" {
         if origin != CallOrigin::Local { return Err(format!("remote_cmd_forbidden:{cmd}")); }
         return super::public_relay::dispatch(app, cmd, args);
     }
@@ -181,14 +210,23 @@ pub fn dispatch(
     {
         return Err(format!("remote_cmd_forbidden:{cmd}"));
     }
+    if cmd.starts_with("security_") {
+        return crate::security::dispatch(app, cmd, args);
+    }
     if cmd.starts_with("memory_") {
         return crate::memory::dispatch(app, cmd, args);
+    }
+    if cmd.starts_with("kb_") {
+        crate::kb::guard_paths(app,cmd,args,|path|guard_remote_path(app,origin,path))?;
+        return crate::kb::dispatch(app,cmd,args);
     }
     if cmd.starts_with("knowledge_") {
         crate::knowledge::guard_paths(app,cmd,args,|path|guard_remote_path(app,origin,path))?;
         return crate::knowledge::dispatch(app, cmd, args);
     }
     match cmd {
+        // Browser clients render on another device: never return the server's installed fonts.
+        "bundled_font_catalog" => to_value(crate::fonts::bundled_font_catalog()),
         "record_split_trace" => {
             let entry = serde_json::from_value(
                 args.get("entry").cloned().ok_or("missing_split_trace_entry")?,
@@ -196,6 +234,21 @@ pub fn dispatch(
             to_value(crate::split_trace::record(app, source, entry)?)
         }
         // ── PTY control (`pty_spawn` is handled in ws.rs) ──
+        "terminal_completion_config" => {
+            let settings = core::get_app_settings(app)?;
+            Ok(serde_json::json!({
+                "mode": settings.get(crate::pty::completion::MODE_KEY),
+                "available": crate::pty::completion::AVAILABLE,
+                "modes": ["auto", "tab", "off"], "debounceMs": crate::pty::completion::DEBOUNCE_MS,
+            }))
+        }
+        "pty_completion" => {
+            to_value(app.pty().completion(
+                &req_str(args, "sessionId")?, &req_str(args, "action")?, source,
+                args.get("revision").and_then(Value::as_u64),
+                args.get("index").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()),
+            )?)
+        }
         "pty_write" => {
             // Input does not participate in resize-owner arbitration and needs no source identifier.
             app.pty()
@@ -272,7 +325,41 @@ pub fn dispatch(
         )?)),
         // Model enumeration spawns the agent CLI and waits for it, so it belongs on the same blocking
         // path as agent_locate_bin rather than on the main thread.
-        "agent_list_models" => to_value(crate::agent::model_catalog::list_models(&req_str(
+        "session_permission_state" => to_value(crate::agent::permission_state::read(app, &req_str(args, "sessionId")?)?),
+        "agent_permission_catalog" => to_value(crate::agent::permission_catalog::catalog(
+            &req_str(args, "agent")?, args.get("stored").and_then(Value::as_str),
+        )?),
+        "agent_set_default_permission" => crate::agent::permission_catalog::set_default(
+            app, &req_str(args, "agent")?, &req_str(args, "mode")?,
+        ),
+        "plan_execute_prepare" => crate::agent::plan_execute::menu::prepare(app, &serde_json::from_value(args.get("context").cloned().unwrap_or_default()).map_err(|e|format!("Invalid creation location: {e}"))?),
+        "plan_execute_create" => {
+            let request: crate::agent::plan_execute::menu::Request = serde_json::from_value(args.get("request").cloned().unwrap_or_default()).map_err(|e|format!("Invalid workflow request: {e}"))?;
+            if let Some(cwd) = request.cwd.as_deref().filter(|s|!s.is_empty()) { guard_remote_path(app, origin, cwd)?; }
+            crate::agent::plan_execute::menu::start(app, &request)
+        }
+        "plan_execute_start" => to_value(crate::agent::plan_execute::start(app, &serde_json::from_value(args.get("request").cloned().unwrap_or_default()).map_err(|e| format!("Invalid workflow request: {e}"))?)?),
+        "plan_execute_defaults" => crate::agent::plan_execute::defaults(app, &req_str(args,"parentSessionId")?, &serde_json::from_value(args.get("config").cloned().unwrap_or_default()).map_err(|e|e.to_string())?),
+        "plan_execute_split_pending" => crate::agent::plan_execute::split::pending(app),
+        "plan_execute_split_read" => crate::agent::plan_execute::split::read(app, &req_str(args,"runId")?),
+        "plan_execute_split_confirm" => crate::agent::plan_execute::split::confirm(app, &serde_json::from_value(args.get("request").cloned().unwrap_or_default()).map_err(|e|format!("Invalid task confirmation: {e}"))?),
+        "plan_execute_split_cancel" => crate::agent::plan_execute::split::cancel(app, &req_str(args,"runId")?, &req_str(args,"proposalId")?),
+        "launch_options" => to_value(crate::agent::launch_options::catalog()),
+        "launch_models" => to_value(crate::agent::launch_models::list(app,
+            SessionKind::from_db(&req_str(args, "kind")?),
+            &serde_json::from_value(args.get("context").cloned().unwrap_or_else(|| serde_json::json!({})))
+                .map_err(|e| format!("Invalid launch context: {e}"))?)?),
+        "launch_selection" => to_value(crate::agent::launch_options::selection(
+            serde_json::from_value(args.get("kind").cloned().unwrap_or_default()).map_err(|e| format!("Invalid agent kind: {e}"))?,
+            opt_str(args, "args").as_deref(),
+        )),
+        "apply_launch_args" => to_value(crate::agent::launch_options::apply(
+            serde_json::from_value(args.get("kind").cloned().unwrap_or_default()).map_err(|e| format!("Invalid agent kind: {e}"))?,
+            opt_str(args, "args").as_deref(),
+            opt_str(args, "model").as_deref(),
+            opt_str(args, "effort").as_deref(),
+        )?),
+        "agent_list_models" => to_value(crate::agent::model_catalog::list_models(app, &req_str(
             args, "agent",
         )?)?),
 
@@ -587,6 +674,9 @@ pub fn dispatch(
         "agent_turn_stats" => to_value(core::agent_turn_stats(app, &req_str(args, "sessionId")?)?),
         // Account-level quotas: one stored copy per machine, refreshed by the background poller in
         // `usage_store`. Clients read it here and never query a provider themselves.
+        "codex_reset_credit_consume" => to_value(crate::agent::usage_store::consume_codex_reset(
+            app, &req_str(args, "idempotencyKey")?,
+        )?),
         "usage_snapshot" => to_value(crate::agent::usage_store::snapshot(app)),
         // Manual refresh from the panel's ↻ button. `provider` narrows the work to one source;
         // omitting it refreshes every provider whose account is present on this machine.
@@ -597,13 +687,20 @@ pub fn dispatch(
             let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
             to_value(crate::agent::usage_store::refresh(app, provider, force))
         }
-        "read_agent_transcript" => to_value(core::read_agent_transcript(
-            app,
-            &req_str(args, "sessionId")?,
-        )?),
+        "read_agent_transcript" => {
+            let sid=req_str(args,"sessionId")?;
+            let mut value=to_value(core::read_agent_transcript(app,&sid)?)?;
+            crate::agent::tell::decorate(app,&sid,&mut value);
+            Ok(value)
+        },
         // Session view rows: the same recording as read_agent_transcript, parsed with reasoning and tool
         // calls kept. Takes a session id, never a path, so the remote path ACL has nothing to gate.
-        "read_agent_chat" => to_value(core::read_agent_chat(app, &req_str(args, "sessionId")?)?),
+        "read_agent_chat" => {
+            let sid=req_str(args,"sessionId")?;
+            let mut value=to_value(core::read_agent_chat(app,&sid)?)?;
+            crate::agent::tell::decorate(app,&sid,&mut value);
+            Ok(value)
+        },
         // Chat engine: an agent driven as a protocol peer. Every arm takes a session id and never a path,
         // so a remote client can drive a conversation without reaching the filesystem through these calls.
         "chat_clear" => to_value(core::chat_clear(app, &req_str(args, "sessionId")?)?),
@@ -634,6 +731,10 @@ pub fn dispatch(
                 personality.as_deref(),
             )?)
         }
+        "chat_auth_start" => to_value(core::chat_auth_start(app, &req_str(args, "sessionId")?)?),
+        "chat_auth_logout" => to_value(core::chat_auth_logout(app, &req_str(args, "sessionId")?)?),
+        "chat_auth_submit" => to_value(core::chat_auth_submit(app, &req_str(args, "sessionId")?, &req_str(args, "code")?)?),
+        "chat_auth_cancel" => to_value(core::chat_auth_cancel(app, &req_str(args, "sessionId")?)?),
         "chat_compact" => to_value(core::chat_compact(app, &req_str(args, "sessionId")?)?),
         "chat_review" => to_value(core::chat_review(
             app,
@@ -710,6 +811,12 @@ pub fn dispatch(
                 updated_permissions,
             )?)
         }
+        "chat_restart_permission_mode" => to_value(app.chat().restart_claude_bypass(
+            app,
+            &req_str(args, "sessionId")?,
+            args.get("pid").and_then(Value::as_u64).and_then(|pid| u32::try_from(pid).ok())
+                .ok_or("A valid process id is required")?,
+        )?),
         "chat_set_mode" => to_value(core::chat_set_mode(
             app,
             &req_str(args, "sessionId")?,
@@ -738,13 +845,23 @@ pub fn dispatch(
         }
         // The catalogue belongs to an agent installation, but the session selects both its kind and any
         // custom executable/configuration used to query it.
+        "model_catalog_status" => to_value(crate::agent::remote_model_catalog::status()),
+        "model_catalog_refresh" => to_value(crate::agent::remote_model_catalog::refresh(app)),
         "chat_models" => core::chat_models(app, &req_str(args, "sessionId")?),
         "chat_commands" => to_value(core::chat_commands(app, &req_str(args, "sessionId")?)?),
         "chat_snapshot" => {
             let window = args.get("window").filter(|value| !value.is_null()).map(|value| serde_json::from_value::<crate::agent::chat::engine::ChatWindow>(value.clone())).transpose().map_err(|e| e.to_string())?;
-            to_value(core::chat_snapshot_window(app, &req_str(args, "sessionId")?, window.as_ref())?)
+            let sid = req_str(args,"sessionId")?;
+            let mut value = to_value(core::chat_snapshot_window(app, &sid, window.as_ref())?)?;
+            crate::agent::tell::decorate(app,&sid,&mut value);
+            Ok(value)
         }
-        "chat_row" => core::chat_row(app, &req_str(args, "sessionId")?, &req_str(args, "rowId")?, args.get("epoch").and_then(Value::as_u64)),
+        "chat_row" => {
+            let sid=req_str(args,"sessionId")?;
+            let mut value=core::chat_row(app,&sid,&req_str(args,"rowId")?,args.get("epoch").and_then(Value::as_u64))?;
+            crate::agent::tell::decorate(app,&sid,&mut value);
+            Ok(value)
+        },
         "chat_attachment" => to_value(core::chat_attachment(
             app,
             &req_str(args, "sessionId")?,
@@ -764,6 +881,7 @@ pub fn dispatch(
         "chat_attach" => to_value(core::chat_attach(app, &req_str(args, "sessionId")?)?),
         "chat_detach" => to_value(core::chat_detach(app, &req_str(args, "sessionId")?)?),
         "chat_stop" => to_value(core::chat_stop(app, &req_str(args, "sessionId")?)?),
+
         "set_session_engine" => to_value(core::set_session_engine(
             app,
             &req_str(args, "sessionId")?,
@@ -925,17 +1043,6 @@ pub fn dispatch(
             &req_str(args, "name")?,
         )?),
         "list_worktrees" => to_value(git::worktree_list(&req_str(args, "repoRoot")?)?),
-        // Report which session an orchestration's agent became, closing the one gap that kept spawned
-        // sessions anonymous to the backend. A null sessionId records that the user dropped that entry.
-        "orch_attach_session" => {
-            let conn = app.db().conn.lock().map_err(|_| "database is unavailable")?;
-            to_value(crate::db::repo::set_orch_agent_session(
-                &conn,
-                &req_str(args, "orchId")?,
-                req_u64(args, "idx")? as u32,
-                opt_str(args, "sessionId").as_deref(),
-            )?)
-        }
         // Render a model and effort choice into that agent's own command-line spelling. The frontend
         // asks rather than reproducing the table, which differs per agent and would drift if copied.
         "compose_agent_args" => to_value(crate::agent::inject::compose_agent_args(
@@ -1242,6 +1349,44 @@ mod tests {
         let db = crate::db::Db::open(&data_dir.join("test.db"))
             .expect("failed to open the test database");
         AppCtx::Headless(Arc::new(HeadlessHost::new(data_dir, db)))
+    }
+
+    #[test]
+    fn public_remote_options_reaches_host_scope_catalog() {
+        let app = test_ctx();
+        let data_dir = app.data_dir().unwrap();
+        let (project, conversation) = {
+            let conn = app.db().conn.lock().unwrap();
+            let project = crate::db::repo::create_virtual_project(&conn, "Shared project").unwrap();
+            let conversation = crate::db::repo::create_session(
+                &conn, &project.id, None, "AI conversation", crate::models::SessionKind::Codex,
+                None, None, None, None, None,
+            ).unwrap();
+            crate::db::repo::create_session(
+                &conn, &project.id, None, "Private terminal", crate::models::SessionKind::Terminal,
+                None, None, None, None, None,
+            ).unwrap();
+            (project, conversation)
+        };
+        let result = dispatch(&app, "public_remote_options", &json!({}), DESKTOP_SOURCE, CallOrigin::Local).unwrap();
+        assert_eq!(result["options"]["scopes"], json!(["machine", "project", "session"]));
+        assert_eq!(result["projects"], json!([{"id":project.id,"name":project.name}]));
+        let sessions = result["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["id"], conversation.id);
+        assert_eq!(sessions[0]["projectName"], "Shared project");
+        drop(app);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
+    fn public_remote_options_rejects_remote_management_access() {
+        let app = test_ctx();
+        let data_dir = app.data_dir().unwrap();
+        assert_eq!(dispatch(&app, "public_remote_options", &json!({}), "ws-1", CallOrigin::Remote).unwrap_err(),
+            "remote_cmd_forbidden:public_remote_options");
+        drop(app);
+        std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     #[test]

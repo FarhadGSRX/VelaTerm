@@ -63,12 +63,14 @@ pub fn detail(root: &Path, id: &str) -> Result<Value> {
     // Keep symbols, edges and indexed file hashes on one SQLite snapshot while another process syncs.
     let _snapshot = conn.unchecked_transaction().map_err(|_| "knowledge_index_invalid")?;
     let selected = find(&conn,id)?;
-    let mut incoming = Vec::new(); let mut outgoing = Vec::new();
+    let mut incoming = Vec::new(); let mut outgoing = Vec::new(); let mut totals = Vec::new();
     for (incoming_direction, destination) in [(true,&mut incoming),(false,&mut outgoing)] {
         let (other,focus) = if incoming_direction {("source","target")} else {("target","source")};
+        let total: i64 = conn.query_row(&format!("SELECT count(*) FROM edges e JOIN nodes n ON n.id=e.{other} WHERE e.{focus}=?1"),[id],|r|r.get(0)).map_err(|_|"knowledge_index_invalid")?;
+        totals.push(total);
         let cols = NODE.split(',').map(|s| format!("n.{s}")).collect::<Vec<_>>().join(",");
         let mut stmt = conn.prepare(&format!("SELECT {cols},e.kind,e.line,e.provenance,e.metadata FROM edges e JOIN nodes n ON n.id=e.{other} WHERE e.{focus}=?1 ORDER BY n.file_path,n.start_line,e.id LIMIT 201")).map_err(|_| "knowledge_index_invalid")?;
-        let rows = stmt.query_map([id],|r| Ok(json!({"node":node(r)?,"kind":r.get::<_,String>(9)?,"line":r.get::<_,Option<i64>>(10)?,"provenance":r.get::<_,Option<String>>(11)?,"metadata":r.get::<_,Option<String>>(12)?})))
+        let rows = stmt.query_map([id],|r| Ok(json!({"node":node(r)?,"kind":r.get::<_,String>(9)?,"line":r.get::<_,Option<i64>>(10)?,"provenance":r.get::<_,Option<String>>(11)?,"metadata":r.get::<_,Option<String>>(12)?,"inferred":r.get::<_,Option<String>>(11)?.as_deref()==Some("heuristic")})))
             .map_err(|_| "knowledge_index_invalid")?.collect::<std::result::Result<Vec<_>,_>>().map_err(|_| "knowledge_index_invalid")?;
         destination.extend(rows);
     }
@@ -81,5 +83,5 @@ pub fn detail(root: &Path, id: &str) -> Result<Value> {
     let truncated = incoming.len()>200 || outgoing.len()>200;
     incoming.truncate(200); outgoing.truncate(200);
     Ok(json!({"node":selected,"incoming":incoming,"outgoing":outgoing,"truncated":truncated,
-        "source":source,"sourceTruncated":end.saturating_sub(start)+1>600,"digest":digest(&bytes),"changedDuringRead":indexed_hash!=digest(&bytes)}))
+        "incomingTotal":totals[0],"outgoingTotal":totals[1],"source":source,"sourceTruncated":end.saturating_sub(start)+1>600,"digest":digest(&bytes),"changedDuringRead":indexed_hash!=digest(&bytes)}))
 }

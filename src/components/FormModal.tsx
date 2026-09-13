@@ -1,6 +1,6 @@
 //! Generic form modal that renders inputs from field definitions for creating groups/sessions, renaming, and similar actions.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { normalizeArgDashes } from "../args";
 import { useT } from "../i18n";
 import { Backdrop } from "./Backdrop";
@@ -10,6 +10,7 @@ export interface FieldDef {
   key: string;
   label: string;
   placeholder?: string;
+  render?: (value: string, onChange: (value: string) => void) => ReactNode;
   required?: boolean;
   autoFocus?: boolean;
   /** When provided, render a select whose option value is submitted; an empty string is a valid Default option. */
@@ -203,7 +204,7 @@ export function FormModal({
                     <span style={{ color: "var(--status-error)" }}> *</span>
                   )}
                 </div>
-                {f.select ? (
+                {f.render ? f.render(values[f.key], v => setValues(vs => ({ ...vs, [f.key]: v }))) : f.select ? (
                   <SelectField
                     field={f}
                     value={values[f.key]}

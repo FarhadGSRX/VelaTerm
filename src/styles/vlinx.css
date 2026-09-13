@@ -128,10 +128,9 @@ button { font-family: inherit; color: inherit; background: none; border: none; c
 /* Session tree: hide the native scrollbar in favor of LeftSidebar's TreeScrollbar. */
 .tree { scrollbar-width: none; }
 .tree::-webkit-scrollbar { display: none; }
-/* Terminal: hide the native scrollbar in favor of TerminalView's TermScrollbar. On macOS, Tauri
-   WKWebView still treats ::-webkit-scrollbar as an auto-hiding overlay rather than a classic bar. */
-.xterm .xterm-viewport { scrollbar-width: none; }
-.xterm .xterm-viewport::-webkit-scrollbar { display: none; }
+/* xterm 6 uses a DOM scrollbar. Keep VelaTerm's persistent terminal scrollbar as the visible control;
+   wheel events still reach xterm's scrollable element. */
+.xterm .xterm-scrollable-element > .scrollbar { display: none !important; }
 #root { height: 100vh; }
 
 /* ============================ APP SHELL ============================== */
@@ -147,8 +146,8 @@ button { font-family: inherit; color: inherit; background: none; border: none; c
 .brand .logo { width: 18px; height: 18px; border-radius: 4px; display: block; object-fit: contain; user-select: none; }
 /* Select the logo through CSS content based on documentElement data-theme. System theme changes update
    data-theme without rerendering TitleBar, so a JS-derived image src could retain the old light logo. */
-.brand .logo { content: url(/velaterm-light.svg); }
-:root[data-theme="dark"] .brand .logo { content: url(/velaterm-dark.svg); }
+.brand .logo { content: var(--brand-logo-light, url(/velaterm-light.svg)); }
+:root[data-theme="dark"] .brand .logo { content: var(--brand-logo-dark, url(/velaterm-dark.svg)); }
 .brand .v { color: var(--text); }
 .brand .sub { color: var(--text-dim); font-weight: 400; font-size: 11px; }
 .tb-spacer { flex: 1; }
@@ -156,10 +155,11 @@ button { font-family: inherit; color: inherit; background: none; border: none; c
 .tb-pair { display: flex; gap: 0; }
 .tb-btn:hover { background: var(--bg-hover); color: var(--text); }
 .tb-btn.on { color: var(--accent); }
-/* While remote access runs, light the globe with the same accent glow as the panel's running indicator. */
-.tb-btn.remote-on { color: var(--accent); }
-.tb-btn.remote-on:hover { color: var(--accent); background: var(--bg-hover); }
-.tb-btn.remote-on svg { filter: drop-shadow(0 0 4px color-mix(in oklch, var(--accent) 60%, transparent)); }
+/* While remote access runs, light the globe with the same accent glow as the panel's running indicator.
+   A linked account lights the account icon the same way. */
+.tb-btn.remote-on, .tb-btn.account-on { color: var(--accent); }
+.tb-btn.remote-on:hover, .tb-btn.account-on:hover { color: var(--accent); background: var(--bg-hover); }
+.tb-btn.remote-on svg, .tb-btn.account-on svg { filter: drop-shadow(0 0 4px color-mix(in oklch, var(--accent) 60%, transparent)); }
 .tb-seg { display: flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
 .tb-seg button { padding: 0 9px; height: 24px; color: var(--text-dim); }
 .tb-seg button.on { background: var(--accent-soft); color: var(--accent); }
@@ -378,8 +378,6 @@ svg { display: block; }
 .pane-tools button { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; color: var(--text-faint); }
 .pane-tools button:hover { background: var(--bg-active); color: var(--text); }
 .pane-tools button:disabled { opacity: 0.3; cursor: default; }
-.pane-tools button.conversation-switch { width: auto; display: flex; align-items: center; gap: 4px; padding: 0 4px; }
-.session-experimental-badge { flex: none; white-space: nowrap; border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; font-size: 10px; line-height: 14px; font-weight: 500; color: var(--text-muted); }
 
 /* Shell-switch pill sits left of pane tools and includes text, so it does not reuse fixed-width tool buttons. */
 .pane-head .shell-pick { display: flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 6px; border-radius: 5px; color: var(--text-faint); font-size: 10.5px; cursor: pointer; }
@@ -412,7 +410,7 @@ svg { display: block; }
 .empty-action:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 
 /* ============================ INSPECTOR ============================ */
-.insp-tabs { height: 32px; flex: none; display: flex; border-bottom: 1px solid var(--border); padding: 0 6px; gap: 2px; }
+.insp-tabs { height: 32px; flex: none; display: flex; justify-content: center; border-bottom: 1px solid var(--border); padding: 0 6px; gap: 2px; }
 .insp-tab { display: flex; align-items: center; gap: 6px; padding: 0 10px; color: var(--text-dim); border-radius: var(--r-sm); margin: 5px 0; font-size: 11.5px; }
 .insp-tab:hover { color: var(--text); }
 .insp-tab.on { color: var(--text); background: var(--bg-active); }
@@ -478,6 +476,17 @@ svg { display: block; }
 
 .insp-section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .insp-section h4 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--text-dim); font-weight: 600; margin-bottom: 10px; }
+/* Section captions double as disclosure controls. The caption sits in a button so keyboard users get a
+   real target, and the plus/minus button on the right makes the affordance visible without hovering.
+   Collapsing leaves the header in place, so the section keeps its name and any header controls. */
+.insp-head { display: flex; align-items: center; gap: 8px; }
+.insp-head .insp-head-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 0; border: none; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.insp-head .insp-head-toggle:hover { color: var(--text); }
+.insp-head .insp-head-toggle .ttl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-head .insp-collapse { flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--text-faint); cursor: pointer; }
+.insp-head .insp-collapse:hover { background: var(--bg-hover); color: var(--text); }
+/* A collapsed section is a single caption line, so the header drops the gap its body used to need. */
+.insp-section.collapsed > .insp-head { margin-bottom: 0; }
 /* Right-aligned qualifier in a section title (the agent name, the pid): reads as part of the caption,
    so it keeps the title's size and letter-spacing but drops the uppercasing that would mangle a name. */
 .insp-head-tag { margin-left: auto; font-size: 11px; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

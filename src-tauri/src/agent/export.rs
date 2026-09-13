@@ -91,6 +91,11 @@ pub fn export_markdown(
             let messages = crate::agent::opencode_store::messages(agent_session_id)?;
             (path, crate::agent::chat::opencode_timeline::events(&messages))
         }
+        SessionKind::Pi | SessionKind::Omp => {
+            let path = resume::find_pi_session(kind, agent_session_id)
+                .ok_or("Pi session file not found")?;
+            (path, pi_events(&resume::read_pi_transcript(kind, agent_session_id)?))
+        }
         SessionKind::Terminal => {
             return Err("Terminal sessions have no agent transcript".to_string())
         }
@@ -625,6 +630,131 @@ pub(crate) fn codex_events(content: &str) -> Vec<Event> {
     out
 }
 
+/// Parse a Pi or OMP session recording.
+///
+/// The file is an append-only tree of entries, each carrying `id` and `parentId`. A fork or rewind appends
+/// new entries to a different parent, so a flat read would show abandoned turns as if they still counted.
+/// Only the active branch is kept: the chain from the last entry back to the root, reversed into speaking
+/// order.
+pub(crate) fn pi_events(content: &str) -> Vec<Event> {
+    let branch = resume::pi_active_branch(content);
+
+    let mut out: Vec<Event> = Vec::new();
+    for entry in branch {
+        if entry.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(message) = entry.get("message") else {
+            continue;
+        };
+        let ts = entry
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        match message.get("role").and_then(Value::as_str) {
+            Some("user") => {
+                let text = pi_message_text(message);
+                if !text.trim().is_empty() {
+                    out.push(Event::User { text, ts });
+                }
+            }
+            Some("assistant") => pi_assistant_events(message, ts, &mut out),
+            Some("toolResult") => {
+                let id = message
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let name = message
+                    .get("toolName")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let text = pi_message_text(message);
+                let is_error = message
+                    .get("isError")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                out.push(Event::ToolResult {
+                    id,
+                    name,
+                    text,
+                    is_error,
+                });
+            }
+            Some("bashExecution") => {
+                let command = message
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !command.is_empty() {
+                    out.push(Event::User {
+                        text: format!("!{command}"),
+                        ts,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn pi_assistant_events(message: &Value, ts: Option<String>, out: &mut Vec<Event>) {
+    let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str).unwrap_or("") {
+            "text" => {
+                let text = block.get("text").and_then(Value::as_str).unwrap_or("");
+                if !text.is_empty() {
+                    out.push(Event::AssistantText {
+                        text: text.to_string(),
+                        ts: ts.clone(),
+                    });
+                }
+            }
+            "thinking" => {
+                let text = block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !text.is_empty() {
+                    out.push(Event::Thinking {
+                        text: text.to_string(),
+                        ts: ts.clone(),
+                    });
+                }
+            }
+            "toolCall" => {
+                out.push(Event::ToolUse {
+                    id: block.get("id").and_then(Value::as_str).map(str::to_string),
+                    name: block
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("(unknown tool)")
+                        .to_string(),
+                    input: block.get("arguments").cloned().unwrap_or(Value::Null),
+                    ts: ts.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Text out of a Pi/OMP message, whose content is a string or an array of blocks.
+fn pi_message_text(message: &Value) -> String {
+    match message.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 pub(crate) fn codex_user_message_is_injected(payload: &Value, text: &str) -> bool {
     if let Some(kinds) = payload
         .pointer("/internal_chat_message_metadata_passthrough/content_item_kinds")
@@ -653,6 +783,42 @@ pub(crate) fn codex_user_message_is_injected(payload: &Value, text: &str) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Pi/OMP recording is a tree; only the chain from the last entry back to the root is the live
+    /// conversation, and each content block becomes its own event.
+    #[test]
+    fn pi_events_keep_the_active_branch_and_map_blocks() {
+        let lines = [
+            r#"{"type":"session","id":"s"}"#,
+            r#"{"type":"message","id":"u1","parentId":null,"timestamp":"t1","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"#,
+            r#"{"type":"message","id":"a1","parentId":"u1","timestamp":"t2","message":{"role":"assistant","content":[{"type":"thinking","thinking":"pondering"},{"type":"text","text":"hi"},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"ls"}}]}}"#,
+            r#"{"type":"message","id":"r1","parentId":"a1","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"a.rs"}],"isError":false}}"#,
+            r#"{"type":"message","id":"a2","parentId":"u1","message":{"role":"assistant","content":[{"type":"text","text":"abandoned"}]}}"#,
+            r#"{"type":"message","id":"u2","parentId":"r1","message":{"role":"user","content":"next"}}"#,
+        ];
+        let events = pi_events(&lines.join("\n"));
+        let users: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::User { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(users, ["hello", "next"]);
+        let answers: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::AssistantText { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers, ["hi"]);
+        assert!(events.iter().any(|event| matches!(event, Event::Thinking { text, .. } if text == "pondering")));
+        assert!(events.iter().any(|event| matches!(event, Event::ToolUse { id, name, input, .. }
+            if id.as_deref() == Some("call_1") && name == "bash" && input["command"] == "ls")));
+        assert!(events.iter().any(|event| matches!(event, Event::ToolResult { id, text, is_error, .. }
+            if id.as_deref() == Some("call_1") && text == "a.rs" && !is_error)));
+    }
 
     /// The stand-in reply the CLI records for a locally handled command is not part of the conversation.
     #[test]

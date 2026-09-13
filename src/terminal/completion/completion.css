@@ -1,0 +1,43 @@
+/* Match vlx-sql's Monaco suggest widget, with content-sized width for short shell candidates. */
+.terminal-completion {
+  --suggest-bg: #252526;
+  --suggest-border: #454545;
+  --suggest-text: #d4d4d4;
+  --suggest-selected: #04395e;
+  --suggest-match: #2aaaff;
+  --suggest-selected-match: #2aaaff;
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid var(--suggest-border);
+  border-radius: 3px;
+  background: var(--suggest-bg);
+  color: var(--suggest-text);
+  box-shadow: 0 2px 5px #00000014;
+  font-size: 13px;
+  line-height: 20px;
+}
+[data-theme="light"] .terminal-completion {
+  --suggest-bg: #f3f3f3;
+  --suggest-border: #c8c8c8;
+  --suggest-text: #333333;
+  --suggest-selected: #0060c0;
+  --suggest-match: #0066bf;
+  --suggest-selected-match: #bbe7ff;
+}
+.terminal-completion[hidden] { display: none; }
+.terminal-completion-list { min-height: 0; max-height: 240px; overflow: auto; flex: 1 1 auto; padding: 0; }
+.terminal-completion-row { display: flex; align-items: center; height: 20px; gap: 5px; padding: 0 5px; cursor: pointer; }
+.terminal-completion-row[aria-selected="true"] { background: var(--suggest-selected); color: #fff; }
+.terminal-completion-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 16px; opacity: .8; }
+.terminal-completion-icon svg { width: 14px; height: 14px; }
+.terminal-completion-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.terminal-completion-label mark { background: transparent; color: var(--suggest-match); font-weight: 600; }
+.terminal-completion-row[aria-selected="true"] mark { color: var(--suggest-selected-match); }
+.terminal-completion-description { flex: 1 1 0; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; opacity: .7; font-size: 12px; }
+.terminal-completion-description:empty { display: none; }
+/* Monaco keeps its status bar and expanded documentation closed by default. Full text remains in row titles. */
+.terminal-completion-detail, .terminal-completion-footer { display: none; }

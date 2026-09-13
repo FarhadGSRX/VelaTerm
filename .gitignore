@@ -61,9 +61,6 @@ coverage/
 .cache/
 .vite/
 
-# Local-only mobile policy backup.
-mobile/_backup/
-
 # Local vela-server build output for the lightweight SSH remote server.
 /dist-server/
 

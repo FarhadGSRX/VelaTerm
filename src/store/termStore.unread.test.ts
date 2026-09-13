@@ -47,6 +47,7 @@ vi.mock("../notify", () => ({
 
 import { useTermStore } from "./termStore";
 import { effectiveStatus } from "../types";
+import * as transport from "../ipc/transport";
 import { registerTerminal, unregisterTerminal } from "../terminal/registry";
 
 const SID = "unread-1";
@@ -109,6 +110,19 @@ describe("who owns the unread marker", () => {
     });
 
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("allows the mobile host to notify even while the session is visible", async () => {
+    const preview = vi.spyOn(transport, "invoke").mockResolvedValueOnce({title:"Mobile session",body:"Current reply"});
+    Object.defineProperty(window, "__VELATERM_NOTIFICATIONS__", {value: {}, configurable: true});
+    try {
+      useTermStore.setState({windowFocused: true, activeTabId: "t1", paneTrees: {t1: {kind:"leaf",paneId:"p1",sessionId:SID}}});
+      useTermStore.getState().applyStatusSignal(SID, {kind:"state",state:"waiting",authoritative:true});
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+      expect(notify).toHaveBeenCalledTimes(1);
+      useTermStore.getState().applyStatusSignal(SID, {kind:"state",state:"waiting",authoritative:true});
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally { preview.mockRestore(); Reflect.deleteProperty(window, "__VELATERM_NOTIFICATIONS__"); }
   });
 });
 

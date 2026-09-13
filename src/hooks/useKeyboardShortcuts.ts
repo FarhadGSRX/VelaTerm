@@ -20,6 +20,7 @@ export const DOC_EXPORT_PDF_EVENT = "vlx:doc-export-pdf";
 
 import { useEffect } from "react";
 import { isTauri } from "../ipc/transport";
+import { isShareSurface } from "../ipc/shareBase";
 import { env } from "../platform";
 import { useTermStore } from "../store/termStore";
 import {
@@ -77,13 +78,13 @@ export function useKeyboardShortcuts() {
 
       if (matchCombo(e, sc("openProject"))) {
         e.preventDefault();
-        void useTermStore.getState().importProject();
+        if(!isShareSurface)void useTermStore.getState().importProject();
         return;
       }
 
       if (matchCombo(e, sc("newTab"))) {
         e.preventDefault();
-        useTermStore.getState().newScratchTab();
+        if(!isShareSurface)useTermStore.getState().newScratchTab();
         return;
       }
 

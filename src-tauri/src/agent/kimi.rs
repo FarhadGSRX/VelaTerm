@@ -21,21 +21,7 @@ exit 0
 
 /// Kimi hook configuration audit: record only phase, result, and duration, never configuration, paths, tokens, or session content.
 pub fn audit_install(status: &str, duration_ms: u128) {
-    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    let level = if status == "failed" { "WARN" } else { "INFO" };
-    eprintln!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{:<5}] [system] event=kimi_hook_install step=hooks method=config_merge inputCount=1 outputCount={} status={} durationMs={}",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second(),
-        level,
-        if status == "success" { 1 } else { 0 },
-        status,
-        duration_ms,
-    );
+    crate::diagnostics::record(if status=="failed"{"WARN"}else{"INFO"},"kimi_hook_install",serde_json::json!({"status":status,"durationMs":duration_ms as u64,"inputCount":1,"outputCount":usize::from(status=="success")}));
 }
 
 fn kimi_home() -> Option<PathBuf> {

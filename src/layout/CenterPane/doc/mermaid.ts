@@ -57,6 +57,9 @@ export function renderMermaid(theme: DiagramTheme, src: string): Promise<Mermaid
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
+        // SVG text survives the SVG-only sanitizer; HTML labels use foreignObject and are removed.
+        htmlLabels: false,
+        flowchart: { htmlLabels: false },
         theme: theme === "dark" ? "dark" : "default",
       });
       const renderId = `vlx-mermaid-${idSeq++}`;

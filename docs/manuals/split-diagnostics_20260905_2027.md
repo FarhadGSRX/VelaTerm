@@ -8,28 +8,15 @@
 
 ## 日志位置
 
-更新并重新构建应用后，分屏诊断日志会写入应用数据目录下的 `logs/split.log`。
+分屏事件写入应用数据目录下的 `logs/runtime-*.log`，与其他诊断共用有界后台写入器。每个进程使用独立文件，按大小和保留期限轮转；位置、权限和故障边界见[运行日志与隐私保护](runtime-diagnostics_20260909.md)。
 
-- macOS 发行版：`~/Library/Application Support/io.vlinx.vlxterm.release/logs/split.log`。
-- macOS 默认开发版：`~/Library/Application Support/io.vlinx.vlxterm/logs/split.log`；使用独立应用标识的实例以其实际数据目录为准。
-- SSH、配对 URL 原生窗口：写入承载该窗口的本地桌面应用日志，`clientId` 为本地窗口标签。
-- 普通浏览器、Electron：写入所连接后端的数据目录，`clientId` 为后端分配的连接标识。
-- 无界面服务：写入其数据目录下的 `logs/split.log`，数据目录可由既有的 `--data-dir` 参数指定。
-
-每个日志文件最多约 4 MiB，轮转时只保留一个 `split.previous.log`。Unix 系统中新建日志文件的权限为 `0600`。
-
-启动应用或服务前可设置环境变量：
-
-| 变量 | 默认行为 | 配置说明 |
-| --- | --- | --- |
-| `VLX_SPLIT_LOG_DIR` | 应用数据目录下的 `logs/` | 覆盖分屏日志目录 |
-| `VLX_SPLIT_LOG_LEVEL` | `info` | `info`、`debug`、`trace` 记录分屏事件；`warn`、`error`、`off` 不记录这些信息级事件 |
+原生 SSH、配对 URL 窗口仍写入承载窗口的本地桌面日志；普通浏览器和 Electron 写入所连接后端的数据目录。`VLX_LOG_DIR` 优先控制通用目录，未设置时 `VLX_SPLIT_LOG_DIR` 继续控制分屏日志目录。`VLX_SPLIT_LOG_LEVEL` 继续作为分屏事件的额外级别过滤条件。
 
 ## 记录内容
 
-控制台和文件使用相同格式：`yyyy-MM-dd HH:mm:ss [INFO ] [system] event=split clientId=… data=…`。行首为服务端时间；结构化数据中的 `clientAtMs` 是客户端触发时的 Unix 毫秒时间，可用于跨窗口对照。
+控制台和文件使用相同格式：`yyyy-MM-dd HH:mm:ss [INFO ] [requestId或system] event=split {...}`。行首为服务端时间；结构化数据中的 `clientAtMs` 是客户端触发时的 Unix 毫秒时间，可用于跨窗口对照。
 
-记录包含来源、会话 ID、父会话 ID、页签 ID 及分屏方向。来源分别为：
+记录包含来源、通过 UUID 格式检查的会话 ID、父会话 ID、页签 ID 及分屏方向。不符合安全字段格式的标识不会直接输出。来源分别为：
 
 | `source` | 含义 |
 | --- | --- |
@@ -41,7 +28,7 @@
 
 日志不包含终端输入输出、会话名称、工作目录、服务器地址或认证信息。镜像事件只记录收到的会话 ID，不伪造本地父会话或方向。
 
-当前窗口最近 200 条记录仍可通过开发者工具中的 `window.__vlxSplitLog` 查看。`persistence` 为 `pending`、`saved`、`disabled` 或 `failed`，分别表示正在写入、后端已确认写入、后端配置为不记录信息级事件或写入失败。窗口重载会清空内存记录，已写入的文件不受影响。后端不可用或目录不可写时不会阻止分屏，控制台会提示失败，不会自动重试；窗口关闭前尚未完成的请求也可能未落盘。
+当前窗口最近 200 条记录仍可通过开发者工具中的 `window.__vlxSplitLog` 查看。`persistence` 为 `pending`、`saved`、`disabled` 或 `failed`，分别表示正在写入、后端已接受进入写入队列、后端配置为不记录信息级事件或写入失败。窗口重载会清空内存记录，已写入的文件不受影响。后端请求失败不会阻止分屏，控制台会提示失败，不会自动重试；异步磁盘写入失败由后端诊断状态报告，不能根据 `saved` 判断文件一定已写入；窗口关闭前尚未完成的请求也可能未落盘。
 
 ## 回归验证
 

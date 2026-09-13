@@ -223,11 +223,11 @@ pub fn codex_config_snippet(exe_path: &str) -> String {
 /// Builds OpenCode's inline configuration JSON: `{"plugin":["<absolute-local-plugin-path>"]}`.
 /// OpenCode reads it from `OPENCODE_CONFIG_ENV` and loads the plugin by absolute path. Declaring only
 /// the plugin preserves all settings merged from the user's global and project configuration. When
-/// `permission_mode` is `Some("skip")`, `"permission":"allow"` bypasses confirmations because OpenCode
+/// `permission_mode` is `skip` or `bypassPermissions`, `"permission":"allow"` bypasses confirmations because OpenCode
 /// controls permissions through configuration rather than a command-line flag.
 pub fn build_opencode_config_content(plugin_path: &str, permission_mode: Option<&str>) -> String {
     let mut cfg = serde_json::json!({ "plugin": [plugin_path] });
-    if permission_mode == Some("skip") {
+    if matches!(permission_mode.map(str::trim), Some("skip" | "bypassPermissions")) {
         cfg["permission"] = serde_json::Value::String("allow".to_string());
     }
     cfg.to_string()
@@ -382,6 +382,15 @@ fn extra_args_fragment(extra: Option<&str>) -> String {
 pub fn permission_flag(kind: SessionKind, mode: Option<&str>) -> Option<&'static str> {
     // `bypassPermissions` is the same intent written in the chat engine's vocabulary; a session that chose
     // it there must not quietly start asking again when it runs as a terminal.
+    if kind == SessionKind::Claude {
+        match mode.map(str::trim) {
+            Some("plan") => return Some("--permission-mode plan"),
+            Some("default") => return Some("--permission-mode default"),
+            Some("acceptEdits") => return Some("--permission-mode acceptEdits"),
+            Some("auto") => return Some("--permission-mode auto"),
+            _ => {}
+        }
+    }
     if kind == SessionKind::Codex {
         match mode.map(str::trim) {
             Some("read-only") => return Some("--sandbox read-only --ask-for-approval on-request"),
@@ -846,7 +855,7 @@ pub fn prepare(
 /// local agent receives them on both new and resumed launches so reopening a session preserves its options.
 ///
 /// `bin_path` is the executable path configured globally for this agent type. The manager reads it from
-/// `app_settings` at launch time (see `pty/manager.rs::agent_bin_path`). A nonempty value launches the
+/// `app_settings` at launch time (see `agent/executable.rs::resolve`). A nonempty value launches the
 /// absolute path without consulting `PATH`; otherwise the command name is resolved normally.
 ///
 /// `agent_ext_path` is the absolute path to the state-bridge extension of whichever agent loads one through
@@ -1916,10 +1925,10 @@ mod tests {
     }
 
     #[test]
-    fn permission_flag_default_and_unknown_add_nothing() {
-        // None, `default`, and unknown values add no flag and preserve incremental approval.
+    fn permission_flag_default_is_explicit_and_unknown_adds_nothing() {
+        // An explicit default overrides CLI configuration; absent and unknown values add nothing.
         assert_eq!(permission_flag(SessionKind::Claude, None), None);
-        assert_eq!(permission_flag(SessionKind::Claude, Some("default")), None);
+        assert_eq!(permission_flag(SessionKind::Claude, Some("default")), Some("--permission-mode default"));
         assert_eq!(permission_flag(SessionKind::Claude, Some("yolo")), None);
         assert_eq!(permission_flag(SessionKind::Claude, Some("")), None);
     }

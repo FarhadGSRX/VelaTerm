@@ -3,7 +3,50 @@
 import type en from "./en";
 
 const zhTW: typeof en = {
-  // Project code intelligence and memory associations.
+  "tree.newPlanExecuteSession": "新增規劃與執行會話…",
+  "launch.splitTasks": "自動拆分多個任務",
+  "launch.splitTasksHint": "由規劃會話拆分獨立任務；執行前可逐項確認任務說明、智慧體、模型和推理強度。",
+  "launch.splitReview": "確認執行任務",
+  "launch.splitReviewHint": "由同一個規劃會話接收回報並逐項驗收。確認後才會啟動執行會話。",
+  "launch.splitConfirmed": "這些任務已經確認。",
+  "launch.splitClosed": "此方案已不再等待確認。",
+  "launch.splitRetry": "重試尚未送達的任務訊息",
+  "launch.splitSharedDirectory": "所有執行會話使用規劃會話的工作目錄；啟用工作樹時共同使用該工作樹。",
+  "launch.createIn": "建立位置",
+  "launch.workingDirectory": "工作目錄路徑",
+  "launch.createAndStart": "建立並啟動",
+  "launch.planExecuteTaskHint": "請說明任務目標、要求與驗收標準，供規劃會話擬定方案。",
+  "launch.planExecuteResult": "先啟動規劃會話，再由規劃會話建立執行會話。",
+  "launch.planExecuteWorktreeHint": "新工作樹以目前的提交建立，不包含尚未提交的修改；建立失敗時不啟動對應會話。",
+  "launch.workflowDirectorySharedHint": "規劃會話與所有執行會話共用一個新目錄和分支。",
+  "launch.workflowDirectoryEachHint": "規劃會話與每個執行會話分別使用獨立的工作樹和分支。",
+  "launch.planTitle": "規劃與驗收",
+  "launch.execTitle": "執行",
+  "launch.planExecuteIntro": "建立獨立規劃會話，負責制定方案、驗收結果，並向執行會話提出修改要求。",
+  "chat.origin.plan": "規劃",
+  "chat.origin.exec": "執行",
+
+  // Project code intelligence and knowledge entry associations.
+  "knowledge.callers": "呼叫者",
+  "knowledge.callees": "被呼叫者",
+  "knowledge.explore": "程式碼探索",
+  "knowledge.exploreHint": "描述功能或呼叫流程，或輸入檔案、符號名稱…",
+  "knowledge.impact": "影響分析",
+  "knowledge.path": "呼叫路徑",
+  "knowledge.target": "搜尋目標符號…",
+  "knowledge.depth": "遍歷深度",
+  "knowledge.noPath": "索引中找不到有向呼叫路徑。",
+  "knowledge.watching": "自動同步已啟用",
+  "knowledge.onDemand": "查詢前同步",
+  "knowledge.overview": "概覽",
+  "knowledge.uncertain": "推斷關係",
+  "knowledge.kind": "符號類型",
+  "knowledge.language": "語言",
+  "knowledge.results": "結果",
+  "knowledge.resultLarge": "結果過大，無法顯示。請縮小查詢範圍或降低遍歷深度。",
+  "knowledge.queryFailed": "程式碼查詢失敗，請重試或同步索引。",
+  "knowledge.liveHelp": "查詢程序執行期間會同步檔案變更；程序閒置結束後，下次查詢會先補齊變更。",
+  "knowledge.startHelp": "啟用索引後，即可搜尋程式碼、追蹤呼叫和分析變更影響。分析在後端執行，無須呼叫 AI 模型。",
   "knowledge.title": "程式碼圖譜",
   "knowledge.intro": "查看程式碼關係，並連結已儲存的設計決策。",
   "knowledge.setup": "在目前後端安裝 CodeGraph 後，即可啟用專案索引。",
@@ -25,7 +68,7 @@ const zhTW: typeof en = {
   "knowledge.search": "搜尋符號或檔案路徑…",
   "knowledge.searchButton": "搜尋",
   "knowledge.noResults": "沒有符合的符號。",
-  "knowledge.selectSymbol": "選擇一個符號，查看原始碼、關係和相關記憶。",
+  "knowledge.selectSymbol": "選擇一個符號，查看原始碼、關係和相關知識條目。",
   "knowledge.source": "原始碼",
   "knowledge.incoming": "傳入關係",
   "knowledge.outgoing": "傳出關係",
@@ -33,22 +76,22 @@ const zhTW: typeof en = {
   "knowledge.analysisNote": "關係來自靜態分析，可能不完整或存在不確定性。",
   "knowledge.changed": "查詢期間檔案已變更。請再次同步，再使用行號或確認檢閱結果。",
   "knowledge.truncated": "目前檢視已限制顯示數量，部分關係或原始碼行未顯示。",
-  "knowledge.linkMemory": "連結記憶",
-  "knowledge.chooseMemory": "選擇記憶條目",
-  "knowledge.noLinks": "尚無程式碼連結。可在符號詳細資料中連結記憶。",
-  "knowledge.inspect": "核對程式碼與記憶",
+  "knowledge.linkMemory": "連結知識條目",
+  "knowledge.chooseMemory": "選擇知識條目",
+  "knowledge.noLinks": "尚無程式碼連結。可在符號詳細資料中連結知識條目。",
+  "knowledge.inspect": "核對程式碼與條目",
   "knowledge.unlink": "移除連結",
   "knowledge.codeReferences": "程式碼參照",
   "knowledge.refresh": "重新整理",
   "knowledge.current": "未變更",
   "knowledge.review": "需要檢閱",
   "knowledge.unavailable": "無法使用",
-  "knowledge.reviewHelp": "請將此記憶與顯示的程式碼核對。確認後僅記錄目前檔案版本，不修改記憶內文。",
+  "knowledge.reviewHelp": "請將此條目與顯示的程式碼核對。確認後僅記錄目前檔案版本，不修改條目內文。",
   "knowledge.confirmReview": "確認已檢閱",
-  "knowledge.agentHint": "代理程式可在此工作目錄執行 vknowledge search \"主題\"。查詢會同步已啟用的索引，並分別傳回程式碼和記憶。",
+  "knowledge.agentHint": "代理程式可在此工作目錄執行 vkb search \"主題\"。查詢會同步已啟用的索引，並分別傳回程式碼和知識條目。",
   "knowledge.busy": "索引工作正在執行。可以關閉此頁面，或停用索引以停止工作。",
-  "knowledge.disabledHelp": "啟用此目錄的索引後即可查詢程式碼。停用會保留索引和記憶連結。",
-  "knowledge.conflict": "程式碼或記憶已變更。請重新載入後再儲存連結。",
+  "knowledge.disabledHelp": "啟用此目錄的索引後即可查詢程式碼。停用會保留索引和知識條目連結。",
+  "knowledge.conflict": "程式碼或條目已變更。請重新載入後再儲存連結。",
   "knowledge.symbolMissing": "符號或原始碼已無法使用。請同步索引後重新搜尋。",
   "knowledge.directoryMissing": "工作目錄不存在或已變更。請檢查專案和工作階段的路徑。",
   "knowledge.partial": "索引不完整。請再次同步，並確認原始碼檔案可以讀取。",
@@ -58,62 +101,168 @@ const zhTW: typeof en = {
   "knowledge.timeout": "索引工作逾時。請檢查儲存庫大小後重試。",
   "knowledge.error": "操作失敗。請檢查後端的目錄存取權限和執行環境後重試。",
 
-  // Global Memory: a thematic LLM Wiki shared across sessions.
-  "memory.title": "全域記憶",
-  "memory.add": "加入全域記憶",
-  "memory.intro": "以持續更新的 Wiki 組織知識、決策與經驗，建立跨工作階段共享的長期記憶。",
-  "memory.entries": "記憶條目",
+  // Knowledge base: saved knowledge organized by project and session.
+  "memory.hierarchy": "專案與工作階段",
+  "memory.manualGroup": "手動建立",
+  "memory.legacyGroup": "歷史合併條目",
+  "memory.unknownProject": "來源專案不明",
+  "nb.addLink": "插入連結",
+  "nb.attach": "加入附件",
+  "nb.browse": "瀏覽",
+  "nb.chooseNote": "從一篇筆記開始",
+  "nb.closeHint": "僅從清單中移除此知識庫，磁碟上的檔案會保留。",
+  "nb.closeVault": "關閉知識庫",
+  "nb.conflict": "檔案已被外部修改，目前的草稿已保留。請重新讀取檔案，或將草稿另存為新筆記。",
+  "nb.copyTo": "複製到本機知識庫",
+  "nb.createVault": "新增知識庫",
+  "nb.destination": "目標路徑",
+  "nb.download": "下載",
+  "nb.downloadHint": "下載此附件後，可使用其他應用程式開啟。",
+  "nb.empty": "開啟一個資料夾開始記錄，或新增知識庫。",
+  "nb.emptyImport": "所選內容中沒有可匯入的檔案。",
+  "nb.emptyNotes": "筆記以 Markdown 檔案儲存。",
+  "nb.emptyOutline": "文件標題會顯示在這裡。",
+  "nb.emptyTrash": "回收站是空的。",
+  "nb.error": "無法存取知識庫，請檢查連線及資料夾後再試一次。",
+  "nb.exists": "目標已存在，請更換名稱或資料夾。",
+  "nb.favorites": "收藏",
+  "nb.files": "檔案",
+  "nb.folder": "資料夾",
+  "nb.generatedHint": "儲存由工作階段整理出的知識，並保留來源與修訂歷程。",
+  "nb.homeHint": "瀏覽工作階段知識庫與本機知識庫。",
+  "nb.loadMore": "載入更多",
+  "nb.import": "匯入",
+  "nb.importFiles": "選擇檔案",
+  "nb.importFolder": "選擇資料夾",
+  "nb.importHint": "檔案會複製到所選目錄，不會覆寫既有檔案；隱藏的設定目錄會略過。",
+  "nb.imported": "已匯入",
+  "nb.imports": "匯入記錄",
+  "nb.importsEmpty": "還沒有匯入記錄。",
+  "nb.importRoot": "知識庫根目錄",
+  "nb.importBusy": "此知識庫已有匯入正在進行。",
+  "nb.importDelete": "刪除記錄",
+  "nb.importDeleteConfirm": "刪除這筆匯入記錄？已匯入的檔案不會被刪除。",
+  "nb.importDone": "匯入完成",
+  "nb.importDuration": (seconds: string) => `${seconds} 秒`,
+  "nb.importFailed": "匯入失敗",
+  "nb.importFilePending": "未匯入",
+  "nb.importHideFiles": "收合檔案清單",
+  "nb.importInterruptedHint": "匯入在完成前中斷了。",
+  "nb.importProgress": (done: string, total: string) => `${done} / ${total} 個檔案`,
+  "nb.importShowFiles": (count: string) => `檔案清單（${count}）`,
+  "nb.importSkipHidden": "隱藏檔案或目錄",
+  "nb.importStatusCancelled": "已取消",
+  "nb.importStatusCompleted": "已完成",
+  "nb.importStatusFailed": "失敗",
+  "nb.importStatusInterrupted": "已中斷",
+  "nb.importStatusRunning": "正在匯入",
+  "nb.incomplete": "操作未能完成，請檢查檔案後再試一次。",
+  "nb.info": "筆記資訊",
+  "nb.invalid": "名稱或路徑無效。",
+  "nb.links": "引用的筆記",
+  "nb.local": "本機檔案",
+  "nb.localVaults": "本機知識庫",
+  "nb.move": "重新命名或移動",
+  "nb.moveHint": "填寫相對於知識庫根目錄的路徑。移動檔案或資料夾時，會更新既有的筆記連結。",
+  "nb.name": "名稱",
+  "nb.newFolder": "新增資料夾",
+  "nb.newNote": "新增筆記",
+  "nb.noLinks": "尚無相關筆記。",
+  "nb.tags": "標籤",
+  "nb.notes": "筆記",
+  "nb.openVault": "開啟知識庫",
+  "nb.outline": "大綱",
+  "nb.quickOpen": "快速開啟",
+  "nb.readOnly": "此檔案無法作為 UTF-8 Markdown 筆記編輯。",
+  "nb.recent": "最近的筆記",
+  "nb.restore": "還原",
+  "nb.reload": "重新讀取檔案",
+  "nb.root": "資料夾路徑",
+  "nb.rootHint": "選擇目前連線電腦上的資料夾，既有 Markdown 檔案及附件會保留在原處。",
+  "nb.saveCopy": "另存為新筆記",
+  "nb.saved": "已儲存至檔案",
+  "nb.saving": "儲存中…",
+  "nb.search": "搜尋筆記…",
+  "nb.searchAllVaults": "全部知識庫",
+  "nb.searchCount": (count: string) => `${count} 筆結果`,
+  "nb.searchEmpty": "沒有符合的筆記。",
+  "nb.searchLine": (line: string) => `第 ${line} 行`,
+  "nb.searchMatches": (count: string) => `${count} 處命中`,
+  "nb.searchMore": "僅列出前面的結果，縮小關鍵字即可看到其餘命中。",
+  "nb.searchRelated": "相關筆記",
+  "nb.searchResults": "搜尋結果",
+  "nb.searchScope": "搜尋範圍",
+  "nb.searchThisVault": "目前知識庫",
+  "nb.skipped": "已略過",
+  "nb.split": "分欄",
+  "nb.tooLarge": "檔案或所選內容超出知識庫限制。",
+  "nb.trash": "回收站",
+  "nb.trashHint": "將此內容移至知識庫回收站，之後可以還原。",
+  "nb.unsaved": "尚未儲存",
+  "nb.vaults": "知識庫",
+  "nb.view": "檢視模式",
+  "nb.welcome": "個人知識庫",
+  "nb.welcomeText": "自由記錄、連結想法，以一般本機檔案儲存筆記。開啟既有 Markdown 資料夾，或將資料匯入新的知識庫。",
+  "memory.globalMemory": "工作階段知識庫",
+  "memory.title": "知識庫",
+  "memory.add": "整理至工作階段知識庫",
+  "memory.intro": "依專案和工作階段整理知識。條目產生後獨立儲存，不隨來源變更自動更新，可手動編輯。",
+  "memory.entries": "知識條目",
   "memory.emptyJobs": "尚無整理紀錄。",
   "memory.jobs": "整理紀錄",
-  "memory.search": "搜尋記憶標題與內文…",
-  "memory.empty": "沒有符合的記憶。可從工作階段加入內容，逐步建立你的 Wiki。",
+  "memory.search": "搜尋條目標題與內文…",
+  "memory.empty": "沒有符合條件的條目。可從工作階段產生知識條目，或手動新增條目。",
   "memory.emptyDetail": "選擇一個條目，查閱知識內容、關聯與來源。",
-  "memory.new": "新增記憶",
+  "memory.new": "新增條目",
   "memory.titleField": "標題",
   "memory.summary": "摘要",
   "memory.content": "內文（Markdown）",
   "memory.tags": "標籤（以逗號分隔）",
-  "memory.related": "相關記憶",
-  "memory.backlinks": "連結至此條目的記憶",
+  "memory.related": "相關條目",
+  "memory.backlinks": "反向連結",
   "memory.sources": "來源",
   "memory.history": "修訂紀錄",
   "memory.restore": "還原此版本",
   "memory.restoreConfirm": "將此修訂還原為新版本？目前版本仍會保留在歷史紀錄中。",
-  "memory.deleteConfirm": "刪除此記憶及其修訂紀錄？來源工作階段不受影響。",
+  "memory.deleteConfirm": "刪除此條目及其修訂紀錄？來源工作階段不受影響。",
+  "memory.groupDeleteConfirm": (count: string) => `刪除該群組內全部 ${count} 條知識條目？專案或工作階段本身保留。`,
   "memory.export": "匯出 Markdown",
   "memory.selectAgent": "代理程式",
   "memory.model": "模型（選填）",
   "memory.modelHint": "留空時使用代理程式已設定的模型。",
   "memory.compile": "整理並儲存",
-  "memory.compileHelp": "所選代理程式會依主題整理此工作階段，並與現有記憶合併。對話文字與相關記憶將透過你設定的代理程式傳送給模型。",
+  "memory.compileHelp": "所選代理程式會整理此工作階段。再次產生將覆寫該工作階段先前產生的條目，包括手動修改。工作階段文字將透過你設定的代理程式傳送給模型。",
   "memory.unavailable": "尚未安裝或設定",
   "memory.allTags": "所有標籤",
   "memory.updated": "最近更新",
   "memory.titleSort": "依標題排序",
   "memory.sourceNote": "此快照保留整理時使用的對話文字；即使原工作階段已刪除，仍可查閱。",
-  "memory.noKnowledge": "未發現可重複運用的知識，未變更任何記憶條目。",
+  "memory.noKnowledge": "本次未擷取到可重複運用的知識，此工作階段既有的產生條目已清空。",
+  "memory.queued": "等待開始",
+  "memory.cancelling": "正在取消",
+  "memory.schedulingHint": "不同工作階段可同時整理。再次提交會取消此工作階段尚未完成的整理，並由新工作取代。",
+  "memory.waitingHint": "等待此工作階段的上一項整理停止後，將自動開始。",
   "memory.running": "進行中",
   "memory.completed": "已完成",
   "memory.failed": "失敗",
   "memory.cancelled": "已取消",
   "memory.extract": "擷取主題",
   "memory.merge": "合併知識",
-  "memory.commit": "儲存記憶",
+  "memory.commit": "儲存條目",
   "memory.done": "已儲存",
   "memory.closeHint": "整理期間可關閉此視窗，稍後在整理紀錄中查看進度。",
-  "memory.conflict": "操作期間此記憶已變更。請重新載入後再試；本次修改尚未儲存。",
-  "memory.duplicate": "已有同名記憶，請開啟該條目合併內容。",
-  "memory.busy": "已有整理工作正在執行。請等待完成，或在整理紀錄中取消。",
-  "memory.notFound": "此記憶、來源或工作已不存在。",
+  "memory.conflict": "操作期間此條目已變更。請重新載入後再試；本次修改尚未儲存。",
+  "memory.duplicate": "已有同名條目，請開啟該條目合併內容。",
+  "memory.notFound": "此條目、來源或工作已不存在。",
   "memory.noTranscript": "此工作階段目前沒有可讀取的對話內容。",
   "memory.agentUnavailable": "所選代理程式無法使用，請在設定中檢查其執行檔路徑。",
-  "memory.invalid": "部分欄位或連結無效，請檢查標題、內文及相關記憶。",
+  "memory.invalid": "部分欄位或連結無效，請檢查標題、內文及相關條目。",
   "memory.processFailed": "代理程式未能完成整理。請檢查登入狀態、模型及 CLI 設定後重試。",
   "memory.timeout": "代理程式呼叫逾時，請更換可用模型或縮短對話後重試。",
   "memory.interrupted": "整理工作已中斷，可重試處理已儲存的來源快照。",
-  "memory.tooLarge": "來源、上下文或輸出超出支援的大小，未截斷內容，也未寫入記憶。",
-  "memory.invalidOutput": "代理程式傳回的結構化資料無效，未寫入記憶。請重試或更換代理程式。",
-  "memory.loadError": "無法載入記憶資料，請檢查連線後重試。",
+  "memory.tooLarge": "來源、上下文或輸出超出支援的大小，未截斷內容，也未儲存條目。",
+  "memory.invalidOutput": "代理程式傳回的結構化資料無效，未儲存條目。請重試或更換代理程式。",
+  "memory.loadError": "無法載入知識庫資料，請檢查連線後重試。",
   "memory.unsaved": "放棄尚未儲存的修改？",
   "memory.source": "來源快照",
 
@@ -133,6 +282,7 @@ const zhTW: typeof en = {
   "common.paste": "貼上", // Paste
   "common.selectAll": "全選", // Select All
   "common.copied": "已複製", // Copied
+  "common.copyFailed": "複製失敗，請重試。",
   "chat.sync.loading": "正在同步對話…",
   "chat.sync.failed": "同步失敗，仍可查看已載入的訊息。",
   "chat.sync.history": "載入更早的訊息",
@@ -179,6 +329,7 @@ const zhTW: typeof en = {
   "titlebar.themeSystem": (resolved) => `跟隨系統（目前${resolved}）`, // Follow system (currently {resolved})
   "titlebar.themeDark": "深色", // Dark
   "titlebar.themeLight": "淺色", // Light
+  "titlebar.gameCenter": "遊戲中心",
   "titlebar.browser": "內建瀏覽器", // Built-in Browser
   "titlebar.remoteAccess": "遠端存取（瀏覽器）", // Remote Access (Browser)
   "titlebar.connectRemote": "連線到遠端服務", // Connect to Remote Server
@@ -191,6 +342,7 @@ const zhTW: typeof en = {
   "titlebar.clientsTitle": "已連線的用戶端", // Attached clients
   "titlebar.clientUnnamed": "未命名用戶端", // Unnamed client
   "titlebar.clientSince": (time: string) => `${time} 起`, // since {time}
+  "titlebar.feedback": "意見回饋", // Feedback
   "titlebar.share": "分享", // Share
   // ── Alt-triggered menu bar (Windows/Linux) ──
   "menubar.file": "檔案", // File
@@ -223,6 +375,14 @@ const zhTW: typeof en = {
   "settings.catTerminal": "終端機", // Terminal
   "settings.catBehavior": "行為", // Behavior
   "settings.catAgents": "智慧體", // Agents
+  "settings.agentDefaultsTitle": "新工作階段預設值",
+  "settings.referSummaryTitle": "工作階段引用內容",
+  "settings.referSummaryMode": "內容處理方式",
+  "settings.referSummaryFull": "使用完整記錄",
+  "settings.referSummaryFirst": "先摘要",
+  "settings.referSummaryAgent": "摘要智慧體",
+  "settings.referSummaryHint":
+    "預設情況下，vrefer --ask 會將完整記錄交給回答智慧體。啟用「先摘要」後，會統一使用此處選擇的智慧體、模型與思考程度進行壓縮；最終回答也會結合相關的原始內容搜尋片段。",
   "settings.permDefault": "預設", // Default
   "settings.permYolo": "YOLO", // YOLO
   "settings.yoloHint": (flag: string) =>
@@ -244,6 +404,9 @@ const zhTW: typeof en = {
   "settings.agentPathPlaceholder": "如 ~/.local/bin/claude——留空則從 PATH 尋找", // e.g. path — empty = find on PATH
   "settings.agentPathHint":
     "設定後，該類型會話一律按這條完整路徑啟動，不再從 PATH 尋找命令。適用於「已安裝但不在 shell PATH 上」的情況。一鍵安裝成功且能偵測到安裝位置時會自動填入。", // Agent executable path hint
+  "settings.agentDefaultView": "預設檢視", // Default view
+  "settings.agentDefaultViewHint":
+    "該智慧體新增會話時開啟的檢視。既有會話維持建立時的檢視。", // Agent default view hint
   "settings.appearance": "外觀", // Appearance
   "settings.accent": "強調色", // Accent
   "settings.accentAuto": "跟隨明暗", // Follow theme
@@ -261,8 +424,6 @@ const zhTW: typeof en = {
   "settings.navTree": "標準", // Tree
   "settings.navCompact": "緊湊", // Compact
   "settings.tabs": "分頁", // Tabs
-  "settings.defaultSessionEngine": "新建會話的預設檢視",
-  "settings.defaultSessionEngineHint": "既有會話維持建立時的檢視。",
   "settings.dynamicStatusFilter": "狀態篩選動態增加",
   "settings.tabSingle": "單分頁", // Single
   "settings.tabMulti": "多分頁", // Multi
@@ -285,38 +446,66 @@ const zhTW: typeof en = {
     "選擇貼上圖片時寫入的內容（僅本機桌面端）。貼上檔案路徑：把圖片存成暫存檔，在輸入框顯示可讀路徑（Codex 顯示 image_path: …）。原生圖片貼上：觸發 Claude 或 Codex 讀取系統剪貼簿並顯示自身的圖片預留位置。",
   "settings.imagePasteRemoteHint":
     "遠端會話固定貼上檔案路徑，讓智慧體能在其所在機器讀取圖片；原生圖片貼上僅在本機桌面端可用。",
-  "spawn.title": "啟動派生會話？", // Start spawned session?
-  "spawn.fromSession": "來自", // From
-  "spawn.promptLabel": "提示詞", // Prompt
-  "spawn.agentLabel": "智慧體", // Agent
-  "spawn.worktreeLabel": "獨立 git worktree", // Separate git worktree
-  "spawn.modelLabel": "模型", // Model
-  "spawn.effortLabel": "推理強度", // Effort
-  "spawn.modelDefault": "預設", // Default
-  "spawn.modelLoading": "正在取得模型…", // Listing models…
-  "spawn.modelListUnavailable": "取不到模型清單 — 在上面直接填模型名", // No model list available — type an identifier above
-  "spawn.launch": "啟動", // Launch
-  "spawn.remaining": (n: number) => `還有 ${n} 個待確認`, // ${n} more pending
-  "spawn.notifyTitle": "派生會話待確認", // Spawn session awaiting confirmation
-  "orch.title": "啟動這些智慧體？",
-  "orch.notifyTitle": "編排等待確認",
-  "orch.coordinatorName": "進度",
-  "orch.sharedSettings": "總設定",
-  "orch.agentLabel": "類型",
+  "spawn.title": "啟動子會話",
+  "spawn.fromSession": "發起會話",
+  "spawn.promptLabel": "任務說明",
+  "spawn.agentLabel": "會話類型",
+  "spawn.worktreeLabel": "獨立工作樹",
+  "spawn.modelLabel": "模型",
+  "spawn.effortLabel": "推理強度",
+  "spawn.modelDefault": "使用智慧體預設值",
+  "spawn.modelLoading": "正在取得模型…",
+  "spawn.modelListUnavailable": "目前沒有模型清單，可手動輸入模型識別碼。",
+  "spawn.launch": "啟動子會話",
+  "spawn.remaining": (n: number) => `另有 ${n} 項待確認`,
+  "spawn.notifyTitle": "子會話啟動待確認",
+  "orch.title": "批次啟動子會話",
+  "orch.notifyTitle": "批次啟動待確認",
+  "orch.coordinatorName": "會話狀態",
+  "orch.sharedSettings": "共用設定",
+  "orch.agentLabel": "智慧體",
   "orch.modelLabel": "模型",
-  "orch.effortLabel": "思考程度",
-  "orch.nameLabel": "名稱",
-  "orch.promptLabel": "任務",
-  "orch.worktreeLabel": "工作樹",
-  "orch.worktreeNone": "沿用目前目錄",
+  "orch.effortLabel": "推理強度",
+  "orch.nameLabel": "會話名稱",
+  "orch.promptLabel": "任務說明",
+  "orch.worktreeLabel": "Git 工作樹",
+  "orch.worktreeNone": "使用目前目錄",
   "orch.worktreeShared": "共用一個工作樹",
-  "orch.worktreeEach": "每個各一個工作樹",
-  "orch.follow": "跟隨總設定",
-  "orch.overridden": "已改",
-  "orch.remove": "刪除",
-  "orch.launch": (n: number) => `啟動 ${n} 個`,
-  "orch.modelPlaceholder": "智慧體預設",
-  "orch.effortPlaceholder": "智慧體預設",
+  "orch.worktreeEach": "各用一個工作樹",
+  "orch.follow": "使用共用設定",
+  "orch.overridden": "個別設定",
+  "orch.remove": "移除任務",
+  "orch.launch": (n: number) => `啟動 ${n} 個子會話`,
+  "orch.modelPlaceholder": "使用智慧體預設值",
+  "orch.effortPlaceholder": "使用智慧體預設值",
+  "launch.terminalHint": "一般終端會開啟工作目錄，不會自動執行任務說明中的內容。",
+  "launch.optionsError": "無法載入啟動選項，請重試後再啟動。",
+  "launch.singleIntro": "啟動前，請檢查子會話的任務和執行設定。",
+  "launch.taskHint": "這些內容將作為子會話收到的第一則訊息。",
+  "launch.runtime": "執行設定",
+  "launch.directory": "工作目錄",
+  "launch.directoryCurrentHint": "直接在原目錄中修改檔案。",
+  "launch.directorySharedHint": "所有子會話在同一個新目錄和分支中工作。",
+  "launch.directoryEachHint": "每個子會話使用各自的目錄和分支。",
+  "launch.worktreeHint": "工作樹以目前的提交建立，不包含尚未提交的變更；建立失敗時會使用原目錄。",
+  "launch.singleResult": "子會話將顯示在左欄的發起會話下。",
+  "launch.startError": "啟動失敗，請檢查設定後重試。",
+  "launch.starting": "正在啟動…",
+  "launch.batchIntro": "先檢查共用設定，再逐項選取任務並編輯說明。",
+  "launch.sessionCount": (n: number) => `${n} 個子會話`,
+  "launch.batchName": "任務群組名稱",
+  "launch.sharedHint": "未個別設定的子會話將使用這些選項。",
+  "launch.tasks": "任務清單",
+  "launch.incomplete": "待補充",
+  "launch.undoRemove": "復原移除",
+  "launch.taskNumber": (n: number) => `任務 ${n}`,
+  "launch.taskSettings": "此會話的設定",
+  "launch.taskAgent": "此會話的智慧體",
+  "launch.sharedDirectoryLocked": "此任務群組中的所有子會話將共用一個工作樹。",
+  "launch.resetSettings": "還原共用設定",
+  "launch.monitorHint": "啟動後會開啟「會話狀態」終端，顯示各會話正在工作或等待輸入；它不代表任務完成百分比。",
+  "launch.taskIncomplete": (n: number) => `請補上任務 ${n} 的名稱和任務說明。`,
+  "launch.batchResult": "每項任務將啟動一個可獨立互動的子會話。",
   "tree.worktreeMenu": "Worktree",
   "tree.gitMenu": "Git",
   "tree.viewChanges": "查看變更…",
@@ -421,7 +610,8 @@ const zhTW: typeof en = {
   "settings.chatLineHeight": "對話行高",
   "settings.fontDefault": "預設", // Default
   "settings.fontCustom": "自訂…", // Custom
-  "settings.fontUnavailable": "本機未安裝此字型",
+  "settings.fontListUnavailable": "無法取得系統字型清單，可手動輸入字型名稱。",
+  "settings.fontUnconfirmed": "無法確認此字型是否可用。",
   "settings.fontAuto": "自動", // Auto
   "settings.fontSmaller": "縮小", // Smaller
   "settings.fontLarger": "放大", // Larger
@@ -579,6 +769,7 @@ const zhTW: typeof en = {
   "info.recentCommits": "最近提交", // Recent Commits
   "info.noCommits": "無提交", // No commits
   "tree.killProcess": "結束處理程序", // Kill Process
+  "tree.killProcessConfirm": (name: string) => `結束「${name}」的處理程序？目前的工作將中斷，已儲存的對話紀錄和檔案會保留。`,
   "tree.archiveSession": "封存會話", // Archive Session
   "tree.archiveGroup": "封存分組", // Archive Group
   // Temporary (draft) sessions
@@ -930,7 +1121,11 @@ const zhTW: typeof en = {
 
   // ── Document tabs ──
   "doc.wysiwyg": "所見即所得", // WYSIWYG
-  "doc.source": "原始碼", // Source
+  "doc.visual": "所見即所得",
+  "doc.source": "原始碼模式",
+  "doc.compare": "對照模式",
+  "doc.editorLoadFailed": "Markdown 編輯器載入失敗。",
+  "doc.imageOnly": "此處只能插入圖片檔案。",
   "doc.searchPlaceholder": "尋找", // Find
   "doc.searchReplacePlaceholder": "取代", // Replace
   "doc.searchReplace": "取代", // Replace
@@ -976,6 +1171,8 @@ const zhTW: typeof en = {
 
   // ── Right information panel ──
   "panel.noSession": "未選擇會話", // No session selected
+  "panel.collapseSection": "收合此區段", // Collapse section
+  "panel.expandSection": "展開此區段", // Collapse section
   "panel.openInEditor": "在編輯器中開啟", // Open in Editor
   "panel.openInEditorTooltip": "在中欄文件編輯器中開啟（同 view 命令）", // Open in the document editor…
   "panel.preview": "預覽", // Preview
@@ -1058,6 +1255,9 @@ const zhTW: typeof en = {
   "transport.imgUploadHttp": (status) => `圖片上傳失敗 (${status})`, // Image upload failed ({status})
 
   // ── Login gate, directory selection, and connection banner ──
+  "login.showPassword": "顯示",
+  "login.hidePassword": "隱藏",
+  "login.passwordSaveFailed": "已連線，但無法將密碼儲存至手機，請重試。",
   "login.connecting": "連線中…", // Connecting…
   "login.remoteAccess": "遠端存取", // Remote Access
   "login.desc": "輸入存取密碼以連線到該終端機。", // Enter the access password to connect to this terminal.
@@ -1098,6 +1298,31 @@ const zhTW: typeof en = {
   "errlog.close": "關閉",
 
   // ── Mobile ──
+  "mobile.backConnections": "返回連線列表",
+  "mobile.loadSlow": "載入時間較長，你可以重試或返回連線列表。",
+  "mobile.connectionUnavailable": "連線暫時無法使用",
+  "mobile.pushTitle": "任務通知",
+  "mobile.pushHint": "通知會顯示工作階段名稱和簡短回覆摘要，支援前景、背景及鎖定畫面提醒。velaterm.com 和推播服務會接收這些文字，不會接收連線密碼或 SSH 私密金鑰。",
+  "mobile.pushEnable": "開啟通知",
+  "mobile.pushDisable": "關閉通知",
+  "mobile.pushTest": "傳送測試通知",
+  "mobile.pushTestSent": "測試通知已加入佇列，請查看系統通知中心。",
+  "mobile.pushDisabled": "背景通知未開啟。",
+  "mobile.pushEnabled": "背景通知已開啟。",
+  "mobile.pushNotConfigured": "此版本尚未設定推播管道。",
+  "mobile.pushDenied": "請在系統設定中允許通知。",
+  "mobile.pushRegistrationFailed": "裝置註冊失敗，請重試。",
+  "mobile.pushRelayUnavailable": "通知轉送服務暫時無法使用，請重試。",
+  "mobile.pushHostUnavailable": "遠端尚未啟用背景通知，請更新遠端並重新連線。",
+  "mobile.pushDisclosure": "背景通知使用個推和裝置製造商的推播服務。為了傳送通知，這些服務會處理裝置識別碼、網路資訊、工作階段名稱和簡短回覆摘要，不會接收連線密碼或 SSH 私密金鑰。",
+  "mobile.pushConnectHint": "開啟後，請分別開啟需要接收提醒的連線，完成通知訂閱。",
+  "mobile.pushTarget": "測試連線",
+  "mobile.copyConnection": "複製並編輯",
+  "mobile.copyConnectionHint": "以此連線為基礎修改設定，安全沿用已儲存的憑證。原連線保持不變；設定完全相同時，仍只保留一份。",
+  "mobile.copyConnectionReused": "此設定已儲存，已保留現有連線。",
+  "mobile.inputOptions": "輸入選項",
+  "mobile.connections": "連線管理",
+  "mobile.more": "更多操作",
   "mobile.toDesktop": "切換到桌面版", // Switch to desktop
   "mobile.empty1": "暫無會話。", // No sessions.
   "mobile.noMatch": "沒有符合的會話", // No matching sessions
@@ -1208,6 +1433,7 @@ const zhTW: typeof en = {
   "session.switchTitle": "切換檢視將重新啟動智慧體",
   "session.switchBody": "目前進行中的回合會中斷，對話內容不會遺失。",
   "session.switchConfirm": "切換",
+  "session.terminalViewHint": "點選這裡即可切換回終端機檢視。",
   "session.loading": "正在讀取對話…",
   "session.unavailable": "暫時無法讀取此會話的對話內容",
   "session.working": "處理中…",
@@ -1238,13 +1464,43 @@ const zhTW: typeof en = {
   "chat.collaborationMode.defaultHint": "直接推進，僅在需要你決定時提問",
   "chat.collaborationMode.plan": "計畫模式",
   "chat.collaborationMode.planHint": "先調查並制定計畫，可用互動卡片提問",
+  "chat.moreOptions": "更多",
   "chat.modelTooltip": "模型",
   "chat.keepChoice": "設為預設",
   "chat.keepChoiceFor": (model) => `設為 ${model} 的預設`,
+  "chat.followModelDefault": (agent: string) => `使用 ${agent} 預設設定`,
+  "chat.followModelDefaultHint": "使用智慧體設定所決定的模型。",
+  "chat.savedModelDefault": "應用程式預設",
+  "chat.catalogWebsite": "網站模型目錄",
+  "chat.catalogCache": "已快取的模型目錄",
+  "chat.catalogBundled": "內建模型目錄",
+  "chat.catalogChecked": (time: string) => `上次檢查：${time}`,
+  "chat.catalogFailed": "更新失敗，仍可使用原有目錄。",
+  "chat.catalogRefresh": "重新整理",
   "chat.modelDefault": "預設模型",
   "chat.mode.default": "每次詢問",
+  "chat.mode.agentDefault": "智慧體預設",
   "chat.mode.acceptEdits": "自動接受變更",
   "chat.mode.plan": "計畫模式",
+  "chat.permissionRestart.unconfirmed": "連線已中斷，目前無法確認權限是否切換成功。請重新連線後查看對話的目前權限。",
+  "permission.stateUnavailable": "權限狀態無法取得",
+  "permission.currentUnknown": "目前權限尚未確認",
+  "permission.notRunning": "未執行",
+  "permission.launch": (mode: string) => "啟動設定：" + mode,
+  "permission.unconfirmedHint": "尚未確認目前的權限。自訂參數或智慧代理內部的變更可能影響啟動設定的實際效果。",
+  "permission.applied": "已生效",
+  "permission.nextTurn": "下一則訊息生效",
+  "permission.restart": "重新啟動工作階段後生效",
+  "permission.nextStart": "下次啟動生效",
+  "permission.defaultHint": "新建對話的預設權限。現有對話保留各自的權限設定。",
+  "chat.permissionRestart.title": "重新啟動並啟用全部放行？",
+  "chat.permissionRestart.body": "啟用全部放行需要重新啟動 Claude。重新啟動會中斷目前的回覆，聊天記錄會保留。切換成功後，將略過權限確認。",
+  "chat.permissionRestart.confirm": "重新啟動並套用",
+  "chat.permissionRestart.busy": "正在重新啟動…",
+  "chat.permissionRestart.failed": (detail: string) => "權限切換失敗，已保留原權限模式。" + detail,
+  "chat.permissionRestart.tasks": "請先處理或移除佇列中的訊息，並停止背景工作，再重新啟動。",
+  "chat.permissionRestart.stale": "對話程序已變更，請重新選擇全部放行。",
+  "chat.permissionRestart.noHistory": "目前尚無法接續此對話，請等待對話初始化後再試。",
   "chat.mode.bypassPermissions": "全部放行",
   "chat.mode.readOnly": "唯讀",
   "chat.mode.fullAccess": "完整存取",
@@ -1293,6 +1549,7 @@ const zhTW: typeof en = {
   "chat.placeholderBusy": "輸入訊息，本輪結束後將自動傳送",
   "chat.queueTooltip": (combo: string) => `本輪結束後傳送 · ${combo} 立即傳送`,
   "chat.queue.pending": "待傳送",
+  "chat.queue.view": "檢視完整訊息",
   "chat.queue.edit": "編輯",
   "chat.queue.remove": "刪除",
 
@@ -1309,6 +1566,12 @@ const zhTW: typeof en = {
   // N steps
   "chat.subagent.steps": (n: number) => `${n} 步`,
   "chat.subagent.tokens": (tokens: string) => `${tokens} 個 token`,
+  "chat.rewind.edit": "編輯",
+  "chat.rewind.editSend": "確認並重新傳送",
+  "chat.rewind.editConfirm": "刪除並重新傳送",
+  "chat.rewind.editWarning": "原訊息及其後的所有訊息將永久刪除，接著從這裡傳送修改後的內容。已修改的檔案不會還原。",
+  "chat.rewind.inactive": "對話程序尚未啟動，啟動後即可使用這些操作。",
+  "chat.rewind.unsupported": "目前連線的 Agent 尚未提供此操作。",
   "chat.rewind.title": "從這裡回退",
   "chat.rewind.warning": "此操作無法復原。",
   "chat.rewind.conversation": "回退對話",
@@ -1363,6 +1626,45 @@ const zhTW: typeof en = {
   "chat.fastMode.label": "快速",
   "chat.fastMode.on": "快速模式已開啟",
   "chat.fastMode.off": "快速模式已關閉",
+  "chat.auth.login": "登入",
+  "chat.auth.logout": "登出",
+  "chat.auth.confirmLogout": "確認登出",
+  "chat.auth.logoutConfirm": (provider: string) => `確定登出目前主機上的 ${provider} 帳號嗎？這將清除共用的帳號憑證，並影響使用這些憑證的其他對話。對話紀錄會保留。`,
+  "chat.auth.signingOut": "正在登出…",
+  "chat.auth.signedOut": (provider: string) => `已登出 ${provider}，登入後可繼續目前的對話。`,
+  "chat.auth.logoutFailed": "無法確認登出結果，請重試。",
+  "chat.auth.wait": "請等待目前的任務結束後再切換帳號。",
+  "chat.auth.title": (provider: string) => `${provider} 帳號`,
+  "chat.auth.start": "重新登入",
+  "chat.auth.required": (provider: string) => `${provider} 登入狀態已失效，請重新登入後繼續。`,
+  "chat.auth.starting": "正在準備登入…",
+  "chat.auth.pending": "請開啟授權頁面並輸入此驗證碼。登入完成後，此處會自動更新。",
+  "chat.auth.success": "登入成功，可以傳送訊息繼續目前的對話。",
+  "chat.auth.failed": "無法完成登入，請重試。請確認已在 ChatGPT 中啟用裝置碼驗證，且目前的 Codex CLI 支援此功能。",
+  "chat.auth.canceled": "已取消登入，可隨時重試。",
+  "chat.auth.scope": (provider: string) => `登入將更新目前主機使用的 ${provider} 帳號，共用這份憑證的其他對話也將使用該帳號。`,
+  "chat.auth.canceling": "正在取消登入…",
+  "chat.auth.submitting": "正在驗證授權碼…",
+  "chat.auth.claude.pending": "開啟授權頁面並登入，然後將頁面顯示的完整授權碼貼到下方。",
+  "chat.auth.claude.failed": "無法完成登入，請重試，並確認目前的 Claude CLI 支援帳號授權。",
+  "chat.auth.claude.code": "授權碼",
+  "chat.auth.claude.submit": "提交授權碼",
+  "chat.auth.claude.invalidCode": "請貼上本次授權頁面提供的完整授權碼，包括 # 後面的內容。",
+  "chat.auth.claude.externalAuth": "API 金鑰及其他已設定的驗證方式不會變更。",
+  "chat.auth.open": "開啟授權頁面",
+  "chat.resetCredits.label": (n: string) => `重設券：${n} 張`,
+  "chat.resetCredits.title": "Codex 額度重設券",
+  "chat.resetCredits.unknown": "暫時無法取得重設券數量。",
+  "chat.resetCredits.confirm": "使用一張重設券，重設符合條件的 Codex 用量額度。此操作無法復原。",
+  "chat.resetCredits.reset": "額度已重設。",
+  "chat.resetCredits.alreadyRedeemed": "此請求先前已成功執行。",
+  "chat.resetCredits.nothingToReset": "目前沒有符合重設條件的用量額度。",
+  "chat.resetCredits.noCredit": "沒有可用的重設券。",
+  "chat.resetCredits.error": "請求失敗或暫時無法取得最新餘額。請重新整理餘額，或重試尚未確認的重設請求。",
+  "chat.resetCredits.busy": "處理中…",
+  "chat.resetCredits.retry": "重試重設",
+  "chat.resetCredits.use": "使用一張",
+  "chat.resetCredits.refresh": "重新整理",
   "chat.usage.context": (used: string, max: string, pct: number) =>
     `上下文：已用 ${used}，上限 ${max} token（${pct}%）`,
   "chat.usage.cost": (usd: string) => `本次會話費用：$${usd}`,
@@ -1391,6 +1693,14 @@ const zhTW: typeof en = {
   "chat.retry.line": (attempt: number, max: number, seconds: number, message: string) =>
     `${seconds} 秒後重試（${attempt}/${max}）：${message}`,
   "chat.notify.dismiss": "關閉",
+  "settings.completionMode": "命令補全提示",
+  "settings.completionAuto": "自動提示",
+  "settings.completionTab": "按 Tab 提示",
+  "settings.completionOff": "完全關閉",
+  "settings.completionUnavailable": "無法讀取或儲存設定。",
+  "settings.completionHint": "適用於新建的 Zsh、Bash 4+、Fish 和 PowerShell 終端。CMD 保留原生 Tab 行為。Tab 填入選取的候選項目；Enter 直接執行目前的命令，不套用候選項目。",
+
+
 };
 
 export default zhTW;

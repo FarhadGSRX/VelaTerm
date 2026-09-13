@@ -4,13 +4,17 @@
 //! do not duplicate the per-session Info panel—working/waiting/replied counts linked to the sidebar
 //! filter, background keep-alive tab count with a popover, and remote-access status.
 
+import { useAgentPermissions, savePermissionDefault } from "../../hooks/useAgentPermissions";
+import { permissionLabelKey } from "../../components/AgentPermissionSelect";
+import { useSessionPermissionState, type SessionPermissionState } from "../../hooks/useSessionPermissionState";
+import { currentPermissionLabel, pendingPermissionLabel, PermissionStateDetails } from "../../components/PermissionStateDetails";
 import { useEffect, useRef, useState } from "react";
 import Icons from "../../components/Icons";
 import { SELECT_PANEL } from "../../components/Select";
 import { SessionStatusBadge } from "../../components/SessionStatusBadge";
 import { useGitBranchInfo } from "../../hooks/useGitBranch";
 import { t, useT } from "../../i18n";
-import { isTauri } from "../../ipc/transport";
+import { invoke, isTauri } from "../../ipc/transport";
 import {
   getEffectiveNotifyPermission,
   requestEffectiveNotifyPermission,
@@ -441,15 +445,9 @@ function BackgroundTabsSeg() {
   );
 }
 
-/**
- * Per-session permission control, shown only for agents that support switching permissions
- * (Claude, Codex, Copilot, and Cursor). The popover offers staged approval or skipping all approval
- * checks and changes only the current session's persisted `permissionMode`, shared with Edit Session.
- * Global defaults for future sessions belong under Settings ▸ Agents, as the footer explains.
- * Permissions are injected as startup flags, so changing a running session requires a restart;
- * `restartSession` resumes the conversation but interrupts the current task.
- */
-function PermissionSeg() {
+/** Per-session terminal permissions use the same choices as settings and chat. Saving a default is
+ * explicit; running terminals still require confirmation before restarting to apply a saved mode. */
+export function PermissionSeg() {
   const t = useT();
   const activeSessionId = useTermStore((s) => s.activeSessionId);
   const sessions = useTermStore((s) => s.sessions);
@@ -479,14 +477,20 @@ function PermissionSeg() {
 
   // Show only for persisted agent sessions that support permission switching, not temporary drafts.
   const session = sessions.find((s) => s.id === activeSessionId);
+  const permissionCatalog = useAgentPermissions(session?.kind ?? "terminal", session?.permissionMode);
+  const permissionState = useSessionPermissionState(session?.engine === "chat" ? undefined : session?.id,
+    `${session?.permissionMode}:${activeRunning}`);
+  const [keepPermission, setKeepPermission] = useState(false);
+  const [permissionError, setPermissionError] = useState<string>();
+  useEffect(() => {
+    setOpen(false); setStep("mode"); setKeepPermission(false); setPermissionError(undefined);
+  }, [activeSessionId]);
   if (!session || !supportsPermissionToggle(session.kind)) return null;
-  // A chat session carries its own permission control on the composer, with the agent's full set of modes
-  // and no restart to apply them. Two controls for one setting, disagreeing about how many choices there
-  // are and when they take effect, is worse than one.
+  // Chat sessions expose the same runtime facts beside their composer.
   if (session.engine === "chat") return null;
 
-  const isSkip = session.permissionMode === "skip";
-  const running = activeRunning;
+  const isSkip = ["skip", "bypassPermissions", "full-access"].includes(session.permissionMode ?? "");
+  const catalogued = ["claude", "codex", "opencode"].includes(session.kind);
 
   const close = () => {
     setOpen(false);
@@ -494,19 +498,22 @@ function PermissionSeg() {
   };
 
   // Persist only this session's permissionMode. Because update_session replaces the full record,
-  // pass existing fields too or values such as the session name would be cleared. Do not touch globals.
-  const chooseMode = async (skip: boolean) => {
+  // pass existing fields too or values such as the session name would be cleared.
+  const chooseMode = async (mode: string | null) => {
+    setPermissionError(undefined);
     await updateSession(session.id, {
       name: session.name,
       shell: session.shell ?? null,
       cwd: session.cwd ?? null,
       initCmd: session.initCmd ?? null,
       agentArgs: session.agentArgs ?? null,
-      permissionMode: skip ? "skip" : null,
+      permissionMode: mode,
     });
-    // Running sessions need a restart; stopped sessions pick up the mode on their next launch.
-    if (running) setStep("restart");
-    else close();
+    const saved = await invoke<SessionPermissionState>("session_permission_state", { sessionId: session.id });
+    const needsRestart = saved.activation === "restart";
+    if (needsRestart) setStep("restart");
+    if (keepPermission && mode) await savePermissionDefault(session.kind, mode);
+    if (!needsRestart) close();
   };
 
   const doRestart = async () => {
@@ -520,9 +527,10 @@ function PermissionSeg() {
     label: string,
     onClick: () => void,
   ) => (
-    <div
+    <button type="button"
       onClick={onClick}
       style={{
+        width: "100%", border: 0, background: "transparent", textAlign: "left",
         display: "flex",
         alignItems: "center",
         gap: 8,
@@ -543,22 +551,25 @@ function PermissionSeg() {
         {active ? <Icons.check size={12} /> : null}
       </span>
       <span>{label}</span>
-    </div>
+    </button>
   );
 
   return (
     <span
       ref={rootRef}
-      className={isSkip ? "seg btn on" : "seg btn"}
+      className={permissionState?.value?.current && ["skip", "bypassPermissions", "full-access"].includes(permissionState.value.current) ? "seg btn on" : "seg btn"}
       style={{
         position: "relative",
-        color: isSkip ? "var(--status-asking)" : undefined,
       }}
-      title={t("statusbar.permTooltip")}
-      onClick={() => setOpen((v) => !v)}
+      title={t(catalogued ? "chat.modeTooltip" : "statusbar.permTooltip")}
+      onClick={() => {
+        if (!open) { setKeepPermission(false); setPermissionError(undefined); }
+        setOpen(v => !v);
+      }}
     >
       <Icons.lock size={11} />
-      {isSkip ? t("statusbar.permSkip") : t("statusbar.permAsk")}
+      {currentPermissionLabel(permissionState?.value)}
+      {permissionState?.value?.pending && <span style={{ marginLeft: 6 }}>{pendingPermissionLabel(permissionState.value)}</span>}
       {open && (
         <div
           style={{
@@ -576,6 +587,10 @@ function PermissionSeg() {
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          {permissionError && <div role="alert">{permissionError}</div>}
+          <div style={{ padding: "6px 10px", marginBottom: 6 }}>
+            <PermissionStateDetails state={permissionState?.value} error={permissionState?.error} />
+          </div>
           {step === "mode" && (
             <>
               <div
@@ -587,12 +602,20 @@ function PermissionSeg() {
               >
                 {t("statusbar.permMenuTitle")}
               </div>
-              {menuOption(!isSkip, false, t("statusbar.permOptAsk"), () =>
-                void chooseMode(false),
-              )}
-              {menuOption(isSkip, true, t("tree.permissionSkipLabel"), () =>
-                void chooseMode(true),
-              )}
+              {catalogued ? <>
+                {permissionCatalog?.catalog?.modes.map(mode => <span key={mode}>
+                  {menuOption(permissionCatalog.catalog?.selected === mode, mode === "bypassPermissions" || mode === "full-access",
+                    t(permissionLabelKey(mode)), () => void chooseMode(mode).catch(error => setPermissionError(String(error))))}
+                </span>)}
+                {permissionCatalog?.catalog && <label style={{ display: "flex", gap: 8, padding: "6px 10px" }}>
+                  <input type="checkbox" checked={keepPermission} onChange={e => setKeepPermission(e.target.checked)} />
+                  {t("chat.keepChoice")}
+                </label>}
+                {permissionCatalog?.error && <div role="alert">{permissionCatalog.error}</div>}
+              </> : <>
+                {menuOption(!isSkip, false, t("statusbar.permOptAsk"), () => void chooseMode(null).catch(error => setPermissionError(String(error))))}
+                {menuOption(isSkip, true, t("tree.permissionSkipLabel"), () => void chooseMode("skip").catch(error => setPermissionError(String(error))))}
+              </>}
               <div
                 style={{
                   fontSize: 11,
@@ -601,7 +624,7 @@ function PermissionSeg() {
                   lineHeight: 1.5,
                 }}
               >
-                {t("statusbar.permScopeHint")}
+                {!catalogued && t("statusbar.permScopeHint")}
               </div>
             </>
           )}
@@ -639,7 +662,7 @@ function PermissionSeg() {
                   {t("statusbar.permRestartLater")}
                 </button>
                 <button
-                  onClick={() => void doRestart()}
+                  onClick={() => void doRestart().catch(error => setPermissionError(String(error)))}
                   style={{
                     fontSize: 11,
                     padding: "4px 12px",

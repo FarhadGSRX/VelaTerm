@@ -46,6 +46,13 @@ it("migrates older preferences to independent conversation defaults", () => {
   expect(settings.chatLineHeight).toBe(1.2);
 });
 
+it("preserves quoted custom families and explicit fallback lists when applying typography", () => {
+  useTermStore.getState().setChatFontFamily('"User Installed Font"');
+  expect(document.documentElement.style.getPropertyValue("--chat-font")).toMatch(/^"User Installed Font", /);
+  useTermStore.getState().setChatFontFamily('"User Installed Font", monospace');
+  expect(document.documentElement.style.getPropertyValue("--chat-font")).toBe('"User Installed Font", monospace');
+});
+
 it("saves and restores conversation typography without changing terminal typography", () => {
   const store = useTermStore.getState();
   store.setChatFontFamily("Menlo");

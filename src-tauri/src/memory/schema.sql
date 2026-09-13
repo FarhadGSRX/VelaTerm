@@ -59,5 +59,6 @@ END;
 CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memory_entries BEGIN
  DELETE FROM memory_fts WHERE rowid=old.rowid;
 END;
--- Serialize compilers across windows/processes that share this database.
-CREATE UNIQUE INDEX IF NOT EXISTS memory_one_running ON memory_jobs((1)) WHERE status='running';
+-- Session-scoped claims are serialized by an immediate transaction in the scheduler.
+DROP INDEX IF EXISTS memory_one_running;
+CREATE INDEX IF NOT EXISTS memory_jobs_status ON memory_jobs(status);

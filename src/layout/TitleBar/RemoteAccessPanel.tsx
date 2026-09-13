@@ -23,7 +23,6 @@ import { copyText } from "../../ipc/info";
 import { mirrorSetEnabled } from "../../ipc/mirror";
 import { useTermStore } from "../../store/termStore";
 import { invoke } from "../../ipc/transport";
-import { PublicSharingPanel } from "./PublicSharingPanel";
 
 /** app_settings key persisting the selected advertised IP; empty string means automatic (backend default). */
 const SHARE_IP_KEY = "vlx-share-ip";
@@ -391,7 +390,6 @@ export function RemoteAccessPanel({
         >
           {t("remote.title")}
         </div>
-        <PublicSharingPanel />
         <div
           style={{
             fontSize: 11,

@@ -146,6 +146,20 @@ pub fn search_sessions(
     query: &str,
     scope: SearchScope,
 ) -> Result<Vec<SessionSearchHit>, String> {
+    search_sessions_in(db, recordings_dir, query, scope, None)
+}
+
+/// Search globally or restrict matching rows to one resolved session ID.
+///
+/// The filter is applied inside every SQL query rather than after aggregation. This keeps ranking, match
+/// counts, and fallback behavior scoped to the requested conversation and avoids loading unrelated hits.
+pub fn search_sessions_in(
+    db: &Db,
+    recordings_dir: &Path,
+    query: &str,
+    scope: SearchScope,
+    session_id: Option<&str>,
+) -> Result<Vec<SessionSearchHit>, String> {
     let keys: Vec<String> = query.split_whitespace().map(str::to_string).collect();
     if keys.is_empty() {
         return Ok(Vec::new());
@@ -164,18 +178,22 @@ pub fn search_sessions(
     let phrases: Option<Vec<String>> = keys.iter().map(|k| tokenize::query_phrase(k)).collect();
     let mut answered = Answered::Words;
     let mut raw = match phrases {
-        Some(p) => query_words(&conn, &p, scope)?,
+        Some(p) => query_words(&conn, &p, scope, session_id)?,
         None => Vec::new(),
     };
     if raw.is_empty() {
         // Substring fallback. If any term is shorter than three characters, use LIKE for the whole query;
         // trigram MATCH cannot handle it.
         let use_fts = keys.iter().all(|k| k.chars().count() >= MIN_FTS_TERM_CHARS);
-        answered = if use_fts { Answered::Trigram } else { Answered::Like };
-        raw = if use_fts {
-            query_fts(&conn, &keys, scope)?
+        answered = if use_fts {
+            Answered::Trigram
         } else {
-            query_like(&conn, &keys, scope)?
+            Answered::Like
+        };
+        raw = if use_fts {
+            query_fts(&conn, &keys, scope, session_id)?
+        } else {
+            query_like(&conn, &keys, scope, session_id)?
         };
     }
     if raw.is_empty() {
@@ -281,35 +299,47 @@ fn query_words(
     conn: &rusqlite::Connection,
     phrases: &[String],
     scope: SearchScope,
+    session_id: Option<&str>,
 ) -> Result<Vec<RawHit>, String> {
     let expr = phrases.join(" ");
+    let session_filter = if session_id.is_some() {
+        " AND f.session_id = ?4"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT f.session_id, f.source, f.message_index, f.ordinal, \
                 highlight(session_words, 0, ?2, ?3) \
          FROM session_words w JOIN session_fts f ON f.rowid = w.rowid \
          JOIN sessions s ON s.id = f.session_id \
-         WHERE session_words MATCH ?1{} ORDER BY w.rank",
-        scope.sql_filter()
+         WHERE session_words MATCH ?1{}{} ORDER BY w.rank",
+        scope.sql_filter(),
+        session_filter,
     );
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("Failed to prepare word query: {e}"))?;
+    let mut binds = vec![
+        rusqlite::types::Value::Text(expr),
+        rusqlite::types::Value::Text(tokenize::MARK_OPEN.to_string()),
+        rusqlite::types::Value::Text(tokenize::MARK_CLOSE.to_string()),
+    ];
+    if let Some(session_id) = session_id {
+        binds.push(rusqlite::types::Value::Text(session_id.to_string()));
+    }
     let rows = stmt
-        .query_map(
-            rusqlite::params![expr, tokenize::MARK_OPEN, tokenize::MARK_CLOSE],
-            |row| {
-                let marked: String = row.get(4)?;
-                let h = tokenize::parse_highlight(&marked);
-                Ok(RawHit {
-                    session_id: row.get(0)?,
-                    source: row.get(1)?,
-                    message_index: row.get(2)?,
-                    ordinal: row.get(3)?,
-                    text: h.text,
-                    spans: h.spans,
-                })
-            },
-        )
+        .query_map(params_from_iter(binds.iter()), |row| {
+            let marked: String = row.get(4)?;
+            let h = tokenize::parse_highlight(&marked);
+            Ok(RawHit {
+                session_id: row.get(0)?,
+                source: row.get(1)?,
+                message_index: row.get(2)?,
+                ordinal: row.get(3)?,
+                text: h.text,
+                spans: h.spans,
+            })
+        })
         .map_err(|e| format!("Failed to run word query: {e}"))?;
     collect_raw(rows)
 }
@@ -320,19 +350,30 @@ fn query_fts(
     conn: &rusqlite::Connection,
     keys: &[String],
     scope: SearchScope,
+    session_id: Option<&str>,
 ) -> Result<Vec<RawHit>, String> {
     let expr = fts_match_expr(keys);
+    let session_filter = if session_id.is_some() {
+        " AND f.session_id = ?2"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT f.session_id, f.source, f.message_index, f.ordinal, f.text \
          FROM session_fts f JOIN sessions s ON s.id = f.session_id \
-         WHERE f.text MATCH ?1{} ORDER BY rank",
-        scope.sql_filter()
+         WHERE f.text MATCH ?1{}{} ORDER BY rank",
+        scope.sql_filter(),
+        session_filter,
     );
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("Failed to prepare fts query: {e}"))?;
+    let mut binds = vec![expr];
+    if let Some(session_id) = session_id {
+        binds.push(session_id.to_string());
+    }
     let rows = stmt
-        .query_map(params_from_iter(std::iter::once(expr)), map_raw_hit)
+        .query_map(params_from_iter(binds.iter()), map_raw_hit)
         .map_err(|e| format!("Failed to run fts query: {e}"))?;
     collect_raw(rows)
 }
@@ -343,22 +384,32 @@ fn query_like(
     conn: &rusqlite::Connection,
     keys: &[String],
     scope: SearchScope,
+    session_id: Option<&str>,
 ) -> Result<Vec<RawHit>, String> {
     let clause = keys
         .iter()
         .map(|_| "f.text LIKE ? ESCAPE '\\'")
         .collect::<Vec<_>>()
         .join(" AND ");
+    let session_filter = if session_id.is_some() {
+        " AND f.session_id = ?"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT f.session_id, f.source, f.message_index, f.ordinal, f.text \
          FROM session_fts f JOIN sessions s ON s.id = f.session_id \
-         WHERE {clause}{}",
-        scope.sql_filter()
+         WHERE {clause}{}{}",
+        scope.sql_filter(),
+        session_filter,
     );
-    let binds: Vec<String> = keys
+    let mut binds: Vec<String> = keys
         .iter()
         .map(|k| format!("%{}%", like_escape(k)))
         .collect();
+    if let Some(session_id) = session_id {
+        binds.push(session_id.to_string());
+    }
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("Failed to prepare like query: {e}"))?;
@@ -522,8 +573,14 @@ pub fn warm_index(app: AppCtx) {
         };
         let started = std::time::Instant::now();
         match index::refresh_stale(app.db(), &data_dir.join("recordings")) {
-            Ok(()) => println!("search index warm-up finished in {:?}", started.elapsed()),
-            Err(e) => eprintln!("search index warm-up failed: {e}"),
+            Ok(()) => {
+                crate::diagnostics::record(
+                    "INFO",
+                    "search_warmup",
+                    serde_json::json!({"status":"success","durationMs":started.elapsed().as_millis() as u64}),
+                );
+            }
+            Err(e) => crate::diagnostic_warn!("search index warm-up failed: {e}"),
         }
     });
 }
@@ -590,10 +647,25 @@ mod tests {
         let db = temp_db();
         insert_session(&db, "s1", "kimono", "claude");
         insert_session(&db, "s2", "billing", "claude");
-        insert_fts(&db, "s1", "transcript", Some(0), 0, "我买了一件和服，很好看。");
-        insert_fts(&db, "s2", "transcript", Some(0), 0, "总和服务的费用还没有结清。");
+        insert_fts(
+            &db,
+            "s1",
+            "transcript",
+            Some(0),
+            0,
+            "我买了一件和服，很好看。",
+        );
+        insert_fts(
+            &db,
+            "s2",
+            "transcript",
+            Some(0),
+            0,
+            "总和服务的费用还没有结清。",
+        );
 
-        let hits = search_sessions(&db, Path::new("/nonexistent"), "和服", SearchScope::Live).unwrap();
+        let hits =
+            search_sessions(&db, Path::new("/nonexistent"), "和服", SearchScope::Live).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "s1");
         assert_eq!(hits[0].matches[0].matched, vec!["和服".to_string()]);
@@ -605,11 +677,40 @@ mod tests {
     fn substring_fallback_when_no_word_matches() {
         let db = temp_db();
         insert_session(&db, "s1", "git", "claude");
-        insert_fts(&db, "s1", "transcript", Some(0), 0, "list every worktree before merging");
+        insert_fts(
+            &db,
+            "s1",
+            "transcript",
+            Some(0),
+            0,
+            "list every worktree before merging",
+        );
 
-        let hits = search_sessions(&db, Path::new("/nonexistent"), "worktre", SearchScope::Live).unwrap();
+        let hits =
+            search_sessions(&db, Path::new("/nonexistent"), "worktre", SearchScope::Live).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].matches[0].matched, vec!["worktre".to_string()]);
+    }
+
+    #[test]
+    fn session_filter_is_applied_before_results_are_built() {
+        let db = temp_db();
+        insert_session(&db, "s1", "first", "claude");
+        insert_session(&db, "s2", "second", "codex");
+        insert_fts(&db, "s1", "transcript", Some(0), 0, "shared needle");
+        insert_fts(&db, "s2", "transcript", Some(4), 4, "another shared needle");
+
+        let hits = search_sessions_in(
+            &db,
+            Path::new("/nonexistent"),
+            "needle",
+            SearchScope::All,
+            Some("s2"),
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "s2");
+        assert_eq!(hits[0].matches[0].message_index, Some(4));
     }
 
     /// Porter stemming folds inflections and the matched literal is the word as written; a different
@@ -619,10 +720,25 @@ mod tests {
         let db = temp_db();
         insert_session(&db, "s1", "orch", "claude");
         insert_session(&db, "s2", "cli", "claude");
-        insert_fts(&db, "s1", "transcript", Some(0), 0, "The lead agent spawned two children.");
-        insert_fts(&db, "s2", "transcript", Some(0), 0, "Run vspawn to create a child session.");
+        insert_fts(
+            &db,
+            "s1",
+            "transcript",
+            Some(0),
+            0,
+            "The lead agent spawned two children.",
+        );
+        insert_fts(
+            &db,
+            "s2",
+            "transcript",
+            Some(0),
+            0,
+            "Run vspawn to create a child session.",
+        );
 
-        let hits = search_sessions(&db, Path::new("/nonexistent"), "spawn", SearchScope::Live).unwrap();
+        let hits =
+            search_sessions(&db, Path::new("/nonexistent"), "spawn", SearchScope::Live).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "s1");
         assert_eq!(hits[0].matches[0].matched, vec!["spawned".to_string()]);
@@ -634,11 +750,30 @@ mod tests {
     fn word_index_phrases_report_whole_literals() {
         let db = temp_db();
         insert_session(&db, "s1", "app", "claude");
-        insert_fts(&db, "s1", "transcript", Some(0), 0, "打开终端搜索功能，然后在 vlx-term 里试一下。");
+        insert_fts(
+            &db,
+            "s1",
+            "transcript",
+            Some(0),
+            0,
+            "打开终端搜索功能，然后在 vlx-term 里试一下。",
+        );
 
-        let hits = search_sessions(&db, Path::new("/nonexistent"), "终端搜索", SearchScope::Live).unwrap();
+        let hits = search_sessions(
+            &db,
+            Path::new("/nonexistent"),
+            "终端搜索",
+            SearchScope::Live,
+        )
+        .unwrap();
         assert_eq!(hits[0].matches[0].matched, vec!["终端搜索".to_string()]);
-        let hits = search_sessions(&db, Path::new("/nonexistent"), "vlx-term", SearchScope::Live).unwrap();
+        let hits = search_sessions(
+            &db,
+            Path::new("/nonexistent"),
+            "vlx-term",
+            SearchScope::Live,
+        )
+        .unwrap();
         assert_eq!(hits[0].matches[0].matched, vec!["vlx-term".to_string()]);
     }
 
@@ -697,7 +832,10 @@ mod tests {
         assert_eq!(hits.len(), 1);
         let h = &hits[0];
         assert_eq!(h.source, "transcript");
-        assert_eq!(h.match_count, 1, "only a message containing both terms counts as a hit");
+        assert_eq!(
+            h.match_count, 1,
+            "only a message containing both terms counts as a hit"
+        );
         assert_eq!(h.matches[0].message_index, Some(3));
         assert!(h.matches[0].snippet.contains("数据库") || h.matches[0].snippet.contains("配置"));
     }
@@ -783,7 +921,11 @@ mod tests {
 
         let dir = std::path::Path::new("/no/such/dir");
         let live = search_sessions(&db, dir, "deploy", SearchScope::Live).unwrap();
-        assert_eq!(live.len(), 1, "Live returns only sessions that are not archived");
+        assert_eq!(
+            live.len(),
+            1,
+            "Live returns only sessions that are not archived"
+        );
         assert_eq!(live[0].session_id, "live1");
         assert!(!live[0].archived);
 
@@ -799,9 +941,11 @@ mod tests {
         insert_fts(&db, "live1", "recording", None, 1, "查看配置");
         insert_fts(&db, "arch1", "recording", None, 1, "修改配置");
         let live_like = search_sessions(&db, dir, "配置", SearchScope::Live).unwrap();
-        assert_eq!(live_like.len(), 1, "the LIKE fallback filters by scope as well");
+        assert_eq!(
+            live_like.len(),
+            1,
+            "the LIKE fallback filters by scope as well"
+        );
         assert_eq!(live_like[0].session_id, "live1");
     }
 }
-
-

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.build/
+.gradle/
+**/build/
+**/.gradle/
+**/local.properties
+**/DerivedData/
+**/xcuserdata/
+.DS_Store
+
+**/.build/
+**/__pycache__/

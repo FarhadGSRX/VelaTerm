@@ -4,7 +4,7 @@
 //! - Info resource/turn details and per-file Git changes retain design placeholders until their
 //!   backend IPC is available; their DOM structure already matches the design.
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import Icons from "../../components/Icons";
 import { useT } from "../../i18n";
 import { useTermStore } from "../../store/termStore";
@@ -12,12 +12,16 @@ import { projectRoot, type Group, type Project, type Session } from "../../types
 import { FilesTab } from "./FilesTab";
 import { GitTab } from "./git/GitTab";
 import { InfoTab } from "./InfoTab";
-import { KV } from "./parts";
+import { KV, Section } from "./parts";
+import { KnowledgeNavigation } from "../Notebook/KnowledgeNavigation";
+import { MemoryIcon } from "../Memory/MemoryRoute";
+import { memoryNavigate, useMemoryLocation } from "../Memory/navigation";
 
 const INSPECTOR_TABS = [
   { id: "files" as const, label: "Files", Icon: Icons.file },
   { id: "info" as const, label: "Info", Icon: Icons.info },
   { id: "git" as const, label: "Git", Icon: Icons.git },
+  { id: "knowledge" as const, label: "", Icon: MemoryIcon },
 ];
 
 
@@ -28,13 +32,12 @@ const INSPECTOR_TABS = [
 /** Show project/group basics when the selection is not a session; Files and Git use cwd directly. */
 function ScopeInfo({ project, group }: { project: Project; group?: Group }) {
   return (
-    <div className="insp-section">
-      <h4>{group ? "Group" : "Project"}</h4>
+    <Section id="scope" title={group ? "Group" : "Project"} className="scope-section">
       {group && <KV k="group" v={group.name} />}
       <KV k="project" v={project.name} />
       {/* Collections have no folder, so the path row is omitted rather than shown empty. */}
       {projectRoot(project) && <KV k="path" v={project.rootPath} accent />}
-    </div>
+    </Section>
   );
 }
 
@@ -46,6 +49,10 @@ export function RightPanel() {
   const width = useTermStore((s) => s.rightWidth);
   const inspectorTab = useTermStore((s) => s.inspectorTab);
   const setInspectorTab = useTermStore((s) => s.setInspectorTab);
+  const search=useMemoryLocation();
+  const initialInspectorTab = useRef(inspectorTab);
+  useEffect(()=>{const tab=new URLSearchParams(search).get("inspector") ?? initialInspectorTab.current;if((tab==="files"||tab==="info"||tab==="git"||tab==="knowledge")&&useTermStore.getState().inspectorTab!==tab)setInspectorTab(tab);},[search,setInspectorTab]);
+  const tabUrl=(tab:string)=>{const url=new URL(window.location.href);url.searchParams.set("inspector",tab);if(tab==="knowledge"&&!url.searchParams.has("memory"))url.searchParams.set("memory","notebooks");return url.href;};
   const sessions = useTermStore((s) => s.sessions);
   const ephemeralSessions = useTermStore((s) => s.ephemeralSessions);
   const groups = useTermStore((s) => s.groups);
@@ -97,23 +104,27 @@ export function RightPanel() {
 
   return (
     <aside className="col col-right" style={{ width, borderLeft: "none" }}>
-      <div className="insp-tabs">
+      <nav className="insp-tabs">
         {INSPECTOR_TABS.map(({ id, label, Icon }) => (
-          <button
+          <a
+            href={tabUrl(id)}
+            title={id==="knowledge"?t("memory.title"):label}
+            aria-label={id==="knowledge"?t("memory.title"):label}
+            aria-current={inspectorTab===id?"page":undefined}
             key={id}
             className={"insp-tab" + (inspectorTab === id ? " on" : "")}
-            onClick={() => setInspectorTab(id)}
+            onClick={event=>{if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();memoryNavigate(tabUrl(id));}}
           >
             <Icon size={13} />
-            {label}
-          </button>
+          </a>
         ))}
-      </div>
+      </nav>
       <div className="insp-body" style={{ display: "flex", flexDirection: "column" }}>
+        {inspectorTab === "knowledge" && <KnowledgeNavigation/>}
         {inspectorTab === "files" && <FilesTab rootPath={cwd} rootName={project?.name ?? null} />}
         {inspectorTab === "info" &&
           (session ? (
-            <InfoTab session={session} cwd={cwd} />
+            <InfoTab key={session.id} session={session} cwd={cwd} />
           ) : project ? (
             <ScopeInfo project={project} group={group} />
           ) : (

@@ -9,6 +9,7 @@
 
 import { invoke as nativeInvoke } from "@tauri-apps/api/core";
 import { isTauri, isRemoteWindow } from "./ipc/transport";
+import { mobileNotifications } from "./mobile/nativeNotifications";
 
 /**
  * Whether the local native notification plugin is available: either a main Tauri window or a remote
@@ -36,6 +37,11 @@ let granted: boolean | null = null;
 
 /** Ensure notification permission, caching the result to avoid repeated OS queries. */
 async function ensurePermission(): Promise<boolean> {
+  const mobile = mobileNotifications();
+  if (mobile) {
+    const state = await mobile.getPermission();
+    return state === "granted" || (state === "default" && await mobile.requestPermission() === "granted");
+  }
   if (granted !== null) return granted;
   try {
     if (useNativeNotify) {
@@ -69,6 +75,8 @@ export type NotifyPermission = "granted" | "denied" | "default" | "unsupported";
  */
 export async function getNotifyPermission(): Promise<NotifyPermission> {
   try {
+    const mobile = mobileNotifications();
+    if (mobile) return await mobile.getPermission();
     if (useNativeNotify) {
       const { isPermissionGranted } = await import(
         "@tauri-apps/plugin-notification"
@@ -92,6 +100,8 @@ export async function getNotifyPermission(): Promise<NotifyPermission> {
 export async function requestNotifyPermission(): Promise<NotifyPermission> {
   granted = null; // Clear the cache and repopulate it from this request.
   try {
+    const mobile = mobileNotifications();
+    if (mobile) return await mobile.requestPermission();
     if (useNativeNotify) {
       const { isPermissionGranted, requestPermission } = await import(
         "@tauri-apps/plugin-notification"
@@ -187,6 +197,8 @@ export async function notify(
   try {
     const ok = await ensurePermission();
     if (!ok) return;
+    const mobile = mobileNotifications();
+    if (mobile) { await mobile.send({sessionId, title, body, sound}); return; }
     if (useNativeNotify) {
       if (isRemoteWindow) {
         // Remote contexts cannot call native_notify, so emit `vlx://remote-notify` for the local

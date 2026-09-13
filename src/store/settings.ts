@@ -13,7 +13,7 @@ import type {
   PaneStyle,
   VisualSettings,
 } from "../theme";
-import type { SessionEngine } from "../types";
+import type { SessionEngine, SessionKind } from "../types";
 
 /** User-configurable background keep-alive tab limit, defaulting to 32. */
 export const DEFAULT_MAX_LIVE_TABS = 32;
@@ -43,17 +43,54 @@ export const loadRecordSessions = (): boolean => localStorage.getItem(RECORD_SES
 export interface AgentDefaultConfig {
   /** Default launch arguments such as "--model opus"; empty or missing means no arguments. */
   args?: string;
-  /** Default permission mode: "skip" bypasses all confirmation; missing means staged approval. */
+  /** Backend-persisted permission choice for new sessions; `"skip"` is the legacy bypass spelling. */
   permissionMode?: string;
   /** Absolute executable path; empty uses command-name lookup through PATH. This is global per type and
    * read from app_settings at spawn time by `agent_bin_path`, so changes affect subsequent launches.
    * AgentInstallCard fills an empty value after locating a successful one-click installation. */
   path?: string;
+  /** View a new session of this agent opens in. Missing falls back to the conversation view for every
+   * chat-capable agent (`defaultEngineFor`). */
+  engine?: SessionEngine;
 }
 
-/** Terminal renderer: DOM is the stable default; canvas uses a responsive 2D bitmap without GPU
- * contexts; WebGL is sharpest but many terminals can exhaust contexts and return blank or misaligned. */
-export type TermRenderer = "dom" | "canvas" | "webgl";
+/** View a newly created session of this agent opens in: its saved per-agent choice, then the unified
+ * conversation default. Callers only use this for kinds the chat engine can drive. */
+export function defaultEngineFor(
+  kind: SessionKind,
+  agentDefaults: Record<string, AgentDefaultConfig>,
+): SessionEngine {
+  return agentDefaults[kind]?.engine ?? "chat";
+}
+
+/** Terminal renderer: DOM is the stable default; WebGL accelerates rendering but can exhaust GPU contexts. */
+export type TermRenderer = "dom" | "webgl";
+
+/** Last launch choices for one role of the planning workflow, restored the next time its dialog opens. */
+export interface PlanExecuteRolePrefs {
+  agent?: SessionKind;
+  model?: string;
+  effort?: string;
+}
+
+/** Last agent, model and reasoning effort chosen for knowledge-base compilation, restored the next time
+ * its dialog opens. */
+export interface MemoryPrefs {
+  agent?: SessionKind;
+  model?: string;
+  effort?: string;
+}
+
+/** One global pre-summary choice for session references. Agent capabilities and CLI argument mapping
+ * remain backend-owned; the client persists only the user's selection. */
+export interface ReferSummaryConfig {
+  /** Off preserves the original `vrefer --ask` full-transcript behavior. */
+  enabled: boolean;
+  agent: SessionKind;
+  /** Empty values use the selected agent's own defaults. */
+  model: string;
+  effort: string;
+}
 
 /** Image paste mode, configurable only on local desktop clients; browser/remote always upload.
  * `upload` stores a temporary file and writes its visible path to the terminal. `agent` sends Ctrl+V
@@ -71,8 +108,7 @@ export interface PersistedSettings {
   inspectorTab: InspectorTab;
   /** Single-tab mode reuses the current tab and keeps the previous tree alive in the background. */
   singleTabMode: boolean;
-  /** Terminal renderer. DOM is stable; canvas avoids DOM overhead without GPU contexts; WebGL is sharp
-   * but many terminals can hit context limits and return blank or misaligned. */
+  /** Terminal renderer. DOM is stable; WebGL can hit context limits with many terminals. */
   termRenderer: TermRenderer;
   /** Advanced full redraw on tab return, off by default. Enable only to mitigate GPU artifacts or
    * blank frames; normal tab switching redraws only after a size change. */
@@ -121,10 +157,6 @@ export interface PersistedSettings {
   /** Image paste mode: upload writes a file path, while agent lets the agent read the clipboard and show
    * `[Image #x]`. Configurable only on local desktop clients; browser and remote clients always upload. */
   imagePasteMode: ImagePasteMode;
-  /** How a new agent session is driven, which is also which view it opens in: the conversation (the chat
-   * engine, with permission buttons and model controls) or the agent's own terminal interface. An existing
-   * session keeps whatever it was created with until someone switches it. */
-  defaultSessionEngine: SessionEngine;
   /** Model a conversation starts on, remembered from the last one picked. Empty means the agent's own default. */
   chatModel: string;
   /** Model remembered independently for each chat-capable agent. */
@@ -137,9 +169,20 @@ export interface PersistedSettings {
   chatEffortByModel: Record<string, string>;
   /** Whether a new Claude conversation opens with fast mode on, per agent protocol. */
   chatFastModeByKind: Record<string, boolean>;
+  /** Last agent, model and reasoning effort chosen for each planning/execution role, so a repeated
+   * workflow opens on the setup that was used last time rather than on the parent session's. */
+  planExecutePrefs: { plan: PlanExecuteRolePrefs; exec: PlanExecuteRolePrefs };
+  /** Last agent, model and reasoning effort chosen when organizing a session into the knowledge base,
+   * so the next dialog opens on the setup that was used last time. */
+  memoryPrefs: MemoryPrefs;
+  /** Optional pre-summary used by `vrefer --ask`; there is one choice for every caller and target. */
+  referSummary: ReferSummaryConfig;
   /** Whether the Info panel's Resources section shows the whole-machine group. Off hides those rows and
    * stops sampling the machine, leaving only this session's own CPU and memory. */
   showSystemResources: boolean;
+  /** Info panel sections the user collapsed, as a sparse map of section id to `true`. A missing id means
+   * the section is open, so the map stays empty until someone collapses something. */
+  infoCollapsed: Record<string, boolean>;
 }
 const SETTINGS_DEFAULTS: PersistedSettings = {
   accent: "auto",
@@ -170,19 +213,57 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   usageAutoRefresh: true,
   usageRefreshSec: 300,
   imagePasteMode: "upload",
-  defaultSessionEngine: "tui",
   chatModel: "",
   chatModelByKind: {},
   chatEffortByModel: {},
   chatFastModeByKind: {},
+  planExecutePrefs: { plan: {}, exec: {} },
+  memoryPrefs: {},
+  referSummary: { enabled: false, agent: "claude", model: "", effort: "" },
   showSystemResources: true,
+  infoCollapsed: {},
 };
+
+/** Drops anything a corrupted or older payload may hold, keeping only the three launch choices. */
+function sanitizeLaunchChoice(input: unknown): MemoryPrefs {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  const source = input as Record<string, unknown>;
+  const result: MemoryPrefs = {};
+  if (typeof source.agent === "string" && source.agent) result.agent = source.agent as SessionKind;
+  if (typeof source.model === "string") result.model = source.model;
+  if (typeof source.effort === "string") result.effort = source.effort;
+  return result;
+}
+
+function sanitizePlanExecutePrefs(value: unknown): { plan: PlanExecuteRolePrefs; exec: PlanExecuteRolePrefs } {
+  const map = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return { plan: sanitizeLaunchChoice(map.plan), exec: sanitizeLaunchChoice(map.exec) };
+}
+
+function sanitizeReferSummary(value: unknown): ReferSummaryConfig {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    enabled: source.enabled === true,
+    agent: typeof source.agent === "string" && source.agent
+      ? source.agent as SessionKind
+      : SETTINGS_DEFAULTS.referSummary.agent,
+    model: typeof source.model === "string" ? source.model : "",
+    effort: typeof source.effort === "string" ? source.effort : "",
+  };
+}
+
 export function loadSettings(): PersistedSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...SETTINGS_DEFAULTS };
-    // Older versions stored boolean gpuRender outside PersistedSettings; declare it solely for migration.
-    const parsed = JSON.parse(raw) as Partial<PersistedSettings> & { gpuRender?: boolean };
+    // Older versions stored boolean gpuRender and an app-wide defaultSessionEngine outside the current
+    // shape; declare both solely for migration.
+    const parsed = JSON.parse(raw) as Partial<PersistedSettings> & {
+      gpuRender?: boolean;
+      defaultSessionEngine?: SessionEngine;
+    };
     const merged = { ...SETTINGS_DEFAULTS, ...parsed };
     merged.chatFontFamily = typeof merged.chatFontFamily === "string" ? merged.chatFontFamily.trim() || null : null;
     merged.chatFontSize = normalizeTextSize(merged.chatFontSize, DEFAULT_CONVERSATION_FONT_SIZE);
@@ -195,10 +276,38 @@ export function loadSettings(): PersistedSettings {
     ) {
       merged.chatModelByKind = typeof parsed.chatModel === "string" ? { claude: parsed.chatModel } : {};
     }
+    // Collapsed sections are a sparse map keyed by section id; drop anything that is not an explicit
+    // `true` so a corrupted payload cannot hide sections the user never closed.
+    merged.infoCollapsed =
+      parsed.infoCollapsed && typeof parsed.infoCollapsed === "object" && !Array.isArray(parsed.infoCollapsed)
+        ? Object.fromEntries(Object.entries(parsed.infoCollapsed).filter(([, closed]) => closed === true))
+        : {};
+    merged.planExecutePrefs = sanitizePlanExecutePrefs(parsed.planExecutePrefs);
+    merged.memoryPrefs = sanitizeLaunchChoice(parsed.memoryPrefs);
+    merged.referSummary = sanitizeReferSummary(parsed.referSummary);
     // Migrate boolean gpuRender to termRenderer only when the new key is absent, preserving WebGL for
     // existing users. Future saves write only the new structure and naturally discard the old field.
     if (parsed.termRenderer === undefined && typeof parsed.gpuRender === "boolean") {
       merged.termRenderer = parsed.gpuRender ? "webgl" : "dom";
+    }
+    // xterm 6 removed the Canvas addon. Migrate legacy or invalid values to the stable DOM renderer;
+    // the next settings save persists this choice, including settings received from older clients.
+    if (merged.termRenderer !== "dom" && merged.termRenderer !== "webgl") {
+      merged.termRenderer = "dom";
+    }
+    // The view choice used to be a single app-wide setting covering Claude, Codex and OpenCode, while Pi
+    // and OMP were outside its scope. Fold a saved choice into those three agents; newer chat-capable
+    // agents use the unified conversation default. Clone first so the module-level defaults are never mutated.
+    merged.agentDefaults =
+      merged.agentDefaults && typeof merged.agentDefaults === "object" && !Array.isArray(merged.agentDefaults)
+        ? { ...merged.agentDefaults }
+        : {};
+    if (parsed.defaultSessionEngine === "chat" || parsed.defaultSessionEngine === "tui") {
+      for (const kind of ["claude", "codex", "opencode"] as const) {
+        if (merged.agentDefaults[kind]?.engine === undefined) {
+          merged.agentDefaults[kind] = { ...merged.agentDefaults[kind], engine: parsed.defaultSessionEngine };
+        }
+      }
     }
     return merged;
   } catch {

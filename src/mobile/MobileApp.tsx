@@ -9,11 +9,12 @@
 //! - navigation uses local `openId` state without touching tab, split, or keep-alive store state.
 
 import { useCallback, useEffect, useState } from "react";
-import { OrchConfirmModal } from "../components/OrchConfirmModal";
+import { isShareSurface } from "../ipc/shareBase";
+import { navigateSharedSession, selectedSharedSession } from "../sharing/sessionNavigation";
+import { SplitTaskConfirmModal } from "../components/SplitTaskConfirmModal";
 import { SpawnConfirmModal } from "../components/SpawnConfirmModal";
 import { useNotifications } from "../hooks/useNotifications";
 import {
-  onOrchRequest,
   onSessionState,
   onSpawnRequest,
   onSpawnResolved,
@@ -31,23 +32,42 @@ import { projectRoot, type SessionId } from "../types";
 import { SessionListPage } from "./SessionListPage";
 import { TerminalPage } from "./TerminalPage";
 import "./mobile.css";
+import { useMobileTree } from "./useMobileTree";
+import { settleFirstMirrorAlign } from "../store/mirrorAlign";
+import { mobileNotifications } from "./nativeNotifications";
+import { bindMobilePush } from "./pushSubscription";
+
+const useSessionUrl = isShareSurface || !!mobileNotifications();
 
 function MobileApp() {
   const projects = useTermStore((s) => s.projects);
   const sessions = useTermStore((s) => s.sessions);
   const loadTree = useTermStore((s) => s.loadTree);
+  const loadMobileTree = useCallback(() => {
+    // 手机不参加布局镜像，无需等待桌面镜像初始化的超时。
+    settleFirstMirrorAlign(false);
+    return loadTree().then(() => { void bindMobilePush() });
+  }, [loadTree]);
+  const treeRequest = useMobileTree(loadMobileTree);
   const handleSpawnRequest = useTermStore((s) => s.handleSpawnRequest);
   const applyAppearance = useTermStore((s) => s.applyAppearance);
   const clearNotification = useTermStore((s) => s.clearNotification);
 
   // The currently viewed session; null displays the list. TerminalPage owns mount/unmount behavior.
-  const [openId, setOpenId] = useState<SessionId | null>(null);
+  const [openId, setOpenId] = useState<SessionId | null>(()=>useSessionUrl?selectedSharedSession():null);
+  const treeLoaded=useTermStore(s=>s.treeLoaded);
+  useEffect(()=>{
+    if(!useSessionUrl)return;
+    const restore=()=>setOpenId(selectedSharedSession());
+    window.addEventListener("popstate",restore);
+    return ()=>window.removeEventListener("popstate",restore);
+  },[]);
 
   useNotifications();
 
   useEffect(() => {
     applyAppearance();
-    void loadTree();
+
     // Phones share the same backend-authoritative preferences as the desktop, but this view never
     // reconciled them: it neither picked up a theme or language chosen elsewhere nor seeded its own.
     // Do the startup pass here too, then follow later changes over the broadcast.
@@ -65,9 +85,6 @@ function MobileApp() {
     // Handle child-task requests normally. The new session appears in the tree and receives its
     // prompt through usePtySession when opened.
     const unlistenSpawn = onSpawnRequest((req) => void handleSpawnRequest(req));
-    const unlistenOrch = onOrchRequest((req) =>
-      useTermStore.getState().handleOrchRequest(req),
-    );
     // Another client answering the card must clear it here too. Without this the phone keeps showing a
     // request the desktop already confirmed, and tapping Confirm launches the same task a second time.
     const unlistenResolved = onSpawnResolved((ev) => {
@@ -79,13 +96,12 @@ function MobileApp() {
     let treeTimer: ReturnType<typeof setTimeout> | undefined;
     const unlistenTree = onTreeChanged(() => {
       clearTimeout(treeTimer);
-      treeTimer = setTimeout(() => void useTermStore.getState().loadTree(), 300);
+      treeTimer = setTimeout(() => void treeRequest.refresh(), 300);
     });
     return () => {
       unwatch();
       stopSettingsWatch();
       void unlistenSpawn.then((fn) => fn());
-      void unlistenOrch.then((fn) => fn());
       void unlistenResolved.then((fn) => fn());
       clearTimeout(treeTimer);
       void unlistenTree.then((fn) => fn());
@@ -99,18 +115,18 @@ function MobileApp() {
     (id: SessionId) => {
       // Match desktop openSession behavior: opening a session clears its unread marker.
       clearNotification(id);
-      setOpenId(id);
+      if(useSessionUrl)navigateSharedSession(id);else setOpenId(id);
     },
     [clearNotification],
   );
-  const back = useCallback(() => setOpenId(null), []);
+  const back = useCallback(() => {if(useSessionUrl)navigateSharedSession(null);else setOpenId(null)}, []);
 
   const session = openId ? (sessions.find((s) => s.id === openId) ?? null) : null;
 
   // Return to the list if the active session disappears after deletion or archiving.
   useEffect(() => {
-    if (openId && !session) setOpenId(null);
-  }, [openId, session]);
+    if (treeLoaded && openId && !session) setOpenId(null);
+  }, [treeLoaded, openId, session]);
 
   const project = session ? projects.find((p) => p.id === session.projectId) : null;
   const cwd = session ? (session.cwd ?? projectRoot(project) ?? undefined) : undefined;
@@ -120,10 +136,10 @@ function MobileApp() {
       {session ? (
         <TerminalPage session={session} cwd={cwd} onBack={back} />
       ) : (
-        <SessionListPage onOpen={open} />
+        <SessionListPage onOpen={open} loading={treeRequest.loading} error={treeRequest.error} onRefresh={treeRequest.refresh} />
       )}
       <SpawnConfirmModal />
-      <OrchConfirmModal />
+      {!isShareSurface && <SplitTaskConfirmModal />}
       <ConnectionBanner />
     </div>
   );

@@ -4,7 +4,7 @@ description: >-
   You CAN see whether other vlx-term sessions are busy. This reports each session's current state —
   working, asking for permission, waiting for input — straight from the same status the sidebar shows.
   Use it when the user asks how a run or another session is doing ("is it done yet", "what are they up
-  to", "how is the orchestration going") in any language, or after /vorch when you need the outcome.
+  to", "how is the orchestration going") in any language, or when checking execution-session activity.
   Read-only and instant; nothing is sent to any session. Available only inside vlx-term-hosted sessions.
 argument-hint: "[<orch-id>|latest] [--wait] [--follow] [--timeout N] [--json]"
 allowed-tools: Bash(vstat:*)
@@ -15,11 +15,13 @@ allowed-tools: Bash(vstat:*)
 `vstat` prints which vlx-term sessions are working, asking, or waiting. The answer comes from the same
 authoritative status the sidebar displays, not from reading screens.
 
+For planning/execution task progress, use `vflow status <workflow-id>`: it includes task states, independent rounds and delivery receipts. `vstat` reports activity only; idle does not establish acceptance.
+
 ## Forms
 
 ```bash
 vstat                     # every session known to vlx-term
-vstat latest              # this session's most recent /vorch run
+vstat latest              # the most recent legacy orchestration from this session
 vstat <orch-id>           # one specific run
 vstat latest --wait       # block until something in that run changes, then print
 vstat latest --follow     # keep printing changes until every agent has stopped
@@ -34,7 +36,7 @@ the session has not reported yet, which usually means it is still starting.
 - **Plain `vstat` or `vstat latest`** answers "how is it going" right now. Use this from a conversation.
 - **`--wait`** is for scripts that want the next change without polling. It returns after one change or
   after `--timeout` seconds (default 60, at most 300).
-- **`--follow`** is what an orchestration's coordinator tab runs. Do not run it from a conversation: it
+- **`--follow`** remains available to historical orchestration coordinator tabs. Do not run it from a conversation: it
   holds the turn until every agent has stopped.
 
 ## Reading the result
@@ -48,5 +50,4 @@ the session has not reported yet, which usually means it is still starting.
 
 - Must run inside a **vlx-term-hosted session**: it relies on the injected `VLX_*` environment variables
   and `vstat` on PATH; if missing it reports "not inside a VelaTerm session" and exits.
-- `latest` and orchestration ids refer to runs proposed by this session with `/vorch`; other sessions'
-  runs are visible only through the plain, unfiltered listing.
+- `latest` and orchestration IDs refer to historical runs from the retired vorch command. New task-splitting workflows use `vflow status`; the unfiltered `vstat` listing still includes their active sessions.

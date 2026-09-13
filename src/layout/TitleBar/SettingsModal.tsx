@@ -1,3 +1,4 @@
+import { safeError } from "../../ipc/diagnosticSafety";
 //! Modal settings page replacing the narrow title-bar SettingsPopover. Category navigation appears
 //! on the left and content on the right; backdrop clicks or Escape close it. Settings persist through
 //! the store, with applyVisual writing `data-*` attributes to documentElement. The General category
@@ -5,6 +6,8 @@
 
 import { useEffect, useState } from "react";
 import { Backdrop } from "../../components/Backdrop";
+import { CompletionModeField } from "./CompletionModeField";
+import { FontSelect, useFontCatalog } from "./FontSelect";
 import Select, { type SelectOption } from "../../components/Select";
 import {
   getLangChoice,
@@ -35,6 +38,7 @@ import type {
 import { Field, Seg, SectionTitle } from "./settingsParts";
 import {
   AgentsPanel,
+  ReferenceContextPanel,
   GiteaIntegrationPanel,
   SHOW_GITEA_INTEGRATION,
   ShortcutsPanel,
@@ -53,28 +57,6 @@ const ACCENT_HEX: Record<string, string> = {
   violet: "#b08bff",
 };
 const ACCENTS: AccentChoice[] = ["auto", "green", "blue", "amber", "violet"];
-
-/** Preset monospace fonts; fontStack preserves a monospace fallback when a font is unavailable.
- * The Nerd Font and CJK entries at the end are the ones agent TUIs and Chinese terminals commonly need,
- * which otherwise had to be typed as a custom name on every machine. */
-const MONO_FONTS = [
-  "JetBrains Mono",
-  "SF Mono",
-  "Menlo",
-  "Monaco",
-  "Consolas",
-  "Cascadia Code",
-  "Fira Code",
-  "Source Code Pro",
-  "Hack",
-  "Ubuntu Mono",
-  "JetBrainsMono Nerd Font",
-  "CaskaydiaCove Nerd Font",
-  "FiraCode Nerd Font",
-  "Hack Nerd Font",
-  "Maple Mono NF CN",
-  "Sarasa Mono SC",
-];
 
 /** Shared style for the font-size stepper's minus/plus buttons. */
 const STEP_BTN: React.CSSProperties = {
@@ -158,138 +140,6 @@ function ShellSelect() {
         ariaLabel={t("settings.defaultShell")}
       />
     </Field>
-  );
-}
-
-/** Whether a font name actually resolves on this device.
- *
- * A mistyped name is otherwise silent: the stack falls back to the generic monospace family while the
- * settings row keeps showing the name as if it were in use. Measure a probe string in the candidate font
- * against two very different generic families; a font that renders identically to both is not resolving,
- * while a real font differs from at least one. Metric-compatible clones are the known blind spot, and
- * reporting those as available is the safe direction.
- */
-function isFontAvailable(name: string): boolean {
-  if (typeof document === "undefined") return true;
-  const ctx = document.createElement("canvas").getContext("2d");
-  if (!ctx) return true; // Without a 2D context there is nothing to measure, so never warn.
-  const probe = "mmmmmmmmmmlliWWMO0@1";
-  const measure = (family: string) => {
-    ctx.font = `72px ${family}`;
-    return ctx.measureText(probe).width;
-  };
-  const quoted = JSON.stringify(name);
-  return (["monospace", "serif"] as const).some(
-    (base) => measure(`${quoted}, ${base}`) !== measure(base),
-  );
-}
-
-/** Font picker with presets and a custom-name input. A null value uses the default monospace stack.
- * Like the other appearance dropdowns, it avoids native select rendering. */
-function FontSelect({
-  value,
-  onChange,
-  label,
-}: {
-  value: string | null;
-  onChange: (v: string | null) => void;
-  /** Field caption, reused as the control's accessible name. */
-  label: string;
-}) {
-  const t = useT();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const isPreset = value != null && MONO_FONTS.includes(value);
-  const [missing, setMissing] = useState(false);
-  useEffect(() => {
-    if (value == null) {
-      setMissing(false);
-      return;
-    }
-    let alive = true;
-    const check = () => {
-      if (alive) setMissing(!isFontAvailable(value));
-    };
-    check();
-    // A web font still loading would measure as missing on the first pass.
-    void document.fonts?.ready.then(check).catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [value]);
-
-  if (editing) {
-    return (
-      <input
-        autoFocus
-        value={draft}
-        placeholder="Fira Code"
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          // In edit mode Escape exits editing only; stop propagation so it does not close the modal.
-          if (e.key === "Enter") {
-            onChange(draft.trim() || null);
-            setEditing(false);
-          } else if (e.key === "Escape") {
-            e.stopPropagation();
-            setEditing(false);
-          }
-        }}
-        onBlur={() => {
-          onChange(draft.trim() || null);
-          setEditing(false);
-        }}
-        style={{
-          width: 160,
-          height: 26,
-          padding: "0 8px",
-          background: "var(--bg-active)",
-          color: "var(--text)",
-          border: "1px solid var(--accent)",
-          borderRadius: 6,
-          fontSize: 11.5,
-          fontFamily: "inherit",
-          outline: "none",
-        }}
-      />
-    );
-  }
-
-  // Sentinel for the row that opens the free-text editor. A NUL prefix cannot collide with a font name.
-  const CUSTOM = "\u0000custom";
-  const options = [
-    { value: "", label: t("settings.fontDefault") },
-    ...MONO_FONTS.map((f) => ({ value: f, label: f })),
-    // A typed-in name keeps its own row, so picking a preset and coming back does not mean retyping it.
-    ...(value != null && !isPreset ? [{ value, label: value }] : []),
-    { value: CUSTOM, label: t("settings.fontCustom"), separatorBefore: true },
-  ];
-
-  return (
-    <div>
-      <Select
-        value={value ?? ""}
-        onChange={(v) => {
-          if (v === CUSTOM) {
-            setDraft(value && !isPreset ? value : "");
-            setEditing(true);
-            return;
-          }
-          onChange(v || null);
-        }}
-        options={options}
-        size="sm"
-        width={160}
-        menuWidth={172}
-        align="right"
-        ariaLabel={label}
-      />
-      {missing && (
-        <div style={{ marginTop: 4, width: 160, fontSize: 10.5, color: "var(--amber, #f5b14c)" }}>
-          {t("settings.fontUnavailable")}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -400,6 +250,7 @@ function AccentPicker({
 type Cat = "appearance" | "terminal" | "conversation" | "behavior" | "advanced" | "agents" | "shortcuts" | "general";
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
+  const fonts = useFontCatalog();
   const t = useT();
   const accent = useTermStore((s) => s.accent);
   const density = useTermStore((s) => s.density);
@@ -412,8 +263,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setDividerStyle = useTermStore((s) => s.setDividerStyle);
   const setNavLayout = useTermStore((s) => s.setNavLayout);
   const singleTabMode = useTermStore((s) => s.singleTabMode);
-  const defaultSessionEngine = useTermStore((s) => s.defaultSessionEngine);
-  const setDefaultSessionEngine = useTermStore((s) => s.setDefaultSessionEngine);
   const setSingleTabMode = useTermStore((s) => s.setSingleTabMode);
   const spawnConfirm = useTermStore((s) => s.spawnConfirm);
   const setSpawnConfirm = useTermStore((s) => s.setSpawnConfirm);
@@ -637,7 +486,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   />
                 </Field>
                 <Field label={t("settings.uiFont")}>
-                  <FontSelect value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} />
+                  <FontSelect fonts={fonts} value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} />
                 </Field>
                 <Field label={t("settings.uiFontSize")}>
                   <FontSizeStepper
@@ -657,9 +506,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <>
                 <SectionTitle>{t("settings.catTerminal")}</SectionTitle>
                 <ImagePasteModeField />
+                <CompletionModeField />
                 <ShellSelect />
                 <Field label={t("settings.termFont")}>
-                  <FontSelect value={termFontFamily} onChange={setTermFontFamily} label={t("settings.termFont")} />
+                  <FontSelect fonts={fonts} value={termFontFamily} onChange={setTermFontFamily} label={t("settings.termFont")} />
                 </Field>
                 <Field label={t("settings.termFontSize")}>
                   <FontSizeStepper
@@ -686,7 +536,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   {t("settings.chatTypographyHint")}
                 </p>
                 <Field label={t("settings.chatFont")}>
-                  <FontSelect value={chatFontFamily} onChange={setChatFontFamily} label={t("settings.chatFont")} />
+                  <FontSelect fonts={fonts} value={chatFontFamily} onChange={setChatFontFamily} label={t("settings.chatFont")} />
                 </Field>
                 <Field label={t("settings.chatFontSize")}>
                   <FontSizeStepper value={chatFontSize} label={t("settings.chatFontSize")}
@@ -709,7 +559,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     value={termRenderer}
                     options={[
                       ["dom", "DOM"],
-                      ["canvas", "Canvas"],
                       ["webgl", "WebGL"],
                     ]}
                     onChange={setTermRenderer}
@@ -759,101 +608,81 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
 
             {cat === "behavior" && (
-              <>
-                <SectionTitle>{t("settings.catBehavior")}</SectionTitle>
-                <Field label={t("settings.tabs")}>
-                  <Seg<"single" | "multi">
-                    value={singleTabMode ? "single" : "multi"}
-                    options={[
-                      ["single", t("settings.tabSingle")],
-                      ["multi", t("settings.tabMulti")],
-                    ]}
-                    onChange={(v) => setSingleTabMode(v === "single")}
-                  />
-                </Field>
-                {/* Which of the two views a new agent session opens in, which is the same thing as which
-                    engine drives it. An existing session keeps what it was created with. */}
-                <Field label={t("settings.defaultSessionEngine")}>
-                  <Seg<"chat" | "tui">
-                    value={defaultSessionEngine}
-                    options={[
-                      ["chat", `${t("session.showConversation")} · ${t("common.experimental")}`],
-                      ["tui", t("session.showTerminal")],
-                    ]}
-                    onChange={(v) => setDefaultSessionEngine(v)}
-                  />
-                </Field>
-                <div
-                  style={{
-                    marginTop: -2,
-                    marginBottom: 10,
-                    fontSize: 11,
-                    lineHeight: 1.5,
-                    color: "var(--text-dim)",
-                  }}
-                >
-                  {t("settings.defaultSessionEngineHint")}
+              <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                <div>
+                  <SectionTitle>{t("settings.catBehavior")}</SectionTitle>
+                  <Field label={t("settings.tabs")}>
+                    <Seg<"single" | "multi">
+                      value={singleTabMode ? "single" : "multi"}
+                      options={[
+                        ["single", t("settings.tabSingle")],
+                        ["multi", t("settings.tabMulti")],
+                      ]}
+                      onChange={(v) => setSingleTabMode(v === "single")}
+                    />
+                  </Field>
+                  <Field label={t("settings.dynamicStatusFilter")}>
+                    <Seg<"on" | "off">
+                      value={dynamicStatusFilter ? "on" : "off"}
+                      options={[
+                        ["on", t("common.on")],
+                        ["off", t("common.off")],
+                      ]}
+                      onChange={(v) => setDynamicStatusFilter(v === "on")}
+                    />
+                  </Field>
+                  {singleTabMode && (
+                    <Field label={t("settings.maxLiveTabs")}>
+                      <Seg<string>
+                        value={String(maxLiveTabs)}
+                        options={[
+                          ["8", "8"],
+                          ["16", "16"],
+                          ["32", "32"],
+                          ["64", "64"],
+                        ]}
+                        onChange={(v) => setMaxLiveTabs(Number(v))}
+                      />
+                    </Field>
+                  )}
+                  <Field label={t("settings.spawnConfirm")}>
+                    <Seg<"on" | "off">
+                      value={spawnConfirm ? "on" : "off"}
+                      options={[
+                        ["on", t("common.on")],
+                        ["off", t("common.off")],
+                      ]}
+                      onChange={(v) => setSpawnConfirm(v === "on")}
+                    />
+                  </Field>
+                  <Field label={t("settings.usageAuto")}>
+                    <Seg<"on" | "off">
+                      value={usageAutoRefresh ? "on" : "off"}
+                      options={[
+                        ["on", t("common.on")],
+                        ["off", t("common.off")],
+                      ]}
+                      onChange={(v) => setUsageAutoRefresh(v === "on")}
+                    />
+                  </Field>
+                  {usageAutoRefresh && (
+                    <Field label={t("settings.usageRefresh")}>
+                      <Seg<string>
+                        value={String(usageRefreshSec)}
+                        options={[
+                          ["30", "30s"],
+                          ["60", "1m"],
+                          ["120", "2m"],
+                          ["300", "5m"],
+                        ]}
+                        onChange={(v) => setUsageRefreshSec(Number(v))}
+                      />
+                    </Field>
+                  )}
+                  <CleanImagesField />
                 </div>
-                <Field label={t("settings.dynamicStatusFilter")}>
-                  <Seg<"on" | "off">
-                    value={dynamicStatusFilter ? "on" : "off"}
-                    options={[
-                      ["on", t("common.on")],
-                      ["off", t("common.off")],
-                    ]}
-                    onChange={(v) => setDynamicStatusFilter(v === "on")}
-                  />
-                </Field>
-                {singleTabMode && (
-                  <Field label={t("settings.maxLiveTabs")}>
-                    <Seg<string>
-                      value={String(maxLiveTabs)}
-                      options={[
-                        ["8", "8"],
-                        ["16", "16"],
-                        ["32", "32"],
-                        ["64", "64"],
-                      ]}
-                      onChange={(v) => setMaxLiveTabs(Number(v))}
-                    />
-                  </Field>
-                )}
-                <Field label={t("settings.spawnConfirm")}>
-                  <Seg<"on" | "off">
-                    value={spawnConfirm ? "on" : "off"}
-                    options={[
-                      ["on", t("common.on")],
-                      ["off", t("common.off")],
-                    ]}
-                    onChange={(v) => setSpawnConfirm(v === "on")}
-                  />
-                </Field>
-                <Field label={t("settings.usageAuto")}>
-                  <Seg<"on" | "off">
-                    value={usageAutoRefresh ? "on" : "off"}
-                    options={[
-                      ["on", t("common.on")],
-                      ["off", t("common.off")],
-                    ]}
-                    onChange={(v) => setUsageAutoRefresh(v === "on")}
-                  />
-                </Field>
-                {usageAutoRefresh && (
-                  <Field label={t("settings.usageRefresh")}>
-                    <Seg<string>
-                      value={String(usageRefreshSec)}
-                      options={[
-                        ["30", "30s"],
-                        ["60", "1m"],
-                        ["120", "2m"],
-                        ["300", "5m"],
-                      ]}
-                      onChange={(v) => setUsageRefreshSec(Number(v))}
-                    />
-                  </Field>
-                )}
-                <CleanImagesField />
-              </>
+                <ReferenceContextPanel />
+              </div>
             )}
 
             {cat === "agents" && <AgentsPanel />}
@@ -973,7 +802,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                             await installSpawnSkills();
                             setSkillOn(true);
                           } catch (e) {
-                            console.error("vlx skill failed:", e);
+                            console.error("vlx skill failed:", safeError(e));
                           }
                         }}
                       >

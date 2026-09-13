@@ -417,6 +417,9 @@ impl OutputCoalescer {
 ///
 /// PtyManager::spawn starts a detached reader that continuously reads the master and fans out through `stream`.
 pub struct PtySession {
+    /// Session configuration captured at launch, not a claim about later native permission changes.
+    pub launch_permission_mode: Option<String>,
+    pub completion: Arc<Mutex<super::completion::State>>,
     /// Reader completion and child reaping, both required before another engine takes over.
     pub terminated: Arc<(Mutex<u8>, std::sync::Condvar)>,
     #[allow(dead_code)]

@@ -83,3 +83,22 @@ With an agent session open, the right panel's Info tab shows its runtime details
 - **Live theme following**: switching light/dark re-skins running claude sessions instantly, no restart.
 - **Vela Skills**: the "Vela Skills" toggle in Settings ▸ General installs `vspawn`, `vspawn-tree`, and `vopen` for both Claude and Codex, letting either agent spawn sub-sessions and open documents from inside a conversation (see [Session Spawning & Git Collaboration](session-spawning-and-git_20260709_2041.md)).
 - **Windows**: claude / codex fully supported (via PowerShell); the other types are best-effort.
+
+
+## 10. Sign in and out from a Claude or Codex conversation
+
+Open **Claude account** or **Codex account** in the composer controls to access **Sign in again** and **Sign out**, even when no authentication error has occurred. The menu closes when you click outside it or press Escape. Account actions remain hidden until needed; only unresolved authentication or an operation in progress appears below the conversation. After sign-in succeeds or is canceled, that panel closes automatically. Wait for the current turn to finish before changing accounts. Claude also requires any background tasks and permission requests to finish. Read-only conversation views do not expose account controls.
+
+A sign-in prompt appears when a Codex request reports an authentication error, such as a revoked refresh token, `unauthorized`, or a requirement to sign in. The prompt does not open the browser automatically. Select **Sign in again**, open the authorization link, and enter the displayed device code. The conversation shows the result automatically, and you can send another message after sign-in succeeds. The existing conversation and its native thread ID are retained.
+
+The device code remains available when you switch panes or reload the page while the backend and Codex process are running. **Cancel** stops the pending login; an unsuccessful attempt can be retried.
+
+**Sign out** asks for confirmation before clearing the shared Codex account credentials on the connected host. This affects other sessions that use the same credential store; conversation history is kept. After Codex confirms sign-out, the view offers **Sign in**. If the result cannot be confirmed, the view reports that outcome and allows a retry. Signing out pauses automatic delivery of queued messages.
+
+This uses [Codex-managed device code authentication](https://learn.chatgpt.com/docs/app-server). Enable device code login in your [ChatGPT security settings or workspace permissions](https://learn.chatgpt.com/docs/auth), and use a Codex CLI version that supports it. Authentication changes apply to the Codex credential store on the connected host, including other sessions that share that store. VelaTerm displays the temporary device code; Codex manages the account credentials.
+
+For Claude, **Sign in again** opens a sign-in prompt with an authorization link. Open that link, sign in on the official page, and paste the full authorization code, including the part after `#`, into **Authorization code**. Select **Submit code** to finish. The backend checks that the code belongs to the current attempt; the code is never sent as a chat message or retained in the conversation. Pending authorization remains available across page reloads while the backend and Claude process are running. **Cancel** waits for the native flow to end before closing the prompt; cancellation is unavailable while Claude verifies a submitted code.
+
+Claude manages OAuth and credential storage through its native control protocol. Its temporary callback listener uses an automatically assigned port on the connected host's loopback address. The manual authorization link and code submission work when the browser is on another device. The CLI must support `claude_authenticate`, `claude_oauth_callback`, and `claude_oauth_wait_for_completion`; an unsupported CLI or an unsuccessful attempt produces a retryable sign-in error.
+
+For Claude, confirmed **Sign out** runs `claude auth logout` with the session's executable, working directory and configuration-source arguments. The current idle process is then released to discard cached credentials. The next operation resumes the native conversation and restores the visible history and queued messages. Sign-out clears the saved account credentials; configured API keys and other authentication methods are unchanged. Other running sessions can retain cached credentials until they restart.

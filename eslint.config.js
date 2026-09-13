@@ -57,6 +57,10 @@ export default [
       "src-tauri/**",
       "electron-poc/**",
       ".vlx-worktrees/**",
+      // The Capacitor mobile app is a separate sub-project under apps/mobile with its own
+      // TypeScript/Vite pipeline. Its generated iOS and Android trees contain a vendored
+      // native-bridge.js whose inline disable directives reference rules not configured here.
+      "apps/**",
     ],
   },
   {

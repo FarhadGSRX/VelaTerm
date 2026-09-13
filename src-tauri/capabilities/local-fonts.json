@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-fonts",
+  "description": "Local font enumeration for bundled application windows",
+  "windows": ["main", "account-remote-*"],
+  "permissions": ["local-fonts:allow-catalog"]
+}

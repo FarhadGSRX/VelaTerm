@@ -9,6 +9,8 @@ import Icons from "../../components/Icons";
 import { useT } from "../../i18n";
 import { IS_PLAIN_BROWSER } from "../../hooks/shortcutRegistry";
 import { isMac } from "../../ipc/transport";
+import { isShareSurface } from "../../ipc/shareBase";
+import { remoteText } from "../../sharing/remoteApi";
 import { useTermStore } from "../../store/termStore";
 import { projectRoot } from "../../types";
 import {
@@ -193,7 +195,7 @@ export function CenterPane() {
                 <Icons.terminal size={34} />
               </div>
               <div>{t("center.noSession")}</div>
-              <div style={{ color: "var(--text-faint)" }}>
+              {isShareSurface ? <div style={{color:"var(--text-faint)"}}>{remoteText("remote.select")}</div> : <><div style={{ color: "var(--text-faint)" }}>
                 {t("center.noSessionHintPre")}
                 <kbd>{isMac && !IS_PLAIN_BROWSER ? "⌘T" : "Ctrl Alt T"}</kbd>
                 {t("center.noSessionHintPost")}
@@ -202,6 +204,7 @@ export function CenterPane() {
                 <Icons.terminal size={14} />
                 {t("center.createTerminal")}
               </button>
+              </>}
             </div>
           </div>
         )}
@@ -224,6 +227,7 @@ export function CenterPane() {
                 area={info ? rectToStyle(info.rect) : FULL}
                 hidden={!visible}
                 onActivate={info ? () => handleActivate(info.paneId, id) : undefined}
+                onClose={info ? () => handleClose(info.paneId, id) : undefined}
               />
             );
           }

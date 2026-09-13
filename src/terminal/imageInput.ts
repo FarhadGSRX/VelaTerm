@@ -1,3 +1,4 @@
+import { safeError } from "../ipc/diagnosticSafety";
 //! Feed pasted or dropped terminal images to an agent by uploading temporary files and writing their
 //! paths into terminal input. Claude reads the path directly; Codex receives an `image_path:` prefix
 //! so it remains visible instead of collapsing a lone path into `[Image #N]`.
@@ -149,7 +150,7 @@ export async function injectImageFiles(
       await ptyWrite(sessionId, input);
       result.ok += 1;
     } catch (e) {
-      console.error("image paste/drop failed", e);
+      console.error("image paste/drop failed", safeError(e));
       result.fail += 1;
       result.lastError = e instanceof Error ? e.message : String(e);
     }

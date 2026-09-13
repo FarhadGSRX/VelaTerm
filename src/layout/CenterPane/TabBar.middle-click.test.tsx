@@ -30,7 +30,7 @@ const storeState = vi.hoisted(() => ({
   openBrowserTab: vi.fn(),
 }));
 
-vi.mock("../../i18n", () => ({ useT: () => (key: string) => key }));
+vi.mock("../../i18n", () => ({ useT: () => (key: string) => key, getLocale: () => "en" }));
 vi.mock("../../store/termStore", () => {
   const useTermStore = Object.assign(
     (selector: (state: typeof storeState) => unknown) => selector(storeState),

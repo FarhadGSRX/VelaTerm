@@ -9,10 +9,11 @@
 //! which is both honest and safe.
 
 import { marked, type Token, type Tokens } from "marked";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import { highlight } from "../../RightPanel/highlight";
 import { SessionLink } from "./links";
+import { CodeBlockHeader } from "./CodeBlockHeader";
 import {
   codeBlockCopyAttributes,
   copyAttributes,
@@ -25,7 +26,7 @@ import {
 const PARSE_LIMIT = 200_000;
 
 /** Render a Markdown string as React nodes. */
-export function Markdown({ text }: { text: string }): ReactNode {
+export const Markdown = memo(function Markdown({ text }: { text: string }): ReactNode {
   if (text.length > PARSE_LIMIT) {
     return (
       <div className="sv-p" {...copyAttributes.p}>
@@ -45,7 +46,7 @@ export function Markdown({ text }: { text: string }): ReactNode {
     );
   }
   return <>{blocks(tokens)}</>;
-}
+});
 
 /** Render a list of block-level tokens. */
 function blocks(tokens: Token[]): ReactNode[] {
@@ -159,11 +160,7 @@ function Block({ token }: { token: Token }): ReactNode {
 function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
   return (
     <div className="sv-code" {...codeBlockCopyAttributes(lang)}>
-      {lang ? (
-        <div className="sv-code-lang" {...copyAttributes.ignore}>
-          {lang}
-        </div>
-      ) : null}
+      <CodeBlockHeader code={code} lang={lang} />
       <pre {...copyAttributes.code}>{highlight(code)}</pre>
     </div>
   );

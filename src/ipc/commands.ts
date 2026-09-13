@@ -205,6 +205,7 @@ export function readRecording(
 
 /** One agent conversation message for archive reading, with adjacent roles merged by the backend. */
 export interface TranscriptMessage {
+  origin?: import("./chat").MessageOrigin;
   role: "user" | "assistant";
   text: string;
   /** Possibly empty ISO timestamp. */
@@ -340,17 +341,26 @@ export function agentContextInfo(sessionId: string): Promise<AgentContextInfo> {
   return invoke<AgentContextInfo>("agent_context_info", { sessionId });
 }
 
-/** Claude current-turn generated output, tool calls, and changed files after the final user message. */
+/** Backend-owned statistics for the latest root turn and its recorded session. Missing data is null. */
 export interface AgentTurnStats {
-  /** Total output tokens generated this turn. */
-  tokens: number;
-  /** Tool-call count this turn. */
-  toolsUsed: number;
-  /** Distinct files changed this turn. */
-  filesTouched: number;
+  /** Model the latest context reading came from, as the provider reports it. */
+  model: string | null;
+  /** Generated output, including reported reasoning. */
+  tokens: number | null;
+  inputTokens: number | null;
+  totalTokens: number | null;
+  cachedTokens: number | null;
+  cacheHitPercent: number | null;
+  sessionTokens: number | null;
+  toolsUsed: number | null;
+  filesTouched: number | null;
+  contextTokens: number | null;
+  contextLimit: number | null;
+  contextPercent: number | null;
+  generationTokensPerSecond: number | null;
 }
 
-/** Queries current-turn stats, rejecting non-Claude, uncaptured, or deleted transcripts. */
+/** Queries provider usage and activity. Unsupported metrics are null; unreadable recordings reject. */
 export function agentTurnStats(sessionId: string): Promise<AgentTurnStats> {
   return invoke<AgentTurnStats>("agent_turn_stats", { sessionId });
 }
@@ -399,6 +409,8 @@ export interface CodexRateWindow {
 
 /** Codex account rate-limit snapshot from live app-server or local rollout fallback. */
 export interface CodexUsage {
+  /** Undefined/null means the service did not supply an authoritative count. */
+  resetCredits?: number | null;
   primary: CodexRateWindow | null;
   secondary: CodexRateWindow | null;
   /** Optional plan type such as free/plus/pro. */
@@ -480,20 +492,6 @@ export function createWorktree(
   name: string,
 ): Promise<WorktreeInfo> {
   return invoke<WorktreeInfo>("create_worktree", { repoRoot, name });
-}
-
-/**
- * Report which session an orchestration's agent became, or that the user dropped it.
- *
- * Until this call the backend only knows what was proposed: the frontend creates sessions, so nothing
- * else ties a new session back to the request that asked for it.
- */
-export function orchAttachSession(
-  orchId: string,
-  idx: number,
-  sessionId: string | null,
-): Promise<void> {
-  return invoke<void>("orch_attach_session", { orchId, idx, sessionId });
 }
 
 /**
@@ -793,4 +791,10 @@ export function cleanPastedImages(): Promise<{ removed: number; freedBytes: numb
  */
 export function getBackendVersion(): Promise<string> {
   return invoke<string>("app_version");
+}
+
+export type CodexResetOutcome = "reset" | "alreadyRedeemed" | "nothingToReset" | "noCredit";
+
+export function codexResetCreditConsume(idempotencyKey: string): Promise<{ outcome: CodexResetOutcome; usage: UsageSnapshot }> {
+  return invoke("codex_reset_credit_consume", { idempotencyKey });
 }

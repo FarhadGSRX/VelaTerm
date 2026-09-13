@@ -2,11 +2,11 @@
 name: vspawn
 description: >-
   Explicitly spawn a standalone child session under the current vlx-term session, passing the task in as its
-  first message (mirrors spawn_task). **Runs in the current directory by default, without a git worktree**
+  first message (mirrors spawn_task). With --plan-execute, create a separate planner/reviewer and persistent execution sessions; --split-tasks enables user-confirmed task decomposition. **Runs in the current directory by default, without a git worktree**
   (use vspawn-tree for a worktree). Only use when the user explicitly invokes /vspawn or $vspawn; never auto-trigger.
   This is a real session run by its own process in the vlx-term left-panel tree — not an in-process sub-agent,
   and not a background Task. Available only inside vlx-term-hosted sessions.
-argument-hint: "[--worktree] [--cwd <path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] <task>"
+argument-hint: "[--plan-execute] [--split-tasks] [--plan-agent <agent>] [--plan-model <model>] [--plan-effort <level>] [--exec-agent <agent>] [--exec-model <model>] [--exec-effort <level>] [--worktree-mode <none|shared|each>] [--worktree] [--cwd <path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] <task>"
 disable-model-invocation: true
 allowed-tools: Bash(vspawn:*)
 ---
@@ -26,6 +26,43 @@ task, use `/vspawn-tree`, or add `--worktree` to this command).
 User input:
 
 $ARGUMENTS
+
+## Planning and execution mode
+
+When the user requests this workflow or supplies `--plan-execute`, keep the
+current session as the initiator. Pass the expanded task to `vspawn --plan-execute`; VelaTerm creates a new
+planner/reviewer, which later dispatches work to its own persistent executor. Add `--split-tasks` when the user requests automatic decomposition into multiple tasks. The new planner then proposes the split for a separate user review; do not split or execute the task in the initiating conversation. Do not perform the planning
+or execution here, and do not use in-process subagents.
+
+For a skill invocation that uses both `--plan-execute` and `--split-tasks`, **automatically add `--yes`**
+unless the user explicitly requests the initial configuration dialog. This skips launch configuration and
+keeps only the final task-proposal review; the user does not need to supply `--yes` themselves. Never approve
+the proposal on the user's behalf. Without task splitting, keep the ordinary confirmation rules below.
+
+Each role has independent `--plan-agent`, `--plan-model`, `--plan-effort` and `--exec-agent`, `--exec-model`,
+`--exec-effort` parameters. Pass only explicit user selections; the backend resolves omitted choices using
+the initiating session and supported defaults. With split-task skill invocation, the planner starts with
+those settings, and the final review lets the user edit each executor's settings. It does not reconfigure
+the already-started planner. Both launch dialogs also offer automatic task splitting. Do not guess a
+different model. Only agents supported by the backend chat engine can run this workflow. Agent changes
+reset that role's model and effort draft in the dialogs. Ordinary
+`--model`, `--effort` and agent flags serve as planner defaults when role-specific flags are absent.
+
+Keep the cwd rules below. Map an explicit directory choice to `--worktree-mode none` (all roles in the
+current directory), `--worktree-mode shared` (one new worktree shared by the planner and all executors), or
+`--worktree-mode each` (one worktree for the planner and a separate worktree for each executor). This option
+requires `--plan-execute` and overrides the legacy `--worktree` flag. Without an explicit mode, `--worktree`
+means shared; otherwise all workflow sessions use the requested directory. A displayed launch dialog can
+change the mode; the final task review retains it. The selected mode is saved for
+both single-task and split-task execution and is retained through retries and correction rounds.
+Include existing user modifications and the required delivery location in the task. The planner may edit
+its plan and audit documents; only the executor edits implementation files.
+
+The backend supplies both roles with [the workflow protocol](references/plan-execute.md). Read it when
+explaining or diagnosing dispatch, result delivery, correction rounds, cancellation or recovery. In split mode, the user edits and confirms task prompts and execution settings before any executor starts; `--yes` skips only the initial launch confirmation. Each task reports to the same planner with its own workflow ID and round. Workflow
+messages use `vflow` actions and `vtell --report`; they appear with their sender identity in the destination chat. A successful
+`vspawn` invocation records a launch request; it does not prove the user confirmed it or the workflow passed.
+Report that the request was submitted and leave this session free. Do not poll after submitting.
 
 ## Step 1: Expand the user input into a "self-contained" rich prompt (critical)
 
@@ -53,17 +90,17 @@ flag, and **do not** write that instruction into the prompt:
   to the command.
 - Specifying claude / codex, or a leading `--claude` / `--codex` → add the matching flag.
 - "no dialog / don't ask me / just start it / start it straight away," or a leading `--yes` (`-y`) → add `--yes`.
-  The child session then starts immediately with the default settings, with no confirmation card to click.
+  This skips the initial launch card, never the split-task proposal review. Split-task skill invocations
+  add it automatically as described above.
 - Naming a model ("run it on opus / sonnet / gpt-5.5"), or a leading `--model` → add `--model <name>`. Pass the
   name through as the user wrote it; model names belong to the agent that will run, and vlx-term turns it into
   that agent's own model flag.
 - Naming a reasoning effort ("think harder / low effort / high effort"), or a leading `--effort` → add
-  `--effort <level>`. Levels are typically `low`, `medium`, `high`, `xhigh`, `max`; agents whose CLI has no
-  effort setting ignore it.
+  `--effort <level>`. Levels are typically `low`, `medium`, `high`, `xhigh`, `max`; explicit effort selections are rejected if the agent does not expose that setting.
 
 Defaults: **no** worktree (run in the current directory), **follow** the current session type, **inherit** the
 current session's model and effort, and **show** the confirmation card when the user has "Confirm before spawn"
-turned on.
+turned on, except for the split-task skill rule above.
 
 ## Step 3: Run the command
 
@@ -79,7 +116,13 @@ Pass the prompt you expanded in Step 1 **as a single argument** (escaping any qu
 vspawn [--worktree] [--cwd <absolute-path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] "<expanded self-contained prompt>"
 ```
 
-After it succeeds, give the user a one-line summary: "Spawned a child session in vlx-term: <brief task summary>".
+For a split-task skill invocation, use this form, adding only the user's explicit role and directory choices:
+
+```bash
+vspawn --plan-execute --split-tasks --yes [--worktree-mode <none|shared|each>] [--cwd <absolute-path>] [--plan-agent <agent>] [--exec-agent <agent>] "<expanded self-contained prompt>"
+```
+
+After it succeeds, give a one-line summary that the launch request was submitted, including the task and whether it uses planning and execution mode. A submitted request may still be awaiting confirmation.
 
 ## Notes
 

@@ -1,8 +1,10 @@
+import { safeError } from "../ipc/diagnosticSafety";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { t } from "../i18n";
 
 interface Props {
   children: ReactNode;
+  fallback?: (error: Error, retry: () => void) => ReactNode;
 }
 
 interface State {
@@ -16,17 +18,19 @@ export class ErrorBoundary extends Component<Props, State> {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("[VelaTerm] React render crash:", error, info.componentStack);
+  componentDidCatch(error: Error, _info: ErrorInfo) {
+    console.error("[VelaTerm] React render crash:", safeError(error));
   }
 
   render() {
     if (!this.state.error) return this.props.children;
+    if (this.props.fallback) return this.props.fallback(this.state.error, () => this.setState({ error: null }));
     return <CrashScreen error={this.state.error} />;
   }
 }
 
 function CrashScreen({ error }: { error: Error }) {
+  const native = (window as { __VELATERM_CONNECTION_MENU__?: boolean }).__VELATERM_CONNECTION_MENU__;
   return (
     <div style={containerStyle}>
       <div style={cardStyle}>
@@ -46,6 +50,7 @@ function CrashScreen({ error }: { error: Error }) {
         <button onClick={() => location.reload()} style={btnStyle}>
           {t("err.reload")}
         </button>
+        {(native || (window.innerWidth < 768 && history.length > 1)) && <button onClick={() => native ? location.assign("velaterm-ui://close") : history.back()} style={{...btnStyle, marginLeft: 12, minHeight: 44}}>{t("mobile.back")}</button>}
       </div>
     </div>
   );

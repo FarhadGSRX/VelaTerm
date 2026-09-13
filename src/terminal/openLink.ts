@@ -1,3 +1,4 @@
+import { safeError } from "../ipc/diagnosticSafety";
 //! Shared terminal link handler for OSC 8 hyperlinks and bare URLs detected by WebLinksAddon.
 //!
 //! Why xterm's default handling cannot be used:
@@ -24,7 +25,7 @@ import { platform } from "../platform";
  */
 export function openTerminalLink(uri: string): void {
   void platform.opener.openExternal(uri).catch((err: unknown) => {
-    console.warn("[terminal] failed to open link", uri, err);
+    console.warn("[terminal] failed to open link", safeError(err));
   });
 }
 

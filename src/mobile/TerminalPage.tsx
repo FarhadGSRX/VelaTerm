@@ -1,3 +1,4 @@
+import { ConnectionMenuEntry } from "./ConnectionMenuEntry";
 //! Second-level screen: a full-screen session with header, MobileTerminal, and KeyBar.
 //!
 //! Pin the container to `visualViewport.height`. The iOS keyboard overlays rather than shrinking
@@ -8,13 +9,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { StatusIndicator } from "../components/StatusIndicator";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { t, useT } from "../i18n";
 import { onPtyExit, onPtyKilled } from "../ipc/events";
 import { useTermStore } from "../store/termStore";
 import { injectImageFiles } from "../terminal/imageInput";
-import { effectiveStatus, type Session } from "../types";
-import { KeyBar } from "./KeyBar";
-import { MobileTerminal } from "./MobileTerminal";
+import { effectiveStatus, supportsChatEngine, type Session } from "../types";
+import { MobileSessionBody } from "./MobileSessionBody";
 
 export function TerminalPage({
   session,
@@ -51,6 +52,7 @@ export function TerminalPage({
   // Return to the session list when the process exits or another client terminates it. usePtySession
   // also invokes closeSession, but mobile has no tab or split state to close, so navigation is handled here.
   useEffect(() => {
+    if (session.engine === "chat" || supportsChatEngine(session.kind)) return;
     let disposed = false;
     const u1 = onPtyExit(session.id, () => {
       if (!disposed) onBack();
@@ -64,7 +66,7 @@ export function TerminalPage({
       void u2.then((fn) => fn());
     };
     // MobileApp stabilizes onBack with useCallback; resubscribe only when the session ID changes.
-  }, [session.id, onBack]);
+  }, [session.id, session.engine, onBack]);
 
   // Shared image-injection path for terminal paste/drop and KeyBar: upload through the
   // `save_pasted_image` WS invocation, write the server path to the terminal, and show failures for five seconds.
@@ -99,15 +101,20 @@ export function TerminalPage({
         </span>
         <span className="m-title">{session.name}</span>
         <span className="m-kind">{session.kind}</span>
+        {(window as Window & { __VELATERM_CONNECTION_MENU__?: boolean }).__VELATERM_CONNECTION_MENU__ && <details className="m-menu">
+          <summary aria-label={tr("mobile.more")}>•••</summary>
+          <div className="m-menu-items"><ConnectionMenuEntry /></div>
+        </details>}
       </header>
-      <MobileTerminal
-        key={session.id}
-        session={session}
-        cwd={cwd}
-        onImages={injectImages}
-        imgError={imgError}
-      />
-      <KeyBar sessionId={session.id} onImages={injectImages} />
+      <div className="m-session-content">
+        <ErrorBoundary key={session.id} fallback={(error, retry) => <div className="m-load-error" role="alert">
+          <p>{tr("err.renderTitle")}</p><p>{error.message}</p>
+          <button type="button" onClick={retry}>{tr("common.retry")}</button>
+        </div>}>
+          <MobileSessionBody session={session} cwd={cwd} onBack={onBack}
+            onImages={injectImages} imgError={imgError} />
+        </ErrorBoundary>
+      </div>
     </div>
   );
 }

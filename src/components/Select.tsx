@@ -11,6 +11,7 @@
 //! are not this component's job.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Icons from "./Icons";
 
 export type SelectOption<T extends string> = {
@@ -69,6 +70,52 @@ export function selectRowStyle(
   };
 }
 
+/** Anchors a portaled popup to its trigger and keeps it inside the viewport, flipping above when the
+ * space below is tighter. Shared by `Select` and `Combo`, whose panels must sit in the same place. */
+export function useMenuPosition(
+  anchorRef: React.RefObject<HTMLElement | null>,
+  listRef: React.RefObject<HTMLElement | null>,
+  open: boolean,
+  enabled: boolean,
+  menuWidth?: number | string,
+  align: "left" | "right" = "left",
+): React.CSSProperties {
+  const [menuPosition, setMenuPosition] = useState<React.CSSProperties>({});
+  useLayoutEffect(() => {
+    if (!open || !enabled) return;
+    const position = () => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const popupWidth = Math.min(typeof menuWidth === "number" ? menuWidth : rect.width, window.innerWidth - 16);
+      const below = window.innerHeight - rect.bottom - 8;
+      const above = rect.top - 8;
+      const upwards = below < 260 && above > below;
+      setMenuPosition({
+        position: "fixed",
+        right: undefined,
+        left: Math.max(8, Math.min(align === "right" ? rect.right - popupWidth : rect.left, window.innerWidth - popupWidth - 8)),
+        top: upwards ? undefined : rect.bottom + 4,
+        bottom: upwards ? window.innerHeight - rect.top + 4 : undefined,
+        width: popupWidth,
+        maxHeight: Math.max(0, Math.min(260, (upwards ? above : below) - 4)),
+        minWidth: 0,
+        overscrollBehavior: "contain",
+      });
+    };
+    const onScroll = (event: Event) => {
+      if (event.target !== listRef.current) position();
+    };
+    position();
+    window.addEventListener("resize", position);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", position);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [anchorRef, listRef, open, enabled, menuWidth, align]);
+  return menuPosition;
+}
+
 export default function Select<T extends string>({
   value,
   onChange,
@@ -83,6 +130,7 @@ export default function Select<T extends string>({
   title,
   ariaLabel,
   leading,
+  menuPortal = false,
 }: {
   value: T;
   onChange: (v: T) => void;
@@ -103,6 +151,8 @@ export default function Select<T extends string>({
   ariaLabel?: string;
   /** Fixed caption sharing the trigger's box, divided by a rule (the remote panel's "Address" field). */
   leading?: string;
+  /** Render long lists outside clipping/scrolling parents, anchored to the trigger. */
+  menuPortal?: boolean;
 }) {
   const s = SIZES[size];
   const [open, setOpen] = useState(false);
@@ -112,6 +162,7 @@ export default function Select<T extends string>({
   const listRef = useRef<HTMLDivElement | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const listId = useId();
+  const menuPosition = useMenuPosition(btnRef, listRef, open, menuPortal, menuWidth, align);
 
   const selected = options.findIndex((o) => o.value === value);
   const current = selected >= 0 ? options[selected] : undefined;
@@ -125,8 +176,13 @@ export default function Select<T extends string>({
   useLayoutEffect(() => {
     if (!open || active < 0) return;
     const row = listRef.current?.children[active] as HTMLElement | undefined;
-    // Guarded because jsdom, used by the tests, does not implement scrollIntoView.
-    row?.scrollIntoView?.({ block: "nearest" });
+    const list = listRef.current;
+    if (!row || !list) return;
+    // Scroll the list only. scrollIntoView also moves surrounding settings panes under the pointer.
+    if (row.offsetTop < list.scrollTop) list.scrollTop = row.offsetTop;
+    else if (row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight;
+    }
   }, [open, active]);
 
   const commit = (i: number) => {
@@ -174,6 +230,8 @@ export default function Select<T extends string>({
       else if (active >= 0) commit(active);
     }
   };
+
+  const renderMenu = (menu: React.ReactNode) => menuPortal ? createPortal(menu, document.body) : menu;
 
   return (
     <div
@@ -253,7 +311,7 @@ export default function Select<T extends string>({
         <Icons.chevD size={12} style={{ color: "var(--text-muted)", flex: "none" }} />
       </button>
 
-      {open && (
+      {open && renderMenu(
         <>
           {/* Transparent backdrop closes the popup on any outside click. mousedown rather than click so
               the popup is gone before the click lands on whatever is underneath. */}
@@ -275,6 +333,7 @@ export default function Select<T extends string>({
               right: align === "right" ? 0 : undefined,
               width: menuWidth ?? "100%",
               minWidth: "100%",
+              ...(menuPortal ? menuPosition : {}),
             }}
           >
             {options.map((opt, i) => {

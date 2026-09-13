@@ -114,6 +114,7 @@ pub(super) fn handle_notification(
 ) -> bool {
     match method {
         "error" => {
+            if let Some(error) = params.get("error") { super::auth::require(app, session_id, proc, error); }
             let message = params.get("error").map(error_text).unwrap_or_else(|| "Codex reported an error".into());
             if params.get("willRetry").and_then(Value::as_bool).unwrap_or(false) {
                 notice(proc, "retry", format!("Codex is retrying after an error: {message}"));
@@ -175,6 +176,8 @@ pub(super) fn handle_notification(
             {
                 let mut extras = proc.extras.lock().unwrap();
                 extras.context_tokens = Some(in_window);
+                let total = |key: &str| usage.pointer(&format!("/total/{key}")).and_then(Value::as_u64);
+                extras.native_usage = Some(json!({"scope":"session","inputTokens":total("inputTokens"),"outputTokens":total("outputTokens"),"cachedInputTokens":total("cachedInputTokens"),"reasoningOutputTokens":total("reasoningOutputTokens")}));
                 if window.is_some() {
                     extras.context_window = window;
                 }

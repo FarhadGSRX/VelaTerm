@@ -12,6 +12,7 @@ export function knowledgeUrl(projectId: string, values: Record<string, string | 
     if (value == null || value === "") url.searchParams.delete(key); else url.searchParams.set(key,String(value));
   }
   // 无路径的 Tauri 地址在关闭时必须保留完整 URL，避免空目标保留原查询参数。
+  if (values.knowledgeNode && !values.knowledgeView) url.searchParams.set("knowledgeView","symbols");
   return url.href;
 }
 export function KnowledgeLink({ projectId, values, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { projectId: string; values?: Record<string, string | number | null> }) {

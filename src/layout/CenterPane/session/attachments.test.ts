@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { attachImages, dataUrl, MAX_IMAGE_BYTES, MAX_IMAGES } from "./attachments";
+import { attachImages, dataUrl, restoreAttachment, MAX_IMAGE_BYTES, MAX_IMAGES } from "./attachments";
 
 /** A file of `size` bytes whose contents are known, so the base64 can be checked against them. */
 function png(name: string, size: number): File {
@@ -48,5 +48,15 @@ describe("attachImages", () => {
 describe("dataUrl", () => {
   it("puts the prefix back for the browser to draw", () => {
     expect(dataUrl({ mimeType: "image/png", data: "QUFB" })).toBe("data:image/png;base64,QUFB");
+  });
+});
+
+describe("restoreAttachment", () => {
+  it.each([["QQ==", 1], ["QUE=", 2], ["QUFB", 3]] as const)("restores %s without changing its bytes", (data, bytes) => {
+    const image = { mimeType: "image/webp", data };
+    const restored = restoreAttachment(image, 1);
+    expect(restored).toMatchObject({ ...image, name: "image-2.webp", bytes });
+    expect(restored.id).not.toBe(restoreAttachment(image, 1).id);
+    expect(image).toEqual({ mimeType: "image/webp", data });
   });
 });

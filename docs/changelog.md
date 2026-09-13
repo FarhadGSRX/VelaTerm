@@ -1,9 +1,47 @@
 # Changelog
 
-> Created: 2026-07-09 16:10 · Updated: 2026-09-05
+> Created: 2026-07-09 16:10 · Updated: 2026-09-13
 
 All notable changes to VelaTerm are documented here, newest first.
 v0.1.91 is the first public release; earlier version numbers were internal iterations and are not covered.
+
+---
+
+## v0.2.0 — 2026-09-13
+
+- 📱 VelaTerm for iOS and Android (early build): connect to a machine over SSH or a URL after confirming its fingerprint, load the full remote interface inside the app, fill in connection details by scanning a QR code, and sign in to a remote account.
+
+- 🛡️ Experimental code audit: run a whole-repository, directory or file, or working-tree audit with Codex or Claude Code, review findings against the source, and export a Markdown or JSON report.
+
+- 📓 Local knowledge base: open a folder of Markdown notes beside Files, Info and Git, edit notes in the WYSIWYG editor, search paths and full text, organize tags and favorites, and restore deleted notes from the trash. Agents can query notes with `vkb`; folder imports run in the background and keep a record you can expand, revisit or cancel.
+
+- 🤖 Plan-and-execute sessions: `vspawn --plan-execute` opens a planner session that splits the task into execution sessions; `vflow` proposes the split, `vtell --report` returns each executor's result for acceptance, and rework reuses the original executor. Worktrees can be shared by every role or created per session.
+
+- 🔗 Shared projects and sessions now load the host's real interface behind the shared URL, forwarded over an outbound tunnel and limited to the granted project or session. Devices and grants can be managed from the account pages.
+
+- 🧠 Session knowledge adds project, session and entry groups with drag-and-drop, renaming and deletion; a new reorganization of the same session replaces the queued one.
+
+- 💬 Conversation view: long histories load page by page back to the first message, every chat-capable agent (including OMP) opens in the conversation view by default, and consecutive turns from the same agent share one author row.
+
+- ⌨️ Terminal: shell-native suggestions offer Tab completion for zsh, bash, fish and PowerShell on macOS and Linux, the arrow keys keep recalling previous commands while suggestions are open, and the terminal core moves to xterm 6.
+
+- 📊 Info shows per-turn stats for Claude, Codex, Grok, OpenCode, Pi and OMP: input and output tokens, cache hit rate, generation speed, tool calls and recorded file edits. Less-used composer controls move under More.
+
+- 🔐 The composer shows the configured, effective and pending permission mode, and asks for confirmation when a restart is required to apply a change.
+
+- 🔔 Notifications show the session name and a short preview, clicking one opens the session, and the mobile app can receive them through the system push service.
+
+- 🌐 Claude's model list now comes from the published model catalog, cached locally and refreshed every six hours, merged with the models the CLI reports.
+
+- 🧵 Up and down arrows in the composer recall your earlier messages, including queued and pending ones, and restore the unsent draft at the end.
+
+- ↩️ Rolling back a message returns its images to the composer so they can be sent again.
+
+- 🔑 Agents started on macOS inherit the full login-shell environment, so tools installed outside the default PATH are found.
+
+- 💡 A feedback entry in the title bar opens the feedback page.
+
+- 🕹️ A game center entry in the tab bar opens the website's Game Center (PIXEL WING); desktop clicks open the game in the built-in browser.
 
 ---
 

@@ -55,7 +55,8 @@ export function DocOutline({
   return (
     <div className="docview-outline">
       {headings.map((h, i) => (
-        <div
+        <button
+          type="button"
           key={`${h.line}:${h.text}`}
           className={"docview-outline-row lv" + h.level}
           style={{ paddingLeft: 10 + (h.level - minLevel) * 13 }}
@@ -63,7 +64,7 @@ export function DocOutline({
           onClick={() => onJump(i)}
         >
           {h.text}
-        </div>
+        </button>
       ))}
     </div>
   );

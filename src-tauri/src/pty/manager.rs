@@ -70,10 +70,6 @@ const SCROLLBACK_CAP: usize = 512 * 1024;
 /// long, redraw-heavy agent sessions should reach this safety cap.
 const RECORDING_CAP: u64 = 50 * 1024 * 1024;
 
-/// Key for the frontend's main JSON settings block in `app_settings`, shared across shells. The backend reads
-/// only `agentDefaults.<kind>.path`; see `PersistedSettings` and [`agent_bin_path`].
-const VLX_SETTINGS_KEY: &str = "vlx-settings";
-
 /// Shared `app_settings` key for session recording. Recording is off unless the user explicitly stores `"1"`.
 const RECORD_SESSIONS_KEY: &str = "vlx-record-sessions";
 
@@ -209,6 +205,10 @@ impl PtyManager {
         self.sessions.lock().unwrap().contains_key(sid)
     }
 
+    pub fn launch_permission_mode(&self, sid: &str) -> Option<Option<String>> {
+        self.sessions.lock().unwrap().get(sid).map(|session| session.launch_permission_mode.clone())
+    }
+
     /// Starts or attaches to a PTY session and returns its PID and optional typed-session launch command.
     ///
     /// A background reader forwards raw PTY bytes through the binary `on_output` channel without encoding,
@@ -247,6 +247,8 @@ impl PtyManager {
         attach_only: bool,
         first_sink: OutputSink,
     ) -> Result<SpawnResult, String> {
+        let mut diagnostic = crate::diagnostics::Span::new("pty_spawn", serde_json::json!({"sessionId":id,"cols":cols,"rows":rows}));
+        diagnostic.step("slot");
         // Spawn-or-attach: attach subscribers to an existing session, replay its screen, and return no launch
         // command so a second client cannot restart the agent.
         //
@@ -280,6 +282,8 @@ impl PtyManager {
                         }
                         app.emit(&event, payload);
                     }
+                    diagnostic.step("attach");
+                    diagnostic.success();
                     return Ok(SpawnResult {
                         pid,
                         launch: None,
@@ -322,6 +326,7 @@ impl PtyManager {
             resume_id
         };
 
+        diagnostic.step("openpty");
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -332,6 +337,7 @@ impl PtyManager {
             })
             .map_err(|e| format!("Failed to open PTY: {e}"))?;
 
+        diagnostic.step("shell");
         // Default-shell resolution needs the data directory to locate bundled Git Bash on Windows.
         let data_dir_for_shell = app.data_dir().ok();
         // Heal stale persisted absolute shell paths, especially legacy bundled Git Bash locations removed by
@@ -340,7 +346,8 @@ impl PtyManager {
             Some(s) if shell_path_usable(&s) => s,
             Some(stale) => {
                 let fb = resolve_fallback_shell(kind, data_dir_for_shell.as_deref());
-                eprintln!("persisted shell path not found, falling back: {stale:?} -> {fb}");
+                crate::diagnostics::record("WARN","pty_shell_fallback",serde_json::json!({"sessionId":id,"step":"fallback"}));
+                let _ = stale;
                 fb
             }
             None => default_shell(kind, data_dir_for_shell.as_deref()),
@@ -348,6 +355,18 @@ impl PtyManager {
         // WSL is persisted as `wsl://<distribution>`, not an executable path. Convert it to
         // `wsl.exe --distribution <name>` and let WSL start the distribution's default interactive shell.
         let wsl_distro = wsl_distro_from_shell(&shell);
+        let shell_family = if wsl_distro.is_some() {
+            "wsl"
+        } else {
+            match inject::shell_kind(&shell) {
+                inject::ShellKind::Posix => "posix",
+                inject::ShellKind::PowerShell => "powershell",
+                inject::ShellKind::Pwsh => "pwsh",
+                inject::ShellKind::Cmd => "cmd",
+                inject::ShellKind::Fish => "fish",
+            }
+        };
+        crate::diagnostics::record("INFO","pty_shell",serde_json::json!({"sessionId":id,"shell":shell_family}));
         if wsl_distro.is_some() && !cfg!(windows) {
             return Err("WSL shells are only available on Windows".to_string());
         }
@@ -411,7 +430,8 @@ impl PtyManager {
             Some(d) if std::path::Path::new(&d).is_dir() => Some(d),
             Some(stale) => {
                 let fb = home_dir().filter(|h| std::path::Path::new(h).is_dir());
-                eprintln!("persisted cwd not found, falling back: {stale:?} -> {fb:?}");
+                crate::diagnostics::record("WARN","pty_cwd_fallback",serde_json::json!({"sessionId":id,"step":"fallback"}));
+                let _ = stale;
                 fb
             }
             None => home_dir().filter(|h| std::path::Path::new(h).is_dir()),
@@ -536,7 +556,7 @@ impl PtyManager {
 
         // Build in-memory injection and the launch command for typed sessions. Read the configured executable
         // path at spawn time so settings changes apply to the next launch.
-        let bin_path = session_agent_path(&app, &id).or_else(|| agent_bin_path(&app, kind));
+        let bin_path = crate::agent::executable::resolve_session(&app, &id, kind)?;
         // Lazily install the state-bridge extension of whichever agent loads one through `-e`: Pi's under
         // `<data_dir>/pi/`, OMP's under `<data_dir>/omp/`. The static extension reads the session's injected
         // `VLX_*` values and reports without persisting the port or token. If installation fails, log it and let
@@ -553,7 +573,7 @@ impl PtyManager {
                     Ok(data_dir) => match install(&data_dir) {
                         Ok(p) => Some(p.to_string_lossy().to_string()),
                         Err(e) => {
-                            eprintln!("failed to install {label} extension ({label} status reporting unavailable): {e}");
+                            crate::diagnostic_warn!("failed to install {label} extension ({label} status reporting unavailable): {e}");
                             None
                         }
                     },
@@ -574,7 +594,7 @@ impl PtyManager {
                 }
                 Err(e) => {
                     crate::agent::kiro::audit_install("failed", started.elapsed().as_millis());
-                    eprintln!(
+                    crate::diagnostic_warn!(
                         "failed to install kiro shadow agent (kiro status reporting unavailable): {e}"
                     );
                     None
@@ -674,7 +694,7 @@ impl PtyManager {
         // Installation is idempotent and dynamic values remain in `VLX_*`; failures only disable authoritative state.
         if kind == SessionKind::Copilot {
             if let Err(e) = crate::agent::copilot::install() {
-                eprintln!(
+                crate::diagnostic_warn!(
                     "failed to install copilot hooks (copilot status reporting unavailable): {e}"
                 );
             }
@@ -685,7 +705,7 @@ impl PtyManager {
         // disable authoritative state reporting.
         if kind == SessionKind::Cursor {
             if let Err(e) = crate::agent::cursor::install() {
-                eprintln!(
+                crate::diagnostic_warn!(
                     "failed to install cursor hooks (cursor status reporting unavailable): {e}"
                 );
             }
@@ -700,11 +720,11 @@ impl PtyManager {
                         cmd.env("CLINE_HOOKS_DIR", &hooks_dir);
                     }
                     Err(e) => {
-                        eprintln!("failed to install cline hooks (cline status reporting unavailable): {e}");
+                        crate::diagnostic_warn!("failed to install cline hooks (cline status reporting unavailable): {e}");
                     }
                 },
                 Err(e) => {
-                    eprintln!("failed to resolve data dir for cline hooks (cline status reporting unavailable): {e}");
+                    crate::diagnostic_warn!("failed to resolve data dir for cline hooks (cline status reporting unavailable): {e}");
                 }
             }
         }
@@ -713,7 +733,7 @@ impl PtyManager {
         // `vlx-term-status` group into global hooks, preserving all user groups. Failures retain normal launch.
         if kind == SessionKind::Antigravity {
             if let Err(e) = crate::agent::antigravity::install() {
-                eprintln!("failed to install antigravity hooks (antigravity status reporting unavailable): {e}");
+                crate::diagnostic_warn!("failed to install antigravity hooks (antigravity status reporting unavailable): {e}");
             }
         }
 
@@ -727,11 +747,11 @@ impl PtyManager {
                         cmd.env("CRUSH_GLOBAL_CONFIG", &config_dir);
                     }
                     Err(e) => {
-                        eprintln!("failed to install crush shadow config (crush status reporting unavailable): {e}");
+                        crate::diagnostic_warn!("failed to install crush shadow config (crush status reporting unavailable): {e}");
                     }
                 },
                 Err(e) => {
-                    eprintln!("failed to resolve data dir for crush shadow config (crush status reporting unavailable): {e}");
+                    crate::diagnostic_warn!("failed to resolve data dir for crush shadow config (crush status reporting unavailable): {e}");
                 }
             }
         }
@@ -761,8 +781,32 @@ impl PtyManager {
             }
         }
 
-        let launch = agent_spawn.launch.clone();
+        // Windows never loads the integration below, so both bindings stay at their initial values there.
+        #[cfg_attr(windows, allow(unused_mut))]
+        let mut launch = agent_spawn.launch.clone();
+        #[cfg_attr(windows, allow(unused_mut))]
+        let mut completion_state = super::completion::State::default();
+        // Native completion stays off on Windows whatever the stored setting says: no Bash-family shell offers a
+        // startup-file hook, so the integration could only be loaded by typing a command into the terminal, and
+        // every request forks MSYS helper processes there, which stalls typing. `completion::AVAILABLE` mirrors
+        // this gate for the settings UI, and `install_wsl` remains for a later re-enable.
+        #[cfg(not(windows))]
+        if kind == SessionKind::Terminal {
+            if let Some((state, command)) = super::completion::install(&app.data_dir()?, &shell)? {
+                let is_local_zsh = std::path::Path::new(&shell)
+                    .file_stem()
+                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("zsh"));
+                if is_local_zsh {
+                    super::completion::configure_zsh_startup(&state, &mut cmd)?;
+                } else {
+                    launch = Some(command);
+                }
+                completion_state = state;
+            }
+        }
+        let completion = Arc::new(Mutex::new(completion_state));
 
+        diagnostic.step("spawn");
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -782,6 +826,7 @@ impl PtyManager {
             .map_err(|e| format!("Failed to get PTY writer: {e}"))?;
 
         // Drop the slave handle after the child takes ownership to avoid descriptor leaks.
+        diagnostic.step("prepare");
         drop(pair.slave);
 
         // A dedicated per-session writer keeps PTY I/O off the global session lock and UI/IPC thread. A
@@ -815,6 +860,8 @@ impl PtyManager {
         self.sessions.lock().unwrap().insert(
             id.clone(),
             PtySession {
+                launch_permission_mode: permission_mode.clone(),
+                completion: Arc::clone(&completion),
                 terminated: terminated.clone(),
                 master: pair.master,
                 input: input_tx,
@@ -913,16 +960,27 @@ impl PtyManager {
         let exit_event = format!("pty://exit/{id}");
         let killed_event = format!("pty://killed/{id}");
         let terminated_reader = terminated.clone();
+        let diagnostic_context=crate::diagnostics::current_context();
         std::thread::spawn(move || {
+            let _context=crate::diagnostics::Context::enter(Some(&diagnostic_context.0));
+            let _operation=crate::diagnostics::Operation::enter(Some(&diagnostic_context.1));
             let mut scanner = OutputScanner::default();
+            let mut completion_filter = super::completion::Filter::default();
             let mut buf = [0u8; 8192];
             // Deduplicate repeated OSC titles before they trigger main-thread evaluation and frontend updates.
             let mut last_title: Option<String> = None;
+            let output_started=Instant::now();
+            let mut first_output=true;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break, // EOF: the child process exited.
                     Ok(n) => {
-                        let chunk = &buf[..n];
+                        if first_output {
+                            first_output=false;
+                            crate::diagnostics::record("INFO","pty_first_output",serde_json::json!({"sessionId":id_for_read,"bytes":n,"durationMs":output_started.elapsed().as_millis() as u64}));
+                        }
+                        let filtered = completion_filter.feed(&buf[..n], &mut completion.lock().unwrap());
+                        let chunk = filtered.as_slice();
                         // Append this chunk to the session recording used for archival replay.
                         if let Some(rec) = recorder.as_mut() {
                             rec.write(chunk);
@@ -984,6 +1042,7 @@ impl PtyManager {
             // clients use the latter to close their views instead of leaving a frozen terminal.
             // An agent that exits mid-turn never sends Stop; settle it so `vstat` and anything waiting on
             // the run see it as no longer busy rather than working forever.
+            crate::diagnostics::record("INFO","pty_reader_exit",serde_json::json!({"sessionId":id_for_read}));
             crate::agent::status_watch::settle(&id_for_read);
             if !intentional_reader.load(Ordering::SeqCst) {
                 app.emit(&exit_event, ());
@@ -1275,6 +1334,7 @@ impl PtyManager {
             }
         }
 
+        diagnostic.success();
         Ok(SpawnResult {
             pid,
             launch,
@@ -1292,14 +1352,10 @@ impl PtyManager {
     /// Briefly lock to clone the sender, then enqueue and return. A dedicated FIFO writer touches the PTY
     /// descriptor without holding the global session lock. A full queue returns an error instead of blocking.
     pub fn write(&self, id: &str, data: &str) -> Result<(), String> {
-        let tx = {
-            let map = self.sessions.lock().unwrap();
-            let session = map
-                .get(id)
-                .ok_or_else(|| format!("Session {id} not found"))?;
-            session.input.clone()
-        };
-        tx.try_send(data.as_bytes().to_vec()).map_err(|e| match e {
+        let map = self.sessions.lock().unwrap();
+        let session = map.get(id).ok_or_else(|| format!("Session {id} not found"))?;
+        session.completion.lock().unwrap().input(data);
+        session.input.try_send(data.as_bytes().to_vec()).map_err(|e| match e {
             std::sync::mpsc::TrySendError::Full(_) => {
                 format!("Session {id} input backlogged (PTY not consuming stdin)")
             }
@@ -1307,6 +1363,56 @@ impl PtyManager {
                 format!("Session {id} is shutting down")
             }
         })
+    }
+
+    pub fn completion(
+        &self, id: &str, action: &str, source: &str, revision: Option<u64>, index: Option<usize>,
+    ) -> Result<super::completion::Snapshot, String> {
+        let map = self.sessions.lock().unwrap();
+        let session = map.get(id).ok_or("Terminal session is not running")?;
+        let mut state = session.completion.lock().unwrap();
+        match action {
+            "state" => {}
+            "query" => {
+                if !state.snapshot.ready || !state.snapshot.supported { return Ok(state.snapshot.clone()); }
+                if state.requested.is_some() { return Err("Native completion is still running".into()); }
+                #[cfg(unix)]
+                if session.master.process_group_leader().is_some_and(|pid| pid as u32 != session.pid) {
+                    state.snapshot.ready = false;
+                    state.snapshot.items.clear();
+                    return Ok(state.snapshot.clone());
+                }
+                state.snapshot.items.clear();
+                state.requested = Some((state.snapshot.input_version, Instant::now()));
+                state.snapshot.pending = true;
+                state.owner = Some(source.to_string());
+                if session.input.try_send(super::completion::QUERY_KEY.to_vec()).is_err() {
+                    state.requested = None;
+                    state.snapshot.pending = false;
+                    return Err("Terminal input queue is unavailable".into());
+                }
+            }
+            "accept" => {
+                #[cfg(unix)]
+                if session.master.process_group_leader().is_some_and(|pid| pid as u32 != session.pid) {
+                    return Err("The shell is not editing a command".into());
+                }
+                let index = index.ok_or("Missing completion index")?;
+                if !state.snapshot.ready || state.snapshot.pending || state.owner.as_deref() != Some(source)
+                    || revision != Some(state.snapshot.revision) || index >= state.snapshot.items.len() {
+                    return Err("Completion is no longer current".into());
+                }
+                std::fs::write(&state.selection_file, format!("{} {index}\n", state.snapshot.revision))
+                    .map_err(|e| e.to_string())?;
+                session.input.try_send(super::completion::ACCEPT_KEY.to_vec())
+                    .map_err(|_| "Terminal input queue is unavailable")?;
+                state.input("");
+            }
+            _ => return Err("Unknown completion action".into()),
+        }
+        let mut snapshot = state.snapshot.clone();
+        if state.owner.as_deref() != Some(source) { snapshot.items.clear(); }
+        Ok(snapshot)
     }
 
     /// Resizes a PTY under a single-owner model; all other clients mirror that size.
@@ -1396,15 +1502,21 @@ impl PtyManager {
     /// same session follows. Both travel out on `pty://killed/{id}` so other clients can tell a restart
     /// from a close, and the requester can recognise its own echo.
     pub fn kill(&self, id: &str, source: &str, reason: KillReason) -> Result<(), String> {
+        let mut diagnostic=crate::diagnostics::Span::new("pty_kill",serde_json::json!({"sessionId":id}));
+        diagnostic.step("lock");
+        let mut killed=true;
         if let Some(mut session) = self.sessions.lock().unwrap().remove(id) {
             *session.kill_info.lock().unwrap() = Some(KillInfo {
                 source: source.to_string(),
                 reason,
             });
             session.intentional.store(true, Ordering::SeqCst);
-            let _ = session.killer.kill();
+            diagnostic.step("kill");
+            if session.killer.kill().is_err() { killed=false; crate::diagnostics::record("WARN","pty_kill_failed",serde_json::json!({"sessionId":id})); }
+            diagnostic.step("finish");
         }
         self.status_cache.lock().unwrap().remove(id);
+        if killed {diagnostic.success();}
         Ok(())
     }
 
@@ -1602,72 +1714,6 @@ fn open_recorder(app: &AppCtx, id: &str) -> Option<Recorder> {
     let _ = file
         .write_all(format!("\r\n--- [VelaTerm] session started/resumed @ {ts} ---\r\n").as_bytes());
     Some(Recorder::new(file, existing_len, RECORDING_CAP))
-}
-
-/// Reads the session-recording setting. Only an explicit `"1"` enables it; missing or unreadable settings
-/// remain off. Callers independently exclude plain Terminal sessions.
-/// Reads an agent's global executable path from `vlx-settings.agentDefaults.<kind>.path`. A nonempty path
-/// launches directly; missing or invalid settings preserve command-name lookup. Expands common `~/` prefixes.
-pub(crate) fn agent_bin_path(app: &AppCtx, kind: SessionKind) -> Option<String> {
-    let key = match kind {
-        SessionKind::Claude => "claude",
-        SessionKind::Codex => "codex",
-        SessionKind::Opencode => "opencode",
-        SessionKind::Copilot => "copilot",
-        SessionKind::Cursor => "cursor",
-        SessionKind::Antigravity => "antigravity",
-        SessionKind::Cline => "cline",
-        SessionKind::Pi => "pi",
-        SessionKind::Omp => "omp",
-        SessionKind::Crush => "crush",
-        SessionKind::Kimi => "kimi",
-        SessionKind::Kiro => "kiro",
-        SessionKind::Grok => "grok",
-        SessionKind::Zoo => "zoo",
-        _ => return None,
-    };
-    let json = {
-        let conn = app.db().conn.lock().ok()?;
-        crate::db::repo::get_app_settings(&conn)
-            .ok()?
-            .remove(VLX_SETTINGS_KEY)?
-    };
-    let v: serde_json::Value = serde_json::from_str(&json).ok()?;
-    let p = v
-        .get("agentDefaults")?
-        .get(key)?
-        .get("path")?
-        .as_str()?
-        .trim();
-    if p.is_empty() {
-        return None;
-    }
-    Some(expand_home_prefix(p))
-}
-
-/// Expand a leading `~/`, or the Windows `~\` people type by hand, against the home directory. Every other
-/// path is returned unchanged, including one whose home directory cannot be resolved.
-fn expand_home_prefix(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
-        if let Some(home) = crate::host::home_dir() {
-            return home.join(rest).to_string_lossy().to_string();
-        }
-    }
-    p.to_string()
-}
-
-/// This session's own agent executable, or None to fall back to the per-kind default. Read at spawn time
-/// like the default, so editing it applies to the next launch.
-fn session_agent_path(app: &AppCtx, id: &str) -> Option<String> {
-    let raw = {
-        let conn = app.db().conn.lock().ok()?;
-        crate::db::repo::get_agent_path(&conn, id).ok()?
-    }?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(expand_home_prefix(trimmed))
 }
 
 /// Detects whether the installed Codex supports the trust flag required for lifecycle-hook injection.

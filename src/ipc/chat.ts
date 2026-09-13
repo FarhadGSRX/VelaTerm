@@ -82,8 +82,17 @@ export interface SubagentInfo {
   durationMs?: number;
 }
 
+export interface MessageOrigin {
+  sessionId: string;
+  name: string;
+  agent: Session["kind"];
+  role: "plan" | "exec" | "system" | "initiator" | "session";
+  runId?: string;
+  round?: number;
+}
+
 export type ChatRow =
-  | { kind: "user"; id: string; text: string; images?: ChatImageValue[]; at?: number }
+  | { kind: "user"; id: string; text: string; images?: ChatImageValue[]; at?: number; origin?: MessageOrigin }
   | {
       kind: "assistant";
       id: string;
@@ -253,7 +262,19 @@ export interface ChatApiRetry {
 }
 
 /** What Claude's protocol reports about the process beyond the conversation itself. Replaced whole. */
+export interface ChatAuthState {
+  status: "required" | "starting" | "pending" | "submitting" | "canceling" | "success" | "failed" | "canceled" | "signingOut" | "signedOut" | "logoutFailed";
+  verificationUrl?: string;
+  userCode?: string;
+}
+
+export const chatAuthStart = (sessionId: string) => invoke<void>("chat_auth_start", { sessionId });
+export const chatAuthLogout = (sessionId: string) => invoke<void>("chat_auth_logout", { sessionId });
+export const chatAuthSubmit = (sessionId: string, code: string) => invoke<void>("chat_auth_submit", { sessionId, code });
+export const chatAuthCancel = (sessionId: string) => invoke<void>("chat_auth_cancel", { sessionId });
+
 export interface ChatExtras {
+  auth?: ChatAuthState;
   contextTokens?: number;
   contextWindow?: number;
   totalCostUsd?: number;
@@ -300,6 +321,7 @@ export interface ChatCollaborationMode {
 export interface QueuedMessage {
   id: string;
   text: string;
+  origin?: MessageOrigin;
   /** Images attached to it, waiting along with the text. */
   images?: ChatImageValue[];
 }
@@ -369,6 +391,7 @@ export interface ChatSnapshot {
   /** Codex: the service tier and personality chosen for this conversation, when set. */
   serviceTier?: string;
   personality?: string;
+  auth?: ChatAuthState;
   /** Flattened `ChatExtras`; read them with `extrasOf`. */
   contextTokens?: number;
   contextWindow?: number;
@@ -383,6 +406,7 @@ export interface ChatSnapshot {
 /** The extras a snapshot carries, as one object. */
 export function extrasOf(snapshot: ChatSnapshot): ChatExtras {
   return {
+    auth: snapshot.auth,
     contextTokens: snapshot.contextTokens,
     contextWindow: snapshot.contextWindow,
     totalCostUsd: snapshot.totalCostUsd,
@@ -399,8 +423,8 @@ export type ChatEvent =
   | { type: "rows"; positions?: Record<string, number>; rows: ChatRow[]; revision?: number; epoch?: number }
   /** A rewind removed rows. Replace rather than merge so every connected view drops the same tail. */
   | { type: "replaceRows"; positions?: Record<string, number>; rows: ChatRow[]; revision?: number; epoch?: number; hasMore?: boolean }
-  /** A new process took over this session: drop everything on screen and follow the rows that come next. */
-  | { type: "reset"; epoch?: number }
+  /** A new process took over; its restored history replaces the previous timeline atomically. */
+  | { type: "reset"; epoch?: number; revision?: number; rows?: ChatRow[]; positions?: Record<string, number>; hasMore?: boolean }
   | { type: "permission"; request: ChatPermission }
   /** The whole queue, whenever it changes. A full list rather than one change, so clients cannot drift. */
   | { type: "queued"; items: QueuedMessage[]; revision?: number; epoch?: number }
@@ -595,6 +619,11 @@ export function chatSetMode(sessionId: string, mode: string): Promise<void> {
   return invoke("chat_set_mode", { sessionId, mode });
 }
 
+/** Restart only the Claude process whose permission rejection the user confirmed. */
+export function chatRestartPermissionMode(sessionId: string, pid: number): Promise<void> {
+  return invoke("chat_restart_permission_mode", { sessionId, pid });
+}
+
 /** Change the collaboration style used by subsequent Codex turns. */
 export function chatSetCollaborationMode(sessionId: string, mode: string): Promise<void> {
   return invoke("chat_set_collaboration_mode", { sessionId, mode });
@@ -679,7 +708,7 @@ export function onChatEvent(
   cb: (event: ChatEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<ChatEvent>(`chat://event/${sessionId}`, event => {
-    if (event.type === "rows" || event.type === "replaceRows") {
+    if ((event.type === "rows" || event.type === "replaceRows" || event.type === "reset") && event.rows) {
       registerRowPositions(event.rows, event.positions);
       registerSnapshotImages(`${sessionId}\u0000${event.epoch ?? "live"}`, sessionId, event.rows);
       registerToolDetails(sessionId, event.epoch, event.rows);

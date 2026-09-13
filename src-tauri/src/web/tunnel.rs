@@ -117,7 +117,7 @@ fn start(remote_host: String, remote_port: u16) -> Result<u16, String> {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    eprintln!("failed to start tunnel runtime: {e}");
+                    crate::diagnostic_warn!("failed to start tunnel runtime: {e}");
                     return;
                 }
             };
@@ -125,7 +125,7 @@ fn start(remote_host: String, remote_port: u16) -> Result<u16, String> {
                 let listener = match TcpListener::from_std(std_listener) {
                     Ok(l) => l,
                     Err(e) => {
-                        eprintln!("failed to take over tunnel listener: {e}");
+                        crate::diagnostic_warn!("failed to take over tunnel listener: {e}");
                         return;
                     }
                 };

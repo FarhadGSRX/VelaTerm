@@ -1,0 +1,44 @@
+.login-screen { position: fixed; inset: 0; overflow: auto; background: var(--bg-app, var(--bg-0)); color: var(--text); }
+.login-navigation { position: sticky; top: 0; z-index: 1; padding: 8px 16px; background: var(--bg-app, var(--bg-0)); }
+.login-navigation button { min-height: 44px; padding: 8px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.login-content { min-height: 100%; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+.login-navigation + .login-content { min-height: calc(100% - 60px); }
+.login-card { box-sizing: border-box; width: min(100%, 360px); padding: 24px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--bg-2); box-shadow: var(--shadow); }
+.login-brand { display: flex; align-items: center; gap: 12px; font-size: 18px; }
+.login-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--bg-0); font-size: 22px; font-weight: 800; }
+.login-card h1 { margin: 24px 0 8px; font-size: 20px; line-height: 1.4; }
+.login-card p { font-size: 14px; line-height: 1.65; color: var(--text-dim); margin: 0 0 20px; }
+.login-card .login-host { overflow-wrap: anywhere; font-size: 13px; }
+.login-label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+.login-password { display: flex; align-items: center; gap: 4px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-0); overflow: hidden; }
+.login-password:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
+.login-password input { width: 100%; min-width: 0; padding: 14px; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 16px; }
+.login-visibility { flex-shrink: 0; min-height: 48px; padding: 10px 12px; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
+.login-remember { display: flex; align-items: center; gap: 10px; min-height: 48px; margin: 8px 0; font-size: 14px; cursor: pointer; }
+.login-remember input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+.login-submit { width: 100%; min-height: 48px; margin-top: 16px; padding: 12px 16px; border: 0; border-radius: 12px; background: var(--accent); color: var(--bg-0); font: inherit; font-weight: 600; cursor: pointer; }
+.login-submit:disabled { opacity: .55; cursor: default; }
+.login-card .login-error { margin: 12px 0 0; color: var(--danger, #e05252); }
+.login-save-error { position: fixed; z-index: 2000; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-2); color: var(--text); box-shadow: var(--shadow); font-size: 16px; }
+.login-save-error span { flex: 1 1 220px; }
+.login-save-error button { min-height: 44px; padding: 8px 12px; }
+@media (max-width: 767px) {
+  .login-screen { font-family: "PingFang SC", "Noto Sans", system-ui, sans-serif; }
+  .login-content { padding: 24px 20px max(24px, env(safe-area-inset-bottom)); align-items: start; }
+  .login-card { width: 100%; max-width: 440px; padding: 24px; border-radius: 24px; }
+  .login-navigation { padding: max(8px, env(safe-area-inset-top)) 8px 8px; }
+  .login-navigation button { font-size: 16px; }
+  .login-brand { font-size: 22px; }
+  .login-mark { width: 44px; height: 44px; font-size: 26px; border-radius: 12px; }
+  .login-card h1 { font-size: 26px; margin-top: 28px; }
+  .login-card p, .login-label, .login-remember { font-size: 16px; }
+  .login-card .login-host { font-size: 15px; margin-bottom: 24px; }
+  .login-password input { min-height: 52px; box-sizing: border-box; }
+  .login-submit { min-height: 52px; font-size: 17px; }
+  .login-visibility { min-height: 52px; }
+}
+@media (max-height: 560px) and (max-width: 767px) {
+  .login-content { padding-top: 8px; }
+  .login-card { padding: 20px; }
+  .login-card h1 { margin-top: 16px; }
+}

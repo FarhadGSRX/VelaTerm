@@ -28,7 +28,7 @@ export type DividerStyle = "subtle" | "visible";
 /** Sidebar layout: tree is standard; compact hides group icons and uses shorter rows. */
 export type NavLayout = "tree" | "compact";
 /** Active tab in the right-side Inspector. */
-export type InspectorTab = "files" | "info" | "git";
+export type InspectorTab = "files" | "info" | "git" | "knowledge";
 
 /** Vlinx visual settings: design tokens beyond the color scheme. */
 export interface VisualSettings {
@@ -95,7 +95,8 @@ export function fontStack(family: string | null | undefined): string {
   const f = family?.trim();
   if (!f) return DEFAULT_MONO_STACK;
   if (f.includes(",")) return f;
-  const quoted = /\s/.test(f) ? `"${f}"` : f;
+  const alreadyQuoted = (f.startsWith('"') && f.endsWith('"')) || (f.startsWith("'") && f.endsWith("'"));
+  const quoted = alreadyQuoted ? f : /\s/.test(f) ? JSON.stringify(f) : f;
   return `${quoted}, ${SYS_MONO_FALLBACK}, "VlxSymbols", "Symbola", ${CJK_FALLBACK}, monospace`;
 }
 

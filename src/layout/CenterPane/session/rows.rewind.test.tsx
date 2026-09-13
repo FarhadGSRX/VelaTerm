@@ -9,11 +9,21 @@ vi.mock("../../../ipc/transport", async (original) => ({
 
 import { chatSnapshot } from "../../../ipc/chat";
 import { invoke } from "../../../ipc/transport";
+import { env } from "../../../platform/env";
+import { imageFromNativeClipboard } from "../../../terminal/imageInput";
+import { MAX_IMAGE_BYTES } from "./attachments";
 import { formatTurnDuration, MessageBubble, WorkingRow } from "./rows";
+
+vi.mock("../../../platform/env", () => ({ env: { isTauri: false, isElectron: false, isWeb: true } }));
+vi.mock("../../../terminal/imageInput", async original => ({
+  ...await original<typeof import("../../../terminal/imageInput")>(), imageFromNativeClipboard: vi.fn(),
+}));
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  env.isTauri = false;
 });
 beforeEach(() => vi.mocked(invoke).mockReset());
 
@@ -51,6 +61,100 @@ describe("message rewind menu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rewind from here" }));
     expect(screen.getByRole("button", { name: "Rewind conversation" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Restore files" })).toBeNull();
+  });
+});
+
+describe("editing a previous message", () => {
+  it("warns before requesting confirmation and keeps editing separate from rewind", () => {
+    const onRewind = vi.fn();
+    const onEditSend = vi.fn();
+    render(<MessageBubble who="You" isUser text="Original request" onRewind={onRewind} onEditSend={onEditSend} rewindScopes={["conversation"]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText(/original message and all later messages will be permanently deleted/)).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Updated request" } });
+    expect(onEditSend).not.toHaveBeenCalled();
+    expect(onRewind).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+    expect(onEditSend).toHaveBeenCalledWith("Updated request", []);
+    expect(onRewind).not.toHaveBeenCalled();
+  });
+
+  it("discards a cancelled edit and prevents an empty text-only resend", () => {
+    const onEditSend = vi.fn();
+    render(<MessageBubble who="You" isUser text="Original request" onEditSend={onEditSend} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "  " } });
+    expect((screen.getByRole("button", { name: "Review and resend" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Keep as is" }));
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Original request");
+    expect(onEditSend).not.toHaveBeenCalled();
+  });
+
+  const paste = (files: File[]) => fireEvent.paste(screen.getByRole("textbox"), {
+    clipboardData: { items: files.map(file => ({ kind: "file", type: file.type, getAsFile: () => file })), getData: () => "" },
+  });
+  const png = (name: string) => new File([name], name, { type: "image/png" });
+
+  it("keeps consecutive pastes, removes an original image, and sends images without text", async () => {
+    const onEditSend = vi.fn();
+    const { container } = render(<MessageBubble who="You" isUser text="Original" images={[{ mimeType: "image/png", data: "T0xE" }]} onEditSend={onEditSend} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: " " } });
+    paste([png("first")]);
+    paste([png("second")]);
+    expect((screen.getByRole("button", { name: "Review and resend" }) as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect(container.querySelectorAll(".sv-attach-item")).toHaveLength(3));
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove this image" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+    expect(onEditSend).toHaveBeenCalledWith("", [expect.objectContaining({ data: btoa("first") }), expect.objectContaining({ data: btoa("second") })]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove this image" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove this image" })[0]);
+    expect((screen.getByRole("button", { name: "Review and resend" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("counts retained images toward the limit and reports oversized or unreadable pastes", async () => {
+    const { container } = render(<MessageBubble who="You" isUser text="Original" images={[{ mimeType: "image/png", data: "T0xE" }]} onEditSend={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const large = png("large.png");
+    Object.defineProperty(large, "size", { value: MAX_IMAGE_BYTES + 1 });
+    paste([large]);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("large.png"));
+    const read = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(() => { throw new Error("Unreadable"); });
+    paste([png("broken.png")]);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("broken.png"));
+    read.mockRestore();
+    paste([png("one"), png("two"), png("three"), png("four")]);
+    await waitFor(() => expect(container.querySelectorAll(".sv-attach-item")).toHaveLength(4));
+    expect(screen.getByRole("status").textContent).toMatch(/4/);
+  });
+
+  it("does not add an unfinished paste to a reopened editor", async () => {
+    const { container } = render(<MessageBubble who="You" isUser text="Original" onEditSend={vi.fn()} />);
+    let reader!: FileReader;
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function(this: FileReader) { reader = this; });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    paste([png("late")]);
+    await waitFor(() => expect(reader).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Keep as is" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    Object.defineProperty(reader, "result", { value: "data:image/png;base64,TEFURQ==" });
+    await act(async () => { reader.dispatchEvent(new ProgressEvent("load")); });
+    expect(container.querySelector(".sv-attach-item")).toBeNull();
+    expect((screen.getByRole("button", { name: "Review and resend" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("reads the native clipboard when Tauri omits image data and leaves text paste alone", async () => {
+    env.isTauri = true;
+    vi.mocked(imageFromNativeClipboard).mockResolvedValue(png("native"));
+    const { container } = render(<MessageBubble who="You" isUser text="Original" onEditSend={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    paste([]);
+    await waitFor(() => expect(container.querySelectorAll(".sv-attach-item")).toHaveLength(1));
+    expect(imageFromNativeClipboard).toHaveBeenCalledOnce();
+    expect(fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { items: [], getData: () => "plain text" } })).toBe(true);
+    expect(imageFromNativeClipboard).toHaveBeenCalledOnce();
   });
 });
 

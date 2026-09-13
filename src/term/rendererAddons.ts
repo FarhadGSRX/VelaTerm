@@ -1,23 +1,11 @@
-//! On-demand loading of xterm's Canvas and WebGL renderer addons.
-//!
-//! Why these are not imported normally: together they weigh about 200 KB in the entry bundle, yet DOM
-//! is the default renderer and the only one verified to work under Tauri's WKWebView (canvas
-//! mismeasures cell width against the configured font; WebGL loses contexts and corrupts glyph
-//! atlases in hidden views). So the overwhelmingly common path pays for two addons it never
-//! constructs. Loading them only when a session actually selects that renderer removes them from the
-//! entry bundle entirely.
-//!
-//! Constructors are cached after the first load, which lets callers that must stay synchronous — such
-//! as rebuilding a stale WebGL context during reveal — read the already-resolved constructor.
+//! Load the optional WebGL renderer only when selected. DOM is the default, and WebGL may lose
+//! contexts in hidden views. Cache its constructor for synchronous context recovery on tab reveal.
 
-import type { CanvasAddon } from "@xterm/addon-canvas";
 import type { WebglAddon } from "@xterm/addon-webgl";
 
 type WebglCtor = typeof WebglAddon;
-type CanvasCtor = typeof CanvasAddon;
 
 let webglCtor: WebglCtor | null = null;
-let canvasCtor: CanvasCtor | null = null;
 
 /**
  * Load the WebGL addon constructor, returning null when the chunk cannot be fetched. Null is not
@@ -28,17 +16,6 @@ export async function loadWebglCtor(): Promise<WebglCtor | null> {
   try {
     webglCtor = (await import("@xterm/addon-webgl")).WebglAddon;
     return webglCtor;
-  } catch {
-    return null;
-  }
-}
-
-/** Load the Canvas addon constructor; null means the caller should stay on the DOM renderer. */
-export async function loadCanvasCtor(): Promise<CanvasCtor | null> {
-  if (canvasCtor) return canvasCtor;
-  try {
-    canvasCtor = (await import("@xterm/addon-canvas")).CanvasAddon;
-    return canvasCtor;
   } catch {
     return null;
   }

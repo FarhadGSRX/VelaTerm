@@ -1,5 +1,6 @@
 //! Project code intelligence. CodeGraph owns its index; VelaTerm owns jobs and memory associations.
 mod runtime;
+mod worker;
 mod graph;
 mod links;
 pub mod agent;
@@ -148,7 +149,12 @@ fn synchronize(app: &AppCtx, index: &Index, job: Option<&str>) -> Result<Value> 
     runtime::audit(app, &index.id, "INFO", "sync_started", 0);
     let command = if root.join(".codegraph/codegraph.db").is_file() { "sync" } else { "init" };
     let result = (|| {
-        runtime::run(app, index, job, command)?;
+        if job.is_some() {
+            worker::stop(app, &index.root);
+            runtime::run(app, index, job, command)?;
+        } else {
+            worker::query(app, index, &json!({"action":"sync"}))?;
+        }
         let stats = graph::stats(&root)?;
         if stats["state"] != "complete" { return Err("knowledge_partial".into()); }
         Ok(stats)
@@ -181,9 +187,31 @@ pub fn dispatch(app: &AppCtx, cmd: &str, args: &Value) -> Result<Value> {
         "knowledge_runtime" => runtime::status(app),
         "knowledge_start" => start(app, required(args,"id")?),
         "knowledge_disable" => {
-            let id = required(args,"id")?; get(app,id)?;
+            let id = required(args,"id")?; let index = get(app,id)?;
             app.db().conn.lock().map_err(|e| e.to_string())?.execute("UPDATE knowledge_indexes SET enabled=0,status='disabled',job_id='',error='',updated_at=?1 WHERE id=?2",params![now(),id]).map_err(|e| e.to_string())?;
-            app.emit("knowledge://changed", ()); Ok(Value::Null)
+            worker::stop(app,&index.root); app.emit("knowledge://changed", ()); Ok(Value::Null)
+        },
+        "knowledge_query" => {
+            let id = required(args,"id")?;
+            let action = required(args,"action")?;
+            if !["explore","search","files","impact","path","callers","callees","status"].contains(&action) { return Err("knowledge_invalid".into()); }
+            let text = args.get("query").and_then(Value::as_str).unwrap_or("");
+            if text.len()>10_000 { return Err("knowledge_invalid".into()); }
+            let mut request = json!({"action":action,"query":text,"page":args.get("page").and_then(Value::as_u64).unwrap_or(0).min(100_000),"limit":40,"depth":args.get("depth").and_then(Value::as_u64).unwrap_or(3).clamp(1,6),"maxFiles":12});
+            if ["impact","path","callers","callees"].contains(&action) {
+                request["nodeId"] = json!(required(args,"nodeId")?);
+            }
+            if action=="path" { request["targetId"] = json!(required(args,"targetId")?); }
+            let index = ready(app,id)?;
+            if action=="search" && text.trim().is_empty() {
+                let page=request["page"].as_u64().unwrap_or(0);
+                let mut value=graph::search(Path::new(&index.root),"",page)?;
+                value["hasMore"]=json!((page+1)*40<value["total"].as_u64().unwrap_or(0));
+                return Ok(value);
+            }
+            if let Some(node_id) = request["nodeId"].as_str() { graph::find(&graph::open(Path::new(&index.root))?,node_id)?; }
+            if let Some(node_id) = request["targetId"].as_str() { graph::find(&graph::open(Path::new(&index.root))?,node_id)?; }
+            worker::query(app,&index,&request)
         },
         "knowledge_search" => {
             let index = ready(app, required(args,"id")?)?;
@@ -209,7 +237,7 @@ pub fn dispatch(app: &AppCtx, cmd: &str, args: &Value) -> Result<Value> {
 pub fn guard_paths(app: &AppCtx, cmd: &str, args: &Value, guard: impl Fn(&str) -> Result<()>) -> Result<()> {
     if cmd=="knowledge_list" {
         for root in roots(app,required(args,"projectId")?)? { guard(&root)?; }
-    } else if matches!(cmd,"knowledge_start" | "knowledge_search" | "knowledge_node" | "knowledge_disable") {
+    } else if matches!(cmd,"knowledge_start" | "knowledge_search" | "knowledge_node" | "knowledge_disable" | "knowledge_query") {
         guard(&get(app,required(args,"id")?)?.root)?;
     } else if cmd=="knowledge_link" { guard(&get(app,required(args,"indexId")?)?.root)?; }
     else if matches!(cmd,"knowledge_links" | "knowledge_review" | "knowledge_unlink") {

@@ -1,3 +1,4 @@
+import { marked } from "marked";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatEvent, ChatPermission, ChatSnapshot } from "../../../ipc/chat";
@@ -42,13 +43,30 @@ beforeEach(() => {
   snapshotOverrides = {};
   permissions = [];
   vi.mocked(invoke).mockReset();
-  vi.mocked(onTransportReconnect).mockImplementation(callback => { reconnectCallback = callback; return () => {}; });
-  vi.mocked(listen).mockImplementation((_name, callback) => {
-    eventCallback = callback as (event: ChatEvent) => void;
-    return Promise.resolve(() => {});
+  const reconnectListeners = new Set<() => void>();
+  reconnectCallback = () => reconnectListeners.forEach(callback => callback());
+  vi.mocked(onTransportReconnect).mockImplementation(callback => {
+    reconnectListeners.add(callback); return () => { reconnectListeners.delete(callback); };
   });
-  useTermStore.setState({ chatModel: "old-model", chatModelByKind: { claude: "old-model" }, chatEffortByModel: {}, runtimes: {} });
-  vi.mocked(invoke).mockImplementation((command) => {
+  const chatListeners = new Set<(event: ChatEvent) => void>();
+  eventCallback = event => chatListeners.forEach(callback => callback(event));
+  vi.mocked(listen).mockImplementation((name, callback) => {
+    const listener = callback as (event: ChatEvent) => void;
+    if (name === "chat://event/s") chatListeners.add(listener);
+    return Promise.resolve(() => { chatListeners.delete(listener); });
+  });
+  useTermStore.setState({ chatModel: "old-model", chatModelByKind: { claude: "old-model" }, chatEffortByModel: {}, runtimes: {}, agentDefaults: {} });
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "agent_permission_catalog") {
+      const agent = (args as { agent: string }).agent;
+      return Promise.resolve({ modes: agent === "codex" ? ["read-only", "auto", "full-access"]
+        : agent === "opencode" ? ["default", "bypassPermissions"]
+        : ["plan", "default", "acceptEdits", "auto", "bypassPermissions"], selected: "default" }) as Promise<never>;
+    }
+    if (command === "agent_set_default_permission") {
+      const { agent, mode } = args as { agent: string; mode: string };
+      return Promise.resolve({ [agent]: { permissionMode: mode } }) as Promise<never>;
+    }
     if (command === "chat_snapshot") return Promise.resolve({
       submissionReceipts: true, running: true, model: "old-model", mode: "default", rows: [], queue: [], permissions, commands: [], configKeys: [], ...snapshotOverrides,
     }) as Promise<never>;
@@ -95,6 +113,7 @@ async function mountPane(kind: "claude" | "codex" | "opencode" = "claude", expec
   const view = render(<ChatPane session={{ id: "s", projectId: "p", name: "Claude", kind, engine: "chat", collapsed: false, sortOrder: 0, createdAt: 0 }}
     area={{}} hidden={false} focused multi={false} onActivate={() => {}} onSplit={() => {}} onClose={() => {}} />);
   await waitFor(() => expect((screen.getByRole("combobox", { name: "Model" }) as HTMLSelectElement).value).toBe(expectedModel));
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
   return view;
 }
 
@@ -173,21 +192,231 @@ it("guards queue editors mounted after the pane and removes the listener on unmo
   expect(insert()).toBe(true);
 });
 
+it("recalls session inputs in order while busy and restores the unsent draft", async () => {
+  snapshotOverrides = { rows: [
+    { kind: "user", id: "old", text: "First input" },
+    { kind: "assistant", id: "answer", text: "Do not recall answers", streaming: false },
+    { kind: "user", id: "image", text: "" },
+    { kind: "user", id: "external", text: "Another session's message", origin: {
+      sessionId: "other", name: "Other", agent: "codex", role: "session",
+    } },
+    { kind: "user", id: "new", text: "Second input" },
+  ], queue: [
+    { id: "queued", text: "Queued input" },
+    { id: "external-queued", text: "Another session's queued message", origin: {
+      sessionId: "other", name: "Other", agent: "codex", role: "session",
+    } },
+  ] };
+  useTermStore.setState({ runtimes: { s: { status: "running", agent: "codex", agentState: "working" } } });
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Unsent draft" } });
+  input.setSelectionRange(0, 0);
+  for (const expected of ["Queued input", "Second input", "First input", "First input"]) {
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(input.value).toBe(expected);
+    expect(input.selectionStart).toBe(0);
+  }
+  for (const expected of ["Second input", "Queued input", "Unsent draft"]) {
+    input.setSelectionRange(input.value.length, input.value.length);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.value).toBe(expected);
+  }
+  expect(input.selectionStart).toBe(0);
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+});
+
+it("leaves multiline caret movement, selection, modified arrows and IME input to the editor", async () => {
+  snapshotOverrides = { rows: [{ kind: "user", id: "old", text: "History\nContinuation" }] };
+  const { container } = await mountPane();
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "First line\nSecond line" } });
+  for (const [start, end, options] of [
+    [12, 12, {}], [0, 5, {}], [0, 0, { shiftKey: true }], [0, 0, { ctrlKey: true }],
+    [0, 0, { altKey: true }], [0, 0, { metaKey: true }], [0, 0, { isComposing: true }],
+    [0, 0, { keyCode: 229 }],
+  ] as const) {
+    input.setSelectionRange(start, end);
+    expect(fireEvent.keyDown(input, { key: "ArrowUp", ...options })).toBe(true);
+    expect(input.value).toBe("First line\nSecond line");
+  }
+  input.setSelectionRange(0, 0);
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input.value).toBe("History\nContinuation");
+  expect(fireEvent.keyDown(input, { key: "ArrowDown" })).toBe(true);
+  expect(input.value).toBe("History\nContinuation");
+});
+
+it("keeps the history position when queued input becomes a row and when newer input arrives", async () => {
+  snapshotOverrides = { rows: [{ kind: "user", id: "old", text: "Same input" }],
+    queue: [{ id: "queued", text: "Same input" }] };
+  const { container } = await mountPane();
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  act(() => {
+    eventCallback({ type: "rows", rows: [
+      { kind: "user", id: "queued", text: "Same input" },
+      { kind: "user", id: "latest", text: "New input" },
+    ] });
+    eventCallback({ type: "queued", items: [] });
+  });
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input.value).toBe("Same input");
+  input.setSelectionRange(input.value.length, input.value.length);
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(input.value).toBe("Same input");
+  expect(input.selectionStart).toBe(input.value.length);
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(input.value).toBe("New input");
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(input.value).toBe("");
+});
+
+it("recalls a submitted edit as the latest input and starts a fresh draft after sending", async () => {
+  snapshotOverrides = { rows: [{ kind: "user", id: "old", text: "History" }] };
+  const { container } = await mountPane();
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Original draft" } });
+  input.setSelectionRange(0, 0);
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  fireEvent.change(input, { target: { value: "Edited history" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(useOutbox.getState().sessions.s?.[0].status).toBe("sent"));
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input.value).toBe("Edited history");
+  input.setSelectionRange(input.value.length, input.value.length);
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(input.value).toBe("");
+});
+
+it("loads earlier pages once, preserves live messages, and reaches the first message", async () => {
+  useTermStore.setState({ searchOpen: false });
+  snapshotOverrides = { startedAt: 17, rowsRevision: 1, hasMore: true,
+    positions: { recent: 1000 }, rows: [{ kind: "user", id: "recent", text: "Recent message" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let finishHistory!: (value: unknown) => void;
+  const pages: string[] = [];
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    const before = (args?.window as { before?: string } | undefined)?.before;
+    if (command !== "chat_snapshot" || !before) return previous(command, args);
+    pages.push(before);
+    if (before === "recent") return new Promise<unknown>(resolve => { finishHistory = resolve; }) as Promise<never>;
+    return Promise.resolve({ ...snapshotOverrides, pageKind: "history", hasMore: false,
+      positions: { first: 0 }, rows: [{ kind: "user", id: "first", text: "First message" }] }) as Promise<never>;
+  });
+  const { container } = await mountPane();
+  fireEvent.click(container.querySelector(".sv-history-more")!);
+  fireEvent.click(container.querySelector(".sv-history-more")!);
+  expect(pages).toEqual(["recent"]);
+  act(() => eventCallback({ type: "rows", epoch: 17, revision: 3, positions: { live: 1001 },
+    rows: [{ kind: "user", id: "live", text: "Live message" }] }));
+  await act(async () => finishHistory({ ...snapshotOverrides, pageKind: "history", hasMore: true,
+    positions: { older: 400 }, rows: [{ kind: "user", id: "older", text: "Older message" }] }));
+  fireEvent.click(container.querySelector(".sv-history-more")!);
+  await waitFor(() => expect(container.querySelector(".sv-history-more")).toBeNull());
+  expect(pages).toEqual(["recent", "older"]);
+  expect([...container.querySelectorAll(".sv-item[data-search-id]")].map(item => item.getAttribute("data-search-id")))
+    .toEqual(["first", "older", "recent", "live"]);
+  expect(screen.getByText("Live message")).toBeTruthy();
+});
+
+it("keeps failed history loading retryable beside the earlier-message control", async () => {
+  useTermStore.setState({ searchOpen: false });
+  snapshotOverrides = { hasMore: true, rows: [{ kind: "user", id: "recent", text: "Recent message" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let attempts = 0;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command !== "chat_snapshot" || !(args?.window as { before?: string } | undefined)?.before) return previous(command, args);
+    attempts += 1;
+    return (attempts === 1 ? Promise.reject(new Error("History temporarily unavailable")) : Promise.resolve({
+      ...snapshotOverrides, pageKind: "history", hasMore: false,
+      rows: [{ kind: "user", id: "first", text: "First message" }],
+    })) as Promise<never>;
+  });
+  const { container } = await mountPane();
+  fireEvent.click(container.querySelector(".sv-history-more")!);
+  await waitFor(() => expect(container.querySelector(".sv-history [role=alert]")?.textContent).toContain("History temporarily unavailable"));
+  expect(screen.getByText("Recent message")).toBeTruthy();
+  fireEvent.scroll(container.querySelector(".sv-scroll")!);
+  expect(attempts).toBe(1);
+  fireEvent.click(container.querySelector(".sv-history-more")!);
+  await waitFor(() => expect(screen.getByText("First message")).toBeTruthy());
+  expect(container.querySelector(".sv-history")).toBeNull();
+  expect(attempts).toBe(2);
+});
+
+it("loads older pages until an input is found and can recall a slash command without completing it", async () => {
+  snapshotOverrides = { hasMore: true, rows: [{ kind: "user", id: "recent", text: "Recent input" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    const before = (args?.window as { before?: string } | undefined)?.before;
+    if (command === "chat_snapshot" && before) return Promise.resolve({
+      ...snapshotOverrides, pageKind: "history", hasMore: before === "recent",
+      rows: before === "recent"
+        ? [{ kind: "assistant", id: "answer", text: "Older answer", streaming: false }]
+        : [{ kind: "user", id: "older", text: "/review" }],
+    }) as Promise<never>;
+    return previous(command, args);
+  });
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(input.value).toBe("Recent input");
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  await waitFor(() => expect(input.value).toBe("/review"));
+  expect(container.querySelector(".sv-complete")).toBeNull();
+  input.setSelectionRange(input.value.length, input.value.length);
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(input.value).toBe("Recent input");
+});
+
+it.each(["edit", "down"])("does not overwrite the draft when older history finishes after %s", async action => {
+  snapshotOverrides = { hasMore: true, rows: [{ kind: "assistant", id: "answer", text: "Answer", streaming: false }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let finishHistory!: (value: unknown) => void;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_snapshot" && (args?.window as { before?: string } | undefined)?.before
+    ? new Promise<unknown>(resolve => { finishHistory = resolve; }) as Promise<never> : previous(command, args));
+  const { container } = await mountPane();
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  await waitFor(() => expect(finishHistory).toBeTypeOf("function"));
+  if (action === "edit") fireEvent.change(input, { target: { value: "Keep the new draft" } });
+  else fireEvent.keyDown(input, { key: "ArrowDown" });
+  await act(async () => finishHistory({ ...snapshotOverrides, pageKind: "history", hasMore: false,
+    rows: [{ kind: "user", id: "old", text: "Old input" }] }));
+  expect(input.value).toBe(action === "edit" ? "Keep the new draft" : "");
+});
+
 it("labels OpenCode replies with their own models instead of the current selection", async () => {
   const { container } = await mountPane("opencode");
   act(() => eventCallback({ type: "replaceRows", rows: [
+    { kind: "user", id: "u1", text: "First question" },
     { kind: "assistant", id: "a", text: "First answer", streaming: false, model: "deepseek-v4-pro" },
+    { kind: "user", id: "u2", text: "Second question" },
     { kind: "assistant", id: "b", text: "Second answer", streaming: true, model: "glm-5.3" },
+    { kind: "user", id: "u3", text: "Third question" },
     { kind: "assistant", id: "c", text: "Legacy answer", streaming: false },
   ] }));
   const authors = () => Array.from(container.querySelectorAll(".sv-msg-who"), (node) => node.textContent);
-  await waitFor(() => expect(authors()).toEqual(["deepseek-v4-pro", "glm-5.3", "OpenCode"]));
+  await waitFor(() => expect(authors()).toEqual(["You", "deepseek-v4-pro", "You", "glm-5.3", "You", "OpenCode"]));
   act(() => eventCallback({ type: "settingsChanged", model: "new-model" }));
-  expect(authors()).toEqual(["deepseek-v4-pro", "glm-5.3", "OpenCode"]);
+  expect(authors()).toEqual(["You", "deepseek-v4-pro", "You", "glm-5.3", "You", "OpenCode"]);
   act(() => eventCallback({ type: "rows", rows: [
     { kind: "assistant", id: "b", text: "Second answer completed", streaming: false, model: "glm-5.3" },
   ] }));
-  expect(authors()).toEqual(["deepseek-v4-pro", "glm-5.3", "OpenCode"]);
+  expect(authors()).toEqual(["You", "deepseek-v4-pro", "You", "glm-5.3", "You", "OpenCode"]);
+});
+
+it("opens the agent's line above its reasoning, not under the prompt", async () => {
+  const { container } = await mountPane();
+  act(() => eventCallback({ type: "replaceRows", rows: [
+    { kind: "user", id: "u1", text: "Question" },
+    { kind: "reasoning", id: "r1", text: "Thinking it over", streaming: false },
+    { kind: "assistant", id: "a1", text: "Answer", streaming: false, model: "some-model" },
+  ] }));
+  const reasoning = container.querySelector('[data-search-id="r1"]')!;
+  expect(reasoning.querySelector(".sv-turn-head .sv-msg-who")?.textContent).toBe("some-model");
+  expect(container.querySelector('[data-search-id="a1"] .sv-msg-head')).toBeNull();
 });
 
 it.each(["claude", "codex"] as const)("preserves %s reply labels without model metadata", async (kind) => {
@@ -213,6 +442,60 @@ it("keeps the confirmed model and saved default while a change waits or is rejec
   await act(async () => complete());
   expect(select.value).toBe("new-model");
   expect(useTermStore.getState().chatModelByKind.claude).toBe("new-model");
+});
+
+it("keeps the saved restart notice after Later without restarting or changing current permissions", async () => {
+  await mountPane();
+  const select = screen.getByRole("combobox", { name: "Permission mode" }) as HTMLSelectElement;
+  fireEvent.change(select, { target: { value: "bypassPermissions" } });
+  await act(async () => reject(new Error("CHAT_PERMISSION_RESTART_REQUIRED:123")));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect(select.value).toBe("default");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_restart_permission_mode")).toBe(false);
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "session_permission_state"
+    ? Promise.resolve({ configured: "bypassPermissions", current: "default", launch: "default",
+      pending: "bypassPermissions", activation: "restart", running: true }) as Promise<never>
+    : previous(command, args));
+  fireEvent.click(screen.getByRole("button", { name: "Later" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  act(() => reconnectCallback());
+  expect(await screen.findByText("Applies after restarting this session: Bypass")).toBeTruthy();
+  expect(select.value).toBe("default");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_restart_permission_mode")).toBe(false);
+});
+
+it("turns a late permission rejection event into the restart confirmation", async () => {
+  await mountPane();
+  act(() => eventCallback({ type: "error", message: "CHAT_PERMISSION_RESTART_REQUIRED:123" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect((screen.getByRole("combobox", { name: "Permission mode" }) as HTMLSelectElement).value).toBe("default");
+});
+
+it.each(["success", "rejected", "disconnected"])("handles a confirmed Bypass restart: %s", async outcome => {
+  const accepted = outcome === "success";
+  await mountPane();
+  const select = screen.getByRole("combobox", { name: "Permission mode" }) as HTMLSelectElement;
+  fireEvent.change(select, { target: { value: "bypassPermissions" } });
+  await act(async () => reject(new Error("CHAT_PERMISSION_RESTART_REQUIRED:123")));
+  let finish!: () => void;
+  let fail!: (error: Error) => void;
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_restart_permission_mode"
+    ? new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; }) as Promise<never>
+    : previous(command, args));
+  fireEvent.click(screen.getByRole("button", { name: "Restart and apply" }));
+  expect(invoke).toHaveBeenCalledWith("chat_restart_permission_mode", { sessionId: "s", pid: 123 });
+  expect(select.value).toBe("default");
+  expect((screen.getByRole("button", { name: "Restarting…" }) as HTMLButtonElement).disabled).toBe(true);
+  const failure = new Error("Policy rejected the permission change");
+  if (outcome === "disconnected") failure.name = "TransportError";
+  await act(async () => accepted ? finish() : fail(failure));
+  expect(select.value).toBe(accepted ? "bypassPermissions" : "default");
+  expect(useTermStore.getState().agentDefaults.claude?.permissionMode).toBe(accepted ? "bypassPermissions" : undefined);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  if (outcome === "rejected") expect(screen.getByText(/Permission change failed.*Policy rejected/)).toBeTruthy();
+  if (outcome === "disconnected") expect(screen.getByText(/The permission change could not be confirmed/)).toBeTruthy();
 });
 
 it("retains the approval card and does not approve the tool when its required mode change fails", async () => {
@@ -329,6 +612,14 @@ for (const kind of ["claude", "codex", "opencode"] as const) {
     expect(screen.getByText("Steering message sent")).toBeTruthy();
   });
 }
+
+it("sends normally when Alt+Enter arrives with no running turn", async () => {
+  const { container } = await mountPane();
+  const input = container.querySelector(".sv-composer textarea") ?? screen.getByRole("textbox");
+  fireEvent.change(input, { target: { value: "Hello" } });
+  fireEvent.keyDown(input, { key: "Enter", altKey: true });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_send", expect.objectContaining({ behavior: "queue", text: "Hello" })));
+});
 
 it("shows stopping immediately on one Escape and completion only after confirmation", async () => {
   const { container } = await mountPane();
@@ -466,7 +757,7 @@ it("searches the focused session and closes without interrupting a running turn"
   fireEvent.click(screen.getByTitle("Search…"));
   const input = screen.getByRole("textbox", { name: "Search transcript…" });
   fireEvent.change(input, { target: { value: "history" } });
-  expect(screen.getByRole("status").textContent).toBe("1/1");
+  expect(screen.getByRole("status", { name: "1 of 1" }).textContent).toBe("1/1");
   expect(container.querySelector(".sv-search-match")?.textContent).toContain("Searchable history");
   vi.mocked(invoke).mockClear();
   fireEvent.keyDown(input, { key: "Escape" });
@@ -511,7 +802,7 @@ it("waits for the skill catalogue and retries a failed lookup without sending th
   const { container } = await mountPane("codex");
   const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
   fireEvent.change(input, { target: { value: "$vsp", selectionStart: 4 } });
-  await screen.findByRole("status");
+  await screen.findByRole("status", { name: "" });
   fireEvent.keyDown(input, { key: "Enter" });
   expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "chat_send")).toBe(false);
   await act(async () => failLookup(new Error("Skill lookup failed")));
@@ -544,12 +835,13 @@ it("keeps following layout growth and viewport changes, but preserves manual his
       clientHeight: { get: () => viewport },
       scrollTop: { get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height - viewport)); } },
     });
-    const resize = () => act(() => {
+    const resize = () => act(async () => {
       for (const [observer, record] of [...observers]) {
         if (record.targets.has(scroll)) record.callback([], observer);
       }
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     });
-    resize();
+    await resize();
     expect(top).toBe(800);
     // A layout-induced scroll can arrive before ResizeObserver.
     height = 1800;
@@ -557,17 +849,17 @@ it("keeps following layout growth and viewport changes, but preserves manual his
     expect(top).toBe(1400);
     expect(container.querySelector(".sv-to-end")).toBeNull();
     viewport = 250;
-    resize();
+    await resize();
     expect(top).toBe(1550);
     height = 2100;
-    resize();
+    await resize();
     expect(top).toBe(1850);
     // Actual upward scrolling parks history, even as later content grows.
     scroll.scrollTop = 900;
     fireEvent.scroll(scroll);
     expect(container.querySelector(".sv-to-end")).toBeTruthy();
     height = 2500;
-    resize();
+    await resize();
     expect(top).toBe(900);
     const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
     fireEvent.change(input, { target: { value: "Continue" } });
@@ -575,7 +867,7 @@ it("keeps following layout growth and viewport changes, but preserves manual his
     await waitFor(() => expect(input.value).toBe(""));
     expect(top).toBe(2250);
     height = 2800;
-    resize();
+    await resize();
     expect(top).toBe(2550);
     expect(container.querySelector(".sv-to-end")).toBeNull();
   } finally {
@@ -604,10 +896,196 @@ it("offers only Codex conversation rewind and sends no file restore request", as
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_rewind_preview")).toBe(false);
 });
 
+it("shows the irreversible warning for an OpenCode rewind without a file preview", async () => {
+  snapshotOverrides = { rewindScopes: ["both"], rows: [{ kind: "user", id: "u-opencode", text: "Edit the fixture" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind_preview"
+    ? Promise.resolve({ canRewind: true }) as Promise<never> : previous(command, args));
+  await mountPane("opencode");
+  fireEvent.click(await screen.findByRole("button", { name: "Rewind from here" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind conversation and restore files" }));
+  await waitFor(() => expect(screen.getByText("This cannot be undone.")).toBeTruthy());
+  expect(screen.queryByText(/files? will change/)).toBeNull();
+});
+
+it("opens Codex rewind on the first Enter and can reopen it before confirming", async () => {
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "u-command", text: "Command target" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind"
+    ? Promise.resolve({ prefillText: "Command target" }) as Promise<never> : previous(command, args));
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  const scroll = container.querySelector<HTMLDivElement>(".sv-scroll")!;
+  Object.defineProperties(scroll, { scrollHeight: { value: 2000 }, clientHeight: { value: 500 } });
+  const message = screen.getByText("Command target").closest<HTMLDivElement>(".sv-msg")!;
+  // jsdom has no layout or scrollIntoView. Simulate the browser locating the user message.
+  message.scrollIntoView = vi.fn(() => { scroll.scrollTop = 25; });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    fireEvent.change(input, { target: { value: "/rewind" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("button", { name: "Rewind conversation" });
+    await waitFor(() => expect(message.scrollIntoView).toHaveBeenCalledTimes(attempt + 1));
+    fireEvent.click(screen.getByRole("button", { name: "Rewind conversation" }));
+    expect(scroll.scrollTop).toBe(25);
+    expect(input.value).toBe("");
+    if (attempt === 0) fireEvent.click(screen.getByRole("button", { name: "Keep as is" }));
+  }
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send" || command === "chat_rewind")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_rewind", {
+    sessionId: "s", rowId: "u-command", scope: "conversation",
+  }));
+  await waitFor(() => expect(input.value).toBe("Command target"));
+});
+
+it.each([
+  ["claude", "conversation", "Look at this", false],
+  ["claude", "both", "", true],
+  ["codex", "conversation", "", false],
+  ["codex", "conversation", "Look at this", true],
+  ["opencode", "both", "Look at this", false],
+  ["opencode", "both", "", true],
+] as const)("restores %s %s images to the composer (text=%s, reference=%s) and resends their bytes", async (kind, scope, text, reference) => {
+  const image = { mimeType: "image/png", data: "UE5H" };
+  const rowId = `restore-${kind}-${scope}-${reference}`;
+  snapshotOverrides = { rewindScopes: [scope], rows: [
+    { kind: "user", id: "keep", text: "Keep this earlier message" },
+    { kind: "user", id: rowId, text, images: [reference ? { mimeType: image.mimeType, attachmentId: `row:${rowId}:0` } : image] },
+    { kind: "assistant", id: "answer", text: "Obsolete answer", streaming: false },
+  ] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let resolveImage!: (value: typeof image) => void;
+  const imageReady = new Promise<typeof image>(resolve => { resolveImage = resolve; });
+  let rewound = false;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "chat_attachment") return (rewound ? Promise.reject(new Error("Attachment removed")) : imageReady) as Promise<never>;
+    if (command === "chat_rewind_preview") return Promise.resolve({ canRewind: true, filesChanged: [] }) as Promise<never>;
+    if (command === "chat_rewind") {
+      rewound = true;
+      eventCallback({ type: "replaceRows", rows: [snapshotOverrides.rows![0]] });
+      return Promise.resolve({ prefillText: text }) as Promise<never>;
+    }
+    return previous(command, args);
+  });
+  const { container } = await mountPane(kind);
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.click(screen.getAllByRole("button", { name: "Rewind from here" })[1]);
+  fireEvent.click(screen.getByRole("button", { name: scope === "both" ? "Rewind conversation and restore files" : "Rewind conversation" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "Rewind" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+  if (reference) {
+    expect(rewound).toBe(false);
+    await act(async () => resolveImage(image));
+  }
+  await waitFor(() => expect(container.querySelector<HTMLImageElement>(".sv-attach-thumb")?.src).toBe("data:image/png;base64,UE5H"));
+  expect(input.value).toBe(text);
+  expect(screen.getByText("Keep this earlier message")).toBeTruthy();
+  expect(screen.queryByText("Obsolete answer")).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text, images: [image] }));
+  expect(container.querySelector(".sv-attach-thumb")).toBeNull();
+});
+
+it("keeps unsent text and images when restoring an earlier image, and allows removing the restored attachment", async () => {
+  const image = { mimeType: "image/png", data: "UE5H" };
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "restore-draft", text: "Original", images: [image] }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind"
+    ? Promise.resolve({ prefillText: "Original" }) as Promise<never> : previous(command, args));
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Unsent draft" } });
+  fireEvent.paste(input, { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => new File(["draft"], "draft.png", { type: "image/png" }) }] } });
+  await waitFor(() => expect(container.querySelectorAll(".sv-attach-thumb")).toHaveLength(1));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind from here" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind conversation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+  await waitFor(() => expect(container.querySelectorAll(".sv-attach-thumb")).toHaveLength(2));
+  expect(input.value).toBe("Unsent draft");
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".sv-attach-drop")!);
+  expect(container.querySelectorAll(".sv-attach-thumb")).toHaveLength(1);
+  expect(container.querySelector<HTMLImageElement>(".sv-attach-thumb")?.alt).toBe("draft.png");
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({
+    text: "Unsent draft", images: [{ mimeType: "image/png", data: "ZHJhZnQ=" }],
+  }));
+});
+
+it.each(["attachment", "rewind"] as const)("keeps history and the composer unchanged when %s fails during image rewind", async failure => {
+  const image = { mimeType: "image/png", data: "UE5H" };
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: `failed-${failure}`, text: "Original with image",
+    images: [failure === "attachment" ? { mimeType: image.mimeType, attachmentId: "row:failed-attachment:0" } : image] }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === `chat_${failure}`
+    ? Promise.reject(new Error("Image rewind rejected")) : previous(command, args));
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Keep this draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Rewind from here" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind conversation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+  await screen.findByText("Error: Image rewind rejected");
+  expect(input.value).toBe("Keep this draft");
+  expect(container.querySelector(".sv-attach-thumb")).toBeNull();
+  expect(container.querySelector('[data-search-id="failed-' + failure + '"]')).toBeTruthy();
+  expect(document.querySelector(".sv-rewind-target")?.textContent).toContain("Original with image");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+  if (failure === "attachment") expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_rewind")).toBe(false);
+});
+
+it("preserves all images when rewind exceeds the attachment limit and waits for excess images to be removed", async () => {
+  const images = Array.from({ length: 4 }, () => ({ mimeType: "image/png", data: "UE5H" }));
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "restore-limit", text: "Original", images }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind"
+    ? Promise.resolve({ prefillText: "Original" }) as Promise<never> : previous(command, args));
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.paste(input, { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => new File(["draft"], "draft.png", { type: "image/png" }) }] } });
+  await waitFor(() => expect(container.querySelectorAll(".sv-attach-thumb")).toHaveLength(1));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind from here" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind conversation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+  await waitFor(() => expect(container.querySelectorAll(".sv-attach-thumb")).toHaveLength(5));
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.getByText("A message can include up to 4 images")).toBeTruthy();
+  expect(input.value).toBe("Original");
+  expect(container.querySelectorAll(".sv-attach-thumb")).toHaveLength(5);
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+  fireEvent.click([...container.querySelectorAll<HTMLButtonElement>(".sv-attach-drop")].at(-1)!);
+  expect(container.querySelector(".sv-attach-note")).toBeNull();
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text: "Original", images }));
+});
+
+it("leaves message images in history and the composer unchanged for file-only rewind", async () => {
+  snapshotOverrides = { rewindScopes: ["files"], rows: [{ kind: "user", id: "files-only", text: "Original with image", images: [{ mimeType: "image/png", data: "UE5H" }] }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "chat_rewind_preview") return Promise.resolve({ canRewind: true, filesChanged: [] }) as Promise<never>;
+    if (command === "chat_rewind") return Promise.resolve({ prefillText: null }) as Promise<never>;
+    return previous(command, args);
+  });
+  const { container } = await mountPane();
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Unsent draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Rewind from here" }));
+  fireEvent.click(screen.getByRole("button", { name: "Restore files" }));
+  await waitFor(() => expect((screen.getByRole("button", { name: "Rewind" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+  await waitFor(() => expect(container.querySelector(".sv-rewind-confirm")).toBeNull());
+  expect(input.value).toBe("Unsent draft");
+  expect(container.querySelector(".sv-attach-thumb")).toBeNull();
+  expect(container.querySelector('[data-search-id="files-only"] .sv-msg-image')).toBeTruthy();
+});
+
 it("receives native rewind scopes when Codex starts after the initial snapshot", async () => {
   snapshotOverrides = { running: false, rewindScopes: [], rows: [{ kind: "user", id: "u-native", text: "An earlier request" }] };
   await mountPane("codex");
-  expect(screen.queryByRole("button", { name: "Rewind from here" })).toBeNull();
+  expect((screen.getByRole("button", { name: "Rewind from here" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Rewind from here" }).title).toContain("not running");
   act(() => eventCallback({ type: "process", pid: 123, startedAt: 100, rewindScopes: ["conversation"] }));
   fireEvent.click(await screen.findByRole("button", { name: "Rewind from here" }));
   expect(screen.getByRole("button", { name: "Rewind conversation" })).toBeTruthy();
@@ -643,3 +1121,407 @@ for (const kind of ["claude", "codex", "opencode"] as const) {
     expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send" || command === "chat_queue_remove")).toBe(false);
   });
 }
+
+it("keeps restored Codex history visible when a new process resets the timeline", async () => {
+  snapshotOverrides = { startedAt: 100, rowsRevision: 10,
+    rows: [{ kind: "user", id: "previous-id", text: "Earlier question" }] };
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Continue here" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  act(() => eventCallback({ type: "reset", epoch: 200, revision: 1, hasMore: true,
+    rows: [{ kind: "user", id: "replayed-id", text: "Earlier question" }] }));
+  expect(screen.getByText("Earlier question")).toBeTruthy();
+  expect(screen.getByText("Continue here")).toBeTruthy();
+  expect(container.querySelector('[data-search-id="previous-id"]')).toBeNull();
+  expect(container.querySelector('[data-search-id="replayed-id"]')).toBeTruthy();
+  expect(container.querySelector(".sv-history-more")).toBeTruthy();
+  await act(async () => {});
+});
+
+it("confirms the target before removing history and resends the edit with its images", async () => {
+  const image = { mimeType: "image/png", data: "UE5H" };
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [
+    { kind: "user", id: "keep", text: "Keep this" },
+    { kind: "user", id: "edit", text: "Original", images: [image] },
+    { kind: "assistant", id: "answer", text: "Old answer", streaming: false },
+  ] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind"
+    ? Promise.resolve({ prefillText: "Original" }) as Promise<never> : previous(command, args));
+  await mountPane("codex");
+  fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+  fireEvent.change(screen.getByRole("textbox", { name: "Edit" }), { target: { value: "Replacement" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  expect(document.querySelector(".sv-rewind-target")?.textContent).toContain("Original");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_rewind")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_rewind", { sessionId: "s", rowId: "edit", scope: "conversation" }));
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(true));
+  const calls = vi.mocked(invoke).mock.calls;
+  expect(calls.findIndex(([command]) => command === "chat_rewind")).toBeLessThan(calls.findIndex(([command]) => command === "chat_send"));
+  expect(calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text: "Replacement", images: [image] });
+  expect(screen.getByText("Keep this")).toBeTruthy();
+  expect(screen.queryByText("Old answer")).toBeNull();
+});
+
+it("keeps the original conversation and edited text when rewind fails", async () => {
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "edit", text: "Original" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind"
+    ? Promise.reject(new Error("Rewind rejected")) : previous(command, args));
+  await mountPane("codex");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Edit" }), { target: { value: "Replacement" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await screen.findByText("Error: Rewind rejected");
+  expect((screen.getByRole("textbox", { name: "Edit" }) as HTMLTextAreaElement).value).toBe("Replacement");
+  expect(document.querySelector(".sv-rewind-target")?.textContent).toContain("Original");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+});
+
+it.each(["claude", "codex", "opencode"] as const)("resends the edited image selection for %s and preserves the composer draft", async kind => {
+  const original = { mimeType: "image/png", data: "T0xE" };
+  const kept = { mimeType: "image/png", data: "S0VFUA==" };
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: `edit-images-${kind}`, text: "Original", images: [original, { mimeType: "image/png", attachmentId: `row:edit-images-${kind}:1` }] }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_attachment"
+    ? Promise.resolve(kept) as Promise<never> : command === "chat_rewind"
+    ? Promise.resolve({ prefillText: "Original" }) as Promise<never> : previous(command, args));
+  const { container } = await mountPane(kind);
+  const composer = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(composer, { target: { value: "Unsent draft" } });
+  fireEvent.paste(composer, { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => new File(["DRAFT"], "draft.png", { type: "image/png" }) }] } });
+  await waitFor(() => expect(container.querySelectorAll(".sv-composer .sv-attach-item")).toHaveLength(1));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const editor = screen.getByRole("textbox", { name: "Edit" });
+  fireEvent.change(editor, { target: { value: " " } });
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".sv-message-editor .sv-attach-drop")!);
+  fireEvent.paste(editor, { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => new File(["NEW"], "new.png", { type: "image/png" }) }] } });
+  await waitFor(() => expect(container.querySelectorAll(".sv-message-editor .sv-attach-item")).toHaveLength(2));
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  const preview = container.querySelectorAll(".sv-rewind-target")[1];
+  await waitFor(() => expect(Array.from(preview.querySelectorAll("img"), image => image.src)).toEqual([
+    "data:image/png;base64,S0VFUA==", "data:image/png;base64,TkVX",
+  ]));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_rewind")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text: "", images: [kept, { mimeType: "image/png", data: "TkVX" }] }));
+  expect(composer.value).toBe("Unsent draft");
+  expect(container.querySelector<HTMLImageElement>(".sv-composer .sv-attach-thumb")?.src).toBe("data:image/png;base64,RFJBRlQ=");
+});
+
+it("does not restore removed images when resending only text", async () => {
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "remove-images", text: "Original",
+    images: [{ mimeType: "image/png", data: "T0xE" }] }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind"
+    ? Promise.resolve({ prefillText: "Original" }) as Promise<never> : previous(command, args));
+  const { container } = await mountPane("codex");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".sv-message-editor .sv-attach-drop")!);
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text: "Original", images: undefined }));
+});
+
+it("keeps edited images when a retained history attachment cannot be resolved", async () => {
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "edit-missing-image", text: "Original",
+    images: [{ mimeType: "image/png", attachmentId: "row:edit-missing-image:0" }] }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_attachment"
+    ? Promise.reject(new Error("History image unavailable")) : previous(command, args));
+  const { container } = await mountPane("codex");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.paste(screen.getByRole("textbox", { name: "Edit" }), { clipboardData: {
+    items: [{ kind: "file", type: "image/png", getAsFile: () => new File(["NEW"], "new.png", { type: "image/png" }) }],
+  } });
+  await waitFor(() => expect(container.querySelectorAll(".sv-message-editor .sv-attach-item")).toHaveLength(2));
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await screen.findByText("Error: History image unavailable");
+  expect(container.querySelectorAll(".sv-message-editor .sv-attach-item")).toHaveLength(2);
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_rewind" || command === "chat_send")).toBe(false);
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".sv-rewind-confirm .sv-deny")!);
+  fireEvent.click(container.querySelector<HTMLButtonElement>(".sv-message-editor .sv-attach-drop")!);
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_rewind"
+    ? Promise.resolve({ prefillText: "Original" }) as Promise<never> : previous(command, args));
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text: "Original", images: [{ mimeType: "image/png", data: "TkVX" }] }));
+});
+
+
+it.each(["claude", "opencode"] as const)("saves %s permission defaults only after the mode is accepted", async kind => {
+  await mountPane(kind);
+  const select = screen.getByRole("combobox", { name: "Permission mode" });
+  fireEvent.change(select, { target: { value: "bypassPermissions" } });
+  expect(invoke).not.toHaveBeenCalledWith("agent_set_default_permission", expect.anything());
+  await act(async () => reject(new Error("Permission rejected")));
+  expect(useTermStore.getState().agentDefaults).toEqual({});
+  fireEvent.change(select, { target: { value: "bypassPermissions" } });
+  await act(async () => complete());
+  expect(invoke).toHaveBeenCalledWith("agent_set_default_permission", { agent: kind, mode: "bypassPermissions" });
+  expect(useTermStore.getState().agentDefaults[kind]?.permissionMode).toBe("bypassPermissions");
+});
+
+it("keeps confirmed session permissions when saving the global default fails", async () => {
+  await mountPane("opencode");
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "agent_set_default_permission"
+    ? Promise.reject(new Error("Default save failed")) : previous(command, args));
+  const select = screen.getByRole("combobox", { name: "Permission mode" }) as HTMLSelectElement;
+  fireEvent.change(select, { target: { value: "bypassPermissions" } });
+  await act(async () => complete());
+  expect(select.value).toBe("bypassPermissions");
+  expect(useTermStore.getState().agentDefaults).toEqual({});
+  expect(screen.getByText("Error: Default save failed")).toBeTruthy();
+});
+
+
+it("keeps message actions visible while working and enables them again when idle", async () => {
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "u", text: "Earlier request" }] };
+  await mountPane("codex");
+  const rewind = screen.getByRole("button", { name: "Rewind from here" }) as HTMLButtonElement;
+  const edit = screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement;
+  expect(rewind.disabled).toBe(false);
+  act(() => useTermStore.setState({ runtimes: { s: { status: "running", agent: "codex", agentState: "working" } } }));
+  expect(screen.getByRole("button", { name: "Rewind from here" })).toBe(rewind);
+  expect(screen.getByRole("button", { name: "Edit" })).toBe(edit);
+  expect(rewind.disabled).toBe(true);
+  expect(edit.disabled).toBe(true);
+  expect(rewind.title).toContain("no active turn");
+  fireEvent.click(rewind);
+  fireEvent.click(edit);
+  expect(screen.queryByRole("button", { name: "Rewind conversation" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Edit" })).toBeNull();
+  act(() => useTermStore.setState({ runtimes: {} }));
+  expect(rewind.disabled).toBe(false);
+  expect(edit.disabled).toBe(false);
+  fireEvent.click(edit);
+  expect((screen.getByRole("textbox", { name: "Edit" }) as HTMLTextAreaElement).value).toBe("Earlier request");
+});
+
+it("keeps message actions visible but disabled while messages are queued", async () => {
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "u", text: "Earlier request" }], queue: [{ id: "q", text: "Queued" }] };
+  await mountPane("codex");
+  expect((screen.getByRole("button", { name: "Rewind from here" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(true);
+  act(() => eventCallback({ type: "queued", items: [] }));
+  expect((screen.getByRole("button", { name: "Rewind from here" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+
+it("does not reparse unchanged history while typing or moving the caret, but updates streamed Markdown", async () => {
+  snapshotOverrides = { rows: [
+    { kind: "user", id: "prompt", text: "Long audit instruction. ".repeat(2_000) },
+    { kind: "assistant", id: "reply", text: "Initial answer", streaming: true },
+  ] };
+  const { container } = await mountPane();
+  const lexer = vi.spyOn(marked, "lexer");
+  try {
+    const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+    fireEvent.change(input, { target: { value: "Follow-up question" } });
+    input.setSelectionRange(3, 3);
+    fireEvent.select(input);
+    expect(input.value).toBe("Follow-up question");
+    expect(lexer).not.toHaveBeenCalled();
+    act(() => eventCallback({ type: "rows", rows: [
+      { kind: "assistant", id: "reply", text: "Updated **answer**", streaming: false },
+    ] }));
+    expect(container.querySelector(".sv-msg-body strong")?.textContent).toBe("answer");
+    expect(lexer).toHaveBeenCalledTimes(1);
+    expect(lexer).toHaveBeenCalledWith("Updated **answer**");
+  } finally { lexer.mockRestore(); }
+});
+
+it("retains scroll observers during input and observes newly appended rows", async () => {
+  const instances: { observe: ReturnType<typeof vi.fn>; unobserve: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    observe = vi.fn(); unobserve = vi.fn(); disconnect = vi.fn();
+    constructor() { instances.push(this); }
+  });
+  try {
+    const { container, unmount } = await mountPane();
+    const scroll = container.querySelector(".sv-scroll")!;
+    const observer = instances.find(instance => instance.observe.mock.calls.some(([element]) => element === scroll))!;
+    expect(observer).toBeTruthy();
+    const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+    fireEvent.change(input, { target: { value: "Typing must not rebuild observers" } });
+    expect(observer.disconnect).not.toHaveBeenCalled();
+    act(() => eventCallback({ type: "rows", rows: [{ kind: "user", id: "appended", text: "New row" }] }));
+    await waitFor(() => expect(observer.observe).toHaveBeenCalledWith(container.querySelector('[data-search-id="appended"]')));
+    act(() => eventCallback({ type: "replaceRows", rows: [] }));
+    await waitFor(() => expect(observer.unobserve).toHaveBeenCalled());
+    unmount();
+    expect(observer.disconnect).toHaveBeenCalledTimes(1);
+  } finally { cleanup(); vi.unstubAllGlobals(); }
+});
+
+
+it("restores Codex authorization from the backend and retains the conversation after sign-in", async () => {
+  snapshotOverrides = { auth: { status: "required" }, rows: [{ kind: "user", id: "original", text: "Original conversation" }] };
+  const view = await mountPane("codex");
+  const begin = screen.getByRole("button", { name: "Sign in again" });
+  fireEvent.click(begin);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_auth_start", { sessionId: "s" }));
+  const pending = { status: "pending" as const, userCode: "ABCD-1234", verificationUrl: "https://auth.openai.com/codex/device" };
+  act(() => eventCallback({ type: "extras", extras: { auth: pending } }));
+  expect(screen.getByText("ABCD-1234")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Open authorization page" }).getAttribute("href")).toBe(pending.verificationUrl);
+  view.unmount();
+  snapshotOverrides.auth = pending;
+  await mountPane("codex");
+  expect(screen.getByText("ABCD-1234")).toBeTruthy();
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "success" } } }));
+  expect(screen.queryByText("ABCD-1234")).toBeNull();
+  expect(screen.getByText("Original conversation")).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Codex account" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Codex account" }).getAttribute("aria-expanded")).toBe("false");
+});
+
+it("keeps authentication commands out of read-only conversation views", async () => {
+  snapshotOverrides = { auth: { status: "required" } };
+  render(<ChatPane session={{ id: "s", projectId: "p", name: "Codex", kind: "codex", engine: "chat", collapsed: false, sortOrder: 0, createdAt: 0 }}
+    area={{}} hidden={false} focused multi={false} readOnly onActivate={() => {}} onSplit={() => {}} onClose={() => {}} />);
+  await act(async () => {});
+  expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Codex account" })).toBeNull();
+});
+
+
+it("offers manual sign-out without an auth error and requires confirmation before invoking it", async () => {
+  snapshotOverrides = { auth: undefined, rows: [{ kind: "user", id: "history", text: "Keep this conversation" }] };
+  await mountPane("codex");
+  expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Codex account" })).toBeNull();
+  const account = screen.getByRole("button", { name: "Codex account" });
+  fireEvent.click(account);
+  expect(screen.getByRole("button", { name: "Sign in again" })).toBeTruthy();
+  fireEvent.keyDown(account, { key: "Escape" });
+  expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+  fireEvent.click(account);
+  fireEvent.mouseDown(document.body);
+  expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+  fireEvent.click(account);
+  fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+  expect(screen.getByText(/This clears the shared account credentials/)).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "chat_auth_logout")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("button", { name: "Confirm sign-out" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+  const confirm = screen.getByRole("button", { name: "Confirm sign-out" });
+  fireEvent.click(confirm);
+  fireEvent.click(confirm);
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "chat_auth_logout")).toHaveLength(1));
+  expect(invoke).toHaveBeenCalledWith("chat_auth_logout", { sessionId: "s" });
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "signedOut" } } }));
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+  expect(screen.getByText("Keep this conversation")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_auth_start", { sessionId: "s" }));
+});
+
+it("keeps the stop shortcut available after folding a settings menu with the keyboard", async () => {
+  const { container } = await mountPane("codex");
+  act(() => useTermStore.setState({ runtimes: { s: { status: "running", agent: "codex", agentState: "working" } } }));
+  fireEvent.click(screen.getByRole("button", { name: "Codex account" }));
+  // Keyboard activation does not dispatch the outside mousedown that closes a nested popover.
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  expect(screen.queryByRole("button", { name: "Codex account" })).toBeNull();
+  fireEvent.keyDown(container.querySelector(".sv-box textarea")!, { key: "Escape" });
+  expect(invoke).toHaveBeenCalledWith("chat_interrupt", { sessionId: "s" });
+});
+
+it("disables account changes during work and shows a failed sign-out without claiming success", async () => {
+  snapshotOverrides = { turnStartedAt: Date.now() };
+  await mountPane("codex");
+  fireEvent.click(screen.getByRole("button", { name: "Codex account" }));
+  expect((screen.getByRole("button", { name: "Sign out" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Sign in again" }) as HTMLButtonElement).disabled).toBe(true);
+  act(() => useTermStore.setState({ runtimes: { s: { status: "running", agent: "codex", agentState: "working" } } }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Codex account" }), { key: "Escape" });
+  expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_interrupt")).toBe(false);
+  act(() => eventCallback({ type: "turnCompleted" }));
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "signingOut" } } }));
+  expect((screen.getByRole("button", { name: "Sign out" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "logoutFailed" } } }));
+  expect(screen.getByText("Could not confirm sign-out. Please try again.")).toBeTruthy();
+  expect(screen.queryByText("Signed out of Codex. Sign in to continue this conversation.")).toBeNull();
+  expect((screen.getByRole("button", { name: "Sign out" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it("folds canceled authorization back into the account menu, including after a reload", async () => {
+  snapshotOverrides = { auth: { status: "pending", userCode: "ABCD-1234", verificationUrl: "https://auth.openai.com/codex/device" } };
+  const view = await mountPane("codex");
+  expect(screen.getByText("ABCD-1234")).toBeTruthy();
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "canceled" } } }));
+  expect(screen.queryByRole("region", { name: "Codex account" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+  view.unmount();
+  snapshotOverrides.auth = { status: "canceled" };
+  await mountPane("codex");
+  expect(screen.queryByRole("region", { name: "Codex account" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Codex account" }));
+  expect(screen.getByRole("button", { name: "Sign in again" })).toBeTruthy();
+  expect(screen.queryByText("Sign-in canceled. You can try again at any time.")).toBeNull();
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "starting" } } }));
+  expect(screen.queryByRole("button", { name: "Codex account" })).toBeNull();
+  expect(screen.getAllByRole("region", { name: "Codex account" })).toHaveLength(1);
+});
+
+
+it("offers Claude account actions in the folded menu and keeps sign-out explicit", async () => {
+  snapshotOverrides = { rows: [{ kind: "user", id: "history", text: "Claude history" }] };
+  await mountPane("claude");
+  expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Claude account" }));
+  expect(screen.getByText(/Sign-in updates the Claude account/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+  expect(invoke).not.toHaveBeenCalledWith("chat_auth_logout", { sessionId: "s" });
+  fireEvent.click(screen.getByRole("button", { name: "Confirm sign-out" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_auth_logout", { sessionId: "s" }));
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "signedOut" } } }));
+  expect(screen.getByText("Signed out of Claude. Sign in to continue this conversation.")).toBeTruthy();
+  expect(screen.getByText("Claude history")).toBeTruthy();
+});
+
+it("restores Claude authorization after reload and submits the full code only to the account API", async () => {
+  snapshotOverrides = { auth: { status: "pending", verificationUrl: "https://claude.ai/oauth/authorize?state=test" } };
+  await mountPane("claude");
+  expect(screen.getByRole("link", { name: "Open authorization page" }).getAttribute("href")).toBe("https://claude.ai/oauth/authorize?state=test");
+  const input = screen.getByLabelText("Authorization code") as HTMLInputElement;
+  expect(input.type).toBe("password");
+  fireEvent.change(input, { target: { value: "test-code#test" } });
+  fireEvent.click(screen.getByRole("button", { name: "Submit code" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_auth_submit", { sessionId: "s", code: "test-code#test" }));
+  expect(input.value).toBe("");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "submitting" } } }));
+  expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "success" } } }));
+  expect(screen.queryByRole("region", { name: "Claude account" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Claude account" }).getAttribute("aria-expanded")).toBe("false");
+});
+
+it("shows Claude-specific login failures and folds a confirmed cancellation", async () => {
+  snapshotOverrides = { auth: { status: "failed" } };
+  await mountPane("claude");
+  expect(screen.getByText(/your Claude CLI supports account authorization/)).toBeTruthy();
+  expect(screen.queryByText(/Device code authentication/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_auth_start", { sessionId: "s" }));
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "starting" } } }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_auth_cancel", { sessionId: "s" }));
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "canceling" } } }));
+  expect(screen.getByText("Canceling sign-in…")).toBeTruthy();
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "canceled" } } }));
+  expect(screen.queryByRole("region", { name: "Claude account" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Claude account" })).toBeTruthy();
+});

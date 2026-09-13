@@ -5,6 +5,13 @@
 import { useEffect, useState } from "react";
 import { normalizeArgDashes } from "../../args";
 import Select from "../../components/Select";
+import {
+  LaunchLoadState,
+  ModelEffortFields,
+  useLaunchOptions,
+} from "../../components/LaunchFields";
+import { AgentPermissionSelect } from "../../components/AgentPermissionSelect";
+import { savePermissionDefault } from "../../hooks/useAgentPermissions";
 import { useT, type I18nKey } from "../../i18n";
 import {
   DEFAULT_BINDINGS,
@@ -22,7 +29,8 @@ import {
 import { isTauri } from "../../ipc/transport";
 import { env } from "../../platform";
 import { useTermStore } from "../../store/termStore";
-import type { SessionKind } from "../../types";
+import { defaultEngineFor } from "../../store/settings";
+import { supportsChatEngine, type SessionKind } from "../../types";
 import { kindIconEl } from "../sessionViewers/sessionMeta";
 import { Field, Seg, SectionTitle } from "./settingsParts";
 
@@ -343,6 +351,89 @@ function AgentPathBlock({
   );
 }
 
+/** Controls how another session's conversation is supplied when answering a reference question. */
+export function ReferenceContextPanel() {
+  const t = useT();
+  const referSummary = useTermStore((s) => s.referSummary);
+  const setReferSummary = useTermStore((s) => s.setReferSummary);
+  const launch = useLaunchOptions(referSummary.enabled);
+  const summaryOptions = launch.options.filter((option) => option.supportsReferSummary);
+  const summarySpec = summaryOptions.find((option) => option.id === referSummary.agent);
+
+  useEffect(() => {
+    if (!referSummary.enabled || launch.state !== "ready" || summarySpec || !summaryOptions[0]) return;
+    setReferSummary({ agent: summaryOptions[0].id as SessionKind, model: "", effort: "" });
+  }, [launch.state, referSummary.enabled, setReferSummary, summaryOptions, summarySpec]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        padding: 14,
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        background: "var(--bg-active)",
+      }}
+    >
+      <div>
+        <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 600 }}>
+          {t("settings.referSummaryTitle")}
+        </div>
+        <div style={{ marginTop: 5, color: "var(--text-dim)", fontSize: 11, lineHeight: 1.5 }}>
+          {t("settings.referSummaryHint")}
+        </div>
+      </div>
+      <Field label={t("settings.referSummaryMode")}>
+        <Seg<"full" | "summary">
+          value={referSummary.enabled ? "summary" : "full"}
+          options={[
+            ["full", t("settings.referSummaryFull")],
+            ["summary", t("settings.referSummaryFirst")],
+          ]}
+          onChange={(mode) => setReferSummary({ enabled: mode === "summary" })}
+        />
+      </Field>
+      {referSummary.enabled && (
+        <>
+          <LaunchLoadState state={launch.state} error={launch.error} retry={launch.retry} />
+          {launch.state === "ready" && summarySpec && (
+            <>
+              <Field label={t("settings.referSummaryAgent")}>
+                <Select<SessionKind>
+                  value={referSummary.agent}
+                  onChange={(agent) => setReferSummary({ agent, model: "", effort: "" })}
+                  options={summaryOptions.map((option) => ({
+                    value: option.id as SessionKind,
+                    label: option.label,
+                    icon: (
+                      <span style={{ display: "inline-flex", flex: "none" }}>
+                        {kindIconEl(option.id as SessionKind, 15)}
+                      </span>
+                    ),
+                  }))}
+                  width={220}
+                  align="right"
+                  menuPortal
+                />
+              </Field>
+              <div style={{ display: "grid", gap: 12, paddingTop: 2 }}>
+                <ModelEffortFields
+                  spec={summarySpec}
+                  model={referSummary.model}
+                  effort={referSummary.effort}
+                  onChange={(model, effort) => setReferSummary({ model, effort })}
+                />
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Agents category. Select an agent, then configure its executable path, default launch arguments,
  * and default permission mode in `store.agentDefaults`. New sessions use these when no explicit value
  * is supplied. Per-session values override defaults, except executable paths, which are always global. */
@@ -355,12 +446,14 @@ export function AgentsPanel() {
   const supportsYolo =
     !!meta?.yolo || meta?.permVia === "env" || meta?.permVia === "inverse";
   const cfg = agentDefaults[selKind] ?? {};
-  const skip = cfg.permissionMode === "skip";
+  const skip = ["skip", "bypassPermissions", "full-access"].includes(cfg.permissionMode ?? "");
   const isEnvPerm = meta?.permVia === "env";
 
   return (
     <>
       <SectionTitle>{t("settings.catAgents")}</SectionTitle>
+
+      <SectionTitle>{t("settings.agentDefaultsTitle")}</SectionTitle>
 
       <Field label={t("resume.agentType")}>
         <AgentSelect value={selKind} onChange={setSelKind} />
@@ -384,16 +477,10 @@ export function AgentsPanel() {
       />
 
       <Field label={t("info.permission")}>
-        {selKind === "codex" ? (
-          <Select
-            value={skip || cfg.permissionMode === "full-access" ? "skip" : cfg.permissionMode === "read-only" ? "read-only" : "auto"}
-            options={[
-              { value: "read-only", label: t("chat.mode.readOnly") },
-              { value: "auto", label: t("chat.mode.auto") },
-              { value: "skip", label: t("chat.mode.fullAccess") },
-            ]}
-            onChange={(v) => setAgentDefault(selKind, { permissionMode: v })}
-          />
+        <div style={{ marginBottom: 8, color: "var(--text-dim)", fontSize: 12 }}>{t("permission.defaultHint")}</div>
+        {["claude", "codex", "opencode"].includes(selKind) ? (
+          <AgentPermissionSelect key={selKind} kind={selKind} value={cfg.permissionMode}
+            onChange={mode => savePermissionDefault(selKind, mode)} />
         ) : supportsYolo ? (
           <Seg<"default" | "skip">
             value={skip ? "skip" : "default"}
@@ -430,6 +517,25 @@ export function AgentsPanel() {
             ? t("settings.permViaEnvHint")
             : t("settings.yoloHint", meta.yolo)}
         </div>
+      )}
+
+      {/* Only agents the chat engine can drive have two views; everything else always runs its own terminal. */}
+      {supportsChatEngine(selKind) && (
+        <>
+          <Field label={t("settings.agentDefaultView")}>
+            <Seg<"chat" | "tui">
+              value={cfg.engine ?? defaultEngineFor(selKind, agentDefaults)}
+              options={[
+                ["chat", t("session.showConversation")],
+                ["tui", t("session.showTerminal")],
+              ]}
+              onChange={(v) => setAgentDefault(selKind, { engine: v })}
+            />
+          </Field>
+          <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: "var(--text-dim)" }}>
+            {t("settings.agentDefaultViewHint")}
+          </div>
+        </>
       )}
 
       <div

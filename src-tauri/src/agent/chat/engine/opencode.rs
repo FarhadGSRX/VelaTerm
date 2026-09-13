@@ -144,7 +144,7 @@ pub(super) fn bootstrap(
                 // A session OpenCode no longer has cannot be resumed; a fresh one loses nothing that
                 // could be shown anyway.
                 Err(e) if wire::is_not_found(&e) => {
-                    eprintln!("chat: OpenCode has no session {id}; starting a new one");
+                    crate::diagnostic_warn!("chat: OpenCode has no session {id}; starting a new one");
                     server.post("/session", None)
                 }
                 Err(e) => Err(e),
@@ -185,7 +185,7 @@ pub(super) fn bootstrap(
         // it would pick by itself. None of these is fatal when missing; the conversation still works.
         match server.get("/agent") {
             Ok(agents) => announce_agents(&app, &session_id, &proc, &agents, session.get("agent")),
-            Err(e) => eprintln!("chat: OpenCode agents unavailable: {e}"),
+            Err(e) => crate::diagnostic_warn!("chat: OpenCode agents unavailable: {e}"),
         }
         match server.get("/command") {
             Ok(commands) => {
@@ -193,7 +193,7 @@ pub(super) fn bootstrap(
                 *proc.commands.lock().unwrap() = catalogue.clone();
                 emit(&app, &session_id, json!({"type":"commands","commands":catalogue}));
             }
-            Err(e) => eprintln!("chat: OpenCode commands unavailable: {e}"),
+            Err(e) => crate::diagnostic_warn!("chat: OpenCode commands unavailable: {e}"),
         }
         if proc.opencode.lock().unwrap().default_model.is_none() {
             if let Ok(providers) = server.get("/provider") {
@@ -210,7 +210,7 @@ pub(super) fn bootstrap(
         // also carries the child sessions' work and any staged revert.
         if resume.is_some() {
             if let Err(e) = rebuild_timeline(&proc, &server, &native_id) {
-                eprintln!("chat: OpenCode history not reloaded: {e}");
+                crate::diagnostic_warn!("chat: OpenCode history not reloaded: {e}");
             }
         }
         proc.ready.store(true, Ordering::Relaxed);

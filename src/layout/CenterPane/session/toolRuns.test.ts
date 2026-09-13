@@ -6,6 +6,7 @@ import type { ChatRow } from "../../../ipc/chat";
 import {
   estimateRowHeight,
   groupToolRuns,
+  markAgentTurns,
   mountedStart,
   runSummaryText,
   type DisplayRow,
@@ -86,6 +87,55 @@ describe("groupToolRuns", () => {
   it("leaves a conversation with no tool calls untouched", () => {
     const rows = [user("u1"), assistant("a1")];
     expect(shape(groupToolRuns(rows))).toEqual(["row:u1", "row:a1"]);
+  });
+});
+
+describe("markAgentTurns", () => {
+  it("marks the first entry of a turn and fills the line from its replies", () => {
+    const display = groupToolRuns([
+      user("u1"),
+      { kind: "reasoning", id: "r1", text: "hmm", streaming: false },
+      tool("t1", "Read"),
+      tool("t2", "Read"),
+      tool("t3", "Read"),
+      { kind: "assistant", id: "a1", text: "done", streaming: false, model: "m", at: 12_345, durationMs: 3_000 },
+      user("u2"),
+      assistant("a2"),
+    ]);
+    const out = markAgentTurns(display);
+    expect(out[0].head).toBeUndefined();
+    expect(out[1].head).toEqual({ who: "m", at: 12_345, durationMs: 3_000 });
+    expect(out[2].head).toBeUndefined();
+    expect(out[2].kind === "run" && out[2].calls.length).toBe(3);
+    expect(out[3].head).toBeUndefined();
+    expect(out[4].head).toBeUndefined();
+    expect(out[5].head).toEqual({});
+  });
+
+  it("leaves remarks about the conversation without an author line", () => {
+    const display = groupToolRuns([
+      user("u1"),
+      { kind: "notice", id: "n1", message: "retrying" },
+      { kind: "error", id: "e1", message: "failed" },
+      assistant("a1"),
+    ]);
+    const out = markAgentTurns(display);
+    expect(out[1].head).toBeUndefined();
+    expect(out[2].head).toBeUndefined();
+    expect(out[3].head).toEqual({});
+  });
+
+  it("marks a turn that was cut off at the top of history", () => {
+    const display = groupToolRuns([
+      { kind: "reasoning", id: "r1", text: "hmm", streaming: false },
+      assistant("a1"),
+    ]);
+    expect(markAgentTurns(display)[0].head).toEqual({});
+  });
+
+  it("counts the turn's line into the height estimate", () => {
+    const plain: DisplayRow = { kind: "row", id: "a", row: assistant("a") };
+    expect(estimateRowHeight({ ...plain, head: {} })).toBe(estimateRowHeight(plain) + 34);
   });
 });
 

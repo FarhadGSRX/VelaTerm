@@ -43,7 +43,14 @@ pub struct ServiceTier {
 }
 
 pub fn list(bin: &str, extra_args: &[String]) -> Result<Vec<CodexModel>, String> {
+    list_in_dir(bin, extra_args, None)
+}
+
+/// A launch draft may use project-local provider settings before a session exists.
+pub fn list_in_dir(bin: &str, extra_args: &[String], cwd: Option<&str>) -> Result<Vec<CodexModel>, String> {
     let mut command = Command::new(bin);
+    crate::agent::executable::prepare_command(&mut command, bin);
+    if let Some(cwd) = cwd { command.current_dir(cwd); }
     command.arg("app-server").arg("--stdio");
     command.args(app_server_args(extra_args));
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());

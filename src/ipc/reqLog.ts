@@ -1,3 +1,4 @@
+import { safeCommand, safeError } from "./diagnosticSafety";
 //! Central request-error recorder (last-resort capture layer).
 //!
 //! Previously, request failures were handled independently at call sites and most disappeared into `void` or
@@ -29,7 +30,8 @@ const subscribers = new Set<(entry: RequestErrorEntry) => void>();
 
 /** Record a failure in the buffer, console.error, and subscriber broadcast used for live Error Log updates. */
 export function recordRequestError(cmd: string, err: unknown): void {
-  const message = String(err instanceof Error ? err.message : err);
+  const message = safeError(err);
+  cmd = safeCommand(cmd);
   const entry: RequestErrorEntry = { ts: Date.now(), cmd, message };
   entries.push(entry);
   if (entries.length > MAX_ENTRIES) entries.shift();

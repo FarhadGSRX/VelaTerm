@@ -9,10 +9,16 @@
 //! same conversation. Closing the pane does let the agent process go once it is idle; the next message
 //! sent starts it again where the conversation left off.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useAgentPermissions, savePermissionDefault } from "../../../hooks/useAgentPermissions";
+import { useSessionPermissionState } from "../../../hooks/useSessionPermissionState";
+import { currentPermissionLabel, PermissionStateDetails } from "../../../components/PermissionStateDetails";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 
 import Icons from "../../../components/Icons";
+import { ComposerOptionsButton, useComposerOptions } from "./ComposerOptions";
+import { ComposerToolbar } from "./ComposerToolbar";
+import { ModelCatalogStatus } from "./ModelCatalogStatus";
 import { StatusIndicator } from "../../../components/StatusIndicator";
 import { useT, type I18nKey } from "../../../i18n";
 import {
@@ -24,6 +30,7 @@ import {
   chatQueueUpdate,
   chatRewind,
   chatRewindPreview,
+  resolveChatImage,
   chatSetMode,
   chatSetCollaborationMode,
   chatSetModel,
@@ -50,6 +57,7 @@ import {
   type ChatCollaborationMode,
   type ChatConfigKey,
   type ChatModel,
+  type ChatImageValue,
   type ChatPermission,
   type PendingPermissionMode,
   type ChatRewindPreview,
@@ -58,7 +66,7 @@ import {
   type QueuedMessage,
   type SendBehavior,
 } from "../../../ipc/chat";
-import { attachImages, MAX_IMAGE_BYTES, MAX_IMAGES, type Attachment } from "./attachments";
+import { attachImages, restoreAttachment, MAX_IMAGE_BYTES, MAX_IMAGES, type Attachment } from "./attachments";
 import { attachChatInputGuard } from "./inputGuard";
 import { buildSuggestions, findFileMention, mentionDir, type Suggestion } from "./completion";
 import { env } from "../../../platform/env";
@@ -67,11 +75,16 @@ import { IS_MAC, IS_PLAIN_BROWSER } from "../../../hooks/shortcutRegistry";
 import { useMentionFiles } from "./fileMentions";
 import { ControlChip, LevelBar, type ChipOption } from "./controls";
 import { FastModeChip, McpChip, NotificationBar, RetryLine, TasksChip, UsageMeter } from "./extras";
+import { AgentAccountMenu, AgentAuth } from "./AgentAuth";
+import { CodexResetCredits } from "./CodexResetCredits";
 import { useEngineSwitch } from "./engineSwitch";
+import { ConversationViewHint } from "./ConversationViewHint";
+import { isShareSurface } from "../../../ipc/shareBase";
+import { usePermissionRestart } from "./permissionRestart";
 import { PermissionCard, type PermissionAnswer } from "./permissionCards";
-import { isMode, modesFor, type Mode } from "./permissions";
+import { isMode, type Mode } from "./permissions";
 import { useTermStore } from "../../../store/termStore";
-import { effectiveStatus, type Session } from "../../../types";
+import { effectiveStatus, supportsPermissionToggle, type Session } from "../../../types";
 import { kindIconEl } from "../../sessionViewers/sessionMeta";
 import { assistantLabel } from "../../sessionViewers/TranscriptViewer";
 import {
@@ -84,11 +97,13 @@ import {
   ReasoningRow,
   ToolCard,
   ToolRunCard,
+  TurnHead,
   WorkingRow,
 } from "./rows";
 import {
   estimateRowHeight,
   groupToolRuns,
+  markAgentTurns,
   mountedStart,
   type DisplayRow,
 } from "./toolRuns";
@@ -97,7 +112,13 @@ import { onTransportReconnect } from "../../../ipc/transport";
 import { useOutbox, emptySubmissions, acknowledgeSubmissions, createSubmission, deliverSubmission, retrySubmission, submissionsFor, ChatVersions } from "./outbox";
 import { cachedChat, cacheChat, mergeRows, reconcileChat, chatSyncMetrics } from "./chatCache";
 import { ChatSearch } from "./ChatSearch";
+import { QueuedMessageText } from "./QueuedMessageText";
 import { SessionLinkDirectory } from "./links";
+
+interface MessageReplacement {
+  text: string;
+  images: ChatImageValue[];
+}
 
 /** Distance from the bottom still counted as "at the bottom", in pixels. */
 const PIN_SLACK = 40;
@@ -151,6 +172,11 @@ function modeLabelKey(mode: Mode): I18nKey {
   return `chat.mode.${mode}` as I18nKey;
 }
 
+/** OMP's `default` defers to its own approval configuration, which reads differently from OpenCode's. */
+function modeLabelKeyFor(kind: Session["kind"], mode: Mode): I18nKey {
+  return kind === "omp" && mode === "default" ? "chat.mode.agentDefault" : modeLabelKey(mode);
+}
+
 /** A Codex mode (`default`, `plan`) or an OpenCode agent name; the backend validates it against the catalogue. */
 type CollaborationMode = ChatCollaborationMode["mode"];
 
@@ -185,6 +211,8 @@ export function ChatPane({
   focused,
   multi,
   paneId,
+  readOnly = false,
+  mobile = false,
   onActivate,
   onSplit,
   onClose,
@@ -196,11 +224,14 @@ export function ChatPane({
   focused: boolean;
   multi: boolean;
   paneId?: string;
+  readOnly?: boolean;
+  mobile?: boolean;
   onActivate: (paneId: string, id: string) => void;
   onSplit: (paneId: string, id: string, dir: "horizontal" | "vertical") => void;
   onClose: (paneId: string, id: string) => void;
 }) {
   const t = useT();
+  const composerOptions = useComposerOptions(mobile);
   const paneStyle = useTermStore((s) => s.paneStyle);
   const status = useTermStore((s) => effectiveStatus(s.runtimes[session.id]));
   const searchOpen = useTermStore((s) => s.searchOpen);
@@ -222,10 +253,11 @@ export function ChatPane({
   const [syncState, setSyncState] = useState<"loading" | "ready" | "failed">("loading");
   const [hasMore, setHasMore] = useState(cachedChat(session.id)?.hasMore ?? false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const historyBusy = useRef(false);
   const historyGeneration = useRef(0);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
-  const prependScroll = useRef<{ height: number; top: number } | null>(null);
+  const prependScroll = useRef<{ height: number; top: number; anchor?: { id: string; offset: number } } | null>(null);
   const [submissionReceipts, setSubmissionReceipts] = useState<boolean | null>(null);
   const pendingSubmissions = useOutbox(state => state.sessions[session.id] ?? emptySubmissions);
   // Messages typed while the agent was busy. They belong to the backend, not to this pane: a second view
@@ -260,6 +292,8 @@ export function ChatPane({
   // bypassPermissions, and that is what this control shows.
   const [mode, setMode] = useState<Mode>(() => storedMode(session));
   const [pendingPermissionMode, setPendingPermissionMode] = useState<PendingPermissionMode | null>(null);
+  const permissionState = useSessionPermissionState(hidden ? undefined : session.id,
+    `${session.permissionMode}:${mode}:${pendingPermissionMode?.current}:${pendingPermissionMode?.next}`);
   const [collaborationMode, setCollaborationMode] = useState<CollaborationMode>(() =>
     storedCollaborationMode(session),
   );
@@ -299,7 +333,32 @@ export function ChatPane({
   };
   const [turnStartedAt, setTurnStartedAt] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
+  const keepRestartPermission = useRef(false);
+  const permissionCatalog = useAgentPermissions(session.kind);
+  const permissionRestart = usePermissionRestart(session.id, () => {
+    setMode("bypassPermissions");
+    setError(null);
+    if (keepRestartPermission.current) {
+      keepRestartPermission.current = false;
+      void savePermissionDefault(session.kind, "bypassPermissions").catch(err => setError(String(err)));
+    }
+  }, setError);
   const [draft, setDraft] = useState("");
+  // Only the browsing position and unsent draft are local. Recall reads the backend's conversation and queue.
+  const inputHistory = useRef<{
+    id: string | null;
+    draft: string;
+    caret: number;
+    loading: boolean;
+  } | null>(null);
+  const updateDraft = (text: string) => {
+    inputHistory.current = null;
+    setDraft(text);
+  };
+  useEffect(() => {
+    inputHistory.current = null;
+    return () => { inputHistory.current = null; };
+  }, [session.id]);
   // Caret position in the draft. An `@` mention is read from where the caret is, not from the end of the
   // text, so that a path can be completed in the middle of a sentence that is already written.
   const [caret, setCaret] = useState(0);
@@ -313,6 +372,7 @@ export function ChatPane({
   const [pendingRewind, setPendingRewind] = useState<{
     rowId: string;
     scope: ChatRewindScope;
+    replacement?: MessageReplacement;
     preview?: ChatRewindPreview;
     loading: boolean;
   } | null>(null);
@@ -360,6 +420,8 @@ export function ChatPane({
           break;
         case "replaceRows":
           historyGeneration.current += 1;
+          setHistoryError(null);
+          prependScroll.current = null;
           if (!versions.accept("rows", event.revision, event.epoch)) break;
           acknowledgeSubmissions(session.id, event.rows.map(row => row.id));
           setRows(event.rows);
@@ -372,12 +434,15 @@ export function ChatPane({
         // process that just ended would show the replayed history a second time, under the old rows.
         case "reset":
           historyGeneration.current += 1;
-          if (!versions.accept("rows", event.epoch === undefined ? undefined : 0, event.epoch)) break;
+          setHistoryError(null);
+          prependScroll.current = null;
+          if (!versions.accept("rows", event.revision ?? (event.epoch === undefined ? undefined : 0), event.epoch)) break;
           versions.queue = 0;
-          setRows([]);
+          setRows(event.rows ?? []);
+          acknowledgeSubmissions(session.id, (event.rows ?? []).map(row => row.id));
           setQueue([]);
           snapshotRef.current = undefined;
-          setHasMore(false);
+          setHasMore(event.hasMore ?? false);
           setEditing(null);
           setPermissions([]);
           setPendingPermissionMode(null);
@@ -478,7 +543,9 @@ export function ChatPane({
             stopping.current = false;
             setActionFeedback("");
           }
-          setError(event.message);
+          // A late permission rejection arrives on this channel rather than as a command failure; it is
+          // still a restart request, so it must open the confirmation instead of a bare error.
+          if (!permissionRestart.handleError(event.message)) setError(event.message);
           break;
         case "extras":
           setExtras(event.extras);
@@ -507,6 +574,7 @@ export function ChatPane({
       if (loading || disposed) return;
       loading = true;
       historyGeneration.current += 1;
+      setHistoryError(null);
       setSyncState("loading");
       buffered = [];
       const requestStarted = performance.now();
@@ -546,7 +614,7 @@ export function ChatPane({
         setExtras(
           snapshot.running
             ? extrasOf(snapshot)
-            : { fastMode: useTermStore.getState().chatFastModeByKind[session.kind] ?? false },
+            : { auth: snapshot.auth, fastMode: useTermStore.getState().chatFastModeByKind[session.kind] ?? false },
         );
         setTurnStartedAt(snapshot.running ? snapshot.turnStartedAt : undefined);
         if (snapshot.effort && isEffort(snapshot.effort)) setEffort(snapshot.effort);
@@ -621,37 +689,104 @@ export function ChatPane({
 
   useEffect(() => {
     if (snapshotRef.current) {
-      snapshotRef.current = { ...snapshotRef.current, rows, queue, hasMore, rowsRevision: liveVersions.current.rows, queueRevision: liveVersions.current.queue };
+      snapshotRef.current = { ...snapshotRef.current, auth: extras.auth, rows, queue, hasMore, rowsRevision: liveVersions.current.rows, queueRevision: liveVersions.current.queue };
       cacheChat(session.id, snapshotRef.current);
     }
-  }, [session.id, rows, queue, hasMore]);
+  }, [session.id, rows, queue, hasMore, extras.auth]);
 
-  const loadHistory = async () => {
-    if (historyBusy.current || !hasMore || syncState !== "ready" || !rows[0]) return;
+  const loadHistory = async (before = rows[0]?.id) => {
+    if (historyBusy.current || !hasMore || syncState !== "ready" || !before) return;
     historyBusy.current = true;
     setHistoryLoading(true);
+    setHistoryError(null);
     const generation = historyGeneration.current;
     try {
-      const page = await chatSnapshot(session.id, { before: rows[0].id, epoch: snapshotRef.current?.startedAt });
+      const page = await chatSnapshot(session.id, { before, epoch: snapshotRef.current?.startedAt });
       if (generation !== historyGeneration.current) return;
       if (page.pageKind !== "history") { await refreshRef.current(); return; }
       const scroll = scrollRef.current;
-      if (scroll) prependScroll.current = { height: scroll.scrollHeight, top: scroll.scrollTop };
+      if (scroll && !pinnedRef.current) {
+        const viewport = scroll.getBoundingClientRect();
+        const anchor = Array.from(scroll.querySelectorAll<HTMLElement>(".sv-item[data-search-id]"))
+          .find(element => element.getBoundingClientRect().bottom > viewport.top && element.getBoundingClientRect().top < viewport.bottom);
+        prependScroll.current = {
+          height: scroll.scrollHeight, top: scroll.scrollTop,
+          anchor: anchor ? { id: anchor.dataset.searchId!, offset: anchor.getBoundingClientRect().top - viewport.top } : undefined,
+        };
+      }
       setRows(current => mergeRows(page.rows, current));
       setHasMore(page.hasMore ?? false);
-    } catch (error) { if (generation === historyGeneration.current) setError(String(error)); }
+      return page;
+    } catch (error) { if (generation === historyGeneration.current) setHistoryError(String(error)); }
     finally { historyBusy.current = false; setHistoryLoading(false); }
   };
-  useLayoutEffect(() => {
-    const previous = prependScroll.current;
-    const scroll = scrollRef.current;
-    if (previous && scroll) {
-      scroll.scrollTop = previous.top + scroll.scrollHeight - previous.height;
-      prependScroll.current = null;
+
+  const recallInput = (direction: "ArrowUp" | "ArrowDown") => {
+    if (direction === "ArrowDown" && !inputHistory.current) return false;
+    const browsing = inputHistory.current ?? {
+      id: null, draft, caret: inputRef.current?.selectionStart ?? draft.length, loading: false,
+    };
+    inputHistory.current = browsing;
+    // Down cancels an outstanding older-page request; its result must not replace the restored draft.
+    if (browsing.loading && direction === "ArrowUp") return true;
+    const entriesOf = (history: ChatRow[]) => {
+      const entries = new Map<string, { id: string; text: string }>();
+      for (const row of history) {
+        if (row.kind === "user" && !row.origin && row.text.trim()) entries.set(row.id, row);
+      }
+      for (const item of [...queue, ...pendingSubmissions]) {
+        if ("origin" in item && item.origin) continue;
+        if (item.text.trim() && !entries.has(item.id)) entries.set(item.id, item);
+      }
+      return [...entries.values()];
+    };
+    const apply = (entry?: { id: string; text: string }) => {
+      const text = entry?.text ?? browsing.draft;
+      const at = entry ? (direction === "ArrowUp" ? 0 : text.length) : browsing.caret;
+      inputHistory.current = entry ? { ...browsing, id: entry.id, loading: false } : null;
+      setDraft(text);
+      setCaret(at);
+      setDismissed(text);
+      placeCaret.current = at;
+      // Adjacent submissions can have identical text, so caret placement cannot depend on a rerender.
+      if (inputRef.current?.value === text) {
+        inputRef.current.setSelectionRange(at, at);
+        placeCaret.current = null;
+      }
+    };
+    let history = rows;
+    const entries = entriesOf(history);
+    const index = browsing.id === null ? entries.length : entries.findIndex(entry => entry.id === browsing.id);
+    if (direction === "ArrowDown") {
+      apply(index >= 0 ? entries[index + 1] : undefined);
+    } else if (index > 0) {
+      apply(entries[index - 1]);
+    } else if (hasMore) {
+      browsing.loading = true;
+      const generation = historyGeneration.current;
+      void (async () => {
+        try {
+          let before = history[0]?.id;
+          while (before && inputHistory.current === browsing) {
+            const page = await loadHistory(before);
+            if (!page || inputHistory.current !== browsing || generation !== historyGeneration.current) return;
+            history = mergeRows(page.rows, history);
+            const older = entriesOf(history);
+            const at = browsing.id === null ? older.length : older.findIndex(entry => entry.id === browsing.id);
+            if (at > 0) { apply(older[at - 1]); return; }
+            const next = page.rows[0]?.id;
+            if (!page.hasMore || !next || next === before) return;
+            before = next;
+          }
+        } finally {
+          browsing.loading = false;
+        }
+      })();
     }
-  }, [rows]);
+    return true;
+  };
   // Searching requests the remaining history explicitly; ordinary navigation stays bounded.
-  useEffect(() => { if (searchOpen && hasMore) void loadHistory(); }, [searchOpen, hasMore, rows.length, syncState]);
+  useEffect(() => { if (searchOpen && focused && !hidden && hasMore && !historyError) void loadHistory(); }, [searchOpen, focused, hidden, hasMore, rows.length, syncState, historyError]);
 
   // Tell the backend when a view holds this conversation and when it lets go. A pane is unmounted only
   // when its session leaves every tab's layout — a background tab keeps it mounted — so letting go
@@ -680,13 +815,14 @@ export function ChatPane({
   }, [session.id, catalogueVersion]);
 
   // What the list draws, rather than what the engine sent: a burst of tool calls becomes one folded row,
-  // so a turn that read a dozen files does not bury the answer that came out of it.
+  // so a turn that read a dozen files does not bury the answer that came out of it. The first entry of
+  // each agent turn is then marked with the author line the view draws above everything the agent did.
   //
   // Reasoning rows with no text are dropped here. The agent may report that it thought without disclosing
   // what it thought: the block arrives carrying only a signature, and its text stays empty for the whole
   // turn. A heading that opens onto nothing is worse than no heading, so such a row is not drawn at all.
   const display = useMemo(
-    () => groupToolRuns(rows.filter((r) => r.kind !== "reasoning" || r.text.trim() !== "")),
+    () => markAgentTurns(groupToolRuns(rows.filter((r) => r.kind !== "reasoning" || r.text.trim() !== ""))),
     [rows],
   );
   // Everything before this index is virtualized; the tail after it stays really mounted, because those
@@ -719,6 +855,31 @@ export function ChatPane({
     overscan: OVERSCAN,
   });
 
+  useLayoutEffect(() => {
+    const previous = prependScroll.current;
+    const scroll = scrollRef.current;
+    if (!previous || !scroll) return;
+    prependScroll.current = null;
+    // Keep the visible message at its original pixel offset. Total-height differences also include
+    // new tail output and estimated heights, neither of which belongs to the reader's anchor.
+    const anchor = previous.anchor;
+    const element = anchor && Array.from(scroll.querySelectorAll<HTMLElement>(".sv-item[data-search-id]"))
+      .find(item => item.dataset.searchId === anchor.id);
+    if (element && anchor) {
+      scroll.scrollTop += element.getBoundingClientRect().top - scroll.getBoundingClientRect().top - anchor.offset;
+    } else {
+      const index = anchor ? virtualRows.findIndex(row => row.id === anchor.id) : -1;
+      const offset = index >= 0 ? virtualizer.getOffsetForIndex(index, "start")?.[0] : undefined;
+      const container = scroll.querySelector<HTMLElement>(".sv-virtual");
+      if (offset !== undefined && container && anchor) {
+        const start = container.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
+        scroll.scrollTop = start + offset - anchor.offset;
+      } else {
+        scroll.scrollTop = previous.top + scroll.scrollHeight - previous.height;
+      }
+    }
+  }, [rows, virtualRows, virtualizer]);
+
   const locateSearch = useCallback((index: number) => {
     const entry = display[index];
     setSearchTarget(entry?.id ?? null);
@@ -737,9 +898,15 @@ export function ChatPane({
   // that would drag the text they are reading, so the scroll position is corrected to absorb the change;
   // while they are at the end there is nothing to protect, and correcting would fight the follow below.
   useEffect(() => {
-    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) => {
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
       if (pinnedRef.current) return false;
-      return item.start < (instance.scrollOffset ?? 0);
+      const scroll = scrollRef.current;
+      const container = scroll?.querySelector<HTMLElement>(".sv-virtual");
+      if (!scroll || !container) return false;
+      // A partially visible row may grow below the viewport's top without moving its own top.
+      // Only fully preceding rows should move the viewport; include the history control's height.
+      const viewportStart = scroll.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      return item.end <= viewportStart;
     };
     return () => {
       virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
@@ -766,39 +933,74 @@ export function ChatPane({
     }
   }, []);
 
-  // Follow after every committed layout, including composer and virtual-row size changes.
-  // Observe the rows as well: images and rendered Markdown can grow without a pane render.
+  // Keep observers alive while the pane is visible. Draft/caret updates do not change the
+  // transcript geometry; only viewport or row resizing and added/removed rows need a follow.
   useLayoutEffect(() => {
     if (hidden) return;
     const el = scrollRef.current;
     if (!el) return;
+    let frame: number | undefined;
     const follow = () => {
-      if (pinnedRef.current) el.scrollTop = el.scrollHeight;
-      scrollGeometry.current = { height: el.scrollHeight, viewport: el.clientHeight };
+      frame = undefined;
+      const height = el.scrollHeight;
+      const viewport = el.clientHeight;
+      if (pinnedRef.current) el.scrollTop = height;
+      scrollGeometry.current = { height, viewport };
+    };
+    const schedule = () => {
+      if (frame === undefined) frame = requestAnimationFrame(follow);
     };
     follow();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(follow);
-    observer.observe(el);
-    for (const child of el.children) observer.observe(child);
-    return () => observer.disconnect();
-  });
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
+    observer?.observe(el);
+    const observed = new Set<Element>();
+    const syncChildren = () => {
+      for (const child of observed) {
+        if (child.parentElement !== el) {
+          observer?.unobserve(child);
+          observed.delete(child);
+        }
+      }
+      for (const child of el.children) {
+        if (!observed.has(child)) {
+          observer?.observe(child);
+          observed.add(child);
+        }
+      }
+      schedule();
+    };
+    syncChildren();
+    const mutations = new MutationObserver(syncChildren);
+    mutations.observe(el, { childList: true });
+    return () => {
+      observer?.disconnect();
+      mutations.disconnect();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [hidden, session.id]);
 
   const busy = status === "working";
   const canRewind =
+    !readOnly &&
     engineRunning &&
     !busy &&
     !rewinding &&
+    !sending &&
+    !clientCommandRunning &&
     queue.length === 0 &&
     permissions.length === 0;
+  const rewindDisabledReason = !engineRunning
+    ? t("chat.rewind.inactive")
+    : !canRewind ? t("chat.command.rewindUnavailable") : undefined;
   const finishRewindRequest = useCallback((token: number) => {
     setRewindRequest((request) => request?.token === token ? null : request);
   }, []);
 
-  const askRewind = (rowId: string, scope: ChatRewindScope) => {
+  const askRewind = useCallback((rowId: string, scope: ChatRewindScope, replacement?: MessageReplacement) => {
+    if (!canRewind || !rewindScopes.includes(scope)) return;
     setError(null);
     if (scope === "conversation") {
-      setPendingRewind({ rowId, scope, loading: false });
+      setPendingRewind({ rowId, scope, replacement, loading: false });
       return;
     }
     setPendingRewind({ rowId, scope, loading: true });
@@ -809,30 +1011,53 @@ export function ChatPane({
         setPendingRewind(null);
         setError(String(err));
       });
-  };
+  }, [canRewind, rewindScopes, session.id]);
 
-  const doRewind = () => {
+  const rewindTarget = pendingRewind ? rows.find(row => row.id === pendingRewind.rowId) : undefined;
+
+  const doRewind = async () => {
     const pending = pendingRewind;
-    if (!pending || pending.loading || rewinding || pending.preview?.canRewind === false) return;
+    if (!pending || pending.loading || !canRewind || pending.preview?.canRewind === false) return;
+    const target = rows.find(row => row.id === pending.rowId);
+    if (!target || target.kind !== "user") return;
+    if (pending.replacement !== undefined && submissionReceipts !== true) {
+      setError(t("chat.submission.updateRequired"));
+      return;
+    }
     setRewinding(true);
     setError(null);
-    void chatRewind(session.id, pending.rowId, pending.scope)
-      .then((result) => {
-        if (pending.scope !== "files") {
-          setRows((current) => {
-            const index = current.findIndex((row) => row.id === pending.rowId);
-            return index < 0 ? current : current.slice(0, index);
-          });
-          if (result.prefillText && !draft.trim()) {
-            setDraft(result.prefillText);
-            setCaret(result.prefillText.length);
-            placeCaret.current = result.prefillText.length;
-          }
+    try {
+      // Resolve attachments before removing their snapshot from the conversation.
+      const images = pending.scope !== "files"
+        ? await Promise.all((pending.replacement?.images ?? target.images ?? []).map(resolveChatImage)) : [];
+      const restored = pending.replacement === undefined ? images.map(restoreAttachment) : [];
+      const result = await chatRewind(session.id, pending.rowId, pending.scope);
+      if (pending.scope !== "files") {
+        setRows(current => {
+          const index = current.findIndex(row => row.id === pending.rowId);
+          return index < 0 ? current : current.slice(0, index);
+        });
+        if (pending.replacement === undefined && result.prefillText && !draft.trim()) {
+          updateDraft(result.prefillText);
+          setCaret(result.prefillText.length);
+          placeCaret.current = result.prefillText.length;
         }
-        setPendingRewind(null);
-      })
-      .catch((err) => setError(String(err)))
-      .finally(() => setRewinding(false));
+        if (restored.length > 0) {
+          // Keep unsent attachments as well; a rewind must not silently discard either set of images.
+          setAttachments(current => [...restored, ...current]);
+        }
+      }
+      setPendingRewind(null);
+      if (pending.replacement !== undefined) {
+        const item = createSubmission(session.id, pending.replacement.text, images.map(({ mimeType, data }) => ({ mimeType, data })), "queue");
+        toEnd();
+        await deliverSubmission(session.id, item);
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setRewinding(false);
+    }
   };
 
   /** Start the agent; the backend restores this conversation's saved Codex settings. */
@@ -865,21 +1090,30 @@ export function ChatPane({
     if (sending) return;
     const text = draft.trim();
     // A picture on its own is a message: dropping a screenshot in and pressing send says enough.
+    if (rewinding || pendingRewind) return;
     if (!text && attachments.length === 0) return;
+    if (attachments.length > MAX_IMAGES) {
+      setAttachNote(t("chat.attach.tooMany", MAX_IMAGES));
+      return;
+    }
     // Paseo treats these as client commands: they change the surrounding session UI and must never be
     // forwarded to Claude or Codex as user prose. Arguments or attachments deliberately opt out.
     const localCommand =
       behavior !== "steer" && attachments.length === 0 && /^\/(clear|new|rewind)$/.exec(text)?.[1];
-    // Codex answers these through requests of its own rather than as a message: a summary of the
-    // conversation, or a code review run as a turn. Both need the native thread open first.
-    const codexCommand =
-      behavior !== "steer" && session.kind === "codex" && attachments.length === 0
+    // These agents answer compact (and, for Codex, review) through requests of their own rather than as
+    // user prose. They need the process started, and for Codex its native thread open, first.
+    const chatCommand =
+      behavior !== "steer" && attachments.length === 0
         ? /^\/(compact|review)(?:\s+([\s\S]*))?$/.exec(text)
         : null;
-    if (codexCommand) {
-      const [, name, args] = codexCommand;
+    const commandSupported =
+      chatCommand?.[1] === "compact"
+        ? session.kind === "codex" || session.kind === "pi" || session.kind === "omp"
+        : session.kind === "codex";
+    if (chatCommand && commandSupported) {
+      const [, name, args] = chatCommand;
       setError(null);
-      setDraft("");
+      updateDraft("");
       setCaret(0);
       setDismissed(null);
       toEnd();
@@ -901,16 +1135,18 @@ export function ChatPane({
         return;
       }
       setError(null);
-      setDraft("");
+      updateDraft("");
       setCaret(0);
       setDismissed(null);
       rewindRequestToken.current += 1;
+      // Keep the requested message in view when opening its menu triggers another layout.
+      // Mounted messages need the same pause in tail following as virtualized messages.
+      pinnedRef.current = false;
       setRewindRequest({ rowId: latestUser.id, token: rewindRequestToken.current });
       const displayIndex = display.findIndex(
         (entry) => entry.kind === "row" && entry.row.id === latestUser.id,
       );
       if (displayIndex >= 0 && displayIndex < virtualRows.length) {
-        pinnedRef.current = false;
         virtualizer.scrollToIndex(displayIndex, { align: "center" });
       }
       return;
@@ -920,7 +1156,7 @@ export function ChatPane({
       const previousDraft = draft;
       setClientCommandRunning(true);
       setError(null);
-      setDraft("");
+      updateDraft("");
       setCaret(0);
       setDismissed(null);
       void useTermStore
@@ -928,7 +1164,7 @@ export function ChatPane({
         .clearChatSession(session.id, model, effort || undefined)
         .catch((err) => {
           setError(String(err));
-          setDraft(previousDraft);
+          updateDraft(previousDraft);
           setCaret(previousDraft.length);
           placeCaret.current = previousDraft.length;
         })
@@ -943,7 +1179,7 @@ export function ChatPane({
     const item = createSubmission(session.id, text, images, behavior);
     setSending(true);
     setError(null);
-    setDraft("");
+    updateDraft("");
     setCaret(0);
     setDismissed(null);
     setAttachments([]);
@@ -1044,13 +1280,15 @@ export function ChatPane({
     setMode(next);
   };
   const pickMode = (next: Mode, keep: boolean) => {
-    void applyMode(next).then(() => {
-      if (keep && session.kind === "codex") {
-        useTermStore.getState().setAgentDefault("codex", {
-          permissionMode: next === "full-access" ? "skip" : next,
-        });
-      }
-    }).catch((err) => setError(String(err)));
+    keepRestartPermission.current = false;
+    void applyMode(next).then(async () => {
+      if (keep) await savePermissionDefault(session.kind, next);
+    }).catch((err) => {
+      if (session.kind === "claude" && next === "bypassPermissions" && permissionRestart.handleError(err)) {
+        keepRestartPermission.current = keep;
+        setError(null);
+      } else setError(String(err));
+    });
   };
 
   const pickCollaborationMode = (next: CollaborationMode) => {
@@ -1193,7 +1431,6 @@ export function ChatPane({
   const completionCommands = useMemo<ChatCommand[]>(() => {
     const local: ChatCommand[] = [
       { name: "clear", description: t("chat.command.clearDescription") },
-      { name: "rewind", description: t("chat.command.rewindDescription") },
     ];
     // What Codex's own interface offers as commands and this pane asks for through requests of its own.
     if (session.kind === "codex") {
@@ -1205,6 +1442,10 @@ export function ChatPane({
           argumentHint: t("chat.command.reviewHint"),
         },
       );
+    }
+    // Pi and OMP expose compaction as a protocol command of their own.
+    if (session.kind === "pi" || session.kind === "omp") {
+      local.push({ name: "compact", description: t("chat.command.compactDescription") });
     }
     // What OpenCode's own interface answers without a turn, handled by the backend when sent.
     if (session.kind === "opencode") {
@@ -1230,7 +1471,7 @@ export function ChatPane({
 
   const complete = (suggestion: Suggestion) => {
     const at = suggestion.caret ?? suggestion.insert.length;
-    setDraft(suggestion.insert);
+    updateDraft(suggestion.insert);
     setCaret(at);
     placeCaret.current = at;
     inputRef.current?.focus();
@@ -1254,20 +1495,23 @@ export function ChatPane({
   // a rebindable global action, so there is no binding to read.
   const interruptCombo = IS_MAC && !IS_PLAIN_BROWSER ? "\u2318\u21A9" : "Ctrl+Enter";
   const steerCombo = IS_MAC ? "\u2325\u21A9" : "Alt+Enter";
-  /** What a keypress in the composer asks for: interrupt with the primary modifier, steer with Alt. */
+  /** What a keypress in the composer asks for: interrupt with the primary modifier, steer with Alt.
+   *  With no turn running there is nothing to steer or interrupt, so the modifiers fall back to a
+   *  normal send instead of an error. */
   const behaviorOf = (e: React.KeyboardEvent): SendBehavior =>
-    e.metaKey || e.ctrlKey ? "interrupt" : e.altKey ? "steer" : "queue";
+    !busy ? "queue" : e.metaKey || e.ctrlKey ? "interrupt" : e.altKey ? "steer" : "queue";
 
   const label = assistantLabel(session.kind);
   // The agent's own mark, drawn in the margin beside each of its answers.
-  const kindIcon = kindIconEl(session.kind, 12);
+  const kindIcon = useMemo(() => kindIconEl(session.kind, 12), [session.kind]);
 
   const modelOptions: ChipOption<string>[] = [
     // The default names no model, so it carries the settings mark, in the accent colour, rather than the
     // agent's.
     {
       value: "",
-      label: t("chat.modelDefault"),
+      label: t("chat.followModelDefault", label),
+      hint: t("chat.followModelDefaultHint"),
       glyph: (
         <span style={{ color: "var(--accent)", display: "inline-flex" }}>
           <Icons.sliders size={14} />
@@ -1277,7 +1521,7 @@ export function ChatPane({
     // The catalogue's description opens with the model's own name, because it is also used where the name
     // is not already on screen. Here it is, one line above, so the menu drops the repeat.
     // Every model row carries the agent's own mark in its brand colour, the same mark the chip shows.
-    ...catalogue.map((m) => ({
+    ...catalogue.toSorted((a, b) => Number(a.largeContext) - Number(b.largeContext)).map((m) => ({
       value: m.id,
       label: m.label,
       hint: withoutNamePrefix(m.description, m.label),
@@ -1287,7 +1531,7 @@ export function ChatPane({
   // The chip reads the selected model's own name, but a model set outside this menu — inherited from the
   // session's launch arguments, or reported by the agent — may not be in the list, so fall back to the id.
   const selected = catalogue.find((m) => m.id === model);
-  const modelLabel = selected?.label ?? model ?? t("chat.modelDefault");
+  const modelLabel = selected?.label ?? model ?? t("chat.followModelDefault", label);
   // Offering a level the selected model rejects would let someone set it and see it silently ignored, so
   // the list narrows to the ladder reported for that model.
   const allowed = levelsOf(
@@ -1340,10 +1584,13 @@ export function ChatPane({
         ]
       : []),
   ];
-  const modeOptions: ChipOption<Mode>[] = modesFor(session.kind).map((value) => ({
+  const modeOptions: ChipOption<Mode>[] = (permissionCatalog?.catalog?.modes ?? []).map((value) => ({
     value,
-    label: t(modeLabelKey(value)),
+    label: t(modeLabelKeyFor(session.kind, value)),
   }));
+  // Pi runs every tool without asking, so it exposes no permission control and nothing to report about
+  // one. A caption for a setting this agent does not have reads as a fact about it that is not true.
+  const hasPermissionControl = supportsPermissionToggle(session.kind);
   const collaborationModeOptions: ChipOption<CollaborationMode>[] = collaborationModes.map(
     (preset) => ({
       value: preset.mode,
@@ -1383,7 +1630,7 @@ export function ChatPane({
       // after this one, so look for its rows: while a menu is open, Escape belongs to the menu.
       onKeyDown={(e) => {
         if (e.key !== "Escape" || !busy) return;
-        if (e.currentTarget.querySelector("[role=option]")) return;
+        if ([...e.currentTarget.querySelectorAll("[role=option], .sv-popover")].some(menu => !menu.closest("[hidden]"))) return;
         e.preventDefault();
         stop();
       }}
@@ -1403,16 +1650,13 @@ export function ChatPane({
             {kindIconEl(session.kind, 13)}
           </span>
           <span className="pt">{session.name}</span>
-          <span className="session-experimental-badge" title={t("session.showConversation")}>{t("common.experimental")}</span>
           <StatusIndicator status={status} unread={unread} />
           <span className="pane-tools">
             <button title={t("term.searchMenu")} onClick={() => useTermStore.getState().openSearch()}>
               <Icons.search size={14} />
             </button>
             {/* The same control the terminal view carries, in the same place, pointing the other way. */}
-            <button title={t("session.showTerminal")} onClick={() => switchTo("tui")}>
-              <Icons.terminal size={14} />
-            </button>
+            <ConversationViewHint enabled={!mobile && !isShareSurface && focused && !hidden} onSwitch={() => switchTo("tui")} />
             <button title={t("term.splitRight")} onClick={() => paneId && onSplit(paneId, session.id, "horizontal")}>
               <Icons.splitV size={14} />
             </button>
@@ -1430,7 +1674,8 @@ export function ChatPane({
         </div>
 
         <div className="sv" style={{ position: "relative", flex: 1, minHeight: 0 }}>
-          {searchOpen && focused && !hidden && <ChatSearch key={session.id} entries={display} scrollRef={scrollRef} onLocate={locateSearch} onClose={closeSearch} />}
+          {searchOpen && focused && !hidden && <ChatSearch key={session.id} entries={display} scrollRef={scrollRef} onLocate={locateSearch} onClose={closeSearch}
+            loadingHistory={hasMore && !historyError} historyError={historyError} onRetryHistory={() => void loadHistory()} />}
           <div className="sv-scroll-wrap">
             <div
               className="sv-scroll"
@@ -1445,7 +1690,7 @@ export function ChatPane({
                   scrollGeometry.current = { height: el.scrollHeight, viewport: el.clientHeight };
                   return;
                 }
-                if (el.scrollTop < 80) void loadHistory();
+                if (el.scrollTop < 80 && !historyError) void loadHistory();
                 const pinned = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_SLACK;
                 pinnedRef.current = pinned;
                 setAway((prev) => (prev === !pinned ? prev : !pinned));
@@ -1455,9 +1700,12 @@ export function ChatPane({
                 {t(syncState === "loading" ? "chat.sync.loading" : "chat.sync.failed")}
                 {syncState === "failed" && <button onClick={() => void refreshRef.current()}>{t("common.retry")}</button>}
               </div>}
-              {hasMore && <button className="sv-history-more" disabled={historyLoading || syncState !== "ready"} onClick={() => void loadHistory()}>
-                {t(historyLoading ? "common.loading" : "chat.sync.history")}
-              </button>}
+              {hasMore && <div className="sv-history" aria-busy={historyLoading}>
+                <button className="vlx-btn sv-history-more" disabled={historyLoading || syncState !== "ready"} onClick={() => void loadHistory()}>
+                  {t(historyLoading ? "common.loading" : historyError ? "common.retry" : "chat.sync.history")}
+                </button>
+                {historyError && <div className="sv-history-error" role="alert">{historyError}</div>}
+              </div>}
               {/* An empty conversation is what a new session opens on, so it gets the middle of the view:
                   the agent's own mark, drawn large enough to say which agent this is, and one line. */}
               {syncState === "ready" && rows.length === 0 && pendingSubmissions.length === 0 && !busy && (
@@ -1489,7 +1737,8 @@ export function ChatPane({
                           cwd={cwd}
                           openRuns={openRuns}
                           onToggleRun={toggleRun}
-                          onRewind={canRewind ? askRewind : undefined}
+                          onRewind={askRewind}
+                    rewindDisabledReason={rewindDisabledReason}
                           rewindScopes={rewindScopes}
                           rewindRequest={rewindRequest}
                           onRewindRequestHandled={finishRewindRequest}
@@ -1509,7 +1758,8 @@ export function ChatPane({
                     cwd={cwd}
                     openRuns={openRuns}
                     onToggleRun={toggleRun}
-                    onRewind={canRewind ? askRewind : undefined}
+                    onRewind={askRewind}
+                    rewindDisabledReason={rewindDisabledReason}
                     rewindScopes={rewindScopes}
                     rewindRequest={rewindRequest}
                     onRewindRequestHandled={finishRewindRequest}
@@ -1529,6 +1779,7 @@ export function ChatPane({
               {extras.apiRetry && <RetryLine retry={extras.apiRetry} />}
               {error && <ErrorRow message={error} />}
               {catalogueError && <ErrorRow message={catalogueError} />}
+              {(session.kind === "codex" || session.kind === "claude") && !readOnly && <AgentAuth provider={session.kind === "claude" ? "Claude" : "Codex"} sessionId={session.id} state={extras.auth} busy={turnStartedAt !== undefined} />}
             </div>
             {away && (
               <button className="sv-to-end" onClick={toEnd} title={t("chat.backToEnd")}>
@@ -1557,18 +1808,33 @@ export function ChatPane({
                     {t(`chat.rewind.confirm.${pendingRewind.scope}` as "chat.rewind.confirm.conversation")}
                   </strong>
                 </div>
+                {rewindTarget?.kind === "user" ? <blockquote className="sv-rewind-target">
+                  {rewindTarget.at ? <time>{new Date(rewindTarget.at).toLocaleString()}</time> : null}
+                  <div>{rewindTarget.text}</div>
+                  {rewindTarget.images?.map((image, index) => <ChatImageView key={index} image={image} className="sv-msg-image" alt="" />)}
+                </blockquote> : null}
+                {pendingRewind.replacement !== undefined ? <>
+                  <p>{t("chat.rewind.editWarning")}</p>
+                  <strong>{t("chat.rewind.editSend")}</strong>
+                  <blockquote className="sv-rewind-target">
+                    <div>{pendingRewind.replacement.text}</div>
+                    {pendingRewind.replacement.images.length > 0 ? <div className="sv-msg-images">
+                      {pendingRewind.replacement.images.map((image, index) => <ChatImageView key={index} image={image} className="sv-msg-image" alt="" />)}
+                    </div> : null}
+                  </blockquote>
+                </> : null}
                 <div className="sv-rewind-confirm-detail">
                   {pendingRewind.loading
                     ? t("chat.rewind.previewing")
                     : pendingRewind.preview?.canRewind === false
                       ? pendingRewind.preview.error || t("chat.rewind.unavailable")
-                      : pendingRewind.scope === "conversation"
+                      : pendingRewind.scope === "conversation" || !pendingRewind.preview?.filesChanged
                         ? t("chat.rewind.warning")
                         : t(
                             "chat.rewind.fileSummary",
-                            pendingRewind.preview?.filesChanged?.length ?? 0,
-                            pendingRewind.preview?.insertions ?? 0,
-                            pendingRewind.preview?.deletions ?? 0,
+                            pendingRewind.preview.filesChanged.length,
+                            pendingRewind.preview.insertions ?? 0,
+                            pendingRewind.preview.deletions ?? 0,
                           )}
                 </div>
                 {pendingRewind.preview?.filesChanged?.length ? (
@@ -1580,10 +1846,10 @@ export function ChatPane({
                   </button>
                   <button
                     className="sv-rewind-apply"
-                    disabled={pendingRewind.loading || rewinding || pendingRewind.preview?.canRewind === false}
+                    disabled={pendingRewind.loading || !canRewind || pendingRewind.preview?.canRewind === false}
                     onClick={doRewind}
                   >
-                    {rewinding ? t("chat.rewind.applying") : t("chat.rewind.apply")}
+                    {rewinding ? t("chat.rewind.applying") : t(pendingRewind.replacement !== undefined ? "chat.rewind.editConfirm" : "chat.rewind.apply")}
                   </button>
                 </div>
               </div>
@@ -1592,8 +1858,10 @@ export function ChatPane({
 
           {/* The whole composer is the drop target, not just the text box: aiming at a one-line input to
               attach a picture is a needlessly small target. */}
-          <div
+          {!readOnly && <div
             className="sv-composer"
+            ref={composerOptions.ref}
+            data-options-expanded={mobile ? composerOptions.expanded : undefined}
             onDragOver={(e) => {
               if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
             }}
@@ -1645,14 +1913,11 @@ export function ChatPane({
                         }}
                       />
                     ) : (
-                      <button
-                        className="sv-queue-text"
+                      <QueuedMessageText
+                        text={item.text}
                         disabled={steeringQueue}
-                        title={t("chat.queue.edit")}
-                        onClick={() => setEditing({ id: item.id, text: item.text })}
-                      >
-                        {item.text}
-                      </button>
+                        onEdit={() => setEditing({ id: item.id, text: item.text })}
+                      />
                     )}
                     {item.images && item.images.length > 0 && (
                       <span className="sv-queue-images">
@@ -1719,13 +1984,30 @@ export function ChatPane({
                       : t("chat.placeholder")
                 }
                 onChange={(e) => {
-                  setDraft(e.target.value);
+                  updateDraft(e.target.value);
                   setCaret(e.target.selectionStart ?? e.target.value.length);
                 }}
                 onKeyUp={syncCaret}
                 onClick={syncCaret}
                 onSelect={syncCaret}
                 onKeyDown={(e) => {
+                  if ((e.key === "ArrowUp" || e.key === "ArrowDown") &&
+                      !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
+                      !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                    const input = e.currentTarget;
+                    const style = getComputedStyle(input);
+                    const singleLineHeight = Math.max(parseFloat(style.minHeight) || 0,
+                      parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom));
+                    const singleLine = !input.value.includes("\n") && input.scrollHeight <= singleLineHeight + 1;
+                    // Let the browser move through explicit and visually wrapped lines before recalling history.
+                    const atBoundary = singleLine || (e.key === "ArrowUp"
+                      ? input.selectionStart === 0 : input.selectionEnd === input.value.length);
+                    if (input.selectionStart === input.selectionEnd && atBoundary && recallInput(e.key)) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      return;
+                    }
+                  }
                   if (e.key === "Escape" && (completion || (wantsCatalogue && catalogueLoading))) {
                     // Dismiss the list rather than letting Escape reach the pane, where it means something else.
                     e.preventDefault();
@@ -1754,6 +2036,7 @@ export function ChatPane({
                   }
                 }}
               />
+              {mobile && <ComposerOptionsButton expanded={composerOptions.expanded} onToggle={composerOptions.toggle} />}
               {/* Model, effort, collaboration style, and permission mode sit under the input, where they belong to the message
                   about to be sent rather than to the pane. */}
               {(busy || actionFeedback) && (
@@ -1762,57 +2045,153 @@ export function ChatPane({
                   {busy && <span>{t("chat.interruptTooltip")} · {t("chat.steerTooltip", steerCombo)}</span>}
                 </div>
               )}
-              <div className="sv-controls">
-                {catalogue.length > 0 && (
+              <ComposerToolbar mobile={mobile}
+                primary={<>
+                  {catalogue.length > 0 && (
+                    <ControlChip
+                      glyph={kindIconEl(session.kind, 14)}
+                      label={modelLabel}
+                      title={t("chat.modelTooltip")}
+                      value={model ?? ""}
+                      options={modelOptions}
+                      defaultValue={defaultModel || undefined}
+                      defaultLabel={t("chat.savedModelDefault")}
+                      footer={session.kind === "claude" ? <ModelCatalogStatus onChanged={() => setCatalogueVersion(v => v + 1)} /> : undefined}
+                      onPick={pickModel}
+                      keepLabel={t("chat.keepChoice")}
+                      onKeepCurrent={() => rememberPair(model ?? "", effort)}
+                      menuWidth={300}
+                      filterPlaceholder={t("chat.filterPlaceholder")}
+                    />
+                  )}
                   <ControlChip
-                    glyph={kindIconEl(session.kind, 14)}
-                    label={modelLabel}
-                    title={t("chat.modelTooltip")}
-                    value={model ?? ""}
-                    options={modelOptions}
-                    defaultValue={defaultModel}
-                    onPick={pickModel}
-                    keepLabel={t("chat.keepChoice")}
-                    menuWidth={300}
-                    filterPlaceholder={t("chat.filterPlaceholder")}
+                    glyph={<Icons.cpu size={14} />}
+                    label={effort ? effortLabel(effort) : t("chat.effortDefault")}
+                    title={t("chat.effortTooltip")}
+                    value={effort}
+                    options={effortOptions}
+                    defaultValue={defaultEffort}
+                    onPick={pickEffort}
+                    // A level belongs to a model, so the box says which one it would become the default for.
+                    keepLabel={selected ? t("chat.keepChoiceFor", selected.label) : t("chat.keepChoice")}
+                    menuWidth={230}
                   />
-                )}
-                <ControlChip
-                  glyph={<Icons.cpu size={14} />}
-                  label={effort ? effortLabel(effort) : t("chat.effortDefault")}
-                  title={t("chat.effortTooltip")}
-                  value={effort}
-                  options={effortOptions}
-                  defaultValue={defaultEffort}
-                  onPick={pickEffort}
-                  // A level belongs to a model, so the box says which one it would become the default for.
-                  keepLabel={selected ? t("chat.keepChoiceFor", selected.label) : t("chat.keepChoice")}
-                  menuWidth={230}
-                />
-                {collaborationModeOptions.length > 0 && (
-                  <ControlChip
-                    glyph={session.kind === "opencode" ? <Icons.bot size={14} /> : <Icons.compass size={14} />}
-                    label={collaborationLabel(session.kind, selectedCollaboration, collaborationMode, t)}
-                    title={t(session.kind === "opencode" ? "chat.agentTooltip" : "chat.collaborationModeTooltip")}
-                    value={collaborationMode}
-                    options={collaborationModeOptions}
-                    onPick={pickCollaborationMode}
-                    menuWidth={260}
-                  />
-                )}
-                <div className="sv-permission-control">
-                  <ControlChip
-                    glyph={<Icons.lock size={14} />}
-                    label={t(modeLabelKey(mode))}
-                    title={t("chat.modeTooltip")}
-                    value={mode}
-                    options={modeOptions}
-                    defaultValue={defaultMode}
-                    onPick={pickMode}
-                    keepLabel={session.kind === "codex" ? t("chat.keepChoice") : undefined}
-                    menuWidth={240}
-                  />
-                  {pendingPermissionMode && (
+                  {collaborationModeOptions.length > 0 && (
+                    <ControlChip
+                      glyph={session.kind === "opencode" ? <Icons.bot size={14} /> : <Icons.compass size={14} />}
+                      label={collaborationLabel(session.kind, selectedCollaboration, collaborationMode, t)}
+                      title={t(session.kind === "opencode" ? "chat.agentTooltip" : "chat.collaborationModeTooltip")}
+                      value={collaborationMode}
+                      options={collaborationModeOptions}
+                      onPick={pickCollaborationMode}
+                      menuWidth={260}
+                    />
+                  )}
+                  {hasPermissionControl && (
+                    <div className="sv-permission-control">
+                      <ControlChip
+                        glyph={<Icons.lock size={14} />}
+                        label={session.kind === "omp" && mode === "default"
+                          ? t("chat.mode.agentDefault")
+                          : currentPermissionLabel(permissionState?.value)}
+                        title={permissionState?.value?.activation === "applied"
+                          ? `${t("chat.modeTooltip")} · ${t("permission.applied")}`
+                          : t("chat.modeTooltip")}
+                        value={mode}
+                        options={modeOptions}
+                        disabled={!permissionCatalog?.catalog}
+                        defaultValue={defaultMode}
+                        onPick={pickMode}
+                        keepLabel={t("chat.keepChoice")}
+                        menuWidth={240}
+                      />
+                    </div>
+                  )}
+                </>}
+                secondary={<>
+                  {fastModeOffered && (
+                    <FastModeChip enabled={extras.fastMode === true} onToggle={pickFastMode} />
+                  )}
+                  {serviceTierOptions.length > 1 && (
+                    <ControlChip
+                      glyph={<Icons.clock size={14} />}
+                      label={serviceTierOptions.find((o) => o.value === serviceTier)?.label ?? t("chat.serviceTier.default")}
+                      title={t("chat.serviceTierTooltip")}
+                      value={serviceTier || CODEX_STANDARD_TIER}
+                      options={serviceTierOptions}
+                      onPick={pickServiceTier}
+                      menuWidth={240}
+                    />
+                  )}
+                  {personalityOffered && (
+                    <ControlChip
+                      glyph={<Icons.bot size={14} />}
+                      label={
+                        personality
+                          ? t(`chat.personality.${personality}` as "chat.personality.none")
+                          : t("chat.personality.default")
+                      }
+                      title={t("chat.personalityTooltip")}
+                      value={personality}
+                      options={personalityOptions}
+                      onPick={pickPersonality}
+                      menuWidth={220}
+                    />
+                  )}
+                  {(session.kind === "claude" || session.kind === "codex") && engineRunning && <McpChip sessionId={session.id} codex={session.kind === "codex"} />}
+                  {session.kind === "claude" && engineRunning && (
+                    <TasksChip
+                      tasks={extras.backgroundTasks ?? []}
+                      busy={busy}
+                      onStop={(taskId) => void chatStopTask(session.id, taskId).catch((err) => setError(String(err)))}
+                      onBackgroundAll={() => void chatBackgroundTasks(session.id).catch((err) => setError(String(err)))}
+                    />
+                  )}
+                  {(session.kind === "codex" || session.kind === "claude") && <AgentAccountMenu provider={session.kind === "claude" ? "Claude" : "Codex"} sessionId={session.id} state={extras.auth} busy={turnStartedAt !== undefined} />}
+                  {session.kind === "codex" && <CodexResetCredits />}
+                </>}
+                actions={<>
+                  {(session.kind === "claude" || session.kind === "codex") && <UsageMeter extras={extras} />}
+                  {busy && (
+                    <button
+                      className="sv-steer"
+                      disabled={sending || clientCommandRunning || (!draft.trim() && attachments.length === 0)}
+                      onClick={() => send("steer")}
+                      title={t("chat.steerTooltip", steerCombo)}
+                    >
+                      {t("chat.steer")}
+                    </button>
+                  )}
+                  {/* What is typed decides the button, not what the agent is doing: with text in the box the
+                      action is always "send" — queued while a turn runs — and only an empty box during a
+                      turn turns it into the stop button. */}
+                  {busy && !clientCommandRunning && !draft.trim() && attachments.length === 0 ? (
+                    <button
+                      className="sv-send sv-stop"
+                      onClick={stop}
+                      title={t("chat.interruptTooltip")}
+                    >
+                      <span className="sv-stop-square" />
+                    </button>
+                  ) : (
+                    <button
+                      className="sv-send"
+                      disabled={sending || clientCommandRunning || (!draft.trim() && attachments.length === 0)}
+                      onClick={() => send()}
+                      title={
+                        busy
+                          ? `${t("chat.queueTooltip", interruptCombo)} · ${t("chat.steerTooltip", steerCombo)}`
+                          : t("session.send")
+                      }
+                    >
+                      <Icons.arrowRight size={14} />
+                    </button>
+                  )}
+                </>}
+                status={hasPermissionControl ? <>
+                  {permissionCatalog?.error && <span role="alert">{permissionCatalog.error}</span>}
+                  <PermissionStateDetails state={permissionState?.value} error={permissionState?.error} />
+                  {!permissionState?.value && pendingPermissionMode && (
                     <span
                       className="sv-mode-pending"
                       role="status"
@@ -1825,95 +2204,21 @@ export function ChatPane({
                       {t("chat.modeNextTurn")}
                     </span>
                   )}
-                </div>
-                {fastModeOffered && (
-                  <FastModeChip enabled={extras.fastMode === true} onToggle={pickFastMode} />
-                )}
-                {serviceTierOptions.length > 1 && (
-                  <ControlChip
-                    glyph={<Icons.clock size={14} />}
-                    label={serviceTierOptions.find((o) => o.value === serviceTier)?.label ?? t("chat.serviceTier.default")}
-                    title={t("chat.serviceTierTooltip")}
-                    value={serviceTier || CODEX_STANDARD_TIER}
-                    options={serviceTierOptions}
-                    onPick={pickServiceTier}
-                    menuWidth={240}
-                  />
-                )}
-                {personalityOffered && (
-                  <ControlChip
-                    glyph={<Icons.bot size={14} />}
-                    label={
-                      personality
-                        ? t(`chat.personality.${personality}` as "chat.personality.none")
-                        : t("chat.personality.default")
-                    }
-                    title={t("chat.personalityTooltip")}
-                    value={personality}
-                    options={personalityOptions}
-                    onPick={pickPersonality}
-                    menuWidth={220}
-                  />
-                )}
-                {(session.kind === "claude" || session.kind === "codex") && engineRunning && <McpChip sessionId={session.id} codex={session.kind === "codex"} />}
-                {session.kind === "claude" && engineRunning && (
-                  <TasksChip
-                    tasks={extras.backgroundTasks ?? []}
-                    busy={busy}
-                    onStop={(taskId) => void chatStopTask(session.id, taskId).catch((err) => setError(String(err)))}
-                    onBackgroundAll={() => void chatBackgroundTasks(session.id).catch((err) => setError(String(err)))}
-                  />
-                )}
-                <span className="sv-controls-gap" />
-                {(session.kind === "claude" || session.kind === "codex") && <UsageMeter extras={extras} />}
-                {busy && (
-                  <button
-                    className="sv-steer"
-                    disabled={sending || clientCommandRunning || (!draft.trim() && attachments.length === 0)}
-                    onClick={() => send("steer")}
-                    title={t("chat.steerTooltip", steerCombo)}
-                  >
-                    {t("chat.steer")}
-                  </button>
-                )}
-                {/* What is typed decides the button, not what the agent is doing: with text in the box the
-                    action is always "send" — queued while a turn runs — and only an empty box during a
-                    turn turns it into the stop button. */}
-                {busy && !clientCommandRunning && !draft.trim() && attachments.length === 0 ? (
-                  <button
-                    className="sv-send sv-stop"
-                    onClick={stop}
-                    title={t("chat.interruptTooltip")}
-                  >
-                    <span className="sv-stop-square" />
-                  </button>
-                ) : (
-                  <button
-                    className="sv-send"
-                    disabled={sending || clientCommandRunning || (!draft.trim() && attachments.length === 0)}
-                    onClick={() => send()}
-                    title={
-                      busy
-                        ? `${t("chat.queueTooltip", interruptCombo)} · ${t("chat.steerTooltip", steerCombo)}`
-                        : t("session.send")
-                    }
-                  >
-                    <Icons.arrowRight size={14} />
-                  </button>
-                )}
-              </div>
+                </> : null}
+              />
             </div>
-          </div>
+          </div>}
         </div>
       </div>
       {engineConfirm}
+      {permissionRestart.dialog}
     </div>
     </SessionLinkDirectory.Provider>
   );
 }
 
 /** One entry of the list: a single row, or a folded run of tool calls. */
-function Entry({
+const Entry = memo(function Entry({
   entry,
   label,
   icon,
@@ -1921,6 +2226,7 @@ function Entry({
   openRuns,
   onToggleRun,
   onRewind,
+  rewindDisabledReason,
   rewindScopes,
   rewindRequest,
   onRewindRequestHandled,
@@ -1931,36 +2237,55 @@ function Entry({
   cwd?: string;
   openRuns: ReadonlySet<string>;
   onToggleRun: (id: string) => void;
-  onRewind?: (rowId: string, scope: ChatRewindScope) => void;
+  onRewind?: (rowId: string, scope: ChatRewindScope, replacement?: MessageReplacement) => void;
+  rewindDisabledReason?: string;
   rewindScopes: ChatRewindScope[];
   rewindRequest: { rowId: string; token: number } | null;
   onRewindRequestHandled: (token: number) => void;
 }) {
+  // The author line the pass in `toolRuns` placed on the first entry of an agent turn. Everything the
+  // agent did in that turn sits under it, so reasoning and tool calls read as the agent's.
+  const head = entry.head ? (
+    <TurnHead
+      who={entry.head.who ?? label}
+      icon={icon}
+      at={entry.head.at}
+      durationMs={entry.head.durationMs}
+    />
+  ) : null;
   if (entry.kind === "run") {
     return (
-      <ToolRunCard
-        calls={entry.calls}
-        renderCall={row => <Row row={row} label={label} icon={icon} cwd={cwd} />}
-        running={entry.running}
-        open={openRuns.has(entry.id)}
-        onToggle={() => onToggleRun(entry.id)}
-        cwd={cwd}
-      />
+      <>
+        {head}
+        <ToolRunCard
+          calls={entry.calls}
+          renderCall={row => <Row row={row} label={label} icon={icon} cwd={cwd} />}
+          running={entry.running}
+          open={openRuns.has(entry.id)}
+          onToggle={() => onToggleRun(entry.id)}
+          cwd={cwd}
+        />
+      </>
     );
   }
   return (
-    <Row
-      row={entry.row}
-      label={label}
-      icon={icon}
-      cwd={cwd}
-      onRewind={onRewind}
-      rewindScopes={rewindScopes}
-      rewindRequest={rewindRequest}
-      onRewindRequestHandled={onRewindRequestHandled}
-    />
+    <>
+      {head}
+      <Row
+        row={entry.row}
+        label={label}
+        icon={icon}
+        cwd={cwd}
+        headless
+        onRewind={onRewind}
+        rewindDisabledReason={rewindDisabledReason}
+        rewindScopes={rewindScopes}
+        rewindRequest={rewindRequest}
+        onRewindRequestHandled={onRewindRequestHandled}
+      />
+    </>
   );
-}
+});
 
 /** Drop a leading "<name> · " from a model's description, where the name is already the row's label. */
 function withoutNamePrefix(description: string, label: string): string {
@@ -1974,7 +2299,9 @@ function Row({
   label,
   icon,
   cwd,
+  headless = false,
   onRewind,
+  rewindDisabledReason,
   rewindScopes,
   rewindRequest,
   onRewindRequestHandled,
@@ -1983,7 +2310,10 @@ function Row({
   label: string;
   icon: ReactNode;
   cwd?: string;
-  onRewind?: (rowId: string, scope: ChatRewindScope) => void;
+  /** True when the turn's author line already stands above this row; subagent rows keep their own. */
+  headless?: boolean;
+  onRewind?: (rowId: string, scope: ChatRewindScope, replacement?: MessageReplacement) => void;
+  rewindDisabledReason?: string;
   rewindScopes?: ChatRewindScope[];
   rewindRequest?: { rowId: string; token: number } | null;
   onRewindRequestHandled?: (token: number) => void;
@@ -2035,12 +2365,16 @@ function Row({
     case "user":
       return (
         <MessageBubble
-          who={t("archive.you")}
+          who={row.origin ? `${row.origin.name}${row.origin.role === "plan" || row.origin.role === "exec" ? ` · ${t(row.origin.role === "plan" ? "chat.origin.plan" : "chat.origin.exec")}` : ""}` : t("archive.you")}
+          icon={row.origin ? kindIconEl(row.origin.agent, 14) : undefined}
           isUser
           text={row.text}
           images={row.images}
           at={row.at}
           onRewind={onRewind ? (scope) => onRewind(row.id, scope) : undefined}
+          onEditSend={onRewind ? (text, images) => onRewind(row.id, "conversation", { text, images }) : undefined}
+          rewindDisabledReason={rewindDisabledReason || (rewindScopes?.length ? undefined : t("chat.rewind.unsupported"))}
+          editDisabledReason={rewindDisabledReason || (rewindScopes?.includes("conversation") ? undefined : t("chat.rewind.unsupported"))}
           rewindScopes={rewindScopes}
           openRewindToken={rewindRequest?.rowId === row.id ? rewindRequest.token : undefined}
           onRewindMenuOpened={onRewindRequestHandled}
@@ -2055,6 +2389,7 @@ function Row({
           text={row.text}
           at={row.at}
           durationMs={row.durationMs}
+          showHead={!headless}
         />
       );
   }

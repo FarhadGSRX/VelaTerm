@@ -1,3 +1,41 @@
+## v0.2.0 — 2026-09-13
+
+- 📱 Ứng dụng VelaTerm cho iOS và Android (bản đầu): kết nối tới máy qua SSH hoặc URL sau khi xác nhận dấu vân tay của máy chủ, tải toàn bộ giao diện từ xa ngay trong ứng dụng, điền thông tin kết nối bằng cách quét mã QR và đăng nhập vào tài khoản từ xa.
+
+- 🛡️ Kiểm toán mã nguồn thử nghiệm: chạy từ menu chuột phải của dự án để kiểm toán toàn bộ kho mã, một thư mục hoặc tệp, hoặc các thay đổi chưa commit trong cây làm việc bằng Codex hoặc Claude Code; đối chiếu phát hiện với mã nguồn và xuất báo cáo Markdown hoặc JSON.
+
+- 📓 Cơ sở tri thức cục bộ: mở thư mục ghi chú Markdown ở bảng bên phải, chỉnh sửa ghi chú bằng trình soạn thảo WYSIWYG, tìm theo đường dẫn và toàn văn, quản lý nhãn và mục yêu thích, và khôi phục ghi chú đã xóa từ thùng rác. Tác nhân có thể tra cứu ghi chú bằng `vkb`; quá trình nhập thư mục chạy nền và lưu lại bản ghi có thể mở rộng, xem lại hoặc hủy.
+
+- 🤖 Phiên lập kế hoạch và thực thi: `vspawn --plan-execute` mở phiên lập kế hoạch để chia công việc thành các phiên thực thi; `vflow` đề xuất phương án chia, `vtell --report` gửi kết quả của từng phiên thực thi để nghiệm thu, và khi làm lại thì dùng lại phiên thực thi ban đầu. Worktree có thể dùng chung cho mọi vai trò hoặc tạo riêng cho từng phiên.
+
+- 🔗 Dự án và phiên được chia sẻ giờ tải giao diện thật của máy chủ phía sau liên kết chia sẻ, truyền qua đường hầm ra ngoài và chỉ giới hạn trong dự án hoặc phiên được cấp quyền. Thiết bị và quyền cấp có thể quản lý ở trang tài khoản.
+
+- 🧠 Cơ sở tri thức phiên hỗ trợ nhóm theo dự án, phiên và mục, có thể kéo thả, đổi tên và xóa; việc tổ chức lại cùng một phiên sẽ thay thế tác vụ đang chờ.
+
+- 💬 Chế độ hội thoại: lịch sử dài được tải theo trang về tận tin nhắn đầu tiên, mọi tác nhân hỗ trợ bộ máy hội thoại (kể cả OMP) đều mở chế độ hội thoại theo mặc định khi tạo phiên mới, và các lượt liên tiếp của cùng một tác nhân gộp thành một dòng tác giả.
+
+- ⌨️ Terminal: gợi ý gốc của shell cung cấp tự động hoàn thành bằng Tab cho zsh, bash, fish và PowerShell trên macOS và Linux, các phím mũi tên vẫn gọi lại lệnh trước đó khi danh sách gợi ý đang mở, và lõi terminal được nâng lên xterm 6.
+
+- 📊 Bảng Info hiển thị thống kê lượt hiện tại cho Claude, Codex, Grok, OpenCode, Pi và OMP: token vào và ra, tỷ lệ trúng bộ đệm, tốc độ tạo, số lần gọi công cụ và các thay đổi tệp được ghi lại. Những điều khiển ít dùng trong ô nhập được gom vào "Thêm".
+
+- 🔐 Ô nhập hiển thị chế độ quyền đã cấu hình, đang áp dụng và đang chờ; khi cần khởi động lại để áp dụng thay đổi, ứng dụng sẽ hỏi xác nhận trước.
+
+- 🔔 Thông báo hiển thị tên phiên và bản xem trước ngắn; bấm vào thông báo sẽ mở phiên tương ứng, và ứng dụng di động có thể nhận thông báo qua dịch vụ đẩy của hệ thống.
+
+- 🌐 Danh sách mô hình của Claude giờ lấy từ danh mục mô hình đã công bố trên website, lưu đệm cục bộ và làm mới sáu giờ một lần, kết hợp với các mô hình do CLI báo cáo.
+
+- 🧵 Phím mũi tên lên và xuống trong ô nhập gọi lại các tin nhắn đã gửi trước đó, kể cả tin đang chờ hàng đợi và chờ xác nhận, và khôi phục bản nháp chưa gửi khi đi tới cuối.
+
+- ↩️ Khi hoàn tác một tin nhắn, hình ảnh của tin đó được đưa trở lại ô nhập để có thể gửi lại.
+
+- 🔑 Tác nhân khởi động trên macOS kế thừa toàn bộ môi trường của shell đăng nhập, nên cả những công cụ cài đặt ngoài PATH mặc định cũng được tìm thấy.
+
+- 💡 Nút phản hồi trên thanh tiêu đề mở trang phản hồi.
+
+- 🕹️ Nút trung tâm trò chơi trên thanh thẻ mở trung tâm trò chơi của website (PIXEL WING); trên máy tính, trò chơi mở trong trình duyệt tích hợp.
+
+---
+
 ## v0.1.108 — 2026-09-08
 
 - 💬 Chế độ hội thoại thử nghiệm cho Claude, Codex và OpenCode, với phản hồi truyền trực tiếp, quá trình suy luận, chi tiết công cụ, phê duyệt quyền và biểu mẫu câu hỏi. Cấu hình mới vẫn mặc định dùng chế độ terminal.

@@ -51,7 +51,9 @@ impl Fixture {
         std::fs::set_permissions(runtime.join("node"),std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 }
-impl Drop for Fixture { fn drop(&mut self) { let _=std::fs::remove_dir_all(&self.dir); } }
+impl Drop for Fixture { fn drop(&mut self) {
+    if let Ok(value)=list(&self.app,"p") { for index in value["indexes"].as_array().unwrap() {worker::stop(&self.app,index["root"].as_str().unwrap());} }
+    let _=std::fs::remove_dir_all(&self.dir); } }
 
 #[test]
 fn graph_preserves_exact_identity_and_rejects_escaping_sources() {
@@ -104,7 +106,7 @@ fn indexing_failure_and_cancellation_are_recoverable() {
 #[test]
 #[cfg(unix)]
 fn association_checks_displayed_source_and_memory_versions() {
-    let f=Fixture::new();let index=f.seed();f.fake_runtime("#!/bin/sh\nexit 0\n");let memory=f.memory();
+    let f=Fixture::new();let index=f.seed();f.fake_runtime("#!/bin/sh\nwhile IFS= read -r request; do printf '%s\\n' 'VLX_KNOWLEDGE {\"result\":{}}'; done\n");let memory=f.memory();
     let digest=graph::digest(&graph::file(&f.root,"main.ts").unwrap());
     let mut args=json!({"entryId":memory["id"],"version":memory["version"],"indexId":index.id,"nodeId":"a","digest":"old"});
     assert_eq!(links::create(&f.app,&args).unwrap_err(),"knowledge_conflict");
@@ -133,6 +135,34 @@ fn real_runtime_indexes_syncs_and_queries_a_separate_worktree() {
     let search=dispatch(&f.app,"knowledge_search",&json!({"id":index.id,"query":"run"})).unwrap();
     let node=&search["nodes"][0];let detail=dispatch(&f.app,"knowledge_node",&json!({"id":index.id,"nodeId":node["id"]})).unwrap();
     assert!(detail["outgoing"].as_array().unwrap().iter().any(|e|e["node"]["name"]=="helper"));
+    let overview=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"status"})).unwrap();
+    assert!(overview["nodeCount"].as_u64().unwrap()>0);
+    let ranked=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"search","query":"kind:function run"})).unwrap();
+    assert_eq!(ranked["nodes"][0]["name"],"run");
+    let helper=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"search","query":"helper"})).unwrap()["nodes"][0]["id"].clone();
+    let path=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"path","nodeId":node["id"],"targetId":helper})).unwrap();
+    assert_eq!(path["path"].as_array().unwrap().len(),2);
+    let impact=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"impact","nodeId":helper,"depth":2})).unwrap();
+    assert!(impact["nodes"].as_array().unwrap().iter().any(|n|n["name"]=="run"));
+    let callers=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"callers","nodeId":helper,"depth":1})).unwrap();
+    assert!(callers["relations"].as_array().unwrap().iter().any(|n|n["node"]["name"]=="run"));
+    let callees=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"callees","nodeId":node["id"],"depth":1})).unwrap();
+    assert!(callees["relations"].as_array().unwrap().iter().any(|n|n["node"]["name"]=="helper"));
+    let reverse=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"path","nodeId":helper,"targetId":node["id"]})).unwrap();
+    assert!(reverse["path"].is_null());
+    let explore=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"explore","query":"main.ts run helper"})).unwrap();
+    assert!(explore["content"].as_array().unwrap().iter().any(|c|c["text"].as_str().unwrap().contains("helper")));
+    let files=dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"files","query":"main"})).unwrap();
+    assert_eq!(files["files"][0]["path"],"main.ts");
+    assert!(guard_paths(&f.app,"knowledge_query",&json!({"id":index.id}), |_|Err("denied".into())).is_err());
+    assert_eq!(dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"invalid"})).unwrap_err(),"knowledge_invalid");
+    // Verify native watching itself, without a query-triggered sync.
+    std::fs::write(f.root.join("watched.ts"),"export function watchedUpdate() { return 7; }\n").unwrap();
+    let wait_started=Instant::now();
+    while graph::search(&f.root,"watchedUpdate",0).unwrap()["total"]!=1 {
+        assert!(wait_started.elapsed()<Duration::from_secs(15),"native watcher did not update the index");
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let wt=f.root.join("nested-worktree");git(&["worktree","add","-qb","separate",wt.to_str().unwrap()]);
     std::fs::write(wt.join("main.ts"),"export function otherBranch() { return 3; }\n").unwrap();
     assert_eq!(checkout(&wt).unwrap(),wt.canonicalize().unwrap());
@@ -146,10 +176,14 @@ fn real_runtime_indexes_syncs_and_queries_a_separate_worktree() {
     let targets=list(&f.app,"p").unwrap();
     let target=targets["indexes"].as_array().unwrap().iter().find(|i|i["root"].as_str()==wt.to_str()).unwrap();
     start(&f.app,target["id"].as_str().unwrap()).unwrap();assert_eq!(f.wait(target["id"].as_str().unwrap()).status,"ready");
-    let separate=agent::query(&f.app,&query).unwrap();assert_eq!(separate["code"]["available"],true);assert_eq!(separate["code"]["data"]["total"],1);
+    let separate=agent::query(&f.app,&query).unwrap();assert_eq!(separate["code"]["available"],true);assert_eq!(separate["code"]["data"]["nodes"].as_array().unwrap().len(),1);
     std::fs::write(f.root.join("main.ts"),"export function renamed() { return 2; }\n").unwrap();
     let updated=dispatch(&f.app,"knowledge_search",&json!({"id":index.id,"query":"renamed"})).unwrap();assert_eq!(updated["total"],1);
     assert_eq!(dispatch(&f.app,"knowledge_search",&json!({"id":index.id,"query":"otherBranch"})).unwrap()["total"],0);
+    dispatch(&f.app,"knowledge_disable",&json!({"id":index.id})).unwrap();
+    assert_eq!(dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"status"})).unwrap_err(),"knowledge_disabled");
+    start(&f.app,&index.id).unwrap();assert_eq!(f.wait(&index.id).status,"ready");
+    assert!(dispatch(&f.app,"knowledge_query",&json!({"id":index.id,"action":"status"})).unwrap()["watching"].as_bool().unwrap());
     assert!(!f.root.join(".git/hooks/post-commit").exists());
 }
 

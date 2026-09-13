@@ -11,10 +11,15 @@
 //! routed through transport/WS (sidecar), so it still invokes `set_browser_url` directly.
 
 import { platform } from "../platform";
-import type { BrowserRect, BrowserStatePayload, UnlistenFn } from "../platform";
+import type {
+  BrowserPopupPayload,
+  BrowserRect,
+  BrowserStatePayload,
+  UnlistenFn,
+} from "../platform";
 import { invoke } from "./transport";
 
-export type { BrowserRect, BrowserStatePayload };
+export type { BrowserPopupPayload, BrowserRect, BrowserStatePayload };
 
 /** Create a child view over the placeholder; repeated calls for one tabId are idempotent and only update bounds. */
 export function browserOpen(tabId: string, url: string, rect: BrowserRect): Promise<void> {
@@ -72,4 +77,12 @@ export function onBrowserState(
   cb: (state: BrowserStatePayload) => void,
 ): Promise<UnlistenFn> {
   return platform.browser.onState(tabId, cb);
+}
+
+/** Listen for new-window requests from one browser tab; the caller opens them as new app browser tabs. */
+export function onBrowserPopup(
+  tabId: string,
+  cb: (popup: BrowserPopupPayload) => void,
+): Promise<UnlistenFn> {
+  return platform.browser.onPopup(tabId, cb);
 }

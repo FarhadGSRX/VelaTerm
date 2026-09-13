@@ -1,0 +1,1 @@
+{"name":"@velaterm/capacitor-remote","version":"0.1.0","type":"module","main":"index.js","capacitor":{"ios":{"src":"ios"},"android":{"src":"android"}}}

@@ -1,0 +1,50 @@
+.sv-view-switch {
+  position: relative;
+  display: inline-flex;
+  z-index: 10;
+}
+
+.sv-view-hint {
+  position: absolute;
+  top: calc(100% + 9px);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: max-content;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.16);
+  color: var(--text);
+  font-family: var(--font-prose);
+  font-size: var(--ui-fs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  cursor: default;
+}
+
+.sv-view-hint::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: var(--hint-arrow-left);
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  border-top: 1px solid var(--accent-line);
+  border-left: 1px solid var(--accent-line);
+  background: var(--bg-2);
+}
+
+.pane-tools .sv-view-hint-close {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--text-dim);
+}
+
+.sv-view-switch button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

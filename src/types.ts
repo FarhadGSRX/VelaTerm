@@ -20,15 +20,9 @@ export type AgentKind = "claude" | "codex" | "opencode" | "copilot" | "cursor" |
  */
 export type SessionKind = "terminal" | "claude" | "codex" | "opencode" | "copilot" | "cursor" | "antigravity" | "cline" | "pi" | "omp" | "crush" | "kimi" | "kiro" | "grok" | "zoo" | "browser";
 
-/** Agent kinds with a two-state permission-mode toggle. Selecting Skip passes that agent's flag for bypassing
- *  every permission confirmation at launch. opencode controls permissions through configuration and has no
- *  equivalent CLI flag; Pi has no permission-confirmation mechanism; terminal/browser have no such concept.
- *  OMP, unlike the Pi it forked from, does confirm tool calls and bypasses them with `--yolo`.
- *  Cline's direction is reversed because it is fully automatic by default: both states inject an explicit flag
- *  (`--auto-approve false` for default and `--auto-approve true` for skip; see backend
- *  inject::permission_flag), while presenting the same two-state semantics to users. This is the single source
- *  shared by the Edit Session dialog and bottom status-bar permission toggle, preventing constant drift. */
-export const PERMISSION_TOGGLE_KINDS: SessionKind[] = ["claude", "codex", "copilot", "cursor", "antigravity", "cline", "omp", "crush", "kimi", "kiro", "grok", "zoo"];
+/** Agents with permission controls. Claude/Codex/OpenCode obtain their choices from the backend;
+ * other supported agents expose a bypass switch. OpenCode injects configuration rather than a flag. */
+export const PERMISSION_TOGGLE_KINDS: SessionKind[] = ["claude", "codex", "opencode", "copilot", "cursor", "antigravity", "cline", "omp", "crush", "kimi", "kiro", "grok", "zoo"];
 export function supportsPermissionToggle(kind: SessionKind): boolean {
   return PERMISSION_TOGGLE_KINDS.includes(kind);
 }
@@ -46,7 +40,7 @@ export function supportsPermissionToggle(kind: SessionKind): boolean {
 export type SessionEngine = "tui" | "chat";
 
 /** Agent kinds the chat engine can drive. The backend refuses the rest, so nothing may offer them. */
-export const CHAT_ENGINE_KINDS: SessionKind[] = ["claude", "codex", "opencode"];
+export const CHAT_ENGINE_KINDS: SessionKind[] = ["claude", "codex", "opencode", "pi", "omp"];
 export function supportsChatEngine(kind: SessionKind): boolean {
   return CHAT_ENGINE_KINDS.includes(kind);
 }
@@ -141,8 +135,8 @@ export interface Session {
   initCmd?: string | null;
   /** User-defined agent launch arguments such as `--model opus`; appended verbatim at startup for agent sessions only. */
   agentArgs?: string | null;
-  /** Two-state permission mode: empty/`"default"` asks incrementally (default); `"skip"` bypasses every permission
-   *  confirmation. Agent sessions only; the backend maps it to the appropriate launch flag by kind (none for opencode). */
+  /** Agent-specific permission mode, validated by the backend catalogue. Legacy `"skip"` means bypass;
+   * the backend maps saved modes to chat policies, terminal flags, or OpenCode configuration. */
   permissionMode?: string | null;
   /** Codex collaboration style. Empty means the native Default mode. */
   /** Codex collaboration style (`default` or `plan`), or the OpenCode agent answering the session. */

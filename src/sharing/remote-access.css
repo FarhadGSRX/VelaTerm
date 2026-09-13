@@ -1,0 +1,27 @@
+.remote-devices { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow: auto; }
+.remote-device { display: flex; align-items: center; justify-content: space-between; flex-wrap:wrap; gap: 14px; width: 100%; text-align: left; padding: 12px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-md, 8px); color: var(--text); }
+.remote-device>div { min-width:0; overflow-wrap:anywhere; }
+.remote-device small { display:block; margin-top:6px; color: var(--text-dim); }
+.remote-device button { border:1px solid var(--border); border-radius:var(--r-md,8px); padding:8px 10px; background:var(--bg-2); color:var(--text); cursor:pointer; }
+.remote-device button:hover { border-color:var(--accent); }
+.remote-window { height: 100dvh; display: flex; flex-direction: column; background: var(--bg-0, #101518); color: var(--text, #ddd); }
+.remote-window > header { flex: none; display: flex; align-items: center; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--border, #444); }
+.remote-window > header small { margin-left: auto; }
+.remote-workspace { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 20px; padding: 20px; min-height: 0; flex: 1; }
+.remote-workspace > aside { display: flex; flex-direction: column; gap: 16px; padding: 14px; overflow: auto; border: 1px solid var(--border, #444); border-radius: 8px; }
+.remote-workspace h2, .remote-workspace h3 { font-size: 13px; margin: 0 0 10px; }
+.remote-workspace aside section { display: flex; flex-direction: column; gap: 6px; }
+.remote-workspace aside a { padding: 8px; color: inherit; text-decoration: none; border-radius: 5px; overflow-wrap: anywhere; }
+.remote-workspace aside a[aria-current], .remote-workspace aside a:hover { background: var(--accent-soft, #294051); }
+.remote-session { overflow: auto; min-width: 0; padding: 16px; border: 1px solid var(--border, #444); border-radius: 8px; }
+.remote-session nav.account-actions { display: none; }
+.remote-session .shared-conversation { margin: 0; padding: 0; max-width: none; }
+.remote-error { margin: 16px 20px 0; }
+@media (max-width: 700px) { .remote-workspace { display: flex; flex-direction: column; gap: 16px; padding: 12px; overflow: auto; } .remote-workspace > aside { flex: none; max-height: 35vh; } .remote-session { overflow: visible; } .remote-window > header { flex-wrap: wrap; gap: 10px; padding: 12px; } }
+
+.remote-window { --remote-gap: 16px; }
+.remote-window > header button { padding: 6px 12px; border: 1px solid var(--border, #555); border-radius: 6px; background: var(--bg-2, transparent); color: inherit; font: inherit; cursor: pointer; }
+.remote-session .shared-conversation > h1, .remote-session .shared-conversation > h1 + p, .remote-session .shared-conversation > h1 + p + p { display: none; }
+.remote-session .shared-conversation > div[aria-live] { min-height: 160px; }
+.remote-session .shared-conversation form { display:flex; flex-direction:column; gap:12px; margin-top:16px; }
+.remote-session .shared-conversation .account-actions { gap:10px; }

@@ -1,3 +1,41 @@
+## v0.2.0 — 2026-09-13
+
+- 📱 Aplicativo VelaTerm para iOS e Android (versão preliminar): conecte-se a uma máquina por SSH ou URL após confirmar a impressão digital do host, carregue a interface remota completa dentro do aplicativo, preencha os dados de conexão lendo um código QR e entre em uma conta remota.
+
+- 🛡️ Auditoria de código experimental: inicie pelo menu de contexto de um projeto uma auditoria do repositório inteiro, de um diretório ou arquivo, ou das alterações não confirmadas na árvore de trabalho, com o Codex ou o Claude Code; revise os achados em relação ao código-fonte e exporte um relatório em Markdown ou JSON.
+
+- 📓 Base de conhecimento local: abra uma pasta de notas Markdown no painel direito, edite as notas no editor WYSIWYG, pesquise por caminho e em texto completo, gerencie etiquetas e favoritos e restaure notas excluídas da lixeira. Os agentes podem consultar as notas com `vkb`; importações de pastas rodam em segundo plano e deixam um registro que você pode expandir, revisar ou cancelar.
+
+- 🤖 Sessões de planejamento e execução: `vspawn --plan-execute` abre uma sessão de planejamento que divide a tarefa em sessões de execução; `vflow` propõe a divisão, `vtell --report` devolve o resultado de cada execução para aceite e um retrabalho reutiliza a sessão de execução original. Os worktrees podem ser compartilhados por todos os papéis ou criados por sessão.
+
+- 🔗 Projetos e sessões compartilhados agora carregam a interface real do host atrás da URL compartilhada, encaminhada por um túnel de saída e limitada ao projeto ou à sessão autorizados. Dispositivos e autorizações podem ser gerenciados nas páginas da conta.
+
+- 🧠 A base de conhecimento de sessão ganha grupos de projetos, sessões e entradas com arrastar e soltar, renomear e excluir; uma nova organização da mesma sessão substitui a que estava na fila.
+
+- 💬 Visualização de conversa: históricos longos carregam página a página até a primeira mensagem, todos os agentes compatíveis com o mecanismo de conversa (incluindo OMP) abrem a visualização de conversa por padrão, e turnos consecutivos do mesmo agente compartilham uma única linha de autor.
+
+- ⌨️ Terminal: as sugestões nativas do shell oferecem preenchimento com Tab para zsh, bash, fish e PowerShell no macOS e no Linux, as setas continuam recuperando comandos anteriores com a lista aberta, e o núcleo do terminal passa para o xterm 6.
+
+- 📊 O painel Info mostra estatísticas do turno atual para Claude, Codex, Grok, OpenCode, Pi e OMP: tokens de entrada e saída, taxa de acertos de cache, velocidade de geração, chamadas de ferramentas e modificações de arquivos registradas. Os controles menos usados da área de escrita passam para "Mais".
+
+- 🔐 A área de escrita mostra o modo de permissão configurado, o vigente e o pendente, e pede confirmação quando é preciso reiniciar para aplicar uma mudança.
+
+- 🔔 As notificações mostram o nome da sessão e uma prévia curta; clicar abre a sessão, e o aplicativo móvel pode recebê-las pelo serviço de notificações push do sistema.
+
+- 🌐 A lista de modelos do Claude agora vem do catálogo de modelos publicado no site, com cache local e atualização a cada seis horas, combinada com os modelos informados pela CLI.
+
+- 🧵 As setas para cima e para baixo na área de escrita recuperam suas mensagens anteriores, incluindo as enfileiradas e as pendentes de confirmação, e restauram no fim o rascunho não enviado.
+
+- ↩️ Reverter uma mensagem devolve suas imagens à área de escrita para que possam ser enviadas novamente.
+
+- 🔑 Agentes iniciados no macOS herdam o ambiente completo do shell de login, então ferramentas instaladas fora do PATH padrão também são encontradas.
+
+- 💡 Uma entrada de feedback na barra de título abre a página de feedback.
+
+- 🕹️ Uma entrada da Central de jogos na barra de abas abre a central de jogos do site (PIXEL WING); no desktop, o jogo abre no navegador integrado.
+
+---
+
 ## v0.1.108 — 2026-09-08
 
 - 💬 Visualização experimental de conversa para Claude, Codex e OpenCode, com respostas em streaming, raciocínio, detalhes de ferramentas, permissões e formulários de perguntas. Novas configurações continuam usando o terminal por padrão.

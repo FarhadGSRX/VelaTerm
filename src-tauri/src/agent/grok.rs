@@ -11,21 +11,7 @@ const HOOKS_FILE: &str = "vlx-term.json";
 
 /// Grok hook installation audit. Never log hook content, executable paths, tokens, or session data.
 pub fn audit_install(status: &str, duration_ms: u128) {
-    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    let level = if status == "failed" { "WARN" } else { "INFO" };
-    eprintln!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{:<5}] [system] event=grok_hook_install step=hooks method=namespaced_file inputCount=1 outputCount={} status={} durationMs={}",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second(),
-        level,
-        if status == "success" { 1 } else { 0 },
-        status,
-        duration_ms,
-    );
+    crate::diagnostics::record(if status=="failed"{"WARN"}else{"INFO"},"grok_hook_install",serde_json::json!({"status":status,"durationMs":duration_ms as u64,"inputCount":1,"outputCount":usize::from(status=="success")}));
 }
 
 fn grok_home() -> Option<PathBuf> {

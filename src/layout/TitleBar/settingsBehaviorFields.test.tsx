@@ -31,6 +31,8 @@ vi.mock("../../store/termStore", () => ({
       navLayout: "tree",
       singleTabMode: true,
       spawnConfirm: true,
+      referSummary: { enabled: false, agent: "claude", model: "", effort: "" },
+      setReferSummary: vi.fn(),
       termRenderer: "dom",
       redrawOnReveal: false,
       outputScheduler: true,
@@ -80,7 +82,7 @@ vi.mock("../../ipc/commands", () => ({
   giteaSetConfig: vi.fn(),
 }));
 vi.mock("../../ipc/settingsSync", () => ({ pushSetting: vi.fn() }));
-vi.mock("../../ipc/transport", () => ({ isTauri: false, isRemoteWindow: false }));
+vi.mock("../../ipc/transport", () => ({ isTauri: false, isRemoteWindow: false, listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("../../notify", () => ({
   getEffectiveNotifyPermission: vi.fn().mockResolvedValue("unsupported"),
   requestEffectiveNotifyPermission: vi.fn().mockResolvedValue("unsupported"),

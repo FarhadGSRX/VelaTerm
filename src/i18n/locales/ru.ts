@@ -13,7 +13,50 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const ru: typeof en = {
-  // Project code intelligence and memory associations.
+  "tree.newPlanExecuteSession": "Новая сессия планирования и выполнения…",
+  "launch.splitTasks": "Автоматически разделить на несколько задач",
+  "launch.splitTasksHint": "Сеанс планирования предложит независимые задачи. Перед запуском проверьте инструкции, агентов, модели и глубину рассуждений.",
+  "launch.splitReview": "Проверка задач для выполнения",
+  "launch.splitReviewHint": "Один сеанс планирования получает все отчёты и проверяет каждую задачу отдельно. Выполнение начинается только после вашего подтверждения.",
+  "launch.splitConfirmed": "Эти задачи уже подтверждены.",
+  "launch.splitClosed": "Это предложение больше не ожидает подтверждения.",
+  "launch.splitRetry": "Повторить отправку недоставленных сообщений",
+  "launch.splitSharedDirectory": "Все сеансы выполнения используют рабочий каталог сеанса планирования и его рабочее дерево, если оно включено.",
+  "launch.createIn": "Создать в",
+  "launch.workingDirectory": "Путь к рабочему каталогу",
+  "launch.createAndStart": "Создать и запустить",
+  "launch.planExecuteTaskHint": "Опишите задачу, требования и критерии приёмки для составления плана.",
+  "launch.planExecuteResult": "Сначала запускается сессия планирования. Когда план готов, она создаёт сессию выполнения.",
+  "launch.planExecuteWorktreeHint": "Новые рабочие деревья создаются из текущего коммита без незакоммиченных изменений. Если создать дерево не удалось, соответствующая сессия не запускается.",
+  "launch.workflowDirectorySharedHint": "Сессия планирования и все сессии выполнения используют один новый каталог и общую ветку.",
+  "launch.workflowDirectoryEachHint": "Сессия планирования и каждая сессия выполнения получают собственное рабочее дерево и отдельную ветку.",
+  "launch.planTitle": "Планирование и проверка",
+  "launch.execTitle": "Выполнение",
+  "launch.planExecuteIntro": "Отдельная сессия планирует работу, проверяет результат и запрашивает исправления.",
+  "chat.origin.plan": "Планирование",
+  "chat.origin.exec": "Выполнение",
+
+  // Project code intelligence and knowledge entry associations.
+  "knowledge.callers": "Вызывающие символы",
+  "knowledge.callees": "Вызываемые символы",
+  "knowledge.explore": "Исследование кода",
+  "knowledge.exploreHint": "Опишите функцию или последовательность вызовов либо укажите файл или символ…",
+  "knowledge.impact": "Анализ влияния",
+  "knowledge.path": "Путь вызовов",
+  "knowledge.target": "Найти целевой символ…",
+  "knowledge.depth": "Глубина обхода",
+  "knowledge.noPath": "В индексе не найден направленный путь вызовов.",
+  "knowledge.watching": "Автосинхронизация включена",
+  "knowledge.onDemand": "Синхронизация перед запросами",
+  "knowledge.overview": "Обзор",
+  "knowledge.uncertain": "Предполагаемая связь",
+  "knowledge.kind": "Тип символа",
+  "knowledge.language": "Язык",
+  "knowledge.results": "Результаты",
+  "knowledge.resultLarge": "Результат слишком велик для отображения. Сузьте запрос или уменьшите глубину обхода.",
+  "knowledge.queryFailed": "Запрос кода завершился ошибкой. Повторите запрос или синхронизируйте индекс.",
+  "knowledge.liveHelp": "Изменения файлов синхронизируются, пока работает процесс запросов. После его завершения из-за простоя следующий запрос сначала учтёт накопленные изменения.",
+  "knowledge.startHelp": "Включите индексацию для поиска кода, отслеживания вызовов и анализа влияния изменений. Анализ выполняется на сервере без модели ИИ.",
   "knowledge.title": "Граф кода",
   "knowledge.intro": "Изучайте связи в коде и связывайте их с сохранёнными проектными решениями.",
   "knowledge.setup": "Установите CodeGraph на этом сервере, чтобы включить индексацию проектов.",
@@ -35,7 +78,7 @@ const ru: typeof en = {
   "knowledge.search": "Поиск символов или путей к файлам…",
   "knowledge.searchButton": "Найти",
   "knowledge.noResults": "Подходящих символов нет.",
-  "knowledge.selectSymbol": "Выберите символ, чтобы увидеть исходный код, связи и связанные записи памяти.",
+  "knowledge.selectSymbol": "Выберите символ, чтобы увидеть исходный код, связи и связанные статьи базы знаний.",
   "knowledge.source": "Исходный код",
   "knowledge.incoming": "Входящие связи",
   "knowledge.outgoing": "Исходящие связи",
@@ -43,22 +86,22 @@ const ru: typeof en = {
   "knowledge.analysisNote": "Связи получены статическим анализом и могут быть неполными или неточными.",
   "knowledge.changed": "Файл изменился во время запроса. Повторите синхронизацию, прежде чем использовать номера строк или подтверждать проверку.",
   "knowledge.truncated": "Объём отображаемых данных ограничен. Некоторые связи или строки кода пропущены.",
-  "knowledge.linkMemory": "Связать с памятью",
-  "knowledge.chooseMemory": "Выберите запись памяти",
-  "knowledge.noLinks": "Связей с кодом пока нет. Запись памяти можно связать с кодом в представлении символа.",
-  "knowledge.inspect": "Проверить код и память",
+  "knowledge.linkMemory": "Связать со статьёй",
+  "knowledge.chooseMemory": "Выберите статью базы знаний",
+  "knowledge.noLinks": "Связей с кодом пока нет. Статью можно связать с кодом в представлении символа.",
+  "knowledge.inspect": "Проверить код и статью",
   "knowledge.unlink": "Удалить связь",
   "knowledge.codeReferences": "Ссылки на код",
   "knowledge.refresh": "Обновить",
   "knowledge.current": "Без изменений",
   "knowledge.review": "Требуется проверка",
   "knowledge.unavailable": "Недоступно",
-  "knowledge.reviewHelp": "Сопоставьте эту запись памяти с показанным кодом. Подтверждение сохраняет текущую версию файла, не изменяя текст записи.",
+  "knowledge.reviewHelp": "Сопоставьте эту статью с показанным кодом. Подтверждение сохраняет текущую версию файла, не изменяя текст статьи.",
   "knowledge.confirmReview": "Подтвердить проверку",
-  "knowledge.agentHint": "Агенты могут выполнять vknowledge search \"тема\" в этом каталоге. Запросы синхронизируют включённые индексы и возвращают код и записи памяти отдельно.",
+  "knowledge.agentHint": "Агенты могут выполнять vkb search \"тема\" в этом каталоге. Запросы синхронизируют включённые индексы и возвращают код и статьи базы знаний отдельно.",
   "knowledge.busy": "Выполняется индексация. Можно закрыть эту страницу или отключить индексацию, чтобы остановить задачу.",
-  "knowledge.disabledHelp": "Включите индексацию этого каталога для запросов к коду. При отключении индекс и связи с памятью сохраняются.",
-  "knowledge.conflict": "Код или запись памяти изменились. Загрузите их заново перед сохранением связи.",
+  "knowledge.disabledHelp": "Включите индексацию этого каталога для запросов к коду. При отключении индекс и связи со статьями сохраняются.",
+  "knowledge.conflict": "Код или статья изменились. Загрузите их заново перед сохранением связи.",
   "knowledge.symbolMissing": "Символ или исходный код больше недоступны. Синхронизируйте индекс и повторите поиск.",
   "knowledge.directoryMissing": "Рабочий каталог отсутствует или изменился. Проверьте пути проекта и сеанса.",
   "knowledge.partial": "Индекс неполон. Повторите синхронизацию и проверьте доступность исходных файлов для чтения.",
@@ -68,15 +111,117 @@ const ru: typeof en = {
   "knowledge.timeout": "Время индексации истекло. Проверьте размер репозитория и повторите попытку.",
   "knowledge.error": "Операция не выполнена. Проверьте доступ сервера к каталогам и среду выполнения, затем повторите попытку.",
 
-  // Global Memory: a thematic LLM Wiki shared across sessions.
-  "memory.title": "Глобальная память",
-  "memory.add": "Добавить в глобальную память",
-  "memory.intro": "Постоянно обновляемая вики, объединяющая знания, решения и опыт из разных сеансов.",
-  "memory.entries": "Статьи памяти",
+  // Knowledge base: saved knowledge organized by project and session.
+  "memory.hierarchy": "Проекты и сеансы",
+  "memory.manualGroup": "Создано вручную",
+  "memory.legacyGroup": "Ранее объединённые записи",
+  "memory.unknownProject": "Исходный проект неизвестен",
+  "nb.addLink": "Вставить ссылку",
+  "nb.attach": "Прикрепить файл",
+  "nb.browse": "Обзор",
+  "nb.chooseNote": "Начните с заметки",
+  "nb.closeHint": "Убрать этот блокнот из списка. Файлы останутся на диске.",
+  "nb.closeVault": "Закрыть блокнот",
+  "nb.conflict": "Файл изменён вне этого редактора. Ваш черновик сохранён. Загрузите файл заново или сохраните черновик как новую заметку.",
+  "nb.copyTo": "Копировать в локальный блокнот",
+  "nb.createVault": "Создать базу знаний",
+  "nb.destination": "Путь назначения",
+  "nb.download": "Скачать",
+  "nb.downloadHint": "Скачайте вложение, чтобы открыть его в другом приложении.",
+  "nb.empty": "Откройте папку или создайте блокнот, чтобы начать писать.",
+  "nb.emptyImport": "Не выбраны файлы, доступные для импорта.",
+  "nb.emptyNotes": "Заметки сохраняются в формате Markdown.",
+  "nb.emptyOutline": "Здесь появятся заголовки документа.",
+  "nb.emptyTrash": "Корзина пуста.",
+  "nb.error": "Не удалось получить доступ к блокноту. Проверьте подключение и папку, затем повторите попытку.",
+  "nb.exists": "Такой файл или папка уже существует. Выберите другое имя или папку.",
+  "nb.favorites": "Избранное",
+  "nb.files": "Файлы",
+  "nb.folder": "Папка",
+  "nb.generatedHint": "Знания, собранные из ваших сеансов, вместе с источниками и историей изменений.",
+  "nb.homeHint": "Просматривайте базу знаний сеансов и локальные базы знаний.",
+  "nb.loadMore": "Загрузить ещё",
+  "nb.import": "Импорт",
+  "nb.importFiles": "Выбрать файлы",
+  "nb.importFolder": "Выбрать папку",
+  "nb.importHint": "Файлы копируются в выбранную папку. Существующие файлы не перезаписываются, а скрытые папки настроек пропускаются.",
+  "nb.imported": "Импортировано",
+  "nb.imports": "История импорта",
+  "nb.importsEmpty": "Импорта пока не было.",
+  "nb.importRoot": "Корень базы знаний",
+  "nb.importBusy": "Для этой базы знаний импорт уже выполняется.",
+  "nb.importDelete": "Удалить запись",
+  "nb.importDeleteConfirm": "Удалить эту запись об импорте? Уже импортированные файлы останутся.",
+  "nb.importDone": "Импорт завершён",
+  "nb.importDuration": (seconds: string) => `${seconds} с`,
+  "nb.importFailed": "Не удалось выполнить импорт",
+  "nb.importFilePending": "Не импортировано",
+  "nb.importHideFiles": "Скрыть файлы",
+  "nb.importInterruptedHint": "Импорт остановился до завершения.",
+  "nb.importProgress": (done: string, total: string) => `${done} / ${total} файлов`,
+  "nb.importShowFiles": (count: string) => `Файлы (${count})`,
+  "nb.importSkipHidden": "Скрытый файл или папка",
+  "nb.importStatusCancelled": "Отменён",
+  "nb.importStatusCompleted": "Завершён",
+  "nb.importStatusFailed": "Ошибка",
+  "nb.importStatusInterrupted": "Прерван",
+  "nb.importStatusRunning": "Импорт",
+  "nb.incomplete": "Не удалось завершить операцию. Проверьте файлы и повторите попытку.",
+  "nb.info": "Сведения о заметке",
+  "nb.invalid": "Недопустимое имя или путь.",
+  "nb.links": "Исходящие ссылки",
+  "nb.local": "Локальные файлы",
+  "nb.localVaults": "Локальные базы знаний",
+  "nb.move": "Переименовать или переместить",
+  "nb.moveHint": "Укажите путь относительно корня блокнота. При перемещении файла или папки существующие ссылки в заметках обновляются.",
+  "nb.name": "Имя",
+  "nb.newFolder": "Новая папка",
+  "nb.newNote": "Новая заметка",
+  "nb.noLinks": "Связанных заметок пока нет.",
+  "nb.tags": "Теги",
+  "nb.notes": "Заметки",
+  "nb.openVault": "Открыть базу знаний",
+  "nb.outline": "Структура",
+  "nb.quickOpen": "Быстрое открытие",
+  "nb.readOnly": "Этот файл нельзя редактировать как заметку Markdown в кодировке UTF-8.",
+  "nb.recent": "Недавние заметки",
+  "nb.restore": "Восстановить",
+  "nb.reload": "Загрузить с диска",
+  "nb.root": "Путь к папке",
+  "nb.rootHint": "Выберите папку на подключённом компьютере. Существующие файлы Markdown и вложения останутся на своих местах.",
+  "nb.saveCopy": "Сохранить как новую заметку",
+  "nb.saved": "Сохранено на диске",
+  "nb.saving": "Сохранение…",
+  "nb.search": "Поиск заметок…",
+  "nb.searchAllVaults": "Все базы знаний",
+  "nb.searchCount": (count: string) => `${count} результатов`,
+  "nb.searchEmpty": "Нет заметок, соответствующих этому запросу.",
+  "nb.searchLine": (line: string) => `Строка ${line}`,
+  "nb.searchMatches": (count: string) => `${count} совпадений`,
+  "nb.searchMore": "Показаны только первые результаты. Уточните запрос, чтобы увидеть остальные.",
+  "nb.searchRelated": "Связанные заметки",
+  "nb.searchResults": "Результаты поиска",
+  "nb.searchScope": "Область поиска",
+  "nb.searchThisVault": "Эта база знаний",
+  "nb.skipped": "Пропущено",
+  "nb.split": "Раздельный вид",
+  "nb.tooLarge": "Файл или выбранные данные превышают ограничения блокнота.",
+  "nb.trash": "Корзина",
+  "nb.trashHint": "Переместить этот элемент в корзину блокнота. Позже его можно будет восстановить.",
+  "nb.unsaved": "Несохранённые изменения",
+  "nb.vaults": "Базы знаний",
+  "nb.view": "Режим просмотра",
+  "nb.welcome": "Ваши блокноты",
+  "nb.welcomeText": "Записывайте мысли, связывайте идеи и храните заметки в обычных локальных файлах. Откройте существующую папку Markdown или импортируйте документы в новый блокнот.",
+  "memory.globalMemory": "База знаний сеансов",
+  "memory.title": "База знаний",
+  "memory.add": "Подготовить для базы знаний сеансов",
+  "memory.intro": "Упорядочивайте знания по проектам и сеансам. Сохранённые статьи не зависят от изменений источников и доступны для ручного редактирования.",
+  "memory.entries": "Статьи базы знаний",
   "memory.emptyJobs": "История обработки пока пуста.",
   "memory.jobs": "История обработки",
   "memory.search": "Поиск по заголовкам и содержимому…",
-  "memory.empty": "Подходящих статей нет. Добавьте беседу, чтобы начать создавать вики.",
+  "memory.empty": "Подходящих статей нет. Создайте статьи из сеанса или добавьте статью вручную.",
   "memory.emptyDetail": "Выберите статью, чтобы прочитать её и просмотреть связи и источники.",
   "memory.new": "Новая статья",
   "memory.titleField": "Заголовок",
@@ -90,18 +235,23 @@ const ru: typeof en = {
   "memory.restore": "Восстановить эту версию",
   "memory.restoreConfirm": "Восстановить эту редакцию как новую версию? Текущая версия останется в истории.",
   "memory.deleteConfirm": "Удалить эту статью и историю её версий? Исходные сеансы сохранятся.",
+  "memory.groupDeleteConfirm": (count: string) => `Удалить все статьи базы знаний этой группы (${count} шт.)? Сам проект или сеанс сохранится.`,
   "memory.export": "Экспорт в Markdown",
   "memory.selectAgent": "Агент",
   "memory.model": "Модель (необязательно)",
   "memory.modelHint": "Оставьте поле пустым, чтобы использовать модель из настроек агента.",
   "memory.compile": "Упорядочить и сохранить",
-  "memory.compileHelp": "Выбранный агент распределит знания из беседы по темам и объединит их с существующими статьями. Текст беседы и связанные статьи будут отправлены модели через настроенного вами агента.",
+  "memory.compileHelp": "Выбранный агент обработает этот сеанс. Повторное создание заменит ранее созданные для этого сеанса записи, включая ручные правки. Текст сеанса будет отправлен модели через настроенного агента.",
   "memory.unavailable": "Не установлен или не настроен",
   "memory.allTags": "Все метки",
   "memory.updated": "Недавно обновлённые",
   "memory.titleSort": "По заголовку",
   "memory.sourceNote": "Этот снимок сохраняет текст беседы, использованный при обработке, даже после удаления исходного сеанса.",
-  "memory.noKnowledge": "Знания для повторного использования не найдены. Статьи не изменены.",
+  "memory.noKnowledge": "Знания для повторного использования не найдены. Ранее созданные записи этого сеанса удалены.",
+  "memory.queued": "Ожидает запуска",
+  "memory.cancelling": "Отмена",
+  "memory.schedulingHint": "Разные сеансы можно обрабатывать параллельно. Повторная отправка отменяет незавершённую задачу этого сеанса и заменяет её новой.",
+  "memory.waitingHint": "Эта задача запустится автоматически после остановки предыдущей задачи этого сеанса.",
   "memory.running": "Выполняется",
   "memory.completed": "Завершено",
   "memory.failed": "Ошибка",
@@ -113,7 +263,6 @@ const ru: typeof en = {
   "memory.closeHint": "Во время обработки окно можно закрыть. Следить за ходом работы можно в истории обработки.",
   "memory.conflict": "Статья изменилась во время операции. Загрузите её заново и повторите попытку. Ваши изменения не сохранены.",
   "memory.duplicate": "Статья с таким заголовком уже существует. Откройте её, чтобы объединить содержимое.",
-  "memory.busy": "Другая обработка уже выполняется. Дождитесь завершения или отмените её в истории.",
   "memory.notFound": "Эта статья, источник или задача больше не существует.",
   "memory.noTranscript": "Для этого сеанса нет доступной для чтения беседы.",
   "memory.agentUnavailable": "Выбранный агент недоступен. Проверьте путь к его исполняемому файлу в настройках.",
@@ -123,7 +272,7 @@ const ru: typeof en = {
   "memory.interrupted": "Обработка прервана. Её можно повторить, используя сохранённый снимок источника.",
   "memory.tooLarge": "Источник, контекст или ответ превышает допустимый размер. Содержимое не обрезано и не сохранено.",
   "memory.invalidOutput": "Агент вернул неверные структурированные данные. Ничего не сохранено. Повторите попытку или выберите другого агента.",
-  "memory.loadError": "Не удалось загрузить память. Проверьте соединение и повторите попытку.",
+  "memory.loadError": "Не удалось загрузить базу знаний. Проверьте соединение и повторите попытку.",
   "memory.unsaved": "Отменить несохранённые изменения?",
   "memory.source": "Снимок источника",
 
@@ -143,6 +292,7 @@ const ru: typeof en = {
   "common.paste": "Вставить", // Paste
   "common.selectAll": "Выделить все", // Select All
   "common.copied": "Скопировано", // Copied
+  "common.copyFailed": "Не удалось скопировать. Повторите попытку.",
   "chat.sync.loading": "Синхронизация переписки…",
   "chat.sync.failed": "Не удалось синхронизировать. Загруженные сообщения по-прежнему доступны.",
   "chat.sync.history": "Загрузить более ранние сообщения",
@@ -189,6 +339,7 @@ const ru: typeof en = {
   "titlebar.themeSystem": (resolved) => `Как в системе (сейчас: ${resolved})`, // Follow system (currently {resolved})
   "titlebar.themeDark": "Тёмная", // Dark
   "titlebar.themeLight": "Светлая", // Light
+  "titlebar.gameCenter": "Игровой центр",
   "titlebar.browser": "Встроенный браузер", // Built-in Browser
   "titlebar.remoteAccess": "Удалённый доступ (браузер)", // Remote Access (Browser)
   "titlebar.connectRemote": "Подключиться к удалённому серверу", // Connect to Remote Server
@@ -201,6 +352,7 @@ const ru: typeof en = {
   "titlebar.clientsTitle": "Подключённые клиенты", // Attached clients
   "titlebar.clientUnnamed": "Клиент без имени", // Unnamed client
   "titlebar.clientSince": (time: string) => `с ${time}`, // since {time}
+  "titlebar.feedback": "Обратная связь", // Feedback
   "titlebar.share": "Поделиться", // Share
   // ── Alt-triggered menu bar (Windows/Linux) ──
   "menubar.file": "Файл", // File
@@ -235,6 +387,14 @@ const ru: typeof en = {
   "settings.catTerminal": "Терминал", // Terminal
   "settings.catBehavior": "Поведение", // Behavior
   "settings.catAgents": "Агенты", // Agents
+  "settings.agentDefaultsTitle": "Настройки новых сеансов по умолчанию",
+  "settings.referSummaryTitle": "Контекст ссылок на сеансы",
+  "settings.referSummaryMode": "Режим контекста",
+  "settings.referSummaryFull": "Полная запись",
+  "settings.referSummaryFirst": "Сначала резюме",
+  "settings.referSummaryAgent": "Агент для резюме",
+  "settings.referSummaryHint":
+    "По умолчанию vrefer --ask передаёт отвечающему агенту полную запись. Режим «Сначала резюме» сжимает её с помощью выбранных здесь агента, модели и уровня рассуждения; итоговый ответ также получает релевантные фрагменты исходного текста.",
   "settings.permDefault": "По умолчанию", // Default
   "settings.permYolo": "YOLO", // YOLO
   "settings.yoloHint": (flag: string) =>
@@ -257,6 +417,9 @@ const ru: typeof en = {
     "напр. ~/.local/bin/claude — пусто = искать в PATH", // e.g. path — empty = find on PATH
   "settings.agentPathHint":
     "Если задан, сессии этого типа запускаются по этому полному пути вместо поиска команды в PATH. Полезно, когда агент установлен, но отсутствует в PATH оболочки. Заполняется автоматически после успешной установки в один клик, если место установки удалось определить.", // Agent executable path hint
+  "settings.agentDefaultView": "Вид по умолчанию", // Default view
+  "settings.agentDefaultViewHint":
+    "Вид, в котором открываются новые сессии этого агента. Уже созданные сессии сохраняют вид, с которым были созданы.", // Agent default view hint
   "settings.appearance": "Внешний вид", // Appearance
   "settings.accent": "Акцент", // Accent
   "settings.accentAuto": "Как тема", // Follow theme
@@ -274,8 +437,6 @@ const ru: typeof en = {
   "settings.navTree": "Дерево", // Tree
   "settings.navCompact": "Компактно", // Compact
   "settings.tabs": "Вкладки", // Tabs
-  "settings.defaultSessionEngine": "Вид по умолчанию для новых сессий",
-  "settings.defaultSessionEngineHint": "Уже созданные сессии сохраняют вид, с которым были созданы.",
   "settings.dynamicStatusFilter": "Динамическое добавление в фильтр статуса",
   "settings.tabSingle": "Одна", // Single
   "settings.tabMulti": "Несколько", // Multi
@@ -298,39 +459,66 @@ const ru: typeof en = {
     "Выберите, что вставлять при вставке изображения (только локальный рабочий стол). Вставить путь к файлу: изображение временно сохраняется, а путь вставляется в Claude или Codex. Нативная вставка: Claude или Codex читает системный буфер обмена и показывает собственный маркер изображения.",
   "settings.imagePasteRemoteHint":
     "В удалённых сеансах всегда вставляется путь к файлу, чтобы агент мог прочитать изображение на своей машине. Нативная вставка доступна только локально.",
-  "spawn.title": "Start spawned session?", // Start spawned session?
-  "spawn.fromSession": "From", // From
-  "spawn.promptLabel": "Prompt", // Prompt
-  "spawn.agentLabel": "Agent", // Agent
-  "spawn.worktreeLabel": "Separate git worktree", // Separate git worktree
-  "spawn.modelLabel": "Модель", // Model
-  "spawn.effortLabel": "Усилие", // Effort
-  "spawn.modelDefault": "По умолчанию", // Default
-  "spawn.modelLoading": "Загрузка моделей…", // Listing models…
-  "spawn.modelListUnavailable":
-    "Список моделей недоступен — введите идентификатор выше", // No model list available — type an identifier above
-  "spawn.launch": "Launch", // Launch
-  "spawn.remaining": (n: number) => `${n} more pending`, // ${n} more pending
-  "spawn.notifyTitle": "Spawn session awaiting confirmation", // Spawn session awaiting confirmation
-  "orch.title": "Запустить этих агентов?",
-  "orch.notifyTitle": "Оркестрация ожидает подтверждения",
-  "orch.coordinatorName": "Прогресс",
+  "spawn.title": "Запуск дочерней сессии",
+  "spawn.fromSession": "Исходная сессия",
+  "spawn.promptLabel": "Описание задачи",
+  "spawn.agentLabel": "Тип сессии",
+  "spawn.worktreeLabel": "Отдельное рабочее дерево",
+  "spawn.modelLabel": "Модель",
+  "spawn.effortLabel": "Уровень рассуждения",
+  "spawn.modelDefault": "По умолчанию у агента",
+  "spawn.modelLoading": "Загрузка моделей…",
+  "spawn.modelListUnavailable": "Список недоступен. Можно ввести идентификатор вручную.",
+  "spawn.launch": "Запустить сессию",
+  "spawn.remaining": (n: number) => `Других запросов на проверку: ${n}`,
+  "spawn.notifyTitle": "Дочерняя сессия ожидает подтверждения",
+  "orch.title": "Запуск нескольких сессий",
+  "orch.notifyTitle": "Запуск сессий ожидает подтверждения",
+  "orch.coordinatorName": "Состояние сессий",
   "orch.sharedSettings": "Общие настройки",
   "orch.agentLabel": "Агент",
   "orch.modelLabel": "Модель",
-  "orch.effortLabel": "Усилие",
-  "orch.nameLabel": "Имя",
-  "orch.promptLabel": "Задача",
-  "orch.worktreeLabel": "Worktree",
-  "orch.worktreeNone": "Использовать текущий каталог",
-  "orch.worktreeShared": "Один общий worktree",
-  "orch.worktreeEach": "По одному worktree каждому",
-  "orch.follow": "Как в общих настройках",
-  "orch.overridden": "изменено",
-  "orch.remove": "Удалить",
-  "orch.launch": (n: number) => `Запустить ${n}`,
-  "orch.modelPlaceholder": "по умолчанию у агента",
-  "orch.effortPlaceholder": "по умолчанию у агента",
+  "orch.effortLabel": "Уровень рассуждения",
+  "orch.nameLabel": "Название сессии",
+  "orch.promptLabel": "Описание задачи",
+  "orch.worktreeLabel": "Рабочее дерево Git",
+  "orch.worktreeNone": "Текущий каталог",
+  "orch.worktreeShared": "Общее рабочее дерево",
+  "orch.worktreeEach": "Отдельное дерево для каждой сессии",
+  "orch.follow": "Использовать общие настройки",
+  "orch.overridden": "Индивидуальные настройки",
+  "orch.remove": "Убрать задачу",
+  "orch.launch": (n: number) => `Запустить сессии (${n})`,
+  "orch.modelPlaceholder": "По умолчанию у агента",
+  "orch.effortPlaceholder": "По умолчанию у агента",
+  "launch.terminalHint": "Обычный терминал открывает рабочий каталог. Инструкции задачи не выполняются автоматически.",
+  "launch.optionsError": "Не удалось загрузить параметры запуска. Повторите попытку перед запуском.",
+  "launch.singleIntro": "Проверьте задачу и настройки перед запуском дочерней сессии.",
+  "launch.taskHint": "Эти инструкции станут первым сообщением дочерней сессии.",
+  "launch.runtime": "Параметры запуска",
+  "launch.directory": "Рабочий каталог",
+  "launch.directoryCurrentHint": "Сессии изменяют файлы в исходном каталоге.",
+  "launch.directorySharedHint": "Все сессии используют один новый каталог и одну ветку.",
+  "launch.directoryEachHint": "Каждая сессия получает собственный каталог и ветку.",
+  "launch.worktreeHint": "Рабочие деревья создаются из текущего коммита без незакоммиченных изменений. При ошибке создания используется исходный каталог.",
+  "launch.singleResult": "Дочерняя сессия появится под исходной сессией на боковой панели.",
+  "launch.startError": "Не удалось запустить сессии. Проверьте настройки и повторите попытку.",
+  "launch.starting": "Запуск…",
+  "launch.batchIntro": "Проверьте общие настройки, затем выберите каждую задачу для редактирования инструкций.",
+  "launch.sessionCount": (n: number) => `Сессий: ${n}`,
+  "launch.batchName": "Название группы задач",
+  "launch.sharedHint": "Применяется к сессиям без индивидуальных настроек.",
+  "launch.tasks": "Задачи",
+  "launch.incomplete": "Нужно дополнить",
+  "launch.undoRemove": "Отменить удаление",
+  "launch.taskNumber": (n: number) => `Задача ${n}`,
+  "launch.taskSettings": "Настройки этой сессии",
+  "launch.taskAgent": "Агент этой сессии",
+  "launch.sharedDirectoryLocked": "Все сессии этой группы используют одно общее рабочее дерево.",
+  "launch.resetSettings": "Восстановить общие настройки",
+  "launch.monitorHint": "Терминал «Состояние сессий» покажет, какие сессии работают или ожидают ввода. Он не показывает процент выполнения задач.",
+  "launch.taskIncomplete": (n: number) => `Заполните название и описание задачи ${n}.`,
+  "launch.batchResult": "Каждая задача запускается в отдельной интерактивной сессии.",
   "tree.worktreeMenu": "Worktree",
   "tree.gitMenu": "Git",
   "tree.viewChanges": "Показать изменения…",
@@ -440,7 +628,8 @@ const ru: typeof en = {
   "settings.chatLineHeight": "Высота строки диалога",
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
-  "settings.fontUnavailable": "Не установлен на этом устройстве",
+  "settings.fontListUnavailable": "Не удалось получить список системных шрифтов. Название шрифта можно ввести вручную.",
+  "settings.fontUnconfirmed": "Не удалось подтвердить доступность этого шрифта.",
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -607,6 +796,7 @@ const ru: typeof en = {
   "info.recentCommits": "Последние коммиты", // Recent Commits
   "info.noCommits": "Нет коммитов", // No commits
   "tree.killProcess": "Завершить процесс", // Kill Process
+  "tree.killProcessConfirm": (name: string) => `Завершить процесс сеанса «${name}»? Текущая задача будет прервана. Сохранённая история переписки и файлы останутся.`,
   "tree.archiveSession": "Архивировать сессию", // Archive Session
   "tree.archiveGroup": "Архивировать группу", // Archive Group
   // Temporary (draft) sessions
@@ -976,7 +1166,11 @@ const ru: typeof en = {
 
   // ── Document tabs ──
   "doc.wysiwyg": "Визуальный", // WYSIWYG
-  "doc.source": "Исходник", // Source
+  "doc.visual": "Визуальный",
+  "doc.source": "Исходный код",
+  "doc.compare": "Сравнение",
+  "doc.editorLoadFailed": "Не удалось загрузить редактор Markdown.",
+  "doc.imageOnly": "Здесь можно вставлять только файлы изображений.",
   "doc.searchPlaceholder": "Поиск", // Find
   "doc.searchReplacePlaceholder": "Замена", // Replace
   "doc.searchReplace": "Заменить", // Replace
@@ -1027,6 +1221,8 @@ const ru: typeof en = {
 
   // ── Right information panel ──
   "panel.noSession": "Сессия не выбрана", // No session selected
+  "panel.collapseSection": "Свернуть раздел", // Collapse section
+  "panel.expandSection": "Развернуть раздел", // Collapse section
   "panel.openInEditor": "Открыть в редакторе", // Open in Editor
   "panel.openInEditorTooltip":
     "Открыть в редакторе документов в центральной панели (как команда view)", // Open in the document editor…
@@ -1118,6 +1314,9 @@ const ru: typeof en = {
     `Не удалось загрузить изображение (${status})`, // Image upload failed ({status})
 
   // ── Login gate, directory selection, and connection banner ──
+  "login.showPassword": "Показать",
+  "login.hidePassword": "Скрыть",
+  "login.passwordSaveFailed": "Соединение установлено, но не удалось сохранить пароль на этом устройстве. Повторите попытку.",
   "login.connecting": "Подключение…", // Connecting…
   "login.remoteAccess": "Удалённый доступ", // Remote Access
   "login.desc": "Введите пароль доступа, чтобы подключиться к этому терминалу.", // Enter the access password to connect to this terminal.
@@ -1161,6 +1360,31 @@ const ru: typeof en = {
   "errlog.close": "Закрыть", // Close
 
   // ── Mobile ──
+  "mobile.backConnections": "К списку подключений",
+  "mobile.loadSlow": "Загрузка занимает больше времени, чем ожидалось. Можно повторить попытку или вернуться к списку подключений.",
+  "mobile.connectionUnavailable": "Подключение недоступно",
+  "mobile.pushTitle": "Уведомления о задачах",
+  "mobile.pushHint": "Уведомления показывают название сеанса и краткий фрагмент ответа, в том числе в фоновом режиме и при заблокированном экране. Этот текст передаётся на velaterm.com и в сервис push-уведомлений. Пароли подключения и закрытые ключи SSH не отправляются.",
+  "mobile.pushEnable": "Включить уведомления",
+  "mobile.pushDisable": "Выключить уведомления",
+  "mobile.pushTest": "Отправить тестовое уведомление",
+  "mobile.pushTestSent": "Тестовое уведомление добавлено в очередь. Проверьте центр уведомлений системы.",
+  "mobile.pushDisabled": "Фоновые уведомления выключены.",
+  "mobile.pushEnabled": "Фоновые уведомления включены.",
+  "mobile.pushNotConfigured": "В этой сборке не настроен сервис push-уведомлений.",
+  "mobile.pushDenied": "Разрешите уведомления в настройках системы.",
+  "mobile.pushRegistrationFailed": "Не удалось зарегистрировать устройство. Повторите попытку.",
+  "mobile.pushRelayUnavailable": "Сервис доставки уведомлений недоступен. Повторите попытку.",
+  "mobile.pushHostUnavailable": "На удалённом хосте ещё не включены фоновые уведомления. Обновите хост и подключитесь заново.",
+  "mobile.pushDisclosure": "Для фоновых уведомлений используются Getui и push-сервис производителя устройства. Для доставки они обрабатывают идентификаторы устройства, сведения о сети, названия сеансов и краткие фрагменты ответов. Пароли подключения и закрытые ключи SSH не отправляются.",
+  "mobile.pushConnectHint": "После включения уведомлений откройте каждое нужное подключение один раз, чтобы оформить подписку.",
+  "mobile.pushTarget": "Подключение для проверки",
+  "mobile.copyConnection": "Копировать и изменить",
+  "mobile.copyConnectionHint": "Измените настройки на основе этого подключения. Сохранённые учётные данные будут безопасно перенесены. Исходное подключение не изменится; при совпадении настроек будет использовано существующее подключение.",
+  "mobile.copyConnectionReused": "Эти настройки уже сохранены. Существующее подключение оставлено без изменений.",
+  "mobile.inputOptions": "Параметры сообщения",
+  "mobile.connections": "Управление подключениями",
+  "mobile.more": "Другие действия",
   "mobile.toDesktop": "Перейти к версии для ПК", // Switch to desktop
   "mobile.empty1": "Сессий нет.", // No sessions.
   "mobile.noMatch": "Нет подходящих сессий", // No matching sessions
@@ -1273,6 +1497,7 @@ const ru: typeof en = {
   "session.switchTitle": "Смена вида перезапускает агента",
   "session.switchBody": "Текущий ход будет прерван. Разговор сохранится.",
   "session.switchConfirm": "Переключить",
+  "session.terminalViewHint": "Нажмите здесь, чтобы вернуться к виду терминала.",
   "session.loading": "Читаем беседу…",
   "session.unavailable": "Эту беседу пока не удаётся прочитать",
   "session.working": "Работает…",
@@ -1305,13 +1530,43 @@ const ru: typeof en = {
   "chat.collaborationMode.plan": "Планирование",
   "chat.collaborationMode.planHint":
     "Сначала изучает задачу и составляет план; вопросы могут отображаться как интерактивные карточки",
+  "chat.moreOptions": "Ещё",
   "chat.modelTooltip": "Модель",
   "chat.keepChoice": "По умолчанию",
   "chat.keepChoiceFor": (model) => `По умолчанию для ${model}`,
+  "chat.followModelDefault": (agent: string) => `Использовать модель по умолчанию ${agent}`,
+  "chat.followModelDefaultHint": "Модель определяется настройками агента.",
+  "chat.savedModelDefault": "По умолчанию в приложении",
+  "chat.catalogWebsite": "Каталог моделей с сайта",
+  "chat.catalogCache": "Каталог моделей из кеша",
+  "chat.catalogBundled": "Встроенный каталог моделей",
+  "chat.catalogChecked": (time: string) => `Последняя проверка: ${time}`,
+  "chat.catalogFailed": "Не удалось обновить каталог. Предыдущий каталог остаётся доступным.",
+  "chat.catalogRefresh": "Обновить",
   "chat.modelDefault": "Модель по умолчанию",
   "chat.mode.default": "Всегда спрашивать",
+  "chat.mode.agentDefault": "По умолчанию агента",
   "chat.mode.acceptEdits": "Принимать правки",
   "chat.mode.plan": "Режим плана",
+  "chat.permissionRestart.unconfirmed": "Соединение потеряно. Не удалось подтвердить изменение разрешений. Подключитесь снова, чтобы проверить текущие разрешения сеанса.",
+  "permission.stateUnavailable": "Статус разрешений недоступен",
+  "permission.currentUnknown": "Текущие разрешения не подтверждены",
+  "permission.notRunning": "Не запущено",
+  "permission.launch": (mode: string) => "Настройка при запуске: " + mode,
+  "permission.unconfirmedHint": "Текущие разрешения ещё не подтверждены. Пользовательские аргументы или изменения внутри агента могут повлиять на применение настроек запуска.",
+  "permission.applied": "Применено",
+  "permission.nextTurn": "Применится к следующему сообщению",
+  "permission.restart": "Применится после перезапуска этой сессии",
+  "permission.nextStart": "При следующем запуске",
+  "permission.defaultHint": "Права по умолчанию для новых сеансов. Существующие сеансы сохраняют собственные настройки разрешений.",
+  "chat.permissionRestart.title": "Перезапустить и отключить подтверждения?",
+  "chat.permissionRestart.body": "Для отключения подтверждений нужно перезапустить Claude. Текущий ответ будет прерван, история разговора сохранится. После успешного переключения разрешения будут предоставляться без подтверждения.",
+  "chat.permissionRestart.confirm": "Перезапустить и применить",
+  "chat.permissionRestart.busy": "Перезапуск…",
+  "chat.permissionRestart.failed": (detail: string) => "Не удалось изменить разрешения. Сохранён предыдущий режим. " + detail,
+  "chat.permissionRestart.tasks": "Перед перезапуском обработайте или удалите сообщения из очереди и остановите фоновые задачи.",
+  "chat.permissionRestart.stale": "Процесс сеанса изменился. Снова выберите «Без вопросов».",
+  "chat.permissionRestart.noHistory": "Этот разговор пока нельзя возобновить. Дождитесь завершения инициализации и повторите попытку.",
   "chat.mode.bypassPermissions": "Без вопросов",
   "chat.mode.readOnly": "Только чтение",
   "chat.mode.fullAccess": "Полный доступ",
@@ -1361,6 +1616,7 @@ const ru: typeof en = {
   "chat.placeholderBusy": "Введите сообщение; оно будет отправлено по завершении текущего хода",
   "chat.queueTooltip": (combo: string) => `Будет отправлено по завершении хода · ${combo} — отправить сейчас`,
   "chat.queue.pending": "Сообщения в очереди",
+  "chat.queue.view": "Показать сообщение полностью",
   "chat.queue.edit": "Изменить",
   "chat.queue.remove": "Удалить",
 
@@ -1381,6 +1637,12 @@ const ru: typeof en = {
     return `${n} ${word}`;
   },
   "chat.subagent.tokens": (tokens: string) => `${tokens} токенов`,
+  "chat.rewind.edit": "Редактировать",
+  "chat.rewind.editSend": "Проверить и отправить повторно",
+  "chat.rewind.editConfirm": "Удалить и отправить повторно",
+  "chat.rewind.editWarning": "Исходное сообщение и все последующие сообщения будут удалены без возможности восстановления. Изменённое сообщение будет отправлено с этого места. Изменения в файлах не будут отменены.",
+  "chat.rewind.inactive": "Процесс диалога не запущен. Эти действия станут доступны после его запуска.",
+  "chat.rewind.unsupported": "Подключённый агент пока не предоставляет это действие.",
   "chat.rewind.title": "Откатить отсюда",
   "chat.rewind.warning": "Это действие нельзя отменить.",
   "chat.rewind.conversation": "Откатить диалог",
@@ -1435,6 +1697,45 @@ const ru: typeof en = {
   "chat.fastMode.label": "Быстро",
   "chat.fastMode.on": "Быстрый режим включён",
   "chat.fastMode.off": "Быстрый режим выключен",
+  "chat.auth.login": "Войти",
+  "chat.auth.logout": "Выйти",
+  "chat.auth.confirmLogout": "Подтвердить выход",
+  "chat.auth.logoutConfirm": (provider: string) => `Выйти из ${provider} на этом хосте? Общие учётные данные будут удалены. Это повлияет на другие сеансы, которые их используют. История разговоров сохранится.`,
+  "chat.auth.signingOut": "Выход из аккаунта…",
+  "chat.auth.signedOut": (provider: string) => `Вы вышли из ${provider}. Войдите, чтобы продолжить этот разговор.`,
+  "chat.auth.logoutFailed": "Не удалось подтвердить выход. Попробуйте ещё раз.",
+  "chat.auth.wait": "Дождитесь завершения текущей задачи, прежде чем менять учётную запись.",
+  "chat.auth.title": (provider: string) => `Учётная запись ${provider}`,
+  "chat.auth.start": "Войти снова",
+  "chat.auth.required": (provider: string) => `Авторизация в ${provider} больше не действительна. Войдите снова, чтобы продолжить.`,
+  "chat.auth.starting": "Подготовка к входу…",
+  "chat.auth.pending": "Откройте страницу авторизации и введите этот код. После завершения входа это представление обновится автоматически.",
+  "chat.auth.success": "Вход выполнен. Отправьте сообщение, чтобы продолжить этот разговор.",
+  "chat.auth.failed": "Не удалось завершить вход. Попробуйте ещё раз. Убедитесь, что в ChatGPT включена авторизация по коду устройства и ваша версия Codex CLI поддерживает эту функцию.",
+  "chat.auth.canceled": "Вход отменён. Вы можете повторить попытку в любое время.",
+  "chat.auth.scope": (provider: string) => `При входе обновится учётная запись ${provider}, используемая на этом хосте. Другие сеансы с теми же учётными данными также будут использовать эту запись.`,
+  "chat.auth.canceling": "Отмена входа…",
+  "chat.auth.submitting": "Проверка кода авторизации…",
+  "chat.auth.claude.pending": "Откройте страницу авторизации, войдите в аккаунт и вставьте показанный код целиком.",
+  "chat.auth.claude.failed": "Не удалось завершить вход. Повторите попытку и убедитесь, что ваша версия Claude CLI поддерживает авторизацию аккаунта.",
+  "chat.auth.claude.code": "Код авторизации",
+  "chat.auth.claude.submit": "Отправить код",
+  "chat.auth.claude.invalidCode": "Вставьте полный код текущей попытки авторизации, включая часть после #.",
+  "chat.auth.claude.externalAuth": "Ключи API и другие настроенные способы аутентификации не изменятся.",
+  "chat.auth.open": "Открыть страницу авторизации",
+  "chat.resetCredits.label": (n: string) => `Сбросов лимита: ${n}`,
+  "chat.resetCredits.title": "Доступные сбросы лимитов Codex",
+  "chat.resetCredits.unknown": "Не удалось получить количество доступных сбросов.",
+  "chat.resetCredits.confirm": "Использовать один сброс для подходящих лимитов Codex. Это действие нельзя отменить.",
+  "chat.resetCredits.reset": "Лимиты использования сброшены.",
+  "chat.resetCredits.alreadyRedeemed": "Этот запрос уже выполнен успешно.",
+  "chat.resetCredits.nothingToReset": "Нет лимитов, которые можно сбросить сейчас.",
+  "chat.resetCredits.noCredit": "Доступных сбросов лимита нет.",
+  "chat.resetCredits.error": "Запрос не выполнен или текущий остаток недоступен. Обновите остаток или повторите запрос на сброс, результат которого ещё не подтверждён.",
+  "chat.resetCredits.busy": "Обработка…",
+  "chat.resetCredits.retry": "Повторить сброс",
+  "chat.resetCredits.use": "Использовать один сброс",
+  "chat.resetCredits.refresh": "Обновить",
   "chat.usage.context": (used: string, max: string, pct: number) =>
     `Контекст: ${used} из ${max} токенов (${pct} %)`,
   "chat.usage.cost": (usd: string) => `Стоимость сеанса: $${usd}`,
@@ -1464,6 +1765,14 @@ const ru: typeof en = {
   "chat.retry.line": (attempt: number, max: number, seconds: number, message: string) =>
     `Повторная попытка (${attempt}/${max}) через ${seconds} с: ${message}`,
   "chat.notify.dismiss": "Закрыть",
+  "settings.completionMode": "Подсказки команд",
+  "settings.completionAuto": "Автоматически",
+  "settings.completionTab": "По Tab",
+  "settings.completionOff": "Выключены",
+  "settings.completionUnavailable": "Не удалось загрузить или сохранить настройки.",
+  "settings.completionHint": "Применяется к новым терминалам Zsh, Bash 4+, Fish и PowerShell. В CMD сохраняется стандартное действие Tab. Tab вставляет выбранную подсказку; Enter выполняет текущую команду без применения подсказки.",
+
+
 };
 
 export default ru;

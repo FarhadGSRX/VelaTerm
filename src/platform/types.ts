@@ -15,6 +15,17 @@ export type { UnlistenFn };
 /** Runtime shell kind. `browser` means remote browser access without a desktop shell, using WS. */
 export type PlatformKind = "tauri" | "electron" | "browser";
 
+/** Native display-host fonts plus text fonts shipped with the frontend. */
+export interface FontCatalog {
+  families: string[];
+  systemFontsAvailable: boolean;
+}
+
+export interface FontCapability {
+  /** Query the local display device; plain browsers receive only bundled fonts. */
+  catalog(): Promise<FontCatalog>;
+}
+
 /** Unified environment view; env.ts is the detailed single source of truth. */
 export interface PlatformEnv {
   /** Shell kind. */
@@ -80,8 +91,8 @@ export interface BadgeCapability {
 
 /** Clipboard capability. */
 export interface ClipboardCapability {
-  /** Write text to the clipboard, including layered fallbacks on plaintext HTTP; see transport.copyText. */
-  writeText(text: string): Promise<void>;
+  /** Write text with layered fallbacks on plaintext HTTP; reportFailure rejects if all paths fail. */
+  writeText(text: string, options?: { reportFailure?: boolean }): Promise<void>;
   /** Read clipboard text; return an empty string when unavailable. */
   readText(): Promise<string>;
   /** Read RGBA pixels from a clipboard image; currently supported only in the main Tauri window, otherwise null. */
@@ -163,11 +174,16 @@ export interface BrowserRect {
   h: number;
 }
 
-/** `browser://state` event payload containing URL, title, and loading state. */
+/** `browser://state` event payload: a partial patch carrying URL, document title, and loading state. */
 export interface BrowserStatePayload {
+  url?: string;
+  title?: string;
+  loading?: boolean;
+}
+
+/** `browser://popup` event payload: a new-window request that becomes a new app browser tab. */
+export interface BrowserPopupPayload {
   url: string;
-  title: string;
-  loading: boolean;
 }
 
 /**
@@ -201,6 +217,11 @@ export interface BrowserCapability {
   close(tabId: string): Promise<void>;
   /** Listen for one browser tab's state events and return an unsubscribe function. */
   onState(tabId: string, cb: (s: BrowserStatePayload) => void): Promise<UnlistenFn>;
+  /**
+   * Listen for one browser tab's new-window requests (`window.open` / `target=_blank`) and return an
+   * unsubscribe function. The native layer denies the popup; the frontend opens it as an app browser tab.
+   */
+  onPopup(tabId: string, cb: (popup: BrowserPopupPayload) => void): Promise<UnlistenFn>;
 }
 
 /** System-notification capability with local native, remote-window relay, and Web Notification paths; see notify.ts. */
@@ -224,6 +245,7 @@ export interface NotifyCapability {
 
 /** Unified platform adapter; application code depends only on these capabilities. */
 export interface Platform {
+  fonts: FontCapability;
   /** Environment view. */
   env: PlatformEnv;
   /** Communication (invoke/listen). */

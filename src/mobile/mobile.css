@@ -317,3 +317,70 @@
 }
 .m-key:active { background: var(--bg-active); color: var(--text); }
 .m-key.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+
+/* 会话内容放入原手机页面，不挂载桌面外框。 */
+.m-session-content{position:relative;isolation:isolate;display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;overflow:hidden}
+.m-session-content .pane-head{display:none}
+.m-session-content .sv{--sv-col:100%}
+.m-session-content .sv-scroll,.m-session-content .sv-composer{padding:12px}
+.m-session-content .sv-controls{flex-wrap:wrap;gap:8px}
+.m-session-content .sv-box{min-width:0;max-width:100%}
+
+/* 手机阅读与触控尺寸，限定在手机根节点，不改变桌面密度。 */
+.m-app{--ui-fs:16px;--chat-fs:17px;--chat-line-height:1.75;font-size:16px}
+.m-header{position:relative;z-index:2;min-height:calc(60px + env(safe-area-inset-top));padding-left:16px;padding-right:16px;gap:12px}
+.m-brand,.m-title{font-size:18px}.m-logo{width:28px;height:28px;font-size:16px}
+.m-logo{background:transparent;object-fit:contain;content:var(--brand-logo-light)}
+:root[data-theme="dark"] .m-logo{content:var(--brand-logo-dark)}
+.m-back{font-size:16px;min-height:44px;padding-right:12px}.m-kind{font-size:13px}
+.m-toolbar{padding:12px 16px;gap:12px}.m-search{height:48px;padding:0 12px;gap:10px}
+.m-search input{font-size:16px;min-width:0}.m-search-clear{width:44px;height:44px}
+.m-chips{gap:8px;flex-wrap:wrap}.m-chip{min-height:44px;height:auto;padding:8px;font-size:14px;flex:1 1 90px}
+.m-list{padding:12px 16px calc(24px + env(safe-area-inset-bottom))}
+.m-node{min-height:52px;gap:10px}.m-node-name{font-size:16px}
+.m-row{min-height:64px;padding-top:10px;padding-bottom:10px;gap:10px;margin-top:6px;margin-bottom:6px}
+.m-row-name{font-size:17px;white-space:normal;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.m-row-kind{font-size:13px}.m-empty,.m-nomatch{font-size:16px;line-height:1.8;padding:40px 20px}
+.m-load-status,.m-load-error{margin:16px;padding:20px;border:1px solid var(--border);border-radius:var(--r-md);line-height:1.7;font-size:16px}
+.m-load-error p{margin:0 0 16px;overflow-wrap:anywhere}.m-load-error button{min-height:44px;padding:8px 20px;border-radius:var(--r-md);background:var(--bg-active)}
+.m-menu{position:relative;flex:none}.m-menu summary{list-style:none;display:grid;place-items:center;min-width:44px;min-height:44px;cursor:pointer;border:1px solid var(--border);border-radius:var(--r-md)}
+.m-menu summary::-webkit-details-marker{display:none}.m-menu-items{position:absolute;right:0;top:calc(100% + 8px);z-index:20;min-width:180px;padding:8px;display:flex;flex-direction:column;gap:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--r-md);box-shadow:0 6px 24px #0003}
+.m-menu-items button{min-height:44px;text-align:left;padding:10px 14px;font-size:16px;border-radius:var(--r-sm)}
+.m-menu-items button:active{background:var(--bg-active)}
+.m-session-content .sv-scroll{padding:20px 16px 12px}.m-session-content .sv-composer{padding:16px}
+.m-session-content .sv-box{border-radius:16px}.m-session-content .sv-composer textarea{font-size:17px;line-height:1.6;min-height:88px;padding:14px}
+.m-session-content .sv-controls{padding:10px;gap:10px}.m-session-content .sv-chip{min-height:44px;font-size:14px;padding:8px 10px}
+.m-session-content .sv-send{width:46px;height:46px;flex-shrink:0}
+.m-session-content .sv-scroll pre{font-size:14px;line-height:1.65}
+
+/* Recorded conversations share message cards with chat sessions, without a terminal mount. */
+.m-recorded { flex: 1; min-height: 0; display: flex; flex-direction: column; --sv-col: 100%; }
+/* Shared desktop .sv fills a pane absolutely; the mobile record must stay below its page header. */
+.m-session-content > .m-recorded.sv { position: relative; inset: auto; min-width: 0; }
+.m-session-content > .m-load-error { overflow: auto; }
+.m-recorded-scroll > .m-load-error { margin: 0; flex: none; }
+.m-recorded-scroll { flex: 1; min-height: 0; overflow: auto; padding: 20px 16px; display: flex; flex-direction: column; gap: 20px; overflow-wrap: anywhere; }
+.m-recorded-composer { margin: 12px 16px max(16px, env(safe-area-inset-bottom)); padding: 14px; border: 1px solid var(--border); border-radius: 16px; display: flex; flex-direction: column; gap: 12px; }
+.m-recorded-composer textarea { width: 100%; min-height: 88px; resize: none; border: 0; background: transparent; color: inherit; font: inherit; font-size: 17px; line-height: 1.6; }
+.m-recorded-composer button { align-self: flex-end; min-height: 44px; padding: 8px 22px; }
+.m-recorded-scroll { font-family: var(--chat-font); font-size: var(--chat-fs); line-height: var(--chat-line-height); }
+
+/* Explicit expansion lets options be picked without focusing the message input. */
+.m-session-content .sv-composer { padding: 8px 12px max(8px, env(safe-area-inset-bottom)); }
+.m-session-content .sv-box { position: relative; }
+.m-session-content .sv-composer[data-options-expanded="false"] .sv-controls,
+.m-session-content .sv-composer[data-options-expanded="false"] .sv-action-feedback { display: none; }
+.m-session-content .sv-composer textarea { padding: 12px 56px 12px 12px; min-height: 64px; }
+.m-session-content .sv-composer[data-options-expanded="false"] textarea:not(:focus) { min-height: 52px; height: 52px !important; white-space: nowrap; overflow: hidden; }
+.m-session-content .sv-composer[data-options-expanded="true"] .sv-controls { padding: 6px; gap: 4px; }
+.m-recorded-composer { position: relative; margin: 8px 12px max(8px, env(safe-area-inset-bottom)); padding: 10px 12px; gap: 8px; }
+.m-recorded-composer textarea { padding-right: 52px; }
+.m-recorded-composer[data-options-expanded="false"] button[type="submit"] { display: none; }
+.m-recorded-composer[data-options-expanded="false"] textarea:not(:focus) { min-height: 44px; height: 44px; white-space: nowrap; overflow: hidden; }
+.m-session-content .sv-options-toggle, .m-recorded-composer .sv-options-toggle { position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 44px; height: 44px; min-height: 44px; padding: 0; border-radius: 10px; color: var(--text-secondary); background: var(--bg-2); border: 1px solid var(--border); }
+.m-session-content .sv-options-toggle[aria-expanded="true"], .m-recorded-composer .sv-options-toggle[aria-expanded="true"] { color: var(--accent); background: var(--bg-active); }
+.m-session-content .sv-composer textarea { width: calc(100% - 52px); padding-right: 0; }
+.m-recorded-composer textarea { width: calc(100% - 52px); padding-right: 0; }
+
+.m-recorded-input { position: relative; }
+.m-recorded-input .sv-options-toggle { top: 0; right: 0; }

@@ -315,6 +315,15 @@ fn slugify(name: &str) -> String {
 /// Create a session worktree at `.vlx-worktrees/<slug>-<short>` on branch `vlx/<slug>-<short>`.
 /// Return Err for non-repositories or failure so callers can fall back without a worktree.
 pub fn worktree_add(repo_root: &str, name: &str) -> Result<WorktreeInfo, String> {
+    worktree_add_in(repo_root, name, false)
+}
+
+/// Fork the current checkout beside its peers, so removing one worktree cannot contain another.
+pub fn worktree_add_sibling(repo_root: &str, name: &str) -> Result<WorktreeInfo, String> {
+    worktree_add_in(repo_root, name, true)
+}
+
+fn worktree_add_in(repo_root: &str, name: &str, sibling: bool) -> Result<WorktreeInfo, String> {
     let is_repo = run_git(repo_root, &["rev-parse", "--is-inside-work-tree"])
         .map(|s| s == "true")
         .unwrap_or(false);
@@ -334,7 +343,14 @@ pub fn worktree_add(repo_root: &str, name: &str) -> Result<WorktreeInfo, String>
     let uuid = Uuid::new_v4().to_string();
     let leaf = format!("{slug}-{}", &uuid[..6]);
     let branch = format!("vlx/{leaf}");
-    let path = std::path::Path::new(&top)
+    let storage = if sibling {
+        // Metadata can live outside the checkout, including in submodules and separate Git directories.
+        worktree_list(&top)?.first().map(|entry| entry.path.clone())
+            .ok_or("Cannot resolve the repository's worktree storage directory")?
+    } else {
+        top.clone()
+    };
+    let path = std::path::Path::new(&storage)
         .join(".vlx-worktrees")
         .join(&leaf);
     let path_str = path.to_string_lossy().to_string();
@@ -494,22 +510,7 @@ fn remove_partial_clone(path: &std::path::Path) -> Option<String> {
 
 /// Clone audit logs stable operation ID, phase, result, and duration—never URL, branch, path, or raw Git output.
 fn clone_audit(level: &str, operation_id: &str, status: &str, duration_ms: u128) {
-    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    eprintln!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{:<5}] [{}] event=git_clone step=clone method=git_cli inputCount=1 outputCount={} jobId={} status={} durationMs={}",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second(),
-        level,
-        operation_id,
-        if status == "success" { 1 } else { 0 },
-        operation_id,
-        status,
-        duration_ms,
-    );
+    crate::diagnostics::record(level,"git_clone",serde_json::json!({"operationId":operation_id,"status":status,"method":"git_cli","durationMs":duration_ms as u64}));
 }
 
 fn terminate_clone_process(child: &mut std::process::Child) {

@@ -2,8 +2,8 @@
 //!
 //! Each supported agent ships a different listing command and a different output shape, so the raw
 //! text is normalised here into a plain list of identifiers the spawn dialog can offer. Agents whose
-//! CLI has no listing command are absent from `list_args` and return an empty list, letting the
-//! frontend fall back to a static table or a free-text field.
+//! CLI has no listing command use backend catalogues when available; otherwise they return an empty
+//! list and the dialog keeps a free-text model field.
 //!
 //! Everything here spawns a child process and blocks on its output, so callers must stay off the main
 //! thread. Dispatch already runs inside desktop_call's blocking pool or a WebSocket worker.
@@ -24,8 +24,8 @@ const MAX_MODELS: usize = 1000;
 
 /// Subcommand/flags that make an agent CLI print its model catalogue, or None when it has none.
 ///
-/// Verified against the installed CLIs on 2026-06-09; agents omitted here (claude, codex, kimi) use a
-/// static table instead, and copilot/cline/zoo have no enumeration at all.
+/// Claude and Codex use their dedicated backend providers, Kimi uses backend presets, and
+/// Copilot/Cline/Zoo have no enumeration command.
 fn list_args(agent: &str) -> Option<&'static [&'static str]> {
     match agent {
         "opencode" => Some(&["models"]),
@@ -48,21 +48,28 @@ fn list_args(agent: &str) -> Option<&'static [&'static str]> {
 ///
 /// Errors describe a failure to *ask* the CLI (missing executable, non-zero exit, timeout) so the
 /// dialog can say why the list is empty instead of silently offering nothing.
-pub fn list_models(agent: &str) -> Result<Vec<String>, String> {
+pub fn list_models(app: &crate::host::AppCtx, agent: &str) -> Result<Vec<String>, String> {
+    if agent == "claude" {
+        let bin = super::executable::resolve(app, crate::models::SessionKind::Claude, None)
+            .unwrap_or_else(|| "claude".into());
+        return Ok(super::claude_models::list_for_bin(&bin).into_iter().map(|m| m.id).collect());
+    }
+    if agent == "codex" {
+        let bin = super::executable::resolve(app, crate::models::SessionKind::Codex, None)
+            .unwrap_or_else(|| "codex".into());
+        return super::codex_models::list(&bin, &[]).map(|models| models.into_iter().map(|m| m.id).collect());
+    }
+    if agent == "kimi" {
+        return Ok(["k3", "k3-256k", "kimi-for-coding", "kimi-for-coding-highspeed"].into_iter().map(str::to_string).collect());
+    }
     let Some(args) = list_args(agent) else {
         return Ok(Vec::new());
     };
-    // Prefer the absolute path discovered by installation probing; fall back to the bare name so a
-    // PATH-only installation still works.
-    let bin = crate::agent::install::locate_installed_bin(agent).unwrap_or_else(|| match agent {
-        "cursor" => "cursor-agent".to_string(),
-        "antigravity" => "agy".to_string(),
-        "kiro" => "kiro-cli".to_string(),
-        "zoo" => "roo".to_string(),
-        other => other.to_string(),
-    });
-
+    let kind = crate::models::SessionKind::from_db(agent);
+    let bin = super::executable::resolve(app, kind, None)
+        .unwrap_or_else(|| super::executable::command_name(kind).to_string());
     let mut cmd = crate::host::command(&bin);
+    super::executable::prepare_command(&mut cmd, &bin);
     cmd.args(args);
     // Several CLIs render a decorated tree when they detect a terminal and one plain identifier per
     // line otherwise. Capturing through a pipe already puts them in the plain mode; NO_COLOR removes
@@ -277,10 +284,14 @@ mod tests {
 
     #[test]
     fn agents_without_a_listing_command_return_an_empty_list_instead_of_erroring() {
-        // Claude and Copilot have no catalogue command, so the dialog must fall back to its static
-        // table or a text field rather than showing a failure.
-        assert_eq!(list_models("claude"), Ok(Vec::new()));
-        assert_eq!(list_models("copilot"), Ok(Vec::new()));
+        // Agents without a listing command or a backend catalogue keep an editable model field.
+        let dir = std::env::temp_dir().join(format!("vlx-model-catalog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = crate::db::Db::open(&dir.join("test.db")).unwrap();
+        let app = crate::host::AppCtx::Headless(std::sync::Arc::new(crate::host::HeadlessHost::new(dir.clone(), db)));
+        assert_eq!(list_models(&app, "copilot"), Ok(Vec::new()));
+        drop(app);
+        std::fs::remove_dir_all(dir).unwrap();
         assert!(list_args("opencode").is_some());
     }
 }

@@ -52,7 +52,9 @@ fn next_chat_session_name(
         SessionKind::Claude => "Claude",
         SessionKind::Codex => "Codex",
         SessionKind::Opencode => "OpenCode",
-        _ => return Err("Only Claude, Codex, and OpenCode chat sessions can be cleared".to_string()),
+        _ => {
+            return Err("Only Claude, Codex, and OpenCode chat sessions can be cleared".to_string())
+        }
     };
     let prefix = format!("{label} ");
     let max_suffix = repo::list_all_sessions(conn)?
@@ -420,7 +422,12 @@ pub fn set_group_worktree(
 ) -> Result<(), String> {
     {
         let conn = ctx.db().conn.lock().unwrap();
-        repo::set_group_worktree(&conn, id, empty_to_none(worktree_path), empty_to_none(worktree_base_ref))?;
+        repo::set_group_worktree(
+            &conn,
+            id,
+            empty_to_none(worktree_path),
+            empty_to_none(worktree_base_ref),
+        )?;
     }
     ctx.emit(TREE_CHANGED, ());
     Ok(())
@@ -550,7 +557,11 @@ pub fn set_browser_url(ctx: &AppCtx, id: &str, url: &str) -> Result<(), String> 
 /// Electron. Both Tauri and sidecar WS dispatch use this implementation; see the app_settings schema comment.
 pub fn get_app_settings(ctx: &AppCtx) -> Result<std::collections::HashMap<String, String>, String> {
     let conn = ctx.db().conn.lock().unwrap();
-    repo::get_app_settings(&conn)
+    let mut settings = repo::get_app_settings(&conn)?;
+    settings
+        .entry(crate::pty::completion::MODE_KEY.into())
+        .or_insert_with(|| crate::pty::completion::DEFAULT_MODE.into());
+    Ok(settings)
 }
 
 /// app_settings key holding this installation's anonymous identifier.
@@ -565,11 +576,7 @@ const INSTALL_ID_KEY: &str = "install_id";
 /// databases and therefore separate identifiers, which is what we want.
 pub fn install_id(ctx: &AppCtx) -> Result<String, String> {
     let conn = ctx.db().conn.lock().unwrap();
-    repo::get_or_create_app_setting(
-        &conn,
-        INSTALL_ID_KEY,
-        &uuid::Uuid::new_v4().to_string(),
-    )
+    repo::get_or_create_app_setting(&conn, INSTALL_ID_KEY, &uuid::Uuid::new_v4().to_string())
 }
 
 /// Batch-upserts application preferences by key with last-write-wins semantics. This is the authoritative backend
@@ -583,6 +590,11 @@ pub fn set_app_settings(
     ctx: &AppCtx,
     entries: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
+    if let Some(mode) = entries.get(crate::pty::completion::MODE_KEY) {
+        if !matches!(mode.as_str(), "auto" | "tab" | "off") {
+            return Err("Invalid terminal completion mode".into());
+        }
+    }
     {
         let conn = ctx.db().conn.lock().unwrap();
         repo::set_app_settings(&conn, &entries)?;
@@ -788,8 +800,20 @@ pub fn search_session_content(
 ) -> Result<Vec<crate::search::SessionSearchHit>, String> {
     let recordings_dir = ctx.data_dir()?.join("recordings");
     let scope = crate::search::SearchScope::from_arg(scope.unwrap_or("live"));
-    // Pass &Db rather than a locked connection; search refreshes outside the lock and writes in short transactions.
     crate::search::search_sessions(ctx.db(), &recordings_dir, query, scope)
+}
+
+/// Session-content search optionally restricted to one already resolved session ID.
+pub fn search_session_content_in(
+    ctx: &AppCtx,
+    query: &str,
+    scope: Option<&str>,
+    session_id: Option<&str>,
+) -> Result<Vec<crate::search::SessionSearchHit>, String> {
+    let recordings_dir = ctx.data_dir()?.join("recordings");
+    let scope = crate::search::SearchScope::from_arg(scope.unwrap_or("live"));
+    // Pass &Db rather than a locked connection; search refreshes outside the lock and writes in short transactions.
+    crate::search::search_sessions_in(ctx.db(), &recordings_dir, query, scope, session_id)
 }
 
 /// Reads an agent transcript for the archive-panel viewer.
@@ -812,20 +836,40 @@ pub fn set_session_engine(ctx: &AppCtx, session_id: &str, engine: &str) -> Resul
         return Err(format!("Unknown session engine: {engine}"));
     }
     let session = session_settings::session(ctx, session_id)?;
-    if session.engine == engine { return Ok(()); }
-    if !matches!(session.kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Opencode) {
+    if session.engine == engine {
+        return Ok(());
+    }
+    if !matches!(
+        session.kind,
+        SessionKind::Claude
+            | SessionKind::Codex
+            | SessionKind::Opencode
+            | SessionKind::Pi
+            | SessionKind::Omp
+    ) {
         return Err("This session does not support switching conversation engines".into());
     }
     // Leaving an engine means leaving its process behind; two agents must never share one conversation.
     if engine == "tui" {
         let snapshot = ctx.chat().snapshot(session_id);
         let selection = if snapshot.running {
-            Selection { model: snapshot.model, effort: snapshot.effort }
-        } else { session_settings::resolve(ctx, &session)? };
+            Selection {
+                model: snapshot.model,
+                effort: snapshot.effort,
+            }
+        } else {
+            session_settings::resolve(ctx, &session)?
+        };
         session_settings::persist(ctx, &session, &selection)?;
         if session.kind == SessionKind::Opencode {
             // This opens only the local protocol peer; no prompt or model request is sent.
-            chat_start(ctx, session_id, selection.model.as_deref(), selection.effort.as_deref(), false)?;
+            chat_start(
+                ctx,
+                session_id,
+                selection.model.as_deref(),
+                selection.effort.as_deref(),
+                false,
+            )?;
             ctx.chat().prepare_terminal(session_id, &selection)?;
         }
         ctx.chat().stop_for_handoff(ctx, session_id)?;
@@ -856,10 +900,16 @@ pub fn chat_clear(ctx: &AppCtx, session_id: &str) -> Result<Session, String> {
         if source.archived_at.is_some() {
             return Err("This chat session is already archived".to_string());
         }
-        if !matches!(source.kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Opencode)
-            || source.engine != "chat"
+        if !matches!(
+            source.kind,
+            SessionKind::Claude
+                | SessionKind::Codex
+                | SessionKind::Opencode
+                | SessionKind::Pi
+                | SessionKind::Omp
+        ) || source.engine != "chat"
         {
-            return Err("Only Claude, Codex, and OpenCode chat sessions can be cleared".to_string());
+            return Err("Only chat sessions can be cleared".to_string());
         }
         let name = next_chat_session_name(&transaction, &source.project_id, source.kind)?;
         let fresh = repo::create_fresh_chat_session(&transaction, &source, &name)?;
@@ -875,7 +925,6 @@ pub fn chat_clear(ctx: &AppCtx, session_id: &str) -> Result<Session, String> {
     Ok(fresh)
 }
 
-
 /// Start the chat engine for a session, or do nothing if it is already running.
 ///
 /// The conversation continues where it left off: the session's captured agent id becomes `--resume`, and
@@ -887,14 +936,23 @@ pub fn chat_start(
     effort: Option<&str>,
     fast_mode: bool,
 ) -> Result<(), String> {
-    if ctx.chat().is_alive(session_id) { return Ok(()); }
+    if ctx.chat().is_alive(session_id) {
+        return Ok(());
+    }
     let (session, project_root) = {
         let conn = ctx.db().conn.lock().unwrap();
         let session = repo::get_session(&conn, session_id)?.ok_or("Session not found")?;
         let root = repo::get_project_root(&conn, &session.project_id)?;
         (session, root)
     };
-    if !matches!(session.kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Opencode) {
+    if !matches!(
+        session.kind,
+        SessionKind::Claude
+            | SessionKind::Codex
+            | SessionKind::Opencode
+            | SessionKind::Pi
+            | SessionKind::Omp
+    ) {
         return Err(format!(
             "The chat engine does not support {} sessions yet",
             session.kind.as_str()
@@ -909,24 +967,17 @@ pub fn chat_start(
         .filter(|c| !c.trim().is_empty())
         .map(str::to_string)
         .or(project_root);
-    // A session's own agent path wins over the plain name on PATH, matching how PTY sessions launch.
-    let default_bin = match session.kind {
-        SessionKind::Codex => "codex",
-        SessionKind::Opencode => "opencode",
-        _ => "claude",
-    };
-    let bin = session
-        .agent_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| default_bin.to_string());
+    let bin = crate::agent::executable::for_session(ctx, &session);
     let mut selection = session_settings::resolve(ctx, &session)?;
-    if model.is_some() { selection.model = session_settings::clean(model); }
-    if effort.is_some() { selection.effort = session_settings::clean(effort); }
+    if model.is_some() {
+        selection.model = session_settings::clean(model);
+    }
+    if effort.is_some() {
+        selection.effort = session_settings::clean(effort);
+    }
     session_settings::persist(ctx, &session, &selection)?;
-    let extra_args = session_settings::without_selection_args(session.kind, session.agent_args.as_deref());
+    let extra_args =
+        session_settings::without_selection_args(session.kind, session.agent_args.as_deref());
     ctx.chat().start(
         ctx,
         session_id,
@@ -949,7 +1000,11 @@ pub fn chat_set_fast_mode(ctx: &AppCtx, session_id: &str, enabled: bool) -> Resu
 }
 
 /// Choose the Codex service tier for subsequent turns; None returns to the thread's own.
-pub fn chat_set_service_tier(ctx: &AppCtx, session_id: &str, tier: Option<&str>) -> Result<(), String> {
+pub fn chat_set_service_tier(
+    ctx: &AppCtx,
+    session_id: &str,
+    tier: Option<&str>,
+) -> Result<(), String> {
     let tier = tier.map(str::trim).filter(|value| !value.is_empty());
     {
         let conn = ctx.db().conn.lock().unwrap();
@@ -958,12 +1013,19 @@ pub fn chat_set_service_tier(ctx: &AppCtx, session_id: &str, tier: Option<&str>)
     if ctx.chat().snapshot(session_id).running {
         ctx.chat().set_service_tier(session_id, tier)?;
     }
-    ctx.emit(&format!("chat://event/{session_id}"), serde_json::json!({"type":"codexSettingsChanged","serviceTier":tier}));
+    ctx.emit(
+        &format!("chat://event/{session_id}"),
+        serde_json::json!({"type":"codexSettingsChanged","serviceTier":tier}),
+    );
     Ok(())
 }
 
 /// Choose the Codex personality for subsequent turns; None returns to the configured one.
-pub fn chat_set_personality(ctx: &AppCtx, session_id: &str, personality: Option<&str>) -> Result<(), String> {
+pub fn chat_set_personality(
+    ctx: &AppCtx,
+    session_id: &str,
+    personality: Option<&str>,
+) -> Result<(), String> {
     let personality = personality.map(str::trim).filter(|value| !value.is_empty());
     if personality.is_some_and(|value| !matches!(value, "none" | "friendly" | "pragmatic")) {
         return Err("Unknown Codex personality".into());
@@ -975,8 +1037,45 @@ pub fn chat_set_personality(ctx: &AppCtx, session_id: &str, personality: Option<
     if ctx.chat().snapshot(session_id).running {
         ctx.chat().set_personality(session_id, personality)?;
     }
-    ctx.emit(&format!("chat://event/{session_id}"), serde_json::json!({"type":"codexSettingsChanged","personality":personality}));
+    ctx.emit(
+        &format!("chat://event/{session_id}"),
+        serde_json::json!({"type":"codexSettingsChanged","personality":personality}),
+    );
     Ok(())
+}
+
+/// Begin provider-managed authorization in the existing conversation.
+pub fn chat_auth_start(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
+    prepare_chat_account(ctx, session_id)?;
+    ctx.chat().auth_start(ctx, session_id)
+}
+
+pub fn chat_auth_logout(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
+    prepare_chat_account(ctx, session_id)?;
+    ctx.chat().auth_logout(ctx, session_id)
+}
+
+fn prepare_chat_account(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
+    {
+        let conn = ctx.db().conn.lock().unwrap();
+        let session = repo::get_session(&conn, session_id)?.ok_or("Session not found")?;
+        if !matches!(session.kind, SessionKind::Codex | SessionKind::Claude)
+            || session.engine != "chat"
+        {
+            return Err(
+                "Account operations are available only in Claude or Codex chat sessions.".into(),
+            );
+        }
+    }
+    chat_start(ctx, session_id, None, None, false)
+}
+
+pub fn chat_auth_submit(ctx: &AppCtx, session_id: &str, code: &str) -> Result<(), String> {
+    ctx.chat().auth_submit(ctx, session_id, code)
+}
+
+pub fn chat_auth_cancel(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
+    ctx.chat().auth_cancel(ctx, session_id)
 }
 
 /// Ask Codex to summarize the conversation now (`/compact`).
@@ -1005,7 +1104,11 @@ pub fn chat_mcp_toggle(
 }
 
 /// Reconnect one MCP server, answering with the refreshed server list.
-pub fn chat_mcp_reconnect(ctx: &AppCtx, session_id: &str, server: &str) -> Result<serde_json::Value, String> {
+pub fn chat_mcp_reconnect(
+    ctx: &AppCtx,
+    session_id: &str,
+    server: &str,
+) -> Result<serde_json::Value, String> {
     ctx.chat().mcp_reconnect(session_id, server)
 }
 
@@ -1040,36 +1143,67 @@ pub fn chat_send(
     behavior: Option<&str>,
     message_id: Option<&str>,
 ) -> Result<&'static str, String> {
+    if crate::security::session_active(session_id) {
+        return Err("security_audit_owns_conversation".into());
+    }
     check_images(&images)?;
     // Pasted calls can bypass completion and arrive before the startup catalogue. Resolve aliases on
     // the backend as well, so a first-message `$skill` in Claude is never sent as ordinary prose.
     let session = session_settings::session(ctx, session_id)?;
     let commands = if crate::agent::chat::skills::needs_alias_lookup(session.kind, text) {
         chat_commands(ctx, session_id)?
-    } else { Vec::new() };
+    } else {
+        Vec::new()
+    };
     let original_text = text;
     let text = crate::agent::chat::skills::native_text(text, &commands);
     let Some(message_id) = message_id else {
-        return ctx.chat().send(ctx, session_id, &text, images, behavior.unwrap_or("queue"));
+        return ctx
+            .chat()
+            .send(ctx, session_id, &text, images, behavior.unwrap_or("queue"));
     };
     use crate::agent::chat::submissions::{self, Claim};
-    let payload = serde_json::to_vec(&serde_json::json!([original_text, images, behavior.unwrap_or("queue")]))
-        .map_err(|e| e.to_string())?;
-    let claim = submissions::claim(&ctx.db().conn.lock().unwrap(), session_id, message_id, &payload)?;
+    let payload = serde_json::to_vec(&serde_json::json!([
+        original_text,
+        images,
+        behavior.unwrap_or("queue")
+    ]))
+    .map_err(|e| e.to_string())?;
+    let claim = submissions::claim(
+        &ctx.db().conn.lock().unwrap(),
+        session_id,
+        message_id,
+        &payload,
+    )?;
     if let Claim::Complete(outcome) = claim {
         return outcome.and_then(|value| match value.as_str() {
-            "sent" => Ok("sent"), "queued" => Ok("queued"), "command" => Ok("command"), _ => Err("Invalid submission receipt".into()),
+            "sent" => Ok("sent"),
+            "queued" => Ok("queued"),
+            "command" => Ok("command"),
+            _ => Err("Invalid submission receipt".into()),
         });
     }
-    let outcome = ctx.chat().send_identified(ctx, session_id, &text, images, behavior.unwrap_or("queue"), Some(message_id));
-    submissions::finish(&ctx.db().conn.lock().unwrap(), session_id, message_id,
-        &outcome.clone().map(str::to_owned)).map_err(|_| "chat_submission_pending".to_string())?;
+    let outcome = ctx.chat().send_identified(
+        ctx,
+        session_id,
+        &text,
+        images,
+        behavior.unwrap_or("queue"),
+        Some(message_id),
+    );
+    submissions::finish(
+        &ctx.db().conn.lock().unwrap(),
+        session_id,
+        message_id,
+        &outcome.clone().map(str::to_owned),
+    )
+    .map_err(|_| "chat_submission_pending".to_string())?;
     outcome
 }
 
 /// Refuse a message whose attachments are past the limits. The last line of defence rather than the
 /// first: the composer says the same thing in the user's own language before the bytes are ever sent.
-fn check_images(images: &[ChatImage]) -> Result<(), String> {
+pub(crate) fn check_images(images: &[ChatImage]) -> Result<(), String> {
     if images.len() > MAX_IMAGES_PER_MESSAGE {
         return Err(format!(
             "At most {MAX_IMAGES_PER_MESSAGE} images can be sent with one message"
@@ -1147,11 +1281,19 @@ pub fn chat_permission(
 /// two-state toggle applies at launch and is hidden for these sessions, so if the choice were not stored,
 /// every restart would silently go back to asking.
 pub fn chat_set_mode(ctx: &AppCtx, session_id: &str, mode: &str) -> Result<(), String> {
+    let session = session_settings::session(ctx, session_id)?;
+    let mode = crate::agent::permission_catalog::normalize(session.kind, Some(mode))?;
     // The agent starts with the first message, so a mode chosen before that has nobody to tell yet; the
     // stored value below is what that launch reads.
-    if ctx.chat().is_alive(session_id) {
-        ctx.chat().set_mode(ctx, session_id, mode)?;
-    }
+    let restart_required = if ctx.chat().is_alive(session_id) {
+        match ctx.chat().set_mode(ctx, session_id, mode) {
+            Ok(()) => None,
+            Err(error) if error.starts_with("CHAT_PERMISSION_RESTART_REQUIRED:") => Some(error),
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
     // Terminal sessions have historically stored the unrestricted choice as `skip`; keep that spelling
     // at rest so switching engines does not silently turn confirmations back on.
     let stored = if matches!(mode, "bypassPermissions" | "full-access") {
@@ -1164,6 +1306,11 @@ pub fn chat_set_mode(ctx: &AppCtx, session_id: &str, mode: &str) -> Result<(), S
         repo::set_permission_mode(&conn, session_id, stored)?;
     }
     ctx.emit(TREE_CHANGED, ());
+    // Keep a deferred choice in the database without claiming the running process adopted it.
+    // Returning the restart requirement opens the confirmation; dismissing it keeps the choice pending.
+    if let Some(error) = restart_required {
+        return Err(error);
+    }
     ctx.emit(
         &crate::agent::chat::engine::event_name(session_id),
         serde_json::json!({
@@ -1198,7 +1345,8 @@ pub fn chat_set_model(ctx: &AppCtx, session_id: &str, model: Option<&str>) -> Re
     let mut selection = session_settings::resolve(ctx, &session)?;
     selection.model = session_settings::clean(model);
     if ctx.chat().is_alive(session_id) {
-        ctx.chat().set_model(session_id, selection.model.as_deref())?;
+        ctx.chat()
+            .set_model(session_id, selection.model.as_deref())?;
         selection.model = ctx.chat().snapshot(session_id).model;
     }
     session_settings::persist(ctx, &session, &selection)?;
@@ -1215,11 +1363,14 @@ pub fn chat_set_effort(ctx: &AppCtx, session_id: &str, effort: Option<&str>) -> 
     let mut selection = session_settings::resolve(ctx, &session)?;
     selection.effort = session_settings::clean(effort);
     if ctx.chat().is_alive(session_id) {
-        ctx.chat().set_effort(ctx, session_id, selection.effort.as_deref())?;
+        ctx.chat()
+            .set_effort(ctx, session_id, selection.effort.as_deref())?;
     }
     session_settings::persist(ctx, &session, &selection)?;
-    ctx.emit(&crate::agent::chat::engine::event_name(session_id),
-        serde_json::json!({"type":"settingsChanged","effort":selection.effort}));
+    ctx.emit(
+        &crate::agent::chat::engine::event_name(session_id),
+        serde_json::json!({"type":"settingsChanged","effort":selection.effort}),
+    );
     Ok(())
 }
 
@@ -1230,31 +1381,20 @@ pub fn chat_models(ctx: &AppCtx, session_id: &str) -> Result<serde_json::Value, 
         repo::get_session(&conn, session_id)?.ok_or("Session not found")?
     };
     match session.kind {
-        // The running agent knows its own catalogue best: which models the account may use, and what
-        // each supports. Before it has answered, the curated table stands in.
+        // Live capabilities enrich the complete catalogue; the CLI picker only lists a subset.
         SessionKind::Claude => serde_json::to_value(
             ctx.chat()
                 .live_claude_models(session_id)
                 .unwrap_or_else(crate::agent::claude_models::list),
         ),
         SessionKind::Codex => {
-            let bin = session
-                .agent_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|path| !path.is_empty())
-                .unwrap_or("codex");
+            let bin = crate::agent::executable::for_session(ctx, &session);
             let args = crate::agent::inject::split_extra_args(session.agent_args.as_deref());
-            serde_json::to_value(crate::agent::codex_models::list(bin, &args)?)
+            serde_json::to_value(crate::agent::codex_models::list(&bin, &args)?)
         }
         SessionKind::Opencode => {
             // The running server already knows its providers; without one, a short-lived server answers.
-            let bin = session
-                .agent_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|path| !path.is_empty())
-                .unwrap_or("opencode");
+            let bin = crate::agent::executable::for_session(ctx, &session);
             let root = {
                 let conn = ctx.db().conn.lock().unwrap();
                 repo::get_project_root(&conn, &session.project_id)?
@@ -1266,29 +1406,82 @@ pub fn chat_models(ctx: &AppCtx, session_id: &str) -> Result<serde_json::Value, 
                 .map(str::to_string)
                 .or(root);
             let running = ctx.chat().opencode_server(session_id);
-            serde_json::to_value(crate::agent::opencode_models::list(ctx, session_id, bin, cwd.as_deref(), running)?)
+            serde_json::to_value(crate::agent::opencode_models::list(
+                ctx,
+                session_id,
+                &bin,
+                cwd.as_deref(),
+                running,
+            )?)
         }
-        _ => return Err(format!("The chat engine does not support {} sessions", session.kind.as_str())),
+        SessionKind::Pi | SessionKind::Omp => {
+            if let Some(models) = ctx.chat().pi_models(session_id) {
+                return serde_json::to_value(models)
+                    .map_err(|e| format!("Failed to serialize model catalogue: {e}"));
+            }
+            let bin = crate::agent::executable::for_session(ctx, &session);
+            let root = {
+                let conn = ctx.db().conn.lock().unwrap();
+                repo::get_project_root(&conn, &session.project_id)?
+            };
+            let cwd = session
+                .cwd
+                .as_deref()
+                .filter(|c| !c.trim().is_empty())
+                .map(str::to_string)
+                .or(root);
+            let args = session_settings::without_selection_args(
+                session.kind,
+                session.agent_args.as_deref(),
+            );
+            serde_json::to_value(crate::agent::pi_models::list(
+                session.kind,
+                &bin,
+                cwd.as_deref(),
+                &crate::agent::inject::split_extra_args(Some(&args)),
+            )?)
+        }
+        _ => {
+            return Err(format!(
+                "The chat engine does not support {} sessions",
+                session.kind.as_str()
+            ))
+        }
     }
     .map_err(|e| format!("Failed to serialize model catalogue: {e}"))
 }
 
 /// Read the provider catalogue even before the first message, without starting a conversation.
 pub fn chat_commands(ctx: &AppCtx, session_id: &str) -> Result<Vec<serde_json::Value>, String> {
-    if let Some(commands) = ctx.chat().live_commands(session_id).filter(|commands| !commands.is_empty()) {
+    if let Some(commands) = ctx
+        .chat()
+        .live_commands(session_id)
+        .filter(|commands| !commands.is_empty())
+    {
         return Ok(commands);
     }
     let session = session_settings::session(ctx, session_id)?;
-    if !matches!(session.kind, SessionKind::Codex | SessionKind::Claude) { return Ok(Vec::new()); }
+    if !matches!(session.kind, SessionKind::Codex | SessionKind::Claude) {
+        return Ok(Vec::new());
+    }
     let root = {
         let conn = ctx.db().conn.lock().unwrap();
         repo::get_project_root(&conn, &session.project_id)?
     };
-    let cwd = session.cwd.as_deref().filter(|c| !c.trim().is_empty()).or(root.as_deref());
-    let bin = session.agent_path.as_deref().map(str::trim).filter(|p| !p.is_empty())
-        .unwrap_or(if session.kind == SessionKind::Codex { "codex" } else { "claude" });
-    let args = session_settings::without_selection_args(session.kind, session.agent_args.as_deref());
-    crate::agent::chat::skills::lookup(session.kind, bin, cwd, &crate::agent::inject::split_extra_args(Some(&args)))
+    let cwd = session
+        .cwd
+        .as_deref()
+        .filter(|c| !c.trim().is_empty())
+        .or(root.as_deref());
+    let bin = crate::agent::executable::for_session(ctx, &session);
+    let args =
+        session_settings::without_selection_args(session.kind, session.agent_args.as_deref());
+    crate::agent::chat::skills::lookup(
+        session.kind,
+        &bin,
+        cwd,
+        &crate::agent::inject::split_extra_args(Some(&args)),
+    )
 }
 
 /// Everything a client needs to draw the conversation from scratch, including one that just connected.
@@ -1300,7 +1493,9 @@ pub fn chat_snapshot(
 }
 
 pub fn chat_snapshot_window(
-    ctx: &AppCtx, session_id: &str, window: Option<&crate::agent::chat::engine::ChatWindow>,
+    ctx: &AppCtx,
+    session_id: &str,
+    window: Option<&crate::agent::chat::engine::ChatWindow>,
 ) -> Result<crate::agent::chat::engine::ChatSnapshot, String> {
     let mut snapshot = ctx.chat().snapshot_window(session_id, window);
     if !snapshot.running {
@@ -1329,38 +1524,69 @@ pub fn chat_snapshot_window(
             match crate::agent::chat::history::replay(kind, &id) {
                 Ok(rows) => snapshot.rows = rows,
                 // A recording that is gone, or a thread Codex never wrote, is the same empty pane as before.
-                Err(e) => eprintln!("chat: no history replayed for {id}: {e}"),
+                Err(e) => crate::diagnostic_warn!("chat: no history replayed for {id}: {e}"),
             }
             snapshot.agent_session_id = Some(id);
         }
     }
     if snapshot.pid.is_none() {
         snapshot.total_rows = snapshot.rows.len();
-        snapshot.positions = snapshot.rows.iter().enumerate().map(|(index, row)| (row.id().to_owned(), index)).collect();
+        snapshot.positions = snapshot
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (row.id().to_owned(), index))
+            .collect();
         if let Some(window) = window {
-            let end = window.before.as_ref().and_then(|id| snapshot.rows.iter().position(|row| row.id() == id)).unwrap_or(snapshot.rows.len());
+            let end = window
+                .before
+                .as_ref()
+                .and_then(|id| snapshot.rows.iter().position(|row| row.id() == id))
+                .unwrap_or(snapshot.rows.len());
             let start = end.saturating_sub(crate::agent::chat::engine::SNAPSHOT_PAGE_ROWS);
-            snapshot.page_kind = if window.before.is_some() && end < snapshot.rows.len() { "history" } else { "recent" };
+            snapshot.page_kind = if window.before.is_some() && end < snapshot.rows.len() {
+                "history"
+            } else {
+                "recent"
+            };
             snapshot.has_more = start > 0;
             snapshot.rows = snapshot.rows[start..end].to_vec();
-            snapshot.positions.retain(|_, index| *index >= start && *index < end);
+            snapshot
+                .positions
+                .retain(|_, index| *index >= start && *index < end);
         }
     }
     Ok(snapshot)
 }
 
 /// Expanded tool details remain available when an inactive conversation is replayed from disk.
-pub fn chat_row(ctx: &AppCtx, session_id: &str, row_id: &str, epoch: Option<u64>) -> Result<serde_json::Value, String> {
-    if ctx.chat().snapshot_window(session_id, Some(&Default::default())).pid.is_some() {
+pub fn chat_row(
+    ctx: &AppCtx,
+    session_id: &str,
+    row_id: &str,
+    epoch: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    if ctx
+        .chat()
+        .snapshot_window(session_id, Some(&Default::default()))
+        .pid
+        .is_some()
+    {
         return ctx.chat().row_detail(session_id, row_id, epoch);
     }
-    if epoch.is_some() { return Err("Chat history changed; synchronize the conversation again".into()); }
+    if epoch.is_some() {
+        return Err("Chat history changed; synchronize the conversation again".into());
+    }
     let snapshot = chat_snapshot(ctx, session_id)?;
     fn find(rows: &[crate::agent::chat::engine::ChatRow], id: &str) -> Option<serde_json::Value> {
         for row in rows {
-            if row.id() == id { return serde_json::to_value(row).ok(); }
+            if row.id() == id {
+                return serde_json::to_value(row).ok();
+            }
             if let crate::agent::chat::engine::ChatRow::Tool { children, .. } = row {
-                if let Some(value) = find(children, id) { return Some(value); }
+                if let Some(value) = find(children, id) {
+                    return Some(value);
+                }
             }
         }
         None
@@ -1393,6 +1619,9 @@ pub fn chat_rewind(
     row_id: &str,
     scope: &str,
 ) -> Result<serde_json::Value, String> {
+    if crate::security::session_active(session_id) {
+        return Err("security_audit_owns_conversation".into());
+    }
     ctx.chat().rewind(ctx, session_id, row_id, scope)
 }
 
@@ -1411,6 +1640,7 @@ pub fn chat_detach(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
 
 /// End the conversation and let its process go.
 pub fn chat_stop(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
+    crate::security::cancel_session(ctx, session_id)?;
     ctx.chat().stop(ctx, session_id)
 }
 
@@ -1441,7 +1671,7 @@ pub fn read_agent_chat(
     crate::agent::chat::read(kind, &agent_id)
 }
 
-/// Queries model/context usage for the Info panel (Claude, Codex, Grok).
+/// Queries model/context usage for the Info panel (Claude, Codex, Grok, OpenCode, Pi, OMP).
 pub fn agent_context_info(
     ctx: &AppCtx,
     session_id: &str,
@@ -1452,16 +1682,32 @@ pub fn agent_context_info(
         return Ok(info);
     }
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
-    crate::agent::transcript::context_info(kind, &agent_id)
+    let mut info = crate::agent::transcript::context_info(kind, &agent_id)?;
+    // Pi and OMP leave the limit to their catalogue; the running process answers with the catalogue the
+    // CLI actually uses, which is fresher than the copy it cached on disk.
+    if info.context_limit == 0 {
+        if let Some(model) = info.model.as_deref() {
+            info.context_limit = ctx
+                .chat()
+                .model_context_window(session_id, model)
+                .unwrap_or(0);
+        }
+    }
+    Ok(info)
 }
 
-/// Queries current-turn tokens, tool calls, and changed files for the Info panel, Claude only.
+/// Provider-reported turn/session usage and recorded file activity for the Info panel.
 pub fn agent_turn_stats(
     ctx: &AppCtx,
     session_id: &str,
 ) -> Result<crate::agent::transcript::TurnStats, String> {
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
-    crate::agent::transcript::current_turn_stats(kind, &agent_id)
+    let mut stats = crate::agent::transcript::current_turn_stats(kind, &agent_id)?;
+    if let Ok(context) = agent_context_info(ctx, session_id) {
+        stats.with_context(&context);
+    }
+    ctx.chat().enrich_turn_stats(session_id, &mut stats);
+    Ok(stats)
 }
 
 /// Exports complete session context as Markdown. With desktop `dest_path`, writes to disk and returns None; without
@@ -1514,7 +1760,7 @@ const REMOTE_PASSWORD_HASH_KEY: &str = "remoteAccess.passwordHash";
 /// Persist remote-access settings; failures are logged and never abort the running service.
 fn persist_remote_settings(ctx: &AppCtx, entries: std::collections::HashMap<String, String>) {
     if let Err(e) = set_app_settings(ctx, entries) {
-        eprintln!("failed to persist remote-access settings: {e}");
+        crate::diagnostic_warn!("failed to persist remote-access settings: {e}");
     }
 }
 
@@ -1648,9 +1894,8 @@ pub fn mirror_push(ctx: &AppCtx, source: &str, state: serde_json::Value) -> serd
 const SPAWN_CLAIM_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Spawn requests already answered, keyed by parent session and prompt, with the time they were claimed.
-fn spawn_claims() -> &'static std::sync::Mutex<
-    std::collections::HashMap<String, std::time::Instant>,
-> {
+fn spawn_claims() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>
+{
     static CLAIMS: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
     > = std::sync::OnceLock::new();
@@ -1776,9 +2021,7 @@ fn autostart_config(
 /// Auto-starts LAN remote access on launch when the persisted enabled flag is set. Returns Ok(None) when
 /// nothing is configured. Errors (port in use, production guard on a persisted dev mode) are recorded on
 /// the WebServer so the panel can display them — callers only log; auto-start is never fatal.
-pub fn web_server_autostart(
-    ctx: &AppCtx,
-) -> Result<Option<crate::web::WebServerStatus>, String> {
+pub fn web_server_autostart(ctx: &AppCtx) -> Result<Option<crate::web::WebServerStatus>, String> {
     // Never replace a running instance: a very early manual start would otherwise be stopped and
     // re-bound with the persisted (possibly older) configuration by the auto-start thread.
     if ctx.remote_web().status().running {
@@ -1826,13 +2069,16 @@ mod tests {
     use super::{
         autostart_config, check_images, claim_spawn, get_app_settings, install_id,
         release_spawn_claim, set_app_settings, spawn_claim_key, web_server_autostart,
-        web_server_status, web_server_stop, ChatImage, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE,
+        web_server_status, web_server_stop, ChatImage, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BYTES,
     };
     use std::collections::HashMap;
 
     fn image(bytes: usize) -> ChatImage {
         // Four base64 characters per three bytes, which is what the check reads back.
-        ChatImage { mime_type: "image/png".into(), data: "A".repeat(bytes.div_ceil(3) * 4) }
+        ChatImage {
+            mime_type: "image/png".into(),
+            data: "A".repeat(bytes.div_ceil(3) * 4),
+        }
     }
 
     /// The limits exist so one paste cannot be paid for by every client that later opens the
@@ -1847,7 +2093,10 @@ mod tests {
         );
         assert!(check_images(&[image(MAX_IMAGE_BYTES / 2)]).is_ok());
         assert!(check_images(&[image(MAX_IMAGE_BYTES * 2)]).is_err());
-        let pdf = ChatImage { mime_type: "application/pdf".into(), data: "AAAA".into() };
+        let pdf = ChatImage {
+            mime_type: "application/pdf".into(),
+            data: "AAAA".into(),
+        };
         assert!(check_images(&[pdf]).is_err(), "only images travel this way");
     }
 
@@ -1859,12 +2108,21 @@ mod tests {
         assert!(claim_spawn(key.clone()), "the first answer wins");
         assert!(!claim_spawn(key.clone()), "a second answer must lose");
         // A different prompt, or the same prompt under a different parent, is a different request.
-        assert!(claim_spawn(spawn_claim_key("ses-claim-test", "build something else")));
-        assert!(claim_spawn(spawn_claim_key("ses-claim-test2", "build the thing")));
+        assert!(claim_spawn(spawn_claim_key(
+            "ses-claim-test",
+            "build something else"
+        )));
+        assert!(claim_spawn(spawn_claim_key(
+            "ses-claim-test2",
+            "build the thing"
+        )));
         // An agent retrying a task the user cancelled sends the identical parent and prompt. Issuing the
         // new card releases the old claim, so confirming it works instead of silently doing nothing.
         release_spawn_claim("ses-claim-test", "build the thing");
-        assert!(claim_spawn(key), "a re-issued request can be answered again");
+        assert!(
+            claim_spawn(key),
+            "a re-issued request can be answered again"
+        );
     }
 
     /// Builds a headless AppCtx over a fresh SQLite db inside `dir` (mirrors web::tests).
@@ -1880,7 +2138,8 @@ mod tests {
     /// dispatch filter that hides `remoteAccess.*` and `gitea.token` from remote clients.
     #[test]
     fn set_app_settings_broadcasts_key_names_only() {
-        let dir = std::env::temp_dir().join(format!("vlx-settings-broadcast-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("vlx-settings-broadcast-{}", std::process::id()));
         let ctx = headless_ctx(&dir);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let sink = seen.clone();
@@ -1890,13 +2149,19 @@ mod tests {
 
         // An empty batch changes nothing, so it must stay quiet rather than wake every client.
         set_app_settings(&ctx, HashMap::new()).unwrap();
-        assert!(seen.lock().unwrap().is_empty(), "an empty write broadcasts nothing");
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "an empty write broadcasts nothing"
+        );
 
         set_app_settings(
             &ctx,
             HashMap::from([
                 ("vlx-theme".to_string(), "dark".to_string()),
-                ("remoteAccess.passwordHash".to_string(), "$argon2id$secret".to_string()),
+                (
+                    "remoteAccess.passwordHash".to_string(),
+                    "$argon2id$secret".to_string(),
+                ),
             ]),
         )
         .unwrap();
@@ -1943,7 +2208,10 @@ mod tests {
         assert_eq!(install_id(&ctx).unwrap(), first);
         // It is an ordinary preference, so a reopened database returns the same value.
         assert_eq!(
-            get_app_settings(&ctx).unwrap().get("install_id").map(String::as_str),
+            get_app_settings(&ctx)
+                .unwrap()
+                .get("install_id")
+                .map(String::as_str),
             Some(first.as_str())
         );
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1966,11 +2234,19 @@ mod tests {
         // Stop on a non-running server is a no-op for the service but must persist enabled=0.
         web_server_stop(&ctx).unwrap();
         let settings = get_app_settings(&ctx).unwrap();
-        assert_eq!(settings.get("remoteAccess.enabled").map(String::as_str), Some("0"));
-        // Port and hash stay for prefill (doc contract on web_server_stop).
-        assert_eq!(settings.get("remoteAccess.port").map(String::as_str), Some("9123"));
         assert_eq!(
-            settings.get("remoteAccess.passwordHash").map(String::as_str),
+            settings.get("remoteAccess.enabled").map(String::as_str),
+            Some("0")
+        );
+        // Port and hash stay for prefill (doc contract on web_server_stop).
+        assert_eq!(
+            settings.get("remoteAccess.port").map(String::as_str),
+            Some("9123")
+        );
+        assert_eq!(
+            settings
+                .get("remoteAccess.passwordHash")
+                .map(String::as_str),
             Some("$argon2id$fake")
         );
         assert!(!web_server_status(&ctx).auto_start);
@@ -1990,7 +2266,10 @@ mod tests {
         let Err(err) = web_server_autostart(&ctx) else {
             panic!("production guard must reject lanHttp=1");
         };
-        assert!(err.contains("LAN plaintext mode"), "unexpected error: {err}");
+        assert!(
+            err.contains("LAN plaintext mode"),
+            "unexpected error: {err}"
+        );
         assert!(!ctx.remote_web().status().running, "no server may bind");
         let status = web_server_status(&ctx);
         assert_eq!(status.autostart_error.as_deref(), Some(err.as_str()));
@@ -2032,10 +2311,17 @@ mod tests {
         started.expect("failed to start the loopback web server after retries");
 
         let result = web_server_autostart(&ctx).expect("skip must not be an error");
-        assert!(result.is_none(), "auto-start must skip while an instance runs");
+        assert!(
+            result.is_none(),
+            "auto-start must skip while an instance runs"
+        );
         let status = ctx.remote_web().status();
         assert!(status.running);
-        assert_eq!(status.port, Some(port), "the manual instance must keep its port");
+        assert_eq!(
+            status.port,
+            Some(port),
+            "the manual instance must keep its port"
+        );
 
         ctx.remote_web().stop();
         let _ = std::fs::remove_dir_all(&tmp);

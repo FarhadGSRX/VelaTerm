@@ -1,0 +1,28 @@
+{
+  "name": "@velaterm/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "node scripts/check-icons.mjs && tsc --noEmit && vite build",
+    "sync": "node scripts/sync-resources.mjs && pnpm build && cap sync",
+    "test": "node --test --experimental-strip-types src/*.test.ts",
+    "ios": "cap open ios",
+    "android": "cap open android",
+    "icons": "node scripts/sync-icons.mjs",
+    "check:icons": "node scripts/check-icons.mjs"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.5.1",
+    "@capacitor/ios": "8.5.1",
+    "@capacitor/android": "8.5.1",
+    "@velaterm/capacitor-remote": "link:plugins/remote"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.1",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4",
+    "@types/node": "^22.0.0"
+  }
+}

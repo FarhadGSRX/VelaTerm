@@ -23,8 +23,11 @@ async function completeTexts(row: ChatRow): Promise<string[]> {
   return result;
 }
 
-export function ChatSearch({ entries, onLocate, onClose, scrollRef }: {
+export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHistory = false, historyError, onRetryHistory }: {
   entries: DisplayRow[];
+  loadingHistory?: boolean;
+  historyError?: string | null;
+  onRetryHistory?: () => void;
   scrollRef?: RefObject<HTMLDivElement | null>;
   onLocate: (index: number, query: string) => void;
   onClose: () => void;
@@ -117,11 +120,12 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef }: {
     if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); move(event.shiftKey ? -1 : 1); }
   }}>
     <style>{`::highlight(${highlightName}) { background: #f5ce58; color: #171717; }`}</style>
-    {loadingDetails && <div role="status">{t("common.loading")}</div>}
+    {(loadingHistory || loadingDetails) && <div role="status">{t("common.loading")}</div>}
+    {historyError && <div role="alert">{historyError} <button className="vlx-btn" onClick={onRetryHistory}>{t("common.retry")}</button></div>}
     {detailsError && <div role="alert">{detailsError}</div>}
     <div className="sv-search-controls">
       <input ref={input} className="vlx-input" aria-label={t("archive.searchTranscript")} placeholder={t("doc.searchPlaceholder")} value={query} onChange={event => { setQuery(event.target.value); setPosition(0); }} />
-      <span role="status" aria-label={current ? t("search.matchPosition", Math.min(position + 1, matches.length), matches.length) : undefined} title={current ? current.text.slice(Math.max(0, current.start - 70), current.start + current.length + 100) : undefined}>{query ? current ? `${Math.min(position + 1, matches.length)}/${matches.length}` : t("doc.searchNoMatch") : ""}</span>
+      <span role="status" aria-label={current ? t("search.matchPosition", Math.min(position + 1, matches.length), matches.length) : undefined} title={current ? current.text.slice(Math.max(0, current.start - 70), current.start + current.length + 100) : undefined}>{query ? current ? `${Math.min(position + 1, matches.length)}/${matches.length}` : loadingHistory || loadingDetails || historyError || detailsError ? "" : t("doc.searchNoMatch") : ""}</span>
       <button className="vlx-btn" disabled={!current} title={t("common.prev")} onClick={() => move(-1)}>↑</button>
       <button className="vlx-btn" disabled={!current} title={t("common.next")} onClick={() => move(1)}>↓</button>
       <button className="vlx-btn" title={t("common.close")} onClick={onClose}>✕</button>

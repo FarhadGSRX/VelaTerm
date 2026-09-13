@@ -438,7 +438,7 @@ pub fn backfill_words(db: &Db) -> Result<(), String> {
         }
     }
     if done > 0 {
-        println!("search index: segmented {done} existing fragments into the word index");
+        crate::diagnostics::record("INFO","search_backfill",serde_json::json!({"outputCount":done}));
     }
     Ok(())
 }

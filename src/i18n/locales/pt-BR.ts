@@ -3,7 +3,50 @@
 import type en from "./en";
 
 const ptBR: typeof en = {
-  // Project code intelligence and memory associations.
+  "tree.newPlanExecuteSession": "Nova sessão de planejamento e execução…",
+  "launch.splitTasks": "Dividir automaticamente em várias tarefas",
+  "launch.splitTasksHint": "A sessão de planejamento propõe tarefas independentes. Revise as instruções, os agentes, os modelos e o esforço de raciocínio antes de iniciar a execução.",
+  "launch.splitReview": "Revisar tarefas de execução",
+  "launch.splitReviewHint": "Uma única sessão de planejamento recebe todos os relatórios e revisa cada tarefa separadamente. A execução começa após sua confirmação.",
+  "launch.splitConfirmed": "Estas tarefas já foram confirmadas.",
+  "launch.splitClosed": "Esta proposta não está mais aguardando confirmação.",
+  "launch.splitRetry": "Tentar reenviar as mensagens pendentes",
+  "launch.splitSharedDirectory": "Todas as sessões de execução usam o diretório de trabalho da sessão de planejamento e compartilham sua árvore de trabalho quando ela está habilitada.",
+  "launch.createIn": "Criar em",
+  "launch.workingDirectory": "Caminho do diretório de trabalho",
+  "launch.createAndStart": "Criar e iniciar",
+  "launch.planExecuteTaskHint": "Descreva a tarefa, os requisitos e os critérios de aceitação para o planejamento.",
+  "launch.planExecuteResult": "A sessão de planejamento inicia primeiro e cria a sessão de execução quando o plano está pronto.",
+  "launch.planExecuteWorktreeHint": "Os novos worktrees partem do commit atual, sem alterações não commitadas. Se a criação falhar, a sessão correspondente não será iniciada.",
+  "launch.workflowDirectorySharedHint": "A sessão de planejamento e todas as sessões de execução compartilham um novo diretório e uma branch.",
+  "launch.workflowDirectoryEachHint": "A sessão de planejamento e cada sessão de execução têm seu próprio worktree e sua própria branch.",
+  "launch.planTitle": "Planejamento e revisão",
+  "launch.execTitle": "Execução",
+  "launch.planExecuteIntro": "Uma sessão separada planeja o trabalho, verifica o resultado e solicita correções.",
+  "chat.origin.plan": "Planejamento",
+  "chat.origin.exec": "Execução",
+
+  // Project code intelligence and knowledge entry associations.
+  "knowledge.callers": "Símbolos que chamam",
+  "knowledge.callees": "Símbolos chamados",
+  "knowledge.explore": "Explorar código",
+  "knowledge.exploreHint": "Descreva uma funcionalidade ou um fluxo, ou informe um arquivo ou símbolo…",
+  "knowledge.impact": "Análise de impacto",
+  "knowledge.path": "Caminho de chamadas",
+  "knowledge.target": "Buscar um símbolo de destino…",
+  "knowledge.depth": "Profundidade da busca",
+  "knowledge.noPath": "Nenhum caminho de chamadas direcionado foi encontrado no índice.",
+  "knowledge.watching": "Sincronização automática ativa",
+  "knowledge.onDemand": "Sincronizar antes das consultas",
+  "knowledge.overview": "Visão geral",
+  "knowledge.uncertain": "Relação inferida",
+  "knowledge.kind": "Tipo de símbolo",
+  "knowledge.language": "Linguagem",
+  "knowledge.results": "Resultados",
+  "knowledge.resultLarge": "O resultado é grande demais para exibição. Restrinja a consulta ou reduza a profundidade da busca.",
+  "knowledge.queryFailed": "A consulta de código falhou. Tente novamente ou sincronize o índice.",
+  "knowledge.liveHelp": "As alterações são sincronizadas enquanto o processo de consultas está ativo. Após encerrar por inatividade, a próxima consulta incorpora as alterações pendentes.",
+  "knowledge.startHelp": "Ative a indexação para buscar código, seguir chamadas e analisar o impacto de uma alteração. A análise é executada no servidor sem um modelo de IA.",
   "knowledge.title": "Grafo de código",
   "knowledge.intro": "Explore as relações do código e vincule-as às decisões de projeto salvas.",
   "knowledge.setup": "Instale o CodeGraph neste servidor para ativar a indexação dos projetos.",
@@ -25,7 +68,7 @@ const ptBR: typeof en = {
   "knowledge.search": "Buscar símbolos ou caminhos de arquivos…",
   "knowledge.searchButton": "Buscar",
   "knowledge.noResults": "Nenhum símbolo correspondente.",
-  "knowledge.selectSymbol": "Selecione um símbolo para ver o código-fonte, as relações e as memórias vinculadas.",
+  "knowledge.selectSymbol": "Selecione um símbolo para ver o código-fonte, as relações e os artigos vinculados.",
   "knowledge.source": "Código-fonte",
   "knowledge.incoming": "Relações de entrada",
   "knowledge.outgoing": "Relações de saída",
@@ -33,22 +76,22 @@ const ptBR: typeof en = {
   "knowledge.analysisNote": "As relações vêm de análise estática e podem ser incompletas ou incertas.",
   "knowledge.changed": "O arquivo mudou durante a consulta. Sincronize novamente antes de usar os números de linha ou confirmar a revisão.",
   "knowledge.truncated": "Esta visualização é limitada. Algumas relações ou linhas de código foram omitidas.",
-  "knowledge.linkMemory": "Vincular memória",
-  "knowledge.chooseMemory": "Escolher uma entrada de memória",
-  "knowledge.noLinks": "Ainda não há vínculos com o código. Você pode vincular uma memória nos detalhes de um símbolo.",
-  "knowledge.inspect": "Revisar código e memória",
+  "knowledge.linkMemory": "Vincular artigo de conhecimento",
+  "knowledge.chooseMemory": "Escolher um artigo de conhecimento",
+  "knowledge.noLinks": "Ainda não há vínculos com o código. Você pode vincular um artigo nos detalhes de um símbolo.",
+  "knowledge.inspect": "Revisar código e artigo",
   "knowledge.unlink": "Remover vínculo",
   "knowledge.codeReferences": "Referências ao código",
   "knowledge.refresh": "Atualizar",
   "knowledge.current": "Sem alterações",
   "knowledge.review": "Requer revisão",
   "knowledge.unavailable": "Indisponível",
-  "knowledge.reviewHelp": "Compare esta memória com o código exibido. A confirmação registra a versão atual do arquivo sem alterar o texto da memória.",
+  "knowledge.reviewHelp": "Compare este artigo com o código exibido. A confirmação registra a versão atual do arquivo sem alterar o texto do artigo.",
   "knowledge.confirmReview": "Confirmar revisão",
-  "knowledge.agentHint": "Os agentes podem executar vknowledge search \"tema\" neste diretório. As consultas sincronizam os índices ativos e retornam o código e as memórias separadamente.",
+  "knowledge.agentHint": "Os agentes podem executar vkb search \"tema\" neste diretório. As consultas sincronizam os índices ativos e retornam o código e os artigos de conhecimento separadamente.",
   "knowledge.busy": "Uma tarefa de indexação está em andamento. Você pode fechar esta página ou desativar a indexação para interrompê-la.",
-  "knowledge.disabledHelp": "Ative a indexação deste diretório para consultar o código. A desativação preserva o índice e os vínculos com as memórias.",
-  "knowledge.conflict": "O código ou a memória mudou. Recarregue ambos antes de salvar este vínculo.",
+  "knowledge.disabledHelp": "Ative a indexação deste diretório para consultar o código. A desativação preserva o índice e os vínculos com os artigos.",
+  "knowledge.conflict": "O código ou o artigo mudou. Recarregue ambos antes de salvar este vínculo.",
   "knowledge.symbolMissing": "O símbolo ou o código-fonte não está mais disponível. Sincronize e faça a busca novamente.",
   "knowledge.directoryMissing": "Este diretório de trabalho não existe ou mudou. Verifique os caminhos do projeto e da sessão.",
   "knowledge.partial": "O índice está incompleto. Sincronize novamente e verifique se os arquivos de código-fonte podem ser lidos.",
@@ -58,15 +101,117 @@ const ptBR: typeof en = {
   "knowledge.timeout": "A indexação excedeu o tempo limite. Verifique o tamanho do repositório e tente novamente.",
   "knowledge.error": "A operação falhou. Verifique o acesso aos diretórios e o ambiente de execução do servidor e tente novamente.",
 
-  // Global Memory: a thematic LLM Wiki shared across sessions.
-  "memory.title": "Memória global",
-  "memory.add": "Adicionar à memória global",
-  "memory.intro": "Um wiki em constante atualização para compartilhar conhecimentos, decisões e aprendizados entre sessões.",
-  "memory.entries": "Artigos de memória",
+  // Knowledge base: saved knowledge organized by project and session.
+  "memory.hierarchy": "Projetos e sessões",
+  "memory.manualGroup": "Criação manual",
+  "memory.legacyGroup": "Entradas mescladas anteriormente",
+  "memory.unknownProject": "Projeto de origem desconhecido",
+  "nb.addLink": "Inserir link",
+  "nb.attach": "Anexar arquivo",
+  "nb.browse": "Procurar",
+  "nb.chooseNote": "Comece com uma nota",
+  "nb.closeHint": "Remover este caderno da lista. Os arquivos permanecerão no disco.",
+  "nb.closeVault": "Fechar caderno",
+  "nb.conflict": "O arquivo foi alterado fora deste editor. Seu rascunho foi preservado. Recarregue o arquivo ou salve o rascunho como uma nova nota.",
+  "nb.copyTo": "Copiar para um caderno local",
+  "nb.createVault": "Criar base de conhecimento",
+  "nb.destination": "Caminho de destino",
+  "nb.download": "Baixar",
+  "nb.downloadHint": "Baixe este anexo para abri-lo em outro aplicativo.",
+  "nb.empty": "Abra uma pasta para começar a escrever ou crie um caderno.",
+  "nb.emptyImport": "Nenhum arquivo que possa ser importado foi selecionado.",
+  "nb.emptyNotes": "As notas são salvas como arquivos Markdown.",
+  "nb.emptyOutline": "Os títulos do documento aparecerão aqui.",
+  "nb.emptyTrash": "A lixeira está vazia.",
+  "nb.error": "Não foi possível acessar o caderno. Verifique a conexão e a pasta e tente novamente.",
+  "nb.exists": "O destino já existe. Escolha outro nome ou pasta.",
+  "nb.favorites": "Favoritos",
+  "nb.files": "Arquivos",
+  "nb.folder": "Pasta",
+  "nb.generatedHint": "Conhecimento organizado a partir das suas sessões, com fontes e histórico de revisões.",
+  "nb.homeHint": "Explore a base de conhecimento de sessões e as bases de conhecimento locais.",
+  "nb.loadMore": "Carregar mais",
+  "nb.import": "Importar",
+  "nb.importFiles": "Escolher arquivos",
+  "nb.importFolder": "Escolher pasta",
+  "nb.importHint": "Os arquivos são copiados para a pasta selecionada. Arquivos existentes não são sobrescritos; pastas de configuração ocultas são ignoradas.",
+  "nb.imported": "Importados",
+  "nb.imports": "Histórico de importações",
+  "nb.importsEmpty": "Ainda não há importações.",
+  "nb.importRoot": "Raiz da base de conhecimento",
+  "nb.importBusy": "Já existe uma importação em andamento para esta base de conhecimento.",
+  "nb.importDelete": "Excluir registro",
+  "nb.importDeleteConfirm": "Excluir este registro de importação? Os arquivos já importados não são removidos.",
+  "nb.importDone": "Importação concluída",
+  "nb.importDuration": (seconds: string) => `${seconds} s`,
+  "nb.importFailed": "Falha na importação",
+  "nb.importFilePending": "Não importado",
+  "nb.importHideFiles": "Ocultar arquivos",
+  "nb.importInterruptedHint": "A importação foi interrompida antes de terminar.",
+  "nb.importProgress": (done: string, total: string) => `${done} / ${total} arquivos`,
+  "nb.importShowFiles": (count: string) => `Arquivos (${count})`,
+  "nb.importSkipHidden": "Arquivo ou pasta ocultos",
+  "nb.importStatusCancelled": "Cancelada",
+  "nb.importStatusCompleted": "Concluída",
+  "nb.importStatusFailed": "Falhou",
+  "nb.importStatusInterrupted": "Interrompida",
+  "nb.importStatusRunning": "Importando",
+  "nb.incomplete": "Não foi possível concluir a operação. Verifique os arquivos e tente novamente.",
+  "nb.info": "Detalhes da nota",
+  "nb.invalid": "O nome ou caminho é inválido.",
+  "nb.links": "Links de saída",
+  "nb.local": "Arquivos locais",
+  "nb.localVaults": "Bases de conhecimento locais",
+  "nb.move": "Renomear ou mover",
+  "nb.moveHint": "Informe um caminho relativo à raiz do caderno. Os links existentes são atualizados ao mover o arquivo ou a pasta.",
+  "nb.name": "Nome",
+  "nb.newFolder": "Nova pasta",
+  "nb.newNote": "Nova nota",
+  "nb.noLinks": "Ainda não há notas vinculadas.",
+  "nb.tags": "Marcadores",
+  "nb.notes": "Notas",
+  "nb.openVault": "Abrir base de conhecimento",
+  "nb.outline": "Estrutura",
+  "nb.quickOpen": "Abertura rápida",
+  "nb.readOnly": "Este arquivo não pode ser editado como uma nota Markdown em UTF-8.",
+  "nb.recent": "Notas recentes",
+  "nb.restore": "Restaurar",
+  "nb.reload": "Recarregar do disco",
+  "nb.root": "Caminho da pasta",
+  "nb.rootHint": "Selecione uma pasta no computador conectado. Os arquivos Markdown e anexos existentes permanecem no local original.",
+  "nb.saveCopy": "Salvar como nova nota",
+  "nb.saved": "Salvo no disco",
+  "nb.saving": "Salvando…",
+  "nb.search": "Pesquisar notas…",
+  "nb.searchAllVaults": "Todas as bases de conhecimento",
+  "nb.searchCount": (count: string) => `${count} resultados`,
+  "nb.searchEmpty": "Nenhuma nota corresponde a esta busca.",
+  "nb.searchLine": (line: string) => `Linha ${line}`,
+  "nb.searchMatches": (count: string) => `${count} ocorrências`,
+  "nb.searchMore": "Apenas os primeiros resultados são listados. Refine a busca para ver os demais.",
+  "nb.searchRelated": "Notas relacionadas",
+  "nb.searchResults": "Resultados da pesquisa",
+  "nb.searchScope": "Escopo da busca",
+  "nb.searchThisVault": "Esta base de conhecimento",
+  "nb.skipped": "Ignorados",
+  "nb.split": "Visualização dividida",
+  "nb.tooLarge": "O arquivo ou a seleção excede os limites do caderno.",
+  "nb.trash": "Lixeira",
+  "nb.trashHint": "Mover este item para a lixeira do caderno. Ele poderá ser restaurado depois.",
+  "nb.unsaved": "Alterações não salvas",
+  "nb.vaults": "Bases de conhecimento",
+  "nb.view": "Modo de visualização",
+  "nb.welcome": "Seus cadernos",
+  "nb.welcomeText": "Escreva livremente, conecte ideias e mantenha suas notas em arquivos locais comuns. Abra uma pasta Markdown existente ou importe documentos para um novo caderno.",
+  "memory.globalMemory": "Base de conhecimento de sessões",
+  "memory.title": "Base de conhecimento",
+  "memory.add": "Organizar na base de conhecimento de sessões",
+  "memory.intro": "Organize o conhecimento por projeto e sessão. Os artigos salvos permanecem independentes das fontes e podem ser editados manualmente.",
+  "memory.entries": "Artigos de conhecimento",
   "memory.emptyJobs": "Ainda não há registros de organização.",
   "memory.jobs": "Histórico de organização",
   "memory.search": "Pesquisar títulos e conteúdo…",
-  "memory.empty": "Nenhum artigo correspondente. Adicione uma conversa para começar seu wiki.",
+  "memory.empty": "Nenhum artigo correspondente. Gere artigos a partir de uma sessão ou crie um manualmente.",
   "memory.emptyDetail": "Selecione um artigo para consultar o conteúdo, as relações e as fontes.",
   "memory.new": "Novo artigo",
   "memory.titleField": "Título",
@@ -80,18 +225,23 @@ const ptBR: typeof en = {
   "memory.restore": "Restaurar esta revisão",
   "memory.restoreConfirm": "Restaurar esta revisão como uma nova versão? A versão atual será mantida no histórico.",
   "memory.deleteConfirm": "Excluir este artigo e seu histórico? As sessões de origem serão mantidas.",
+  "memory.groupDeleteConfirm": (count: string) => `Excluir todos os ${count} artigos de conhecimento deste grupo? O projeto ou a sessão em si serão mantidos.`,
   "memory.export": "Exportar Markdown",
   "memory.selectAgent": "Agente",
   "memory.model": "Modelo (opcional)",
   "memory.modelHint": "Deixe em branco para usar o modelo configurado no agente.",
   "memory.compile": "Organizar e salvar",
-  "memory.compileHelp": "O agente selecionado organiza a conversa por temas e a integra aos artigos existentes. O texto da conversa e os artigos relevantes são enviados ao modelo pelo agente configurado.",
+  "memory.compileHelp": "O agente selecionado processará esta sessão. Ao gerar novamente, as entradas geradas anteriormente para esta sessão serão substituídas, incluindo as edições manuais. O texto da sessão será enviado ao modelo pelo agente configurado.",
   "memory.unavailable": "Não instalado ou configurado",
   "memory.allTags": "Todas as etiquetas",
   "memory.updated": "Atualização recente",
   "memory.titleSort": "Título",
   "memory.sourceNote": "Este instantâneo preserva o texto usado na organização, mesmo que a sessão original seja excluída.",
-  "memory.noKnowledge": "Nenhum conhecimento reutilizável foi encontrado; nenhum artigo foi alterado.",
+  "memory.noKnowledge": "Nenhum conhecimento reutilizável foi extraído. As entradas geradas anteriormente para esta sessão foram removidas.",
+  "memory.queued": "Aguardando início",
+  "memory.cancelling": "Cancelando",
+  "memory.schedulingHint": "Sessões diferentes podem ser processadas em paralelo. Ao enviar novamente, qualquer tarefa ainda não concluída desta sessão é cancelada e substituída pela nova.",
+  "memory.waitingHint": "Esta tarefa começará automaticamente quando a anterior desta sessão tiver parado.",
   "memory.running": "Em andamento",
   "memory.completed": "Concluído",
   "memory.failed": "Falha",
@@ -103,7 +253,6 @@ const ptBR: typeof en = {
   "memory.closeHint": "Você pode fechar esta janela durante o processamento e acompanhar o progresso no histórico de organização.",
   "memory.conflict": "Este artigo mudou durante a operação. Recarregue-o antes de tentar novamente; suas alterações não foram salvas.",
   "memory.duplicate": "Já existe um artigo com este título. Abra-o para integrar o conteúdo.",
-  "memory.busy": "Outro processamento está em andamento. Aguarde a conclusão ou cancele-o no histórico.",
   "memory.notFound": "Este artigo, fonte ou tarefa não existe mais.",
   "memory.noTranscript": "Esta sessão não tem uma conversa disponível para leitura.",
   "memory.agentUnavailable": "O agente selecionado está indisponível. Confira o caminho do executável nas configurações.",
@@ -113,7 +262,7 @@ const ptBR: typeof en = {
   "memory.interrupted": "O processamento foi interrompido. Tente novamente com o instantâneo de origem salvo.",
   "memory.tooLarge": "A fonte, o contexto ou a saída excede o tamanho compatível. Nenhum conteúdo foi truncado ou salvo.",
   "memory.invalidOutput": "O agente retornou dados estruturados inválidos. Nada foi salvo; tente novamente ou escolha outro agente.",
-  "memory.loadError": "Não foi possível carregar a memória. Confira a conexão e tente novamente.",
+  "memory.loadError": "Não foi possível carregar a base de conhecimento. Confira a conexão e tente novamente.",
   "memory.unsaved": "Descartar alterações não salvas?",
   "memory.source": "Instantâneo de origem",
 
@@ -133,6 +282,7 @@ const ptBR: typeof en = {
   "common.paste": "Colar", // Paste
   "common.selectAll": "Selecionar tudo", // Select All
   "common.copied": "Copiado", // Copied
+  "common.copyFailed": "Não foi possível copiar. Tente novamente.",
   "chat.sync.loading": "Sincronizando conversa…",
   "chat.sync.failed": "Não foi possível sincronizar. As mensagens carregadas continuam disponíveis.",
   "chat.sync.history": "Carregar mensagens anteriores",
@@ -180,6 +330,7 @@ const ptBR: typeof en = {
     `Seguir o sistema (atualmente ${resolved})`, // Follow system (currently {resolved})
   "titlebar.themeDark": "Escuro", // Dark
   "titlebar.themeLight": "Claro", // Light
+  "titlebar.gameCenter": "Central de jogos",
   "titlebar.browser": "Navegador integrado", // Built-in Browser
   "titlebar.remoteAccess": "Acesso remoto (navegador)", // Remote Access (Browser)
   "titlebar.connectRemote": "Conectar a servidor remoto", // Connect to Remote Server
@@ -192,6 +343,7 @@ const ptBR: typeof en = {
   "titlebar.clientsTitle": "Clientes conectados", // Attached clients
   "titlebar.clientUnnamed": "Cliente sem nome", // Unnamed client
   "titlebar.clientSince": (time: string) => `desde ${time}`, // since {time}
+  "titlebar.feedback": "Feedback", // Feedback
   "titlebar.share": "Compartilhar", // Share
   // ── Alt-triggered menu bar (Windows/Linux) ──
   "menubar.file": "Arquivo", // File
@@ -226,6 +378,14 @@ const ptBR: typeof en = {
   "settings.catTerminal": "Terminal", // Terminal
   "settings.catBehavior": "Comportamento", // Behavior
   "settings.catAgents": "Agentes", // Agents
+  "settings.agentDefaultsTitle": "Padrões de novas sessões",
+  "settings.referSummaryTitle": "Contexto de referências de sessão",
+  "settings.referSummaryMode": "Modo de contexto",
+  "settings.referSummaryFull": "Transcrição completa",
+  "settings.referSummaryFirst": "Resumir primeiro",
+  "settings.referSummaryAgent": "Agente de resumo",
+  "settings.referSummaryHint":
+    "Por padrão, o vrefer --ask envia a transcrição completa ao agente que responde. “Resumir primeiro” a compacta com o único agente, modelo e nível de raciocínio escolhidos aqui; a resposta final também recebe trechos relevantes do texto original.",
   "settings.permDefault": "Padrão", // Default
   "settings.permYolo": "YOLO", // YOLO
   "settings.yoloHint": (flag: string) =>
@@ -248,6 +408,9 @@ const ptBR: typeof en = {
     "ex.: ~/.local/bin/claude — vazio = buscar no PATH", // e.g. path — empty = find on PATH
   "settings.agentPathHint":
     "Quando definido, sessões deste tipo iniciam por este caminho completo em vez de procurar o comando no PATH. Útil quando o agente está instalado mas fora do PATH do shell. Preenchido automaticamente após uma instalação em um clique quando o local é detectado.", // Agent executable path hint
+  "settings.agentDefaultView": "Visão padrão", // Default view
+  "settings.agentDefaultViewHint":
+    "Visão em que as novas sessões deste agente são abertas. As sessões existentes mantêm a visão com que foram criadas.", // Agent default view hint
   "settings.appearance": "Aparência", // Appearance
   "settings.accent": "Destaque", // Accent
   "settings.accentAuto": "Seguir o tema", // Follow theme
@@ -265,8 +428,6 @@ const ptBR: typeof en = {
   "settings.navTree": "Árvore", // Tree
   "settings.navCompact": "Compacta", // Compact
   "settings.tabs": "Abas", // Tabs
-  "settings.defaultSessionEngine": "Visão padrão das novas sessões",
-  "settings.defaultSessionEngineHint": "Sessões existentes mantêm a visão com que foram criadas.",
   "settings.dynamicStatusFilter": "Inclusão dinâmica no filtro de status",
   "settings.tabSingle": "Única", // Single
   "settings.tabMulti": "Múltiplas", // Multi
@@ -289,39 +450,66 @@ const ptBR: typeof en = {
     "Escolha o que será inserido ao colar uma imagem (apenas desktop local). Colar caminho do arquivo: salva a imagem temporariamente e insere o caminho no Claude ou Codex. Colagem nativa: deixa o Claude ou Codex ler a área de transferência do sistema e mostrar seu próprio marcador de imagem.",
   "settings.imagePasteRemoteHint":
     "Sessões remotas sempre colam o caminho do arquivo para que o agente leia a imagem em sua própria máquina. A colagem nativa está disponível apenas no desktop local.",
-  "spawn.title": "Start spawned session?", // Start spawned session?
-  "spawn.fromSession": "From", // From
-  "spawn.promptLabel": "Prompt", // Prompt
-  "spawn.agentLabel": "Agent", // Agent
-  "spawn.worktreeLabel": "Separate git worktree", // Separate git worktree
-  "spawn.modelLabel": "Modelo", // Model
-  "spawn.effortLabel": "Esforço", // Effort
-  "spawn.modelDefault": "Padrão", // Default
-  "spawn.modelLoading": "Carregando modelos…", // Listing models…
-  "spawn.modelListUnavailable":
-    "Sem lista de modelos — digite um identificador acima", // No model list available — type an identifier above
-  "spawn.launch": "Launch", // Launch
-  "spawn.remaining": (n: number) => `${n} more pending`, // ${n} more pending
-  "spawn.notifyTitle": "Spawn session awaiting confirmation", // Spawn session awaiting confirmation
-  "orch.title": "Iniciar estes agentes?",
-  "orch.notifyTitle": "Orquestração aguardando confirmação",
-  "orch.coordinatorName": "Progresso",
+  "spawn.title": "Iniciar sessão filha",
+  "spawn.fromSession": "Sessão solicitante",
+  "spawn.promptLabel": "Instruções da tarefa",
+  "spawn.agentLabel": "Tipo de sessão",
+  "spawn.worktreeLabel": "Worktree separado",
+  "spawn.modelLabel": "Modelo",
+  "spawn.effortLabel": "Esforço de raciocínio",
+  "spawn.modelDefault": "Padrão do agente",
+  "spawn.modelLoading": "Carregando modelos…",
+  "spawn.modelListUnavailable": "Lista indisponível. Você pode inserir um identificador.",
+  "spawn.launch": "Iniciar sessão",
+  "spawn.remaining": (n: number) => `Mais ${n} solicitações para revisar`,
+  "spawn.notifyTitle": "Sessão filha aguardando confirmação",
+  "orch.title": "Iniciar várias sessões",
+  "orch.notifyTitle": "Início de sessões aguardando confirmação",
+  "orch.coordinatorName": "Estado das sessões",
   "orch.sharedSettings": "Configurações comuns",
   "orch.agentLabel": "Agente",
   "orch.modelLabel": "Modelo",
-  "orch.effortLabel": "Esforço",
-  "orch.nameLabel": "Nome",
-  "orch.promptLabel": "Tarefa",
-  "orch.worktreeLabel": "Worktree",
-  "orch.worktreeNone": "Usar o diretório atual",
-  "orch.worktreeShared": "Um worktree compartilhado",
-  "orch.worktreeEach": "Um worktree para cada",
-  "orch.follow": "Seguir as configurações comuns",
-  "orch.overridden": "alterado",
-  "orch.remove": "Remover",
-  "orch.launch": (n: number) => `Iniciar ${n}`,
-  "orch.modelPlaceholder": "padrão do agente",
-  "orch.effortPlaceholder": "padrão do agente",
+  "orch.effortLabel": "Esforço de raciocínio",
+  "orch.nameLabel": "Nome da sessão",
+  "orch.promptLabel": "Instruções da tarefa",
+  "orch.worktreeLabel": "Worktree do Git",
+  "orch.worktreeNone": "Diretório atual",
+  "orch.worktreeShared": "Worktree compartilhado",
+  "orch.worktreeEach": "Um worktree por sessão",
+  "orch.follow": "Usar configurações comuns",
+  "orch.overridden": "Configurações individuais",
+  "orch.remove": "Remover tarefa",
+  "orch.launch": (n: number) => `Iniciar ${n} sessões`,
+  "orch.modelPlaceholder": "Padrão do agente",
+  "orch.effortPlaceholder": "Padrão do agente",
+  "launch.terminalHint": "Um terminal comum abre o diretório de trabalho. As instruções da tarefa não são executadas automaticamente.",
+  "launch.optionsError": "Não foi possível carregar as opções. Tente novamente antes de iniciar.",
+  "launch.singleIntro": "Revise a tarefa e as configurações antes de iniciar uma sessão filha.",
+  "launch.taskHint": "Estas instruções serão a primeira mensagem enviada à sessão filha.",
+  "launch.runtime": "Configurações de execução",
+  "launch.directory": "Diretório de trabalho",
+  "launch.directoryCurrentHint": "As sessões editam arquivos no diretório original.",
+  "launch.directorySharedHint": "Todas as sessões usam o mesmo novo diretório e a mesma branch.",
+  "launch.directoryEachHint": "Cada sessão tem seu próprio diretório e sua própria branch.",
+  "launch.worktreeHint": "Os worktrees partem do commit atual, sem alterações não commitadas. Se a criação falhar, será usado o diretório original.",
+  "launch.singleResult": "A sessão filha aparece abaixo da sessão de origem na barra lateral.",
+  "launch.startError": "Não foi possível iniciar. Verifique as configurações e tente novamente.",
+  "launch.starting": "Iniciando…",
+  "launch.batchIntro": "Revise as configurações comuns e selecione cada tarefa para editar suas instruções.",
+  "launch.sessionCount": (n: number) => `Sessões: ${n}`,
+  "launch.batchName": "Nome do grupo de tarefas",
+  "launch.sharedHint": "Aplica-se às sessões sem configurações individuais.",
+  "launch.tasks": "Tarefas",
+  "launch.incomplete": "Faltam informações",
+  "launch.undoRemove": "Desfazer remoção",
+  "launch.taskNumber": (n: number) => `Tarefa ${n}`,
+  "launch.taskSettings": "Configurações desta sessão",
+  "launch.taskAgent": "Agente desta sessão",
+  "launch.sharedDirectoryLocked": "Todas as sessões deste grupo usam um único worktree compartilhado.",
+  "launch.resetSettings": "Restaurar configurações comuns",
+  "launch.monitorHint": "O terminal “Estado das sessões” mostra quais sessões estão trabalhando ou aguardando entrada. Ele não indica a porcentagem de conclusão das tarefas.",
+  "launch.taskIncomplete": (n: number) => `Preencha o nome e as instruções da tarefa ${n}.`,
+  "launch.batchResult": "Cada tarefa inicia uma sessão interativa independente.",
   "tree.worktreeMenu": "Worktree",
   "tree.gitMenu": "Git",
   "tree.viewChanges": "Ver alterações…",
@@ -432,7 +620,8 @@ const ptBR: typeof en = {
   "settings.chatLineHeight": "Altura da linha da conversa",
   "settings.fontDefault": "Default", // TODO translate
   "settings.fontCustom": "Custom…", // TODO translate
-  "settings.fontUnavailable": "Não instalada neste dispositivo",
+  "settings.fontListUnavailable": "Não foi possível obter a lista de fontes do sistema. Você pode digitar o nome de uma fonte manualmente.",
+  "settings.fontUnconfirmed": "Não foi possível confirmar se esta fonte está disponível.",
   "settings.fontAuto": "Auto", // TODO translate
   "settings.fontSmaller": "Smaller", // TODO translate
   "settings.fontLarger": "Larger", // TODO translate
@@ -597,6 +786,7 @@ const ptBR: typeof en = {
   "info.recentCommits": "Commits recentes", // Recent Commits
   "info.noCommits": "Sem commits", // No commits
   "tree.killProcess": "Encerrar processo", // Kill Process
+  "tree.killProcessConfirm": (name: string) => `Encerrar o processo de “${name}”? A tarefa atual será interrompida. O histórico da conversa e os arquivos salvos serão mantidos.`,
   "tree.archiveSession": "Arquivar sessão", // Archive Session
   "tree.archiveGroup": "Arquivar grupo", // Archive Group
   // Temporary (draft) sessions
@@ -970,7 +1160,11 @@ const ptBR: typeof en = {
 
   // ── Document tabs ──
   "doc.wysiwyg": "WYSIWYG", // WYSIWYG
-  "doc.source": "Código", // Source
+  "doc.visual": "Visual",
+  "doc.source": "Código-fonte",
+  "doc.compare": "Comparação",
+  "doc.editorLoadFailed": "Não foi possível carregar o editor Markdown.",
+  "doc.imageOnly": "Só é possível inserir arquivos de imagem aqui.",
   "doc.searchPlaceholder": "Localizar", // Find
   "doc.searchReplacePlaceholder": "Substituir", // Replace
   "doc.searchReplace": "Substituir", // Replace
@@ -1021,6 +1215,8 @@ const ptBR: typeof en = {
 
   // ── Right information panel ──
   "panel.noSession": "Nenhuma sessão selecionada", // No session selected
+  "panel.collapseSection": "Recolher seção", // Collapse section
+  "panel.expandSection": "Expandir seção", // Collapse section
   "panel.openInEditor": "Abrir no editor", // Open in Editor
   "panel.openInEditorTooltip":
     "Abrir no editor de documentos do painel central (igual ao comando view)", // Open in the document editor…
@@ -1111,6 +1307,9 @@ const ptBR: typeof en = {
   "transport.imgUploadHttp": (status) => `Falha no envio da imagem (${status})`, // Image upload failed ({status})
 
   // ── Login gate, directory selection, and connection banner ──
+  "login.showPassword": "Mostrar",
+  "login.hidePassword": "Ocultar",
+  "login.passwordSaveFailed": "Conexão estabelecida, mas não foi possível salvar a senha neste dispositivo. Tente novamente.",
   "login.connecting": "Conectando…", // Connecting…
   "login.remoteAccess": "Acesso remoto", // Remote Access
   "login.desc": "Digite a senha de acesso para se conectar a este terminal.", // Enter the access password to connect to this terminal.
@@ -1154,6 +1353,31 @@ const ptBR: typeof en = {
   "errlog.close": "Fechar", // Close
 
   // ── Mobile ──
+  "mobile.backConnections": "Voltar às conexões",
+  "mobile.loadSlow": "O carregamento está demorando mais que o esperado. Você pode tentar novamente ou voltar às suas conexões.",
+  "mobile.connectionUnavailable": "Conexão indisponível",
+  "mobile.pushTitle": "Notificações de tarefas",
+  "mobile.pushHint": "As notificações mostram o nome da sessão e uma breve prévia da resposta, inclusive em segundo plano ou com a tela bloqueada. Esse texto é enviado ao velaterm.com e ao serviço de notificações push. Senhas de conexão e chaves privadas SSH não são enviadas.",
+  "mobile.pushEnable": "Ativar notificações",
+  "mobile.pushDisable": "Desativar notificações",
+  "mobile.pushTest": "Enviar notificação de teste",
+  "mobile.pushTestSent": "A notificação de teste foi adicionada à fila. Confira a central de notificações do sistema.",
+  "mobile.pushDisabled": "As notificações em segundo plano estão desativadas.",
+  "mobile.pushEnabled": "As notificações em segundo plano estão ativadas.",
+  "mobile.pushNotConfigured": "Esta compilação não tem um serviço de notificações push configurado.",
+  "mobile.pushDenied": "Permita as notificações nas configurações do sistema.",
+  "mobile.pushRegistrationFailed": "Não foi possível registrar o dispositivo. Tente novamente.",
+  "mobile.pushRelayUnavailable": "O serviço de notificações está indisponível. Tente novamente.",
+  "mobile.pushHostUnavailable": "O servidor remoto ainda não ativou as notificações em segundo plano. Atualize-o e conecte-se novamente.",
+  "mobile.pushDisclosure": "As notificações em segundo plano usam o Getui e o serviço push do fabricante do dispositivo. Para entregá-las, esses serviços processam identificadores do dispositivo, informações de rede, nomes de sessões e breves prévias das respostas. Senhas de conexão e chaves privadas SSH não são enviadas.",
+  "mobile.pushConnectHint": "Após ativar as notificações, abra cada conexão uma vez para concluir a inscrição.",
+  "mobile.pushTarget": "Conexão de teste",
+  "mobile.copyConnection": "Copiar e editar",
+  "mobile.copyConnectionHint": "Edite as configurações a partir desta conexão. As credenciais salvas são mantidas com segurança. A conexão original permanece inalterada; se as configurações forem idênticas, a conexão existente será mantida.",
+  "mobile.copyConnectionReused": "Estas configurações já estão salvas. A conexão existente foi mantida.",
+  "mobile.inputOptions": "Opções da mensagem",
+  "mobile.connections": "Gerenciar conexões",
+  "mobile.more": "Mais ações",
   "mobile.toDesktop": "Mudar para a versão desktop", // Switch to desktop
   "mobile.empty1": "Nenhuma sessão.", // No sessions.
   "mobile.noMatch": "Nenhuma sessão correspondente", // No matching sessions
@@ -1266,6 +1490,7 @@ const ptBR: typeof en = {
   "session.switchTitle": "Trocar de visão reinicia o agente",
   "session.switchBody": "O turno em andamento será interrompido. A conversa é preservada.",
   "session.switchConfirm": "Trocar",
+  "session.terminalViewHint": "Clique aqui para voltar à visão de terminal.",
   "session.loading": "Lendo a conversa…",
   "session.unavailable": "Esta conversa ainda não pode ser lida",
   "session.working": "Trabalhando…",
@@ -1298,13 +1523,43 @@ const ptBR: typeof en = {
   "chat.collaborationMode.plan": "Planejamento",
   "chat.collaborationMode.planHint":
     "Analisa a tarefa e prepara um plano; as perguntas podem usar cartões interativos",
+  "chat.moreOptions": "Mais",
   "chat.modelTooltip": "Modelo",
   "chat.keepChoice": "Definir como padrão",
   "chat.keepChoiceFor": (model) => `Definir como padrão para ${model}`,
+  "chat.followModelDefault": (agent: string) => `Usar o modelo padrão do ${agent}`,
+  "chat.followModelDefaultHint": "Usa o modelo definido nas configurações do agente.",
+  "chat.savedModelDefault": "Padrão do aplicativo",
+  "chat.catalogWebsite": "Catálogo de modelos do site",
+  "chat.catalogCache": "Catálogo de modelos em cache",
+  "chat.catalogBundled": "Catálogo de modelos incluído",
+  "chat.catalogChecked": (time: string) => `Última verificação: ${time}`,
+  "chat.catalogFailed": "Falha na atualização. O catálogo anterior continua disponível.",
+  "chat.catalogRefresh": "Atualizar",
   "chat.modelDefault": "Modelo padrão",
   "chat.mode.default": "Sempre perguntar",
+  "chat.mode.agentDefault": "Padrão do agente",
   "chat.mode.acceptEdits": "Aceitar edições",
   "chat.mode.plan": "Modo plano",
+  "chat.permissionRestart.unconfirmed": "A conexão foi perdida. Não foi possível confirmar a alteração de permissão. Reconecte-se para verificar as permissões atuais da sessão.",
+  "permission.stateUnavailable": "Estado das permissões indisponível",
+  "permission.currentUnknown": "Permissões atuais não confirmadas",
+  "permission.notRunning": "Não está em execução",
+  "permission.launch": (mode: string) => "Configuração de inicialização: " + mode,
+  "permission.unconfirmedHint": "As permissões atuais ainda não foram confirmadas. Argumentos personalizados ou alterações dentro do agente podem afetar a aplicação das configurações de inicialização.",
+  "permission.applied": "Aplicado",
+  "permission.nextTurn": "Aplica-se à próxima mensagem",
+  "permission.restart": "Aplica-se após reiniciar esta sessão",
+  "permission.nextStart": "Na próxima inicialização",
+  "permission.defaultHint": "Permissão padrão para novas sessões. As sessões existentes mantêm suas próprias configurações de permissão.",
+  "chat.permissionRestart.title": "Reiniciar para ignorar as confirmações?",
+  "chat.permissionRestart.body": "O Claude precisa reiniciar para ignorar as confirmações. A resposta atual será interrompida, e o histórico da conversa será mantido. Após a alteração, as confirmações de permissão serão ignoradas.",
+  "chat.permissionRestart.confirm": "Reiniciar e aplicar",
+  "chat.permissionRestart.busy": "Reiniciando…",
+  "chat.permissionRestart.failed": (detail: string) => "Não foi possível alterar a permissão. O modo anterior foi mantido. " + detail,
+  "chat.permissionRestart.tasks": "Processe ou remova as mensagens na fila e interrompa as tarefas em segundo plano antes de reiniciar.",
+  "chat.permissionRestart.stale": "O processo da sessão mudou. Selecione “Sem perguntar” novamente.",
+  "chat.permissionRestart.noHistory": "Ainda não é possível retomar esta conversa. Aguarde a conclusão da inicialização e tente novamente.",
   "chat.mode.bypassPermissions": "Sem perguntar",
   "chat.mode.readOnly": "Somente leitura",
   "chat.mode.fullAccess": "Acesso total",
@@ -1354,6 +1609,7 @@ const ptBR: typeof en = {
   "chat.placeholderBusy": "Digite uma mensagem; ela será enviada quando este turno terminar",
   "chat.queueTooltip": (combo: string) => `Será enviada quando este turno terminar · ${combo} envia agora`,
   "chat.queue.pending": "Mensagens pendentes",
+  "chat.queue.view": "Ver mensagem completa",
   "chat.queue.edit": "Editar",
   "chat.queue.remove": "Remover",
 
@@ -1370,6 +1626,12 @@ const ptBR: typeof en = {
   // N steps
   "chat.subagent.steps": (n: number) => (n === 1 ? "1 passo" : `${n} passos`),
   "chat.subagent.tokens": (tokens: string) => `${tokens} tokens`,
+  "chat.rewind.edit": "Editar",
+  "chat.rewind.editSend": "Revisar e reenviar",
+  "chat.rewind.editConfirm": "Excluir e reenviar",
+  "chat.rewind.editWarning": "A mensagem original e todas as mensagens posteriores serão excluídas permanentemente. A mensagem editada será enviada a partir deste ponto. As alterações nos arquivos não serão desfeitas.",
+  "chat.rewind.inactive": "O processo da conversa não está em execução. Estas ações estarão disponíveis após a inicialização.",
+  "chat.rewind.unsupported": "O agente conectado não oferece esta ação no momento.",
   "chat.rewind.title": "Voltar para este ponto",
   "chat.rewind.warning": "Esta ação não pode ser desfeita.",
   "chat.rewind.conversation": "Reverter conversa",
@@ -1424,6 +1686,45 @@ const ptBR: typeof en = {
   "chat.fastMode.label": "Rápido",
   "chat.fastMode.on": "O modo rápido está ativado",
   "chat.fastMode.off": "O modo rápido está desativado",
+  "chat.auth.login": "Entrar",
+  "chat.auth.logout": "Sair",
+  "chat.auth.confirmLogout": "Confirmar saída",
+  "chat.auth.logoutConfirm": (provider: string) => `Sair do ${provider} neste host? As credenciais compartilhadas serão removidas, o que afetará outras sessões que as utilizam. O histórico das conversas será mantido.`,
+  "chat.auth.signingOut": "Saindo…",
+  "chat.auth.signedOut": (provider: string) => `Você saiu do ${provider}. Entre para continuar esta conversa.`,
+  "chat.auth.logoutFailed": "Não foi possível confirmar a saída. Tente novamente.",
+  "chat.auth.wait": "Aguarde a conclusão da tarefa atual antes de trocar de conta.",
+  "chat.auth.title": (provider: string) => `Conta do ${provider}`,
+  "chat.auth.start": "Entrar novamente",
+  "chat.auth.required": (provider: string) => `Seu login no ${provider} não é mais válido. Entre novamente para continuar.`,
+  "chat.auth.starting": "Preparando o login…",
+  "chat.auth.pending": "Abra a página de autorização e insira este código. Esta tela será atualizada quando o login for concluído.",
+  "chat.auth.success": "Login realizado. Você pode enviar uma mensagem para continuar esta conversa.",
+  "chat.auth.failed": "Não foi possível concluir o login. Tente novamente. Verifique se a autenticação por código de dispositivo está ativada no ChatGPT e se sua versão do Codex CLI oferece suporte a ela.",
+  "chat.auth.canceled": "Login cancelado. Você pode tentar novamente a qualquer momento.",
+  "chat.auth.scope": (provider: string) => `O login atualiza a conta do ${provider} usada neste host. Outras sessões que compartilham estas credenciais também usarão essa conta.`,
+  "chat.auth.canceling": "Cancelando o login…",
+  "chat.auth.submitting": "Verificando o código de autorização…",
+  "chat.auth.claude.pending": "Abra a página de autorização, entre na sua conta e cole o código completo exibido.",
+  "chat.auth.claude.failed": "Não foi possível concluir o login. Tente novamente e verifique se sua versão do Claude CLI oferece suporte à autorização de contas.",
+  "chat.auth.claude.code": "Código de autorização",
+  "chat.auth.claude.submit": "Enviar código",
+  "chat.auth.claude.invalidCode": "Cole o código completo desta tentativa de autorização, incluindo a parte após #.",
+  "chat.auth.claude.externalAuth": "As chaves de API e os outros métodos de autenticação configurados não serão alterados.",
+  "chat.auth.open": "Abrir página de autorização",
+  "chat.resetCredits.label": (n: string) => `Créditos de redefinição: ${n}`,
+  "chat.resetCredits.title": "Créditos para redefinir os limites do Codex",
+  "chat.resetCredits.unknown": "Não foi possível obter a quantidade de créditos de redefinição.",
+  "chat.resetCredits.confirm": "Usar um crédito para redefinir os limites de uso elegíveis do Codex. Esta ação não pode ser desfeita.",
+  "chat.resetCredits.reset": "Limites de uso redefinidos.",
+  "chat.resetCredits.alreadyRedeemed": "Esta solicitação já foi concluída com sucesso.",
+  "chat.resetCredits.nothingToReset": "Nenhum limite de uso está elegível para redefinição.",
+  "chat.resetCredits.noCredit": "Nenhum crédito de redefinição disponível.",
+  "chat.resetCredits.error": "A solicitação falhou ou o saldo atual está indisponível. Atualize o saldo ou tente novamente a redefinição pendente.",
+  "chat.resetCredits.busy": "Processando…",
+  "chat.resetCredits.retry": "Tentar redefinição novamente",
+  "chat.resetCredits.use": "Usar um crédito",
+  "chat.resetCredits.refresh": "Atualizar",
   "chat.usage.context": (used: string, max: string, pct: number) =>
     `Contexto: ${used} de ${max} tokens (${pct}%)`,
   "chat.usage.cost": (usd: string) => `Custo da sessão: $${usd}`,
@@ -1453,6 +1754,14 @@ const ptBR: typeof en = {
   "chat.retry.line": (attempt: number, max: number, seconds: number, message: string) =>
     `Nova tentativa (${attempt}/${max}) em ${seconds} s: ${message}`,
   "chat.notify.dismiss": "Fechar",
+  "settings.completionMode": "Sugestões de comandos",
+  "settings.completionAuto": "Automáticas",
+  "settings.completionTab": "Com Tab",
+  "settings.completionOff": "Desativadas",
+  "settings.completionUnavailable": "Não foi possível carregar ou salvar as configurações.",
+  "settings.completionHint": "Aplica-se a novos terminais Zsh, Bash 4+, Fish e PowerShell. O CMD mantém o comportamento padrão de Tab. Tab insere a sugestão selecionada; Enter executa o comando atual sem aplicar sugestões.",
+
+
 };
 
 export default ptBR;

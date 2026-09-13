@@ -80,7 +80,7 @@ export function ArchivePanel() {
       >
         <Icons.restart size={13} />
       </button>
-      <MemoryLink route={`compile/${s.id}`} className="icon-btn sm" title={`${t("memory.add")} · ${t("common.experimental")}`} aria-label={t("memory.add")} onClick={(e) => { e.stopPropagation(); if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) close(); }}><MemoryIcon size={13} /></MemoryLink>
+      <MemoryLink route={`compile/${s.id}`} className="icon-btn sm" title={t("memory.add")} aria-label={t("memory.add")} onClick={(e) => { e.stopPropagation(); if (!e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) close(); }}><MemoryIcon size={13} /></MemoryLink>
       {canExportContext(s) && (
         <button
           className="icon-btn sm"

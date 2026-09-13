@@ -110,28 +110,34 @@ pub struct ClaudeModel {
     pub supports_fast_mode: bool,
 }
 
-/// The catalogue as the running agent reports it through `list_models`, in the agent's own order.
+/// Merge live model capabilities into the complete curated catalogue.
 ///
-/// Its `default` row names no model of its own, so it is dropped: the menu already has a default entry.
+/// The live picker is a shortlist, not an exhaustive availability list. Omitted models remain selectable.
+/// Its `default` row is omitted because the menu already offers the agent default.
 /// The context window is not part of the answer, so it is borrowed from the curated table where the id
 /// matches, and left unknown otherwise.
 pub fn from_live(models: &[serde_json::Value]) -> Vec<ClaudeModel> {
     let curated = list();
-    models
+    let live: Vec<ClaudeModel> = models
         .iter()
         .filter_map(|m| {
             let value = m.get("value").and_then(serde_json::Value::as_str)?;
-            if value == "default" || m.get("disabled").and_then(serde_json::Value::as_bool) == Some(true) {
+            if value == "default"
+                || m.get("disabled").and_then(serde_json::Value::as_bool) == Some(true)
+            {
                 return None;
             }
-            let id = normalize_id(value).to_string();
+            let resolved = m.get("resolvedModel").and_then(Value::as_str).unwrap_or(value);
+            let id = normalize_id(resolved).to_string();
             let known = curated.iter().find(|c| c.id == id);
-            let label = m
-                .get("displayName")
-                .and_then(serde_json::Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_string)
-                .or_else(|| known.map(|c| c.label.clone()))
+            let label = known
+                .map(|c| c.label.clone())
+                .or_else(|| {
+                    m.get("displayName")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                        .map(str::to_string)
+                })
                 .unwrap_or_else(|| id.clone());
             let description = m
                 .get("description")
@@ -166,7 +172,26 @@ pub fn from_live(models: &[serde_json::Value]) -> Vec<ClaudeModel> {
                 effort_levels,
             })
         })
-        .collect()
+        .collect();
+    let mut merged = curated;
+    for model in live {
+        if let Some(existing) = merged.iter_mut().find(|entry| entry.id == model.id) {
+            *existing = model;
+        } else {
+            merged.push(model);
+        }
+    }
+    // An explicit refusal takes precedence; omission from the shortlist does not.
+    merged.retain(|entry| {
+        !models.iter().any(|model| {
+            model.get("disabled").and_then(Value::as_bool) == Some(true)
+                && model
+                    .get("resolvedModel").or_else(|| model.get("value"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| normalize_id(id) == entry.id)
+        })
+    });
+    merged
 }
 
 /// The curated table, in the order the menu shows it: newest first, each family's 1M variant beside it.
@@ -313,6 +338,7 @@ fn list_with_version(version: Option<(u32, u32, u32)>) -> Vec<ClaudeModel> {
             supports_fast_mode: false,
         })
         .collect();
+    if let Some(remote) = super::remote_model_catalog::models(version) { out = remote; }
     for (id, origin) in settings_models() {
         let id = normalize_id(&id).to_string();
         if out.iter().any(|m| m.id == id) {
@@ -462,21 +488,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn live_catalogue_drops_the_default_row_and_borrows_known_windows() {
+    fn live_shortlist_preserves_complete_catalogue_and_updates_capabilities() {
         let live = vec![
             serde_json::json!({"value":"default","displayName":"Default (recommended)"}),
-            serde_json::json!({"value":"claude-opus-5","displayName":"Opus 5","description":"Best","supportedEffortLevels":["low","high"],"supportsFastMode":true}),
+            serde_json::json!({"value":"claude-opus-5","displayName":"Opus (1M context)","description":"Best","supportedEffortLevels":["low","high"],"supportsFastMode":true}),
             serde_json::json!({"value":"gateway-x","displayName":"Gateway","disabled":true}),
             serde_json::json!({"value":"gateway-y","displayName":"Gateway Y"}),
         ];
         let models = from_live(&live);
-        assert_eq!(models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["claude-opus-5", "gateway-y"]);
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-6[1m]"));
+        assert!(models.iter().any(|m| m.id == "claude-fable-5-1"));
+        assert!(!models
+            .iter()
+            .any(|m| m.id == "default" || m.id == "gateway-x"));
+        assert_eq!(models.iter().filter(|m| m.id == "claude-opus-5").count(), 1);
         assert_eq!(models[0].label, "Opus 5");
         assert_eq!(models[0].effort_levels, vec!["low", "high"]);
         assert!(models[0].supports_fast_mode);
-        assert!(models[0].context_window.is_some(), "borrowed from the curated table");
-        assert!(!models[1].curated);
-        assert!(models[1].context_window.is_none());
+        assert!(
+            models[0].context_window.is_some(),
+            "borrowed from the curated table"
+        );
+        let gateway = models.iter().find(|m| m.id == "gateway-y").unwrap();
+        assert!(!gateway.curated);
+        assert!(gateway.context_window.is_none());
+        let disabled =
+            from_live(&[serde_json::json!({"value":"claude-sonnet-4-6","disabled":true})]);
+        assert!(!disabled.iter().any(|m| m.id == "claude-sonnet-4-6"));
+        assert!(disabled.iter().any(|m| m.id == "claude-sonnet-4-6[1m]"));
+        for entry in MANIFEST {
+            if accepts(entry, installed_version()) {
+                assert!(
+                    models.iter().any(|m| m.id == entry.id),
+                    "missing {}",
+                    entry.id
+                );
+            }
+        }
     }
 
     #[test]
@@ -538,5 +587,19 @@ mod tests {
         let ids: Vec<&str> = MANIFEST.iter().map(|e| e.id).collect();
         assert!(ids.contains(&"claude-opus-4-6"));
         assert!(ids.contains(&"claude-opus-4-6[1m]"));
+    }
+
+    #[test]
+    fn live_alias_uses_the_resolved_version_without_removing_other_versions() {
+        let models = from_live(&[serde_json::json!({
+            "value": "opus", "resolvedModel": "test-future-opus",
+            "displayName": "Future Opus", "supportsFastMode": true
+        })]);
+        assert!(models.iter().any(|m| m.id == "test-future-opus" && m.supports_fast_mode));
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-6"));
+        let disabled = from_live(&[serde_json::json!({
+            "value": "opus", "resolvedModel": "claude-opus-4-6", "disabled": true
+        })]);
+        assert!(!disabled.iter().any(|m| m.id == "claude-opus-4-6"));
     }
 }

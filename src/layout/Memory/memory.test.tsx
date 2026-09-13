@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { setLang } from "../../i18n";
+import { MemoryLibrary } from "./MemoryLibrary";
+import { MemoryDirectory } from "./MemoryDirectory";
 import { MemoryEditor } from "./MemoryDocument";
 import { MemoryCompile } from "./MemoryTasks";
 import { MemoryTab } from "./MemoryTab";
@@ -9,23 +11,34 @@ import { MemoryRoute } from "./MemoryRoute";
 import { MemoryMarkdown } from "./shared";
 import { memoryNavigate, memoryUrl } from "./navigation";
 
-const api = vi.hoisted(() => ({ get: vi.fn(), options: vi.fn(), save: vi.fn(), start: vi.fn(), models: vi.fn() }));
+const api = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), options: vi.fn(), save: vi.fn(), start: vi.fn(), models: vi.fn() }));
 vi.mock("../../ipc/memory", () => ({
-  memoryList: vi.fn().mockResolvedValue({ entries: [], tags: [], total: 0, pageSize: 20 }),
+  memoryList: api.list,
   memoryModels: api.models, memoryGet: api.get, memoryOptions: api.options, memorySave: api.save, memoryStart: api.start,
   memoryDelete: vi.fn(), memoryRestore: vi.fn(), memorySource: vi.fn(), memoryJobs: vi.fn(), memoryCancel: vi.fn(), memoryRetry: vi.fn(),
 }));
-vi.mock("../../store/termStore", () => ({ useTermStore: (select: (s: unknown) => unknown) => select({ sessions: [{ id: "session", name: "Source conversation" }], archivedSessions: [] }) }));
+const store = vi.hoisted(() => ({
+  memoryPrefs: {} as { agent?: string; model?: string; effort?: string },
+  setMemoryPrefs: vi.fn(),
+}));
+vi.mock("../../store/termStore", () => ({
+  useTermStore: Object.assign(
+    (select: (s: unknown) => unknown) => select({ sessions: [{ id: "session", name: "Source conversation" }], archivedSessions: [] }),
+    { getState: () => store },
+  ),
+}));
 
 beforeEach(() => {
   setLang("en"); window.history.replaceState(null, "", "/?memory=library");
+  store.memoryPrefs = {}; store.setMemoryPrefs.mockReset();
+  api.list.mockReset().mockResolvedValue({ projects: [], selectedSessionId: null, entries: [], tags: [], total: 0, pageSize: 40 });
   api.get.mockReset(); api.options.mockReset(); api.save.mockReset(); api.start.mockReset(); api.models.mockReset();
   api.models.mockResolvedValue([{ id: "chosen-model", label: "Chosen model", effortLevels: ["low", "high"] }, { id: "simple-model", label: "Simple model", effortLevels: [] }]);
   api.options.mockResolvedValue({ agents: [{ id: "claude", label: "Claude", available: true }, { id: "codex", label: "Codex", available: true }], defaultAgent: "codex", catalog: [] });
 });
 afterEach(cleanup);
 
-describe("Global Memory interactions", () => {
+describe("Knowledge Base interactions", () => {
   it.each(["tauri://localhost", "tauri://localhost/"])("builds an explicit close URL for %s", (base) => {
     vi.stubGlobal("window", { location: { href: `${base}?memory=library&memoryQuery=test` } });
     try {
@@ -56,7 +69,7 @@ describe("Global Memory interactions", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
     fireEvent.change(await screen.findByLabelText("Model (optional)"), { target: { value: "chosen-model" } });
     fireEvent.change(screen.getByLabelText("Thinking effort"), { target: { value: "high" } });
-    fireEvent.click(screen.getByRole("button", { name: "Compile and save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Organize and save" }));
     await waitFor(() => expect(api.start).toHaveBeenCalledWith("session", "claude", "chosen-model", "high"));
     await waitFor(() => expect(new URLSearchParams(location.search).get("memory")).toBe("job/job-1"));
   });
@@ -76,11 +89,40 @@ describe("Global Memory interactions", () => {
     expect((screen.getByLabelText("Thinking effort") as HTMLSelectElement).value).toBe("");
   });
 
+  it("restores the remembered agent, model and effort on reopen", async () => {
+    store.memoryPrefs = { agent: "claude", model: "chosen-model", effort: "high" };
+    render(<MemoryCompile sessionId="session" />);
+    const claude = await screen.findByRole("radio", { name: "Claude" }) as HTMLInputElement;
+    await waitFor(() => expect(claude.checked).toBe(true));
+    await waitFor(() => expect((screen.getByLabelText("Model (optional)") as HTMLSelectElement).value).toBe("chosen-model"));
+    expect((screen.getByLabelText("Thinking effort") as HTMLSelectElement).value).toBe("high");
+  });
+
+  it("remembers each selection for the next visit", async () => {
+    render(<MemoryCompile sessionId="session" />);
+    await screen.findByLabelText("Model (optional)");
+    fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
+    expect(store.setMemoryPrefs).toHaveBeenCalledWith({ agent: "claude", model: null, effort: null });
+    fireEvent.change(await screen.findByLabelText("Model (optional)"), { target: { value: "chosen-model" } });
+    expect(store.setMemoryPrefs).toHaveBeenCalledWith({ model: "chosen-model", effort: null });
+    fireEvent.change(screen.getByLabelText("Thinking effort"), { target: { value: "high" } });
+    expect(store.setMemoryPrefs).toHaveBeenCalledWith({ effort: "high" });
+  });
+
+  it("falls back to the backend default when the remembered agent is no longer available", async () => {
+    store.memoryPrefs = { agent: "claude", model: "chosen-model", effort: "high" };
+    api.options.mockResolvedValue({ agents: [{ id: "claude", label: "Claude", available: false }, { id: "codex", label: "Codex", available: true }], defaultAgent: "codex", catalog: [] });
+    render(<MemoryCompile sessionId="session" />);
+    const codex = await screen.findByRole("radio", { name: "Codex" }) as HTMLInputElement;
+    await waitFor(() => expect(codex.checked).toBe(true));
+    await waitFor(() => expect((screen.getByLabelText("Model (optional)") as HTMLSelectElement).value).toBe(""));
+  });
+
   it("blocks compilation after a catalogue failure and retries without submitting", async () => {
     api.models.mockRejectedValueOnce(new Error("memory_models_unavailable"));
     render(<MemoryCompile sessionId="session" />);
     await screen.findByRole("alert");
-    expect((screen.getByRole("button", { name: "Compile and save" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Organize and save" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByLabelText("Model (optional)");
     expect(api.start).not.toHaveBeenCalled();
@@ -123,4 +165,70 @@ describe("Global Memory interactions", () => {
     expect(params.get("memory")).toBe("source/source-id");expect(params.get("memoryQuery")).toBe("中文搜索");
     expect(params.get("memoryTag")).toBe("技术");expect(params.get("memoryPage")).toBe("2");
   });
+});
+
+it("navigates project and session groups through shareable URLs and loads scoped entries", async () => {
+  api.list.mockImplementation(async (args) => ({
+    projects: [{ id: "project", name: "Project A", kind: "project", count: 1, sessions: [{ id: "session", name: "Session A", kind: "session", count: 1 }] }],
+    selectedSessionId: args.sessionId ?? null, total: 1, pageSize: 40, tags: [],
+    entries: [{ id: "entry", title: "Saved topic", summary: "Snapshot", tags: [], updatedAt: 0, sourceCount: 1 }],
+  }));
+  render(<><MemoryLibrary selected="" /><aside className="col-right"><MemoryDirectory /></aside></>);
+  await screen.findByRole("link",{name:/Project A/});
+  const directory = document.querySelector(".memory-directory") as HTMLElement;
+  const project = await within(directory).findByRole("link", { name: /Project A/ });
+  expect(project.getAttribute("href")).toContain("memoryProject=project");
+  expect(within(directory).queryByText("Saved topic")).toBeNull();
+  expect(screen.getByRole("main").contains(screen.getByLabelText("Search entry titles and content…"))).toBe(true);
+  fireEvent.click(project);
+  fireEvent.click(await within(directory).findByRole("link", { name: /Session A/ }));
+  await within(screen.getByRole("main")).findByText("Saved topic");
+  expect(location.search).toContain("memorySession=session");
+  expect(api.list).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session", projectId: "project" }));
+  expect(within(directory).getByRole("link", { name: /Saved topic/ }).getAttribute("href")).toContain("memory=entry%2Fentry");
+  expect(within(directory).queryByText("Snapshot")).toBeNull();
+  expect(within(screen.getByRole("main")).getByText("Saved topic")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Recently updated"), { target: { value: "title" } });
+  await waitFor(() => expect(new URLSearchParams(location.search).get("memorySort")).toBe("title"));
+  expect(new URLSearchParams(location.search).get("memorySession")).toBe("session");
+});
+
+it("shows related entries on a search result and links to them", async () => {
+  api.list.mockResolvedValue({
+    projects: [], selectedSessionId: null, total: 1, pageSize: 40, tags: [],
+    entries: [{ id: "entry", title: "Saved topic", summary: "Snapshot", tags: [], updatedAt: 0, sourceCount: 1, related: [{ id: "neighbor", title: "Neighbor topic" }] }],
+  });
+  render(<MemoryLibrary selected="" />);
+  const related = await screen.findByRole("link", { name: "Neighbor topic" });
+  expect(related.getAttribute("href")).toContain("memory=entry%2Fneighbor");
+  expect(screen.getByText("Related entries")).toBeTruthy();
+});
+
+it("keeps failure feedback and retry in the main panel", async () => {
+  api.list.mockRejectedValueOnce(new Error("memory_invalid"));
+  render(<MemoryLibrary selected="" />);
+  const alert = await screen.findByRole("alert");
+  expect(screen.getByRole("main").contains(alert)).toBe(true);
+  expect(document.querySelector(".memory-workspace .memory-directory")).toBeNull();
+  fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getByLabelText("Search entry titles and content…")).toBeTruthy();
+});
+
+it("keeps later entries reachable and locates a selected entry beyond the first tree page", async () => {
+  window.history.replaceState(null,"","/?memory=entry/late&memoryProject=p&memorySession=s");
+  api.list.mockImplementation(async args => ({
+    projects:[{id:"p",name:"Project",kind:"project",count:3,sessions:[{id:"s",name:"Session",kind:"session",count:3}]}],
+    selectedSessionId:args.selectedId?"s":args.sessionId??null,total:3,pageSize:2,tags:[],
+    entries:args.page===1?[{id:"late",title:"Late entry"}]:[{id:"first",title:"First entry"},{id:"second",title:"Second entry"}],
+  }));
+  api.get.mockResolvedValue({entry:{id:"late",title:"Late entry"}});
+  render(<MemoryDirectory/>);
+  const late=await screen.findByRole("link",{name:"Late entry"});
+  expect(late.getAttribute("aria-current")).toBe("page");
+  expect(late.closest('li[data-depth="2"]')?.querySelector('.nb-tree-row>a')?.textContent).toContain("Session");
+  fireEvent.click(screen.getByRole("button",{name:"Load more"}));
+  await waitFor(()=>expect(api.list).toHaveBeenCalledWith(expect.objectContaining({projectId:"p",sessionId:"s",page:1})));
+  await waitFor(()=>expect(screen.queryByRole("button",{name:"Load more"})).toBeNull());
+  expect(screen.getAllByRole("link",{name:"Late entry"})).toHaveLength(1);
 });

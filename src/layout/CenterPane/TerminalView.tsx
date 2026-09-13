@@ -2,7 +2,7 @@
 //! Active panes are shown while background panes remain alive under display:none, preserving xterm and PTY.
 //! `area` positions the pane within the terminal region as a percentage rectangle.
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import Icons from "../../components/Icons";
@@ -10,6 +10,7 @@ import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { StatusIndicator } from "../../components/StatusIndicator";
 import { kindIconEl } from "../sessionViewers/sessionMeta";
 import { useT } from "../../i18n";
+import { TermScrollbar } from "./TermScrollbar";
 import { usePtySession } from "../../hooks/usePtySession";
 import { useGitBranch } from "../../hooks/useGitBranch";
 import { IS_PLAIN_BROWSER } from "../../hooks/shortcutRegistry";
@@ -291,9 +292,8 @@ export const TerminalView = memo(function TerminalView({
           <span className="pane-tools">
             {canSessionView && (
               <button
-                className="conversation-switch"
-                title={`${t("session.showConversation")} · ${t("common.experimental")}`}
-                aria-label={`${t("session.showConversation")} · ${t("common.experimental")}`}
+                title={t("session.showConversation")}
+                aria-label={t("session.showConversation")}
                 onMouseDown={stop}
                 onClick={(e) => {
                   stop(e);
@@ -301,7 +301,6 @@ export const TerminalView = memo(function TerminalView({
                 }}
               >
                 <Icons.bot size={14} />
-                <span className="session-experimental-badge">{t("common.experimental")}</span>
               </button>
             )}
             <button
@@ -520,7 +519,7 @@ export const TerminalView = memo(function TerminalView({
           )}
           {/* Guidance card for a missing agent, shown when runtime.agentMissing is set (agent sessions only). */}
           {!hidden && <AgentInstallCard session={session} />}
-          <TermScrollbar containerRef={containerRef} hidden={hidden} />
+          <TermScrollbar sessionId={session.id} containerRef={containerRef} hidden={hidden} />
         </div>
 
       </div>
@@ -998,149 +997,6 @@ function AgentInstallCard({ session }: { session: Session }) {
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** Custom terminal scrollbar that mirrors xterm viewport state as an always-visible floating control. Tauri's
- *  WKWebView on macOS does not render ::-webkit-scrollbar as a classic scrollbar, so a DOM replacement is needed. */
-function TermScrollbar({
-  containerRef,
-  hidden,
-}: {
-  containerRef: React.RefObject<HTMLDivElement | null>;
-  hidden: boolean;
-}) {
-  const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
-  const [hovered, setHovered] = useState(false);
-  const dragging = useRef(false);
-  const trackRef = useRef<HTMLDivElement | null>(null);
-
-  const update = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const vp = el.querySelector<HTMLElement>(".xterm-viewport");
-    if (!vp) return;
-    const { scrollTop, scrollHeight, clientHeight } = vp;
-    if (scrollHeight <= clientHeight + 1) {
-      setThumb(null);
-      return;
-    }
-    const ratio = clientHeight / scrollHeight;
-    const thumbH = Math.max(24, Math.round(ratio * clientHeight));
-    const maxScroll = scrollHeight - clientHeight;
-    const maxTop = clientHeight - thumbH;
-    const t = maxScroll > 0 ? Math.round((scrollTop / maxScroll) * maxTop) : 0;
-    setThumb({ top: t, height: thumbH });
-  }, [containerRef]);
-
-  useEffect(() => {
-    if (hidden) {
-      setThumb(null);
-      return;
-    }
-    const el = containerRef.current;
-    if (!el) return;
-
-    let vp: HTMLElement | null = null;
-    let scrollArea: HTMLElement | null = null;
-    let raf = 0;
-
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(update);
-    };
-
-    const bind = () => {
-      vp = el.querySelector<HTMLElement>(".xterm-viewport");
-      if (!vp) return;
-      vp.addEventListener("scroll", onScroll, { passive: true });
-      scrollArea = vp.querySelector<HTMLElement>(".xterm-scroll-area");
-      if (scrollArea) mo.observe(scrollArea, { attributes: true, attributeFilter: ["style"] });
-      update();
-    };
-
-    const mo = new MutationObserver(onScroll);
-    const ro = new ResizeObserver(onScroll);
-    ro.observe(el);
-
-    const initRaf = requestAnimationFrame(bind);
-
-    return () => {
-      cancelAnimationFrame(initRaf);
-      cancelAnimationFrame(raf);
-      vp?.removeEventListener("scroll", onScroll);
-      mo.disconnect();
-      ro.disconnect();
-    };
-  }, [containerRef, hidden, update]);
-
-  if (!thumb || hidden) return null;
-
-  const scrollTo = (fraction: number) => {
-    const vp = containerRef.current?.querySelector<HTMLElement>(".xterm-viewport");
-    if (!vp) return;
-    const clamped = Math.max(0, Math.min(1, fraction));
-    vp.scrollTop = clamped * (vp.scrollHeight - vp.clientHeight);
-  };
-
-  const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (dragging.current) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    scrollTo((e.clientY - rect.top) / rect.height);
-  };
-
-  const onThumbMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragging.current = true;
-    const track = trackRef.current;
-    if (!track) return;
-    const rect = track.getBoundingClientRect();
-    const onMove = (me: MouseEvent) => {
-      scrollTo((me.clientY - rect.top) / rect.height);
-    };
-    const onUp = () => {
-      dragging.current = false;
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  };
-
-  return (
-    <div
-      ref={trackRef}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => !dragging.current && setHovered(false)}
-      onClick={onTrackClick}
-      style={{
-        position: "absolute",
-        top: 3,
-        right: 6,
-        width: 8,
-        bottom: 3,
-        borderRadius: 4,
-        background: hovered ? "var(--border-strong)" : "var(--border)",
-        zIndex: 4,
-        cursor: "pointer",
-        transition: "background .15s",
-      }}
-    >
-      <div
-        onMouseDown={onThumbMouseDown}
-        style={{
-          position: "absolute",
-          top: thumb.top,
-          left: 0,
-          right: 0,
-          height: thumb.height,
-          borderRadius: 4,
-          background: hovered ? "var(--text-dim)" : "var(--text-faint)",
-          transition: "background .15s",
-        }}
-      />
     </div>
   );
 }

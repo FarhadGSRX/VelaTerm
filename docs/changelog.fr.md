@@ -1,3 +1,41 @@
+## v0.2.0 — 2026-09-13
+
+- 📱 Application VelaTerm pour iOS et Android (version préliminaire) : connectez-vous à une machine par SSH ou par URL après avoir confirmé l’empreinte de l’hôte, chargez l’interface distante complète dans l’application, remplissez les informations de connexion par code QR et connectez-vous à un compte distant.
+
+- 🛡️ Audit de code expérimental : lancez depuis le menu contextuel d’un projet un audit du dépôt entier, d’un dossier ou d’un fichier, ou des modifications de l’arbre de travail, avec Codex ou Claude Code ; vérifiez les résultats par rapport au code source et exportez un rapport Markdown ou JSON.
+
+- 📓 Base de connaissances locale : ouvrez un dossier de notes Markdown depuis le panneau de droite, modifiez les notes dans l’éditeur WYSIWYG, recherchez par chemin et en plein texte, gérez étiquettes et favoris et restaurez les notes supprimées depuis la corbeille. Les agents peuvent interroger les notes avec `vkb` ; les imports de dossiers s’exécutent en arrière-plan et conservent un historique consultable et annulable.
+
+- 🤖 Sessions de planification et d’exécution : `vspawn --plan-execute` ouvre une session de planification qui découpe la tâche en sessions d’exécution ; `vflow` propose le découpage, `vtell --report` renvoie le résultat de chaque exécution pour validation et une reprise réutilise la session d’exécution d’origine. Les worktrees peuvent être partagés par tous les rôles ou créés par session.
+
+- 🔗 Les projets et sessions partagés chargent désormais la véritable interface de l’hôte derrière l’URL partagée, transmise par un tunnel sortant et limitée au projet ou à la session autorisé. Les appareils et les autorisations se gèrent depuis les pages de compte.
+
+- 🧠 La base de connaissances de session ajoute des groupes de projets, de sessions et d’entrées, avec glisser-déposer, renommage et suppression ; une nouvelle organisation de la même session remplace celle qui est en attente.
+
+- 💬 Vue de conversation : les longs historiques se chargent page par page jusqu’au premier message, tous les agents compatibles avec le moteur de conversation (y compris OMP) ouvrent la vue de conversation par défaut, et les tours consécutifs d’un même agent partagent une seule ligne d’auteur.
+
+- ⌨️ Terminal : les suggestions natives du shell offrent la complétion par Tab pour zsh, bash, fish et PowerShell sous macOS et Linux, les flèches continuent de rappeler les commandes précédentes pendant que la liste est ouverte, et le cœur du terminal passe à xterm 6.
+
+- 📊 Le panneau Info affiche les statistiques du tour en cours pour Claude, Codex, Grok, OpenCode, Pi et OMP : jetons d’entrée et de sortie, taux de cache, vitesse de génération, appels d’outils et modifications de fichiers enregistrées. Les commandes peu utilisées de la zone de saisie passent sous « Plus ».
+
+- 🔐 La zone de saisie affiche le mode d’autorisation configuré, celui en vigueur et celui en attente, et demande confirmation lorsqu’un redémarrage est nécessaire pour appliquer un changement.
+
+- 🔔 Les notifications affichent le nom de la session et un court aperçu ; un clic ouvre la session correspondante, et l’application mobile peut les recevoir via le service de notifications push du système.
+
+- 🌐 La liste des modèles Claude provient désormais du catalogue publié sur le site, mis en cache localement et actualisé toutes les six heures, fusionné avec les modèles signalés par la CLI.
+
+- 🧵 Les flèches haut et bas de la zone de saisie rappellent vos messages précédents, y compris ceux en file d’attente ou en attente de confirmation, et restaurent le brouillon non envoyé à la fin.
+
+- ↩️ Le retour arrière d’un message replace ses images dans la zone de saisie pour pouvoir les renvoyer.
+
+- 🔑 Les agents lancés sous macOS héritent de l’environnement complet du shell de connexion : les outils installés hors du PATH par défaut sont donc trouvés.
+
+- 💡 Une entrée « Votre avis » dans la barre de titre ouvre la page de retour.
+
+- 🕹️ Une entrée Centre de jeux dans la barre d’onglets ouvre le centre de jeux du site (PIXEL WING) ; sur ordinateur, le jeu s’ouvre dans le navigateur intégré.
+
+---
+
 ## v0.1.108 — 2026-09-08
 
 - 💬 Vue de conversation expérimentale pour Claude, Codex et OpenCode : réponses en continu, raisonnement, détails des outils, autorisations et formulaires de questions. Les nouvelles configurations utilisent toujours le terminal par défaut.

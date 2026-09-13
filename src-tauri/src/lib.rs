@@ -14,17 +14,28 @@ mod command_core;
 mod commands;
 mod db;
 mod files;
+mod fonts;
+#[cfg(feature = "gui")]
+pub use fonts::print_font_catalog;
 mod git;
 mod gitea;
 mod host;
 mod models;
 mod memory;
+mod kb;
 mod knowledge;
+// Unix-only: imports the login shell's environment when the process was not started from a shell.
+#[cfg(unix)]
+pub mod login_env;
+mod security;
+pub use security::run_draft_verifier;
 mod procstat;
 mod pty;
 mod search;
 mod session_state;
+mod mobile_push;
 mod split_trace;
+pub mod diagnostics;
 #[cfg(feature = "gui")]
 mod native_menu;
 // GUI-only vela-server provisioning: R2 download, minisign verification, and cache.
@@ -263,6 +274,14 @@ pub fn run_spawn(args: &[String]) -> ! {
     agent::cli_client::run_spawn(args)
 }
 
+pub fn run_tell(args: &[String]) -> ! {
+    agent::tell::run_cli(args)
+}
+
+pub fn run_flow(args: &[String]) -> ! {
+    agent::plan_execute::run_cli(args)
+}
+
 /// Hidden `--view <file|URL>` entry used by `vopen`; POST `/view` to open a center-pane tab, then exit.
 pub fn run_view(args: &[String]) -> ! {
     agent::cli_client::run_view(args)
@@ -280,8 +299,7 @@ pub fn run_search(args: &[String]) -> ! {
     agent::cli_client::run_search(args)
 }
 
-/// Hidden `--orch` entry used by the PATH `vorch` shim. Read a proposal from stdin, POST `/orch` so the
-/// frontend can ask the user to confirm it, and exit; nothing is started here.
+/// Retired `--orch` entry: explain the replacement to older command wrappers.
 pub fn run_orch(args: &[String]) -> ! {
     agent::cli_client::run_orch(args)
 }
@@ -416,7 +434,7 @@ fn register_aumid_for_notifications(identifier: &str, display_name: &str) {
         .create(&path)
         .and_then(|key| key.set_string("DisplayName", display_name));
     if let Err(e) = result {
-        eprintln!(
+        crate::diagnostic_warn!(
             "failed to register AppUserModelId (Windows toast notifications may not show): {e}"
         );
     }
@@ -464,7 +482,15 @@ pub fn run(initial_open_project: Option<PathBuf>) {
 #[cfg(feature = "gui")]
 fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: Option<PathBuf>) {
     builder
-        .plugin(tauri_plugin_opener::init())
+        // The default click script also runs in external child WebViews: it cancels target=_blank
+        // before their native popup handler runs, then fails the remote page's opener permission check.
+        // Application pages install their own link handler in main.tsx; browser tabs use on_new_window.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
+        .plugin(fonts::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -624,47 +650,60 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                             );
                         }
                         // Like VS Code, install/remove the PATH shim only on explicit user action and
-                        // report its exact destination or conflict in a native dialog.
+                        // report its exact destination or conflict in a native dialog. macOS waits on
+                        // the administrator authorization prompt here, so keep the work off the main
+                        // thread; the dialog plugin dispatches its own UI back to the main thread.
                         "install-vela-command" | "uninstall-vela-command" => {
                             use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
                             let installing = id == "install-vela-command";
-                            let result = if installing {
-                                agent::spawn_cli::install_user_cli()
-                            } else {
-                                agent::spawn_cli::uninstall_user_cli()
-                            };
-                            let (message, kind) = match result {
-                                Ok(status) if status.installed => (
-                                    format!(
-                                        "The 'vela' command is ready at:\n{}\n\nRun: vela <project-path>",
-                                        status.path.as_deref().unwrap_or("PATH")
-                                    ),
-                                    MessageDialogKind::Info,
-                                ),
-                                Ok(status) if status.conflict.is_some() => (
-                                    format!(
-                                        "A different 'vela' command remains at:\n{}\n\nVelaTerm did not modify it.",
-                                        status.conflict.as_deref().unwrap_or("PATH")
-                                    ),
-                                    MessageDialogKind::Warning,
-                                ),
-                                Ok(_) => (
-                                    "The VelaTerm-managed 'vela' command was removed from PATH."
-                                        .to_string(),
-                                    MessageDialogKind::Info,
-                                ),
-                                Err(e) => (e.to_string(), MessageDialogKind::Error),
-                            };
-                            app_handle
-                                .dialog()
-                                .message(message)
-                                .title(if installing {
-                                    "Install 'vela' Command"
+                            let handle = app_handle.clone();
+                            tauri::async_runtime::spawn_blocking(move || {
+                                let result = if installing {
+                                    agent::spawn_cli::install_user_cli()
                                 } else {
-                                    "Uninstall 'vela' Command"
-                                })
-                                .kind(kind)
-                                .show(|_| {});
+                                    agent::spawn_cli::uninstall_user_cli()
+                                };
+                                let (message, kind) = match result {
+                                    Ok(status) if status.installed && installing => (
+                                        format!(
+                                            "The 'vela' command is ready at:\n{}\n\nRun: vela <project-path>",
+                                            status.path.as_deref().unwrap_or("PATH")
+                                        ),
+                                        MessageDialogKind::Info,
+                                    ),
+                                    Ok(status) if status.installed => (
+                                        "Uninstall was cancelled.".to_string(),
+                                        MessageDialogKind::Info,
+                                    ),
+                                    Ok(status) if status.conflict.is_some() => (
+                                        format!(
+                                            "A different 'vela' command remains at:\n{}\n\nVelaTerm did not modify it.",
+                                            status.conflict.as_deref().unwrap_or("PATH")
+                                        ),
+                                        MessageDialogKind::Warning,
+                                    ),
+                                    Ok(_) if installing => (
+                                        "Install was cancelled.".to_string(),
+                                        MessageDialogKind::Info,
+                                    ),
+                                    Ok(_) => (
+                                        "The VelaTerm-managed 'vela' command was removed from PATH."
+                                            .to_string(),
+                                        MessageDialogKind::Info,
+                                    ),
+                                    Err(e) => (e.to_string(), MessageDialogKind::Error),
+                                };
+                                handle
+                                    .dialog()
+                                    .message(message)
+                                    .title(if installing {
+                                        "Install 'vela' Command"
+                                    } else {
+                                        "Uninstall 'vela' Command"
+                                    })
+                                    .kind(kind)
+                                    .show(|_| {});
+                            });
                         }
                         // Route Cmd+Q through the same confirmation as a window close.
                         "quit" => {
@@ -699,6 +738,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                 .map_err(|e| format!("failed to create data dir: {e}"))?;
             // Record data_dir so Windows SSH connections prefer bundled tools over a broken/missing PATH install.
             ssh_remote::set_data_dir(data_dir.clone());
+            diagnostics::init(&data_dir);
             let db = Db::open(&data_dir.join("vlx-term.db"))?;
 
             // When cleanup is enabled, remove pasted images older than 24h left by crashes. Normal exit
@@ -707,7 +747,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                 let swept =
                     files::sweep_stale_pasted_images(std::time::Duration::from_secs(24 * 60 * 60));
                 if swept > 0 {
-                    eprintln!("startup sweep: removed {swept} stale pasted temp image(s)");
+                    crate::diagnostic_warn!("startup sweep: removed {swept} stale pasted temp image(s)");
                 }
             }
             app.manage(db);
@@ -715,7 +755,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             // Extract bundled terminal commands into data_dir/bin, which PTY sessions prepend to PATH.
             // Failure is nonfatal and only disables those commands.
             if let Err(e) = agent::spawn_cli::install(&data_dir) {
-                eprintln!("failed to install built-in command shims (vspawn / vopen etc. will be unavailable): {e}");
+                crate::diagnostic_warn!("failed to install built-in command shims (vspawn / vopen etc. will be unavailable): {e}");
             }
             // Release builds auto-install the shell command on Windows/Linux; macOS requires explicit action.
             #[cfg(all(not(debug_assertions), not(target_os = "macos")))]
@@ -724,7 +764,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                     "vela command ready: {}",
                     status.path.as_deref().unwrap_or("PATH")
                 ),
-                Err(e) => eprintln!("failed to install vela command in PATH: {e}"),
+                Err(e) => crate::diagnostic_warn!("failed to install vela command in PATH: {e}"),
             }
             // Refresh bundled skills in both Claude/Codex user directories on every version.
             agent::spawn_cli::refresh_installed_skills();
@@ -739,7 +779,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                     .resolve("resources/gitbash", tauri::path::BaseDirectory::Resource)
                 {
                     Ok(dir) => agent::gitbash::set_bundled_dir(dir),
-                    Err(e) => eprintln!("failed to resolve Git Bash resource path (falling back to PowerShell): {e}"),
+                    Err(e) => crate::diagnostic_warn!("failed to resolve Git Bash resource path (falling back to PowerShell): {e}"),
                 }
                 // Best-effort background cleanup removes obsolete gitbash-min and staging trees only;
                 // never touch the still-used on-demand gitbash-full cache.
@@ -749,7 +789,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                     std::thread::spawn(move || {
                         if stale.exists() {
                             if let Err(e) = std::fs::remove_dir_all(&stale) {
-                                eprintln!(
+                                crate::diagnostic_warn!(
                                     "failed to remove legacy gitbash-min copy ({}): {e}",
                                     stale.display()
                                 );
@@ -763,12 +803,13 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             // Extract the OpenCode status bridge and inject its path at launch. Failure merely falls
             // back to screen-based status detection.
             if let Err(e) = agent::opencode::install(&data_dir) {
-                eprintln!("failed to install opencode plugin (opencode status will degrade to screen detection): {e}");
+                crate::diagnostic_warn!("failed to install opencode plugin (opencode status will degrade to screen detection): {e}");
             }
 
             // Start the random-port/token loopback hook service for agent status callbacks.
             let hooks = HookServer::start(AppCtx::Tauri(app.handle().clone()))?;
             app.manage(hooks);
+            let _ = mobile_push::start(&AppCtx::Tauri(app.handle().clone()));
             let _ = web::public_relay::start(&AppCtx::Tauri(app.handle().clone()));
 
             // Auto-start LAN remote access when the persisted enabled flag is set, restoring the state
@@ -784,7 +825,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                             status.port.unwrap_or(0)
                         ),
                         Ok(None) => {}
-                        Err(e) => eprintln!("remote access auto-start failed: {e}"),
+                        Err(e) => crate::diagnostic_warn!("remote access auto-start failed: {e}"),
                     }
                 });
             }
@@ -800,7 +841,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                     let server = handle.state::<web::local_link::LocalLinkServer>();
                     match web::local_link::start(ctx, &server.0) {
                         Ok(port) => println!("local link listening on 127.0.0.1:{port}"),
-                        Err(e) => eprintln!("local link failed to start: {e}"),
+                        Err(e) => crate::diagnostic_warn!("local link failed to start: {e}"),
                     }
                 });
             }
@@ -809,10 +850,12 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             // and browser client. It only touches providers whose account material exists on this
             // machine, and honours the usage settings live.
             agent::usage_store::start(AppCtx::Tauri(app.handle().clone()));
+            agent::remote_model_catalog::start(AppCtx::Tauri(app.handle().clone()));
 
             // Refresh the search index in the background so the first search only pays for what changed
             // since startup.
             search::warm_index(AppCtx::Tauri(app.handle().clone()));
+            memory::resume(&AppCtx::Tauri(app.handle().clone()));
 
             // Install macOS session-aware notification click handling; unsupported builds skip it.
             #[cfg(target_os = "macos")]
@@ -974,7 +1017,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                         Ok(hwnd) => {
                             let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA);
                         }
-                        Err(e) => eprintln!("single-instance helper window not found: {e}"),
+                        Err(e) => crate::diagnostic_warn!("single-instance helper window not found: {e}"),
                     }
                 }
             }
@@ -1014,6 +1057,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             commands::web_device_revoke,
             // 4) Main-thread windows and developer tools.
             commands::open_remote_window,
+            commands::open_account_remote_window,
             commands::probe_remote_fingerprint,
             commands::url_trust_fingerprint,
             commands::open_devtools,
@@ -1071,6 +1115,8 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                 // When enabled, remove only this process's pasted-image temp files on exit, preserving
                 // images used by other instances.
                 if let tauri::RunEvent::Exit = event {
+                    diagnostics::record("INFO","runtime_stopping",serde_json::json!({}));
+                    diagnostics::flush();
                     // Retire the local-link record so an SSH mirror connection does not even try this
                     // process; a crash leaves it behind, which the reader's PID check covers.
                     if let Ok(dir) = app.path().app_data_dir() {
@@ -1083,7 +1129,7 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                     if enabled {
                         let n = files::cleanup_pasted_images();
                         if n > 0 {
-                            eprintln!("exit cleanup: removed {n} temp image(s) pasted this session");
+                            crate::diagnostic_warn!("exit cleanup: removed {n} temp image(s) pasted this session");
                         }
                     }
                 }
@@ -1307,8 +1353,8 @@ pub fn run_serve(args: &[String]) {
     let parsed = match parse_serve_args(args, env_password) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("vlx-term --serve failed to start: {e}");
-            eprintln!(
+            crate::diagnostic_warn!("vlx-term --serve failed to start: {e}");
+            crate::diagnostic_warn!(
                 "usage: vlx-term --serve [--port 8799] [--password <password>] [--data-dir <dir>] [--local-http] [--lan-http] [--print-pairing] [--mirror 0|1]"
             );
             std::process::exit(1);
@@ -1316,7 +1362,7 @@ pub fn run_serve(args: &[String]) {
     };
 
     if let Err(e) = serve_main(&parsed) {
-        eprintln!("vlx-term --serve failed to start: {e}");
+        crate::diagnostic_warn!("vlx-term --serve failed to start: {e}");
         std::process::exit(1);
     }
 }
@@ -1326,6 +1372,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
     let identifier = serve_identifier();
     let data_dir = serve_data_dir(args, &identifier)?;
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("failed to create data dir: {e}"))?;
+    diagnostics::init(&data_dir);
     let db = Db::open(&data_dir.join("vlx-term.db"))?;
 
     // Match GUI cleanup of stale pasted images from abnormal exits when enabled.
@@ -1338,11 +1385,11 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
 
     // Match GUI extraction of terminal commands/OpenCode plugin; failures are logged and nonfatal.
     if let Err(e) = agent::spawn_cli::install(&data_dir) {
-        eprintln!("failed to install built-in command shims (terminal commands vspawn / vopen etc. will be unavailable): {e}");
+        crate::diagnostic_warn!("failed to install built-in command shims (terminal commands vspawn / vopen etc. will be unavailable): {e}");
     }
     agent::spawn_cli::refresh_installed_skills();
     if let Err(e) = agent::opencode::install(&data_dir) {
-        eprintln!("failed to install opencode plugin (opencode status will degrade to screen detection): {e}");
+        crate::diagnostic_warn!("failed to install opencode plugin (opencode status will degrade to screen detection): {e}");
     }
 
     // An explicit --mirror from the SSH client decides mirror mode for this service, ahead of whatever the
@@ -1355,6 +1402,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
     let host = std::sync::Arc::new(HeadlessHost::new(data_dir.clone(), db));
     let ctx = AppCtx::Headless(std::sync::Arc::clone(&host));
     host.set_hooks(HookServer::start(ctx.clone())?);
+    let _ = mobile_push::start(&ctx);
 
     // Reuse the GUI web service. local-http is loopback plaintext, lan-http is LAN plaintext, and
     // neither selects self-signed LAN TLS; loopback wins if both plaintext flags are present.
@@ -1384,7 +1432,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
     )?;
 
     println!("vlx-term headless server started");
-    println!("  data dir: {}", data_dir.display());
+    diagnostics::record("INFO","database_ready",serde_json::json!({"status":"success"}));
 
     // Print a fully usable preferred URL first. LAN TLS requires the complete #pair fragment with
     // token/public key; plaintext modes can use their bare URL. The fragment carries the long-lived
@@ -1395,7 +1443,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
             match web.create_pairing(None, false) {
                 Ok(info) => Some(info.url),
                 Err(e) => {
-                    eprintln!("  failed to create pairing link: {e}");
+                    crate::diagnostic_warn!("  failed to create pairing link: {e}");
                     None
                 }
             }
@@ -1438,7 +1486,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
             remote.port.unwrap_or(0)
         ),
         Ok(None) => {}
-        Err(e) => eprintln!("  remote access auto-start failed: {e}"),
+        Err(e) => crate::diagnostic_warn!("  remote access auto-start failed: {e}"),
     }
 
     let _ = web::public_relay::start(&ctx);
@@ -1446,9 +1494,11 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
     // Same account-usage poller as the desktop entry point: headless serves browser and mobile clients,
     // which read the stored snapshot instead of querying providers themselves.
     agent::usage_store::start(ctx.clone());
+    agent::remote_model_catalog::start(ctx.clone());
 
     // Same background index warm-up as the desktop entry point.
     search::warm_index(ctx.clone());
+    memory::resume(&ctx);
 
     println!("  press Ctrl+C (or send SIGTERM) to quit");
 
@@ -1464,7 +1514,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
                 match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!(
+                        crate::diagnostic_warn!(
                             "failed to register SIGTERM handler (only Ctrl+C will work): {e}"
                         );
                         let _ = tokio::signal::ctrl_c().await;
@@ -1483,7 +1533,8 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
     });
 
     // Gracefully stop local/LAN services and terminate all active PTY sessions.
-    println!("received shutdown signal, stopping…");
+    diagnostics::record("INFO", "runtime_stopping", serde_json::json!({}));
+    diagnostics::flush();
     web.stop();
     ctx.remote_web().stop();
     ctx.pty().kill_all();

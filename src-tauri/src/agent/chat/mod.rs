@@ -18,6 +18,7 @@ pub mod engine;
 pub mod history;
 pub mod opencode_protocol;
 pub mod opencode_timeline;
+pub mod pi_protocol;
 pub mod protocol;
 pub mod skills;
 pub mod submissions;

@@ -20,6 +20,7 @@ pub fn list(app: &crate::host::AppCtx, session_id: &str, bin: &str, cwd: Option<
     let port = opencode_protocol::configured_port(app, &format!("catalog.{session_id}"))?;
     let password = opencode_protocol::random_password();
     let mut command = Command::new(bin);
+    crate::agent::executable::prepare_command(&mut command, bin);
     command
         .arg("serve")
         .arg("--port")

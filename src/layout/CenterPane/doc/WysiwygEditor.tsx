@@ -1,8 +1,6 @@
-//! Thin wrapper around the Milkdown Crepe WYSIWYG Markdown editor: lifecycle, defaultValue,
-//! markdownUpdated-to-onEdited forwarding, and getMarkdown access.
+//! Thin wrapper around Milkdown Crepe: lifecycle, edit notifications, and Markdown access.
 //!
-//! Content is snapshot-based: defaultValue is supplied once on mount and the editor owns it afterward.
-//! DocView changes the component key for reloads or mode switches rather than setting content in place.
+//! defaultValue initializes the document; companion source updates use minimal ProseMirror transactions.
 
 import {
   forwardRef,
@@ -12,9 +10,14 @@ import {
 } from "react";
 import { Crepe } from "@milkdown/crepe";
 import "@milkdown/crepe/theme/common/style.css";
-import { editorViewCtx } from "@milkdown/kit/core";
+import { editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import { headingIdGenerator } from "@milkdown/kit/preset/commonmark";
 import { $prose } from "@milkdown/kit/utils";
 import type { EditorView } from "@milkdown/kit/prose/view";
+import { Slice } from "@milkdown/kit/prose/model";
+import { Plugin, TextSelection } from "@milkdown/kit/prose/state";
+import { syntaxHighlighting } from "@codemirror/language";
+import { vlxHighlight } from "./docHighlight";
 import { t } from "../../../i18n";
 import { EMPTY_STATUS, type DocSearchControl } from "./docSearch";
 import {
@@ -27,63 +30,9 @@ import {
   pmSearchPlugin,
 } from "./pmSearch";
 import { pmMermaidPlugin } from "./pmMermaid";
-import { uploadDocImage } from "../../../ipc/transport";
-import { loadFileBlob } from "../../../ipc/info";
-import { extOf } from "../../../terminal/imageInput";
+import { onUploadDocImage, proxyDocImageURL } from "./docImageIO";
 import { stripImageRatioAlt } from "./docImage";
-
-/** Map extensions to MIME types so object URLs render formats such as SVG correctly. */
-const IMG_MIME: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  svg: "image/svg+xml",
-  tiff: "image/tiff",
-};
-function mimeFromPath(p: string): string {
-  const ext = p.split(".").pop()?.toLowerCase() ?? "";
-  return IMG_MIME[ext] ?? "application/octet-stream";
-}
-
-/** Reuse object URLs by absolute path to avoid repeated local reads and memory leaks. */
-const docImgUrlCache = new Map<string, string>();
-
-/** Save pasted/dropped images under a sibling assets directory and return the Markdown-relative path. */
-async function onUploadDocImage(file: File, docPath: string): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return uploadDocImage(bytes, extOf(file), docPath);
-}
-
-/**
- * Convert Markdown image sources into WebView-displayable URLs:
- * - Preserve HTTP, HTTPS, data, and blob sources.
- * - Resolve local relative paths against the document, then use loadFileBlob to build object URLs.
- *   This reuses ImageDocView's chunked I/O and avoids changing Tauri asset-protocol security settings.
- *
- * On read failure, return the original source for Crepe's placeholder/failure handling without throwing.
- */
-async function proxyDocImageURL(src: string, docPath: string): Promise<string> {
-  if (/^(https?:|data:|blob:)/i.test(src)) return src;
-  const docDir = docPath.replace(/[/\\][^/\\]*$/, "");
-  const isAbs = src.startsWith("/") || /^[a-zA-Z]:[/\\]/.test(src);
-  const abs = isAbs ? src : docDir ? `${docDir}/${src}` : src;
-  const cached = docImgUrlCache.get(abs);
-  if (cached) return cached;
-  try {
-    const res = await loadFileBlob(abs);
-    if (!res) return src;
-    const url = URL.createObjectURL(
-      new Blob([res.blob], { type: mimeFromPath(abs) }),
-    );
-    docImgUrlCache.set(abs, url);
-    return url;
-  } catch {
-    return src;
-  }
-}
+import { replaceChangedContent, withHeadingIds } from "./milkdownSync";
 
 /** Localize Crepe's slash menu, placeholders, and link/image/code widgets. Capture the current locale
  * at mount; DocView rebuilds the editor by key instead of hot-switching it. docPath locates pasted
@@ -135,6 +84,7 @@ const crepeFeatureConfigs = (docPath: string, textOnly: boolean) => ({
     proxyDomURL: (url: string) => textOnly ? "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" : proxyDocImageURL(url, docPath),
   },
   [Crepe.Feature.CodeMirror]: {
+    theme: syntaxHighlighting(vlxHighlight),
     searchPlaceholder: t("crepe.searchLanguage"),
     noResultText: t("crepe.noResult"),
     copyText: t("common.copy"),
@@ -144,12 +94,21 @@ const crepeFeatureConfigs = (docPath: string, textOnly: boolean) => ({
 });
 
 export interface WysiwygHandle {
+  /** Restore keyboard focus without changing the current selection. */
+  focus: () => void;
   /** Return the current Markdown serialization, or null before the editor is ready. */
   getMarkdown: () => string | null;
+  /** Apply companion Markdown with a minimal ProseMirror transaction. */
+  setMarkdown: (markdown: string) => void;
+  /** Insert Markdown at the current selection, parsing it into ProseMirror nodes. */
+  insertText: (markdown: string) => void;
+  scrollToHeading: (index: number) => void;
   /** Return current HTML for printing/PDF export, or null before the editor is ready. */
   getHtml: () => string | null;
   /** Shared find/replace controls, effective after the ProseMirror view is ready. */
   search: DocSearchControl;
+  /** Position the caret from an editor-gutter click, preserving the anchor for Shift-click. */
+  placeCaret: (x: number, y: number, extend: boolean) => void;
 }
 
 export const WysiwygEditor = forwardRef<
@@ -162,13 +121,18 @@ export const WysiwygEditor = forwardRef<
     onEdited: () => void;
     /** Prevent document image reads and uploads for text-only knowledge entries. */
     textOnly?: boolean;
+    onReady?: () => void;
+    onError?: (error: unknown) => void;
   }
->(function WysiwygEditor({ defaultValue, docPath, onEdited, textOnly = false }, ref) {
+>(function WysiwygEditor({ defaultValue, docPath, onEdited, textOnly = false, onReady, onError }, ref) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const crepeRef = useRef<Crepe | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   // markdownUpdated before create() completes is parser/normalization initialization noise, not user editing.
   const readyRef = useRef(false);
+  const syncingRef = useRef(false);
+  const lifecycleRef = useRef({ onReady, onError });
+  lifecycleRef.current = { onReady, onError };
   const onEditedRef = useRef(onEdited);
   onEditedRef.current = onEdited;
 
@@ -184,16 +148,15 @@ export const WysiwygEditor = forwardRef<
     crepe.editor.use($prose(() => pmSearchPlugin()));
     // Mermaid plugin renders decorations below fenced blocks without changing document serialization.
     crepe.editor.use($prose(() => pmMermaidPlugin()));
-    crepe.on((l) => {
-      l.markdownUpdated((_ctx, md, prevMd) => {
-        if (!readyRef.current || md === prevMd) return;
-        // Focus guard: Crepe may asynchronously normalize code-block languages or lists after create().
-        // Those updates previously marked newly opened documents dirty and blocked external reloads.
-        // Genuine user edits necessarily occur while focus is inside the editor.
-        if (!root.contains(document.activeElement)) return;
-        onEditedRef.current();
-      });
-    });
+    // Observe transactions immediately without serializing the document on every keystroke.
+    crepe.editor.use($prose(() => new Plugin({
+      view: () => ({
+        update(view, previous) {
+          if (!readyRef.current || syncingRef.current || view.state.doc.eq(previous.doc)) return;
+          if (root.contains(document.activeElement)) onEditedRef.current();
+        },
+      }),
+    })));
     crepeRef.current = crepe;
     let disposed = false;
     void crepe.create().then(() => {
@@ -203,7 +166,8 @@ export const WysiwygEditor = forwardRef<
       crepe.editor.action((ctx) => {
         viewRef.current = ctx.get(editorViewCtx);
       });
-    });
+      lifecycleRef.current.onReady?.();
+    }).catch(error => { if (!disposed) lifecycleRef.current.onError?.(error); });
     return () => {
       disposed = true;
       readyRef.current = false;
@@ -216,11 +180,57 @@ export const WysiwygEditor = forwardRef<
         /* Defensive fallback. */
       }
     };
-    // Create once per mount; the parent changes key for content or mode changes.
+    // Create once per mount; the parent changes key only for reloads or initialization retries.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useImperativeHandle(ref, () => ({
+    focus: () => viewRef.current?.focus(),
+    setMarkdown: (markdown) => {
+      const crepe = crepeRef.current;
+      const view = viewRef.current;
+      if (!crepe || !view || !readyRef.current) return;
+      crepe.editor.action(ctx => {
+        const next = ctx.get(parserCtx)(markdown);
+        if (!next) return;
+        const normalized = withHeadingIds(next, ctx.get(headingIdGenerator.key));
+        const transaction = replaceChangedContent(view.state.tr, normalized);
+        if (!transaction) return;
+        syncingRef.current = true;
+        try { view.dispatch(transaction); } finally { syncingRef.current = false; }
+      });
+    },
+    scrollToHeading: index => {
+      rootRef.current?.querySelectorAll<HTMLElement>(".ProseMirror :is(h1,h2,h3,h4,h5,h6)")[index]?.scrollIntoView({ block: "start" });
+    },
+    insertText: markdown => {
+      const crepe = crepeRef.current;
+      const view = viewRef.current;
+      if (!crepe || !view || !readyRef.current) return;
+      crepe.editor.action(ctx => {
+        const parsed = ctx.get(parserCtx)(markdown);
+        if (!parsed) return;
+        const transaction = view.state.tr.replaceSelection(new Slice(parsed.content, 0, 0)).scrollIntoView();
+        view.dispatch(transaction);
+      });
+    },
+    placeCaret: (x, y, extend) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const rect = view.dom.getBoundingClientRect();
+      const hit = view.posAtCoords({
+        left: Math.min(Math.max(x, rect.left + 1), rect.right - 1),
+        top: Math.min(Math.max(y, rect.top + 1), rect.bottom - 1),
+      });
+      const doc = view.state.doc;
+      const pos = hit?.pos ?? (y < rect.top ? 0 : doc.content.size);
+      const near = TextSelection.near(doc.resolve(pos));
+      const selection = extend
+        ? TextSelection.between(doc.resolve(view.state.selection.anchor), near.$head)
+        : near;
+      view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
+      view.focus();
+    },
     getMarkdown: () => {
       const crepe = crepeRef.current;
       if (!crepe || !readyRef.current) return null;

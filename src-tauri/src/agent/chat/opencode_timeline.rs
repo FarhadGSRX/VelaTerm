@@ -14,10 +14,6 @@ use super::engine::{ChatRow, SubagentInfo};
 use crate::agent::export::Event;
 use crate::agent::opencode_store::OpencodeMessage;
 
-/// Root timelines keep this many rows; the rest is summarized by one notice.
-pub const REPLAY_LIMIT: usize = 400;
-/// A subagent's card keeps this many rows.
-pub const CHILD_REPLAY_LIMIT: usize = 200;
 /// How deep nested subagents are followed before their work is left out.
 const MAX_CHILD_DEPTH: usize = 4;
 
@@ -240,7 +236,7 @@ pub fn rows(
     messages: &[OpencodeMessage],
     children: &dyn Fn(&str) -> Option<Vec<OpencodeMessage>>,
 ) -> Vec<ChatRow> {
-    rows_at_depth(messages, children, 0, REPLAY_LIMIT)
+    rows_at_depth(messages, children, 0)
 }
 
 /// Use the native message's model identifier as its display name.
@@ -253,7 +249,6 @@ fn rows_at_depth(
     messages: &[OpencodeMessage],
     children: &dyn Fn(&str) -> Option<Vec<OpencodeMessage>>,
     depth: usize,
-    limit: usize,
 ) -> Vec<ChatRow> {
     let mut out: Vec<ChatRow> = Vec::new();
     for message in messages {
@@ -337,17 +332,6 @@ fn rows_at_depth(
             _ => {}
         }
     }
-    let omitted = out.len().saturating_sub(limit);
-    if omitted > 0 {
-        out.drain(..omitted);
-        out.insert(
-            0,
-            ChatRow::Notice {
-                id: if depth == 0 { "h-omitted".to_string() } else { "h-omitted-child".to_string() },
-                message: format!("{omitted} earlier messages are not shown. The agent still has them."),
-            },
-        );
-    }
     out
 }
 
@@ -367,7 +351,7 @@ fn attach_child(
         .iter()
         .rev()
         .find_map(|m| m.info.get("modelID").and_then(Value::as_str).map(str::to_string));
-    let child_rows = rows_at_depth(&messages, children, depth + 1, CHILD_REPLAY_LIMIT);
+    let child_rows = rows_at_depth(&messages, children, depth + 1);
     if let ChatRow::Tool { children: slot, subagent, .. } = row {
         *slot = child_rows;
         if let Some(facts) = subagent {
@@ -517,6 +501,21 @@ mod tests {
         OpencodeMessage {
             info: json!({"id":id,"role":role,"time":{"created":1_700_000_000_000i64}}),
             parts,
+        }
+    }
+
+    #[test]
+    fn long_root_and_child_histories_keep_the_first_message() {
+        let messages: Vec<_> = (0..1003).map(|i| message(
+            &format!("msg_{i}"), "user", vec![json!({"type":"text","text":format!("message {i}")})],
+        )).collect();
+        let root = rows(&messages, &|_| None);
+        let child = rows_at_depth(&messages, &|_| None, 1);
+        for history in [&root, &child] {
+            assert_eq!(history.len(), 1003);
+            for (index, row) in history.iter().enumerate() {
+                assert_eq!(row.id(), format!("u:msg_{index}"));
+            }
         }
     }
 

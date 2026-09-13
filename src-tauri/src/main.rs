@@ -8,6 +8,15 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    #[cfg(feature = "gui")]
+    if args.get(1).map(String::as_str) == Some("--font-catalog") {
+        velaterm_lib::print_font_catalog();
+        return;
+    }
+    if args.get(1).map(String::as_str) == Some("--security-verify-draft") {
+        velaterm_lib::run_draft_verifier(&args);
+        return;
+    }
     // --version / -V prints the version and Git commit, then exits without a window or service. Keep
     // this first so it returns before raising file-descriptor limits, starting --serve, or creating GUI
     // state. SSH remote connection uses it to identify and pin the remote binary version and commit.
@@ -40,6 +49,8 @@ fn main() {
     // variables, POST to the local hook service, and exit after forwarding.
     match args.get(1).map(String::as_str) {
         Some("--spawn") => velaterm_lib::run_spawn(&args),
+        Some("--tell") => velaterm_lib::run_tell(&args),
+        Some("--flow") => velaterm_lib::run_flow(&args),
         Some("--view") => velaterm_lib::run_view(&args),
         Some("--refer") => velaterm_lib::run_refer(&args),
         Some("--search") => velaterm_lib::run_search(&args),
@@ -52,6 +63,12 @@ fn main() {
     // desktop app. Short-lived shims above have already returned. Child agents inherit this limit;
     // without it, Node-based agents can fail under macOS's default limit of 256 descriptors.
     raise_fd_limit();
+    // Dock and desktop launches inherit a minimal environment: no login-shell PATH, no variables a
+    // startup file exports. Both are needed by the GUI and by the headless server's chat engine, so
+    // recover them before anything spawns a child process. Terminal launches already carry the shell
+    // environment and skip this.
+    #[cfg(unix)]
+    velaterm_lib::login_env::hydrate();
     // Headless server mode starts browser remote access (HTTPS, login, WebSocket, and PTY) from the CLI
     // without creating a window or requiring a display server.
     if args.get(1).map(String::as_str) == Some("--serve") {
@@ -62,11 +79,6 @@ fn main() {
     // not(gui) misuse branch below when invoked without a subcommand.
     #[cfg(feature = "gui")]
     {
-        // Dock and desktop launches inherit a minimal PATH. Recover the login shell's PATH before any
-        // subprocess is spawned so host::command() can find Homebrew and other user-installed tools.
-        #[cfg(not(windows))]
-        hydrate_path_from_login_shell();
-
         // Linux/WebKitGTK black-screen fallback: webkit2gtk 2.40+ enables the DMABUF renderer, which can
         // produce a completely black WebView on virtual GPUs and some drivers without reporting errors.
         // Disabling DMABUF selects the stable path while retaining accelerated compositing and has
@@ -82,7 +94,7 @@ fn main() {
         ) {
             Ok(path) => path,
             Err(e) => {
-                eprintln!("vela: {e}");
+                velaterm_lib::diagnostic_warn!("vela: {e}");
                 std::process::exit(2);
             }
         };
@@ -92,7 +104,7 @@ fn main() {
     // supplied, so print the correct usage and exit with a nonzero status.
     #[cfg(not(feature = "gui"))]
     {
-        eprintln!(
+        velaterm_lib::diagnostic_warn!(
             "vela-server: headless build (no GUI). usage: vela-server --serve [--port <p>] [--data-dir <dir>]; password via VELA_SERVE_PASSWORD env. also: --version"
         );
         std::process::exit(2);
@@ -108,76 +120,6 @@ fn main() {
 fn raise_fd_limit() {
     #[cfg(unix)]
     if let Err(e) = rlimit::increase_nofile_limit(65536) {
-        eprintln!("failed to raise fd limit (does not affect startup): {e}");
+        velaterm_lib::diagnostic_warn!("failed to raise fd limit (does not affect startup): {e}");
     }
-}
-
-/// Recover the user's login-shell PATH and replace this process's PATH.
-///
-/// Apps launched from the macOS Dock or Finder receive launchd's minimal
-/// `/usr/bin:/bin:/usr/sbin:/sbin` PATH; Linux desktop launches have a similar issue. Paths for
-/// Homebrew, Node, Cargo, and other tools configured in shell startup files are otherwise missing.
-///
-/// Direct subprocesses from `host::command()`, including Git probes, worktree operations, and agent
-/// verification, would fail to find tools. A known symptom is `git-lfs: command not found` while
-/// creating a worktree: `/usr/bin/git` is visible, but its `/opt/homebrew/bin/git-lfs` child is not.
-/// PTY terminals are unaffected because their login shell reconstructs PATH; host::command bypasses it.
-///
-/// Run `$SHELL -i -l -c` once, print `$PATH` between sentinel strings, and extract it from stdout.
-/// Sentinels isolate noise emitted by startup files, while interactive mode includes paths commonly
-/// configured in `.zshrc` or `.bashrc` that login mode alone would miss.
-///
-/// Skip when TERM is set because terminal launches, including `pnpm tauri dev`, already have a complete
-/// PATH. Windows GUI processes inherit the system PATH normally and do not compile this logic.
-#[cfg(all(feature = "gui", not(windows)))]
-fn hydrate_path_from_login_shell() {
-    if std::env::var_os("TERM").is_some() {
-        return;
-    }
-
-    const BEGIN: &str = "__VLX_PATH_BEGIN__";
-    const END: &str = "__VLX_PATH_END__";
-
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let script = format!(r#"printf '{BEGIN}%s{END}' "$PATH""#);
-
-    // Startup files may contain interactive prompts such as read or select. Run the shell in a worker
-    // with a timeout so such prompts cannot block application startup; retain inherited PATH on timeout.
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut probe = std::process::Command::new(&shell);
-        // Probe the shell with the system environment; otherwise the captured `PATH` would carry the
-        // AppImage's bundle directories back into this process.
-        velaterm_lib::appimage::scrub_command(&mut probe);
-        let out = probe
-            .arg("-i")
-            .arg("-l")
-            .arg("-c")
-            .arg(&script)
-            .output();
-        let _ = tx.send(out);
-    });
-
-    let Ok(Ok(out)) = rx.recv_timeout(std::time::Duration::from_secs(5)) else {
-        eprintln!("failed to read PATH from login shell (keeping inherited PATH)");
-        return;
-    };
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let Some(path) = stdout
-        .split_once(BEGIN)
-        .and_then(|(_, rest)| rest.split_once(END))
-        .map(|(p, _)| p.trim())
-    else {
-        eprintln!("login shell printed no PATH marker (keeping inherited PATH)");
-        return;
-    };
-
-    // Accept only a nonempty value containing `/usr/bin`; malformed expansions such as fish's
-    // space-separated PATH array should leave the inherited value untouched.
-    if path.is_empty() || !path.split(':').any(|p| p == "/usr/bin") {
-        eprintln!("login shell PATH looks malformed (keeping inherited PATH)");
-        return;
-    }
-    std::env::set_var("PATH", path);
 }

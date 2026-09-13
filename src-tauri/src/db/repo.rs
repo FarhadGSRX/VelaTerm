@@ -357,6 +357,7 @@ pub fn create_session_full(
     // session used before the chat engine existed and what a plain terminal always uses.
     engine: Option<&str>,
 ) -> Result<Session, String> {
+    crate::agent::permission_catalog::validate(kind, permission_mode)?;
     let session = Session {
         id: new_id(),
         project_id: project_id.to_string(),
@@ -444,10 +445,16 @@ pub fn create_fresh_chat_session(
     source: &Session,
     name: &str,
 ) -> Result<Session, String> {
-    if !matches!(source.kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Opencode)
-        || source.engine != "chat"
+    if !matches!(
+        source.kind,
+        SessionKind::Claude
+            | SessionKind::Codex
+            | SessionKind::Opencode
+            | SessionKind::Pi
+            | SessionKind::Omp
+    ) || source.engine != "chat"
     {
-        return Err("Only Claude, Codex, and OpenCode chat sessions can be cleared".to_string());
+        return Err("Only chat sessions can be cleared".to_string());
     }
 
     let session = Session {
@@ -609,6 +616,9 @@ pub fn update_session(
     agent_args: Option<&str>,
     permission_mode: Option<&str>,
 ) -> Result<(), String> {
+    if let Some(kind) = get_session_kind(conn, id)? {
+        crate::agent::permission_catalog::validate(kind, permission_mode)?;
+    }
     conn.execute(
         "UPDATE sessions SET name = ?1, shell = ?2, cwd = ?3, init_cmd = ?4, agent_args = ?5, permission_mode = ?6 WHERE id = ?7",
         params![name, shell, cwd, init_cmd, agent_args, permission_mode, id],
@@ -1405,7 +1415,7 @@ pub struct OrchAgent {
     pub status: String,
 }
 
-/// One `/vorch` run and the agents it asked for.
+/// A historical `/vorch` run and the agents it requested.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrchRun {
@@ -1420,6 +1430,7 @@ pub struct OrchRun {
 ///
 /// Written when the request arrives, before the user has confirmed anything, so a run that is cancelled
 /// outright still leaves a record of what was proposed.
+#[cfg(test)]
 pub fn create_orch_run(
     conn: &Connection,
     parent_session_id: &str,
@@ -1447,6 +1458,7 @@ pub fn create_orch_run(
 ///
 /// Passing `None` records the user having removed that entry, which is a real outcome rather than a
 /// failure: the run is still complete, just smaller than proposed.
+#[cfg(test)]
 pub fn set_orch_agent_session(
     conn: &Connection,
     orch_id: &str,

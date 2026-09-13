@@ -1,3 +1,4 @@
+import { safeError } from "./diagnosticSafety";
 //! Automatic updates for the desktop Tauri client.
 //!
 //! `check()` fetches the updater endpoint configured under `plugins.updater` in tauri.conf.json and
@@ -175,7 +176,7 @@ export async function startInstall(): Promise<void> {
     // Windows never reaches this: the plugin launches the installer with ShellExecute and exits.
     setState({ stage: { kind: "ready" } });
   } catch (err) {
-    console.error("[updater] download or installation failed", err);
+    console.error("[updater] download or installation failed", safeError(err));
     setState({ stage: { kind: "error", detail: String(err) } });
   }
 }
@@ -221,7 +222,7 @@ async function installId(): Promise<string | null> {
     const id = await invoke<string>("install_id");
     cachedInstallId = id || null;
   } catch (err) {
-    console.error("[updater] could not read install id", err);
+    console.error("[updater] could not read install id", safeError(err));
     cachedInstallId = null;
   }
   return cachedInstallId;
@@ -308,7 +309,7 @@ export async function checkForUpdates({
     // Release the superseded handle only after its replacement is in place.
     if (pending) await pending.update.close().catch(() => {});
   } catch (err) {
-    console.error("[updater] update check failed", err);
+    console.error("[updater] update check failed", safeError(err));
     if (manual) {
       await message(t("updater.failed", String(err)), {
         title: t("updater.title"),

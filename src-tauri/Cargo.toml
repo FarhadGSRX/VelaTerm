@@ -1,6 +1,6 @@
 [package]
 name = "velaterm"
-version = "0.1.108"
+version = "0.2.0"
 description = "VelaTerm multi-session terminal manager"
 authors = ["vlinx"]
 edition = "2021"
@@ -18,6 +18,7 @@ default = ["gui"]
 # Opt-in mock runtime for native multi-window event-routing regression tests.
 native-menu-tests = ["gui", "tauri/test"]
 gui = [
+    "dep:font-kit",
     "dep:tauri",
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-dialog",
@@ -41,6 +42,8 @@ strip = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Native font enumeration belongs to the display host, not the remote headless server.
+font-kit = { version = "0.14.3", optional = true }
 # The built-in browser needs unstable Window::add_child multi-WebView APIs. Their signatures may change,
 # so the version is pinned within 2.11 and call sites are centralized.
 tauri = { version = "2", features = ["unstable"], optional = true }
@@ -109,6 +112,9 @@ axum-server = { version = "0.8", features = ["tls-rustls"] }
 # Local TLS-terminating tunnel for remote windows, accepting self-signed certificates and copying both ways.
 # wry 0.55 WKWebView cannot handle certificate challenges and renders direct self-signed HTTPS blank.
 tokio-rustls = "0.26"
+# Outbound WebSocket client for the public account tunnel: the host dials the relay and forwards the share
+# server's HTTP and WebSocket traffic over it, so no inbound port is needed. TLS uses the platform roots.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 # Compute headless --serve data paths using the GUI-equivalent platform directory plus identifier.
 dirs = "6"
 # Browser remote-access E2EE uses NaCl box, wire-compatible with tweetnacl-js. Pairing supplies the server

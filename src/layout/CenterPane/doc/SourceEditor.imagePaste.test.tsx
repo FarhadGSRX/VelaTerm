@@ -122,3 +122,25 @@ describe("SourceEditor image paste", () => {
     expect(mocks.uploadDocImage).not.toHaveBeenCalled();
   });
 });
+
+describe("SourceEditor companion updates", () => {
+  it("applies visual edits without feedback, while source replacements still report edits", async () => {
+    const ref = createRef<SourceHandle>();
+    const onEdited = vi.fn();
+    const { container } = render(
+      <SourceEditor ref={ref} defaultValue="original" path="/tmp/compare.md" kind="markdown" onEdited={onEdited} />,
+    );
+    await waitFor(() => expect(ref.current?.getText()).toBe("original"));
+    const editor = container.querySelector(".cm-editor");
+    act(() => ref.current?.setText("# updated\n\nExact spacing  "));
+    expect(ref.current?.getText()).toBe("# updated\n\nExact spacing  ");
+    expect(onEdited).not.toHaveBeenCalled();
+    expect(container.querySelector(".cm-editor")).toBe(editor);
+    act(() => {
+      ref.current?.search.apply({ query: "updated", caseSensitive: true });
+      ref.current?.search.replace("source edit");
+    });
+    expect(ref.current?.getText()).toBe("# source edit\n\nExact spacing  ");
+    expect(onEdited).toHaveBeenCalledOnce();
+  });
+});

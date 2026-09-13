@@ -129,12 +129,13 @@ export function FastModeChip({
 }
 
 /** A chip whose menu is arbitrary content rather than a list of choices. Closes on outside click and Escape. */
-function ChipPopover({
+export function ChipPopover({
   glyph,
   label,
   title,
   badge,
   width = 300,
+  fitViewport = true,
   children,
   onOpen,
 }: {
@@ -143,11 +144,23 @@ function ChipPopover({
   title: string;
   badge?: ReactNode;
   width?: number;
+  fitViewport?: boolean;
   children: ReactNode;
   onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    if (!open || !fitViewport) return;
+    const resize = () => setViewportWidth(window.innerWidth);
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [open, fitViewport]);
+  const panelWidth = fitViewport ? Math.min(width, Math.max(0, viewportWidth - 16)) : width;
+  const anchorLeft = boxRef.current?.getBoundingClientRect().left ?? 0;
+  const panelLeft = fitViewport ? Math.max(8 - anchorLeft, Math.min(0, viewportWidth - anchorLeft - panelWidth - 8)) : 0;
   useEffect(() => {
     if (!open) return;
     onOpen?.();
@@ -171,6 +184,7 @@ function ChipPopover({
       <button
         className="sv-chip"
         title={title}
+        aria-expanded={open}
         style={open ? { background: "var(--bg-hover)" } : undefined}
         onClick={() => setOpen((v) => !v)}
       >
@@ -182,7 +196,7 @@ function ChipPopover({
       {open && (
         <div
           className="sv-popover"
-          style={{ ...SELECT_PANEL, top: "auto", bottom: "calc(100% + 4px)", left: 0, width, maxHeight: 320 }}
+          style={{ ...SELECT_PANEL, top: "auto", bottom: "calc(100% + 4px)", left: panelLeft, width: panelWidth, maxHeight: 320 }}
         >
           {children}
         </div>

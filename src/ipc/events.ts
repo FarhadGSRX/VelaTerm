@@ -9,7 +9,7 @@ import {
 import type { MirrorSnapshot, RemoteClient } from "./mirror";
 import type { SessionStateBatch } from "./sessionState";
 import type { KillReason, UsageSnapshot } from "./commands";
-import type { AgentKind } from "../types";
+import type { AgentKind, SessionKind } from "../types";
 
 // PTY output bypasses the event channel and travels directly through spawnPty's binary Channel / WS binary frames; see transport.ts.
 
@@ -125,7 +125,17 @@ export function onPtyStatus(
  * Child-session request initiated inside a session through the user's `vspawn` command or Claude's `/vspawn`
  * skill and relayed by backend `/spawn`. Matches Rust `SpawnRequest` one-to-one in camelCase.
  */
+export type WorktreeMode = "none" | "shared" | "each";
+
 export interface SpawnRequest {
+  images?: import("./chat").ChatImage[];
+  requestId?: string;
+  planExecute?: {
+    worktreeMode?: WorktreeMode;
+    splitTasks?: boolean;
+    plan: { agent?: SessionKind | null; model?: string | null; effort?: string | null };
+    exec: { agent?: SessionKind | null; model?: string | null; effort?: string | null };
+  } | null;
   parentSessionId: string;
   prompt: string;
   kind?: AgentKind | "terminal" | null;
@@ -145,52 +155,6 @@ export function onSpawnRequest(
   cb: (req: SpawnRequest) => void,
 ): Promise<UnlistenFn> {
   return listen<SpawnRequest>("spawn://request", (payload) => cb(payload));
-}
-
-/** Settings an orchestration applies to every agent that does not override them. */
-export interface OrchDefaults {
-  kind?: SpawnRequest["kind"];
-  model?: string | null;
-  effort?: string | null;
-}
-
-/** One agent an orchestration asks for. Absent settings mean "follow the shared setting". */
-export interface OrchAgentSpec {
-  /**
-   * Position in the original proposal. The dialog stamps it so that, after the user removes entries,
-   * each surviving one is still reported under the index the backend recorded it at.
-   */
-  idx?: number;
-  name: string;
-  prompt: string;
-  kind?: SpawnRequest["kind"];
-  model?: string | null;
-  effort?: string | null;
-  worktree?: boolean | null;
-}
-
-/**
- * Multi-session request from a session's `vorch` command, relayed by backend `/orch`. Matches Rust
- * `OrchEvent` one-to-one in camelCase.
- *
- * This is a proposal, not an instruction: nothing exists yet, and the user may edit or drop any of it in
- * the confirmation dialog. `orchId` identifies the recorded run, and each session created for it is
- * reported back under that id so the backend knows what the proposal became.
- */
-export interface OrchRequest {
-  orchId: string;
-  sessionId: string;
-  title: string;
-  worktreeMode?: "none" | "shared" | "each" | null;
-  defaults?: OrchDefaults;
-  agents: OrchAgentSpec[];
-}
-
-/** Listen for orchestration proposals as a global event registered once on mount. */
-export function onOrchRequest(
-  cb: (req: OrchRequest) => void,
-): Promise<UnlistenFn> {
-  return listen<OrchRequest>("orch://request", (payload) => cb(payload));
 }
 
 /** Payload broadcast when any client confirms or cancels a spawn confirmation card. */

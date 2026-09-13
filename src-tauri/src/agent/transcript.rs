@@ -8,7 +8,6 @@
 //! - **Codex** uses response_item message rows with user/assistant roles and input_text/output_text blocks; function_call
 //!   records tools. Filter injected environment_context/user_instructions from user messages.
 
-use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::Stdio;
@@ -72,8 +71,14 @@ pub fn context_info(kind: SessionKind, agent_session_id: &str) -> Result<AgentCo
     if matches!(kind, SessionKind::Grok) {
         return grok_context_info(agent_session_id);
     }
+    if matches!(kind, SessionKind::Opencode) {
+        return opencode_context_info(agent_session_id);
+    }
+    if matches!(kind, SessionKind::Pi | SessionKind::Omp) {
+        return pi_context_info(kind, agent_session_id);
+    }
     if !matches!(kind, SessionKind::Claude) {
-        return Err("Only claude, codex, and grok sessions support context info".to_string());
+        return Err("This session kind does not record model context information".to_string());
     }
     let path = resume::find_claude_transcript(agent_session_id)
         .ok_or("Claude transcript file not found")?;
@@ -155,6 +160,115 @@ fn grok_context_info(agent_session_id: &str) -> Result<AgentContextInfo, String>
     })
 }
 
+/// Reads the model and current context from OpenCode's own store.
+///
+/// OpenCode does not record the model's context window, so `context_limit` stays zero: the panel shows
+/// the used count and leaves the overflow meter off rather than guessing a capacity.
+fn opencode_context_info(session_id: &str) -> Result<AgentContextInfo, String> {
+    let messages = crate::agent::opencode_store::messages(session_id)?;
+    let last = messages
+        .iter()
+        .rev()
+        .find(|m| {
+            m.info.get("role").and_then(Value::as_str) == Some("assistant")
+                && m.info
+                    .pointer("/tokens/total")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|n| n > 0)
+        })
+        .ok_or("OpenCode session has no recorded usage yet")?;
+    let context_tokens = last.info.get("tokens").and_then(|tokens| {
+        let input = tokens.get("input").and_then(Value::as_u64).unwrap_or(0);
+        let read = tokens.pointer("/cache/read").and_then(Value::as_u64).unwrap_or(0);
+        let write = tokens.pointer("/cache/write").and_then(Value::as_u64).unwrap_or(0);
+        (input + read + write > 0).then_some(input + read + write)
+    });
+    let model = last
+        .info
+        .get("modelID")
+        .and_then(Value::as_str)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
+    Ok(AgentContextInfo {
+        model,
+        context_tokens,
+        context_limit: 0,
+        current_tool: None,
+    })
+}
+
+/// Reads the model and current context from a Pi or OMP session recording.
+///
+/// Each assistant message carries the usage of one model request, and the prompt it was sent is the
+/// uncached input plus the cache read/write pair — the same widening the panel already applies to Claude.
+/// Neither agent records a context window, so the limit comes from the catalogue the CLI cached on disk;
+/// when the model is not listed there the limit stays zero and the meter is left off rather than guessed.
+fn pi_context_info(kind: SessionKind, agent_session_id: &str) -> Result<AgentContextInfo, String> {
+    let path = resume::find_pi_session(kind, agent_session_id)
+        .ok_or("The agent's session recording could not be found")?;
+    let tail = read_tail(&path, CONTEXT_TAIL_BYTES)?;
+    let PiTailContext { model, provider, context_tokens } = pi_tail_context(&tail);
+    if model.is_none() && context_tokens.is_none() {
+        return Err("The agent has not recorded any usage yet".to_string());
+    }
+    let context_limit = model
+        .as_deref()
+        .and_then(|id| crate::agent::pi_models::stored_context_window(kind, provider.as_deref(), id))
+        .unwrap_or(0);
+    Ok(AgentContextInfo {
+        model,
+        context_tokens,
+        context_limit,
+        current_tool: None,
+    })
+}
+
+/// The latest model and prompt size on a Pi or OMP recording tail.
+struct PiTailContext {
+    model: Option<String>,
+    provider: Option<String>,
+    context_tokens: Option<u64>,
+}
+
+fn pi_tail_context(tail: &str) -> PiTailContext {
+    let mut latest = PiTailContext {
+        model: None,
+        provider: None,
+        context_tokens: None,
+    };
+    for line in tail.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) == Some("model_change") {
+            if let Some(model) = v.get("modelId").and_then(Value::as_str).filter(|m| !m.is_empty()) {
+                latest.model = Some(model.to_string());
+                latest.provider = v.get("provider").and_then(Value::as_str).map(str::to_string);
+            }
+            continue;
+        }
+        let Some(message) = v.get("message") else {
+            continue;
+        };
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        if let Some(model) = message.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()) {
+            latest.model = Some(model.to_string());
+            latest.provider = message.get("provider").and_then(Value::as_str).map(str::to_string);
+        }
+        if let Some(usage) = message.get("usage") {
+            let input = usage.get("input").and_then(Value::as_u64).unwrap_or(0);
+            let read = usage.get("cacheRead").and_then(Value::as_u64).unwrap_or(0);
+            let write = usage.get("cacheWrite").and_then(Value::as_u64).unwrap_or(0);
+            if input.saturating_add(read).saturating_add(write) > 0 {
+                latest.context_tokens = Some(input.saturating_add(read).saturating_add(write));
+            }
+        }
+    }
+    latest
+}
+
 fn read_json_file(path: &Path) -> Option<Value> {
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
@@ -167,7 +281,8 @@ fn json_u64(v: &Value) -> Option<u64> {
 }
 
 /// Extracts Codex model, latest-request input tokens, context window, and current tool from the rollout tail.
-/// `total_token_usage` is cumulative and not context size; use `last_token_usage.input_tokens` instead.
+/// Use the latest input and retained output, excluding reasoning, as the live chat engine does.
+/// `total_token_usage` is cumulative consumption, not context size.
 fn last_codex_context_info(text: &str) -> AgentContextInfo {
     let mut model = None;
     let mut context_tokens = None;
@@ -206,8 +321,12 @@ fn last_codex_context_info(text: &str) -> AgentContextInfo {
                         if let Some(info) = payload.get("info") {
                             context_tokens = info
                                 .get("last_token_usage")
-                                .and_then(|u| u.get("input_tokens"))
-                                .and_then(Value::as_u64)
+                                .and_then(|usage| {
+                                    let input = usage.get("input_tokens")?.as_u64()?;
+                                    let output = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                                    let reasoning = usage.get("reasoning_output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                                    Some(input.saturating_add(output).saturating_sub(reasoning))
+                                })
                                 .or(context_tokens);
                             context_limit = info
                                 .get("model_context_window")
@@ -272,17 +391,10 @@ fn context_limit_for_model(model: &str) -> u64 {
     }
 }
 
-/// Claude-only current-turn Info stats after the final genuine user message: output tokens, tool calls, and distinct changed files.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct TurnStats {
-    /// Sum of assistant `output_tokens` generated during this turn.
-    pub tokens: u64,
-    /// Number of tool_use blocks in this turn.
-    pub tools_used: u32,
-    /// Distinct paths changed by file-writing tools during this turn.
-    pub files_touched: u32,
-}
+mod turn_stats;
+pub use turn_stats::{current_turn_stats, TurnStats};
+#[cfg(test)]
+use turn_stats::turn_stats_from_text;
 
 /// File-writing tools counted toward changed files.
 fn is_edit_tool(name: &str) -> bool {
@@ -303,83 +415,6 @@ fn tool_file_path(input: &Value) -> Option<String> {
         }
     }
     None
-}
-
-/// Computes current-turn Claude stats after the final genuine user message. Missing transcripts error. Because only
-/// the last 512 KB is read, an exceptionally large single turn may be counted from a truncated starting point.
-pub fn current_turn_stats(kind: SessionKind, agent_session_id: &str) -> Result<TurnStats, String> {
-    if !matches!(kind, SessionKind::Claude) {
-        return Err("Only claude sessions support per-turn stats".to_string());
-    }
-    let path = resume::find_claude_transcript(agent_session_id)
-        .ok_or("Claude transcript file not found")?;
-    let tail = read_tail(&path, CONTEXT_TAIL_BYTES)?;
-    Ok(turn_stats_from_text(&tail))
-}
-
-/// Computes current-turn stats from transcript text, isolated for direct unit testing.
-fn turn_stats_from_text(text: &str) -> TurnStats {
-    let lines: Vec<&str> = text.lines().collect();
-
-    // Start after the final genuine user message; parser excludes tool responses, metadata, and sidechains.
-    let mut start = 0usize;
-    for (i, line) in lines.iter().enumerate() {
-        if parse_claude_line(line)
-            .map(|p| p.role == "user")
-            .unwrap_or(false)
-        {
-            start = i + 1;
-        }
-    }
-
-    let mut tokens = 0u64;
-    let mut tools_used = 0u32;
-    let mut files: HashSet<String> = HashSet::new();
-    for line in &lines[start..] {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if v.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
-        if v.get("isSidechain")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let Some(msg) = v.get("message") else {
-            continue;
-        };
-        if msg.get("model").and_then(Value::as_str) == Some("<synthetic>") {
-            continue;
-        }
-        if let Some(usage) = msg.get("usage") {
-            tokens += usage
-                .get("output_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-        }
-        if let Some(items) = msg.get("content").and_then(Value::as_array) {
-            for it in items {
-                if it.get("type").and_then(Value::as_str) == Some("tool_use") {
-                    tools_used += 1;
-                    let name = it.get("name").and_then(Value::as_str).unwrap_or("");
-                    if is_edit_tool(name) {
-                        if let Some(fp) = it.get("input").and_then(tool_file_path) {
-                            files.insert(fp);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    TurnStats {
-        tokens,
-        tools_used,
-        files_touched: files.len() as u32,
-    }
 }
 
 /// Reads at most `cap` bytes from a file tail, discarding the leading partial line when starting mid-file.
@@ -482,6 +517,9 @@ pub struct CodexUsage {
     pub secondary: Option<CodexRateWindow>,
     /// Plan type such as free/plus/pro, passed through for optional display.
     pub plan_type: Option<String>,
+    /// Authoritative available reset count; absent for offline snapshots and unsupported services.
+    #[serde(default)]
+    pub reset_credits: Option<u64>,
 }
 
 /// Actively reads current account limits through the installed Codex CLI app-server.
@@ -490,6 +528,40 @@ pub struct CodexUsage {
 /// Start a short-lived stdio app-server, initialize, query account/rateLimits/read, then close. Unsupported old CLIs,
 /// logged-out state, or network failure return Err for fallback to rollout.
 pub fn live_codex_rate_limits(bin_path: Option<&str>) -> Result<CodexUsage, String> {
+    let response = codex_account_request(bin_path, "account/rateLimits/read", Value::Null)?;
+    parse_live_codex_rate_limits(&response)
+        .ok_or_else(|| "Codex app-server returned no account usage data".to_string())
+}
+
+/// One redemption attempt. The caller must retain its UUID across ambiguous transport failures.
+pub fn consume_codex_reset_credit(
+    bin_path: Option<&str>,
+    idempotency_key: &str,
+) -> Result<CodexResetOutcome, String> {
+    uuid::Uuid::parse_str(idempotency_key).map_err(|_| "Invalid reset request UUID".to_string())?;
+    let response = codex_account_request(
+        bin_path,
+        "account/rateLimitResetCredit/consume",
+        serde_json::json!({ "idempotencyKey": idempotency_key }),
+    )?;
+    serde_json::from_value(response.get("outcome").cloned().unwrap_or(Value::Null))
+        .map_err(|_| "Codex returned an unknown reset outcome; retry the same request".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexResetOutcome {
+    Reset,
+    AlreadyRedeemed,
+    NothingToReset,
+    NoCredit,
+}
+
+fn codex_account_request(
+    bin_path: Option<&str>,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
     let program = bin_path.filter(|p| !p.trim().is_empty()).unwrap_or("codex");
 
     #[cfg(windows)]
@@ -512,6 +584,7 @@ pub fn live_codex_rate_limits(bin_path: Option<&str>) -> Result<CodexUsage, Stri
         cmd
     };
 
+    super::executable::prepare_command(&mut command, program);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -546,7 +619,7 @@ pub fn live_codex_rate_limits(bin_path: Option<&str>) -> Result<CodexUsage, Stri
     let result = (|| {
         writeln!(
             input,
-            r#"{{"method":"initialize","id":0,"params":{{"clientInfo":{{"name":"vlx_term","title":"VelaTerm","version":"{}"}}}}}}"#,
+            r#"{{"method":"initialize","id":0,"params":{{"clientInfo":{{"name":"vlx_term","title":"VelaTerm","version":"{}"}},"capabilities":{{"experimentalApi":true}}}}}}"#,
             env!("CARGO_PKG_VERSION")
         )
         .and_then(|_| input.flush())
@@ -557,14 +630,13 @@ pub fn live_codex_rate_limits(bin_path: Option<&str>) -> Result<CodexUsage, Stri
             .and_then(|_| {
                 writeln!(
                     input,
-                    r#"{{"method":"account/rateLimits/read","id":1,"params":null}}"#,
+                    "{}",
+                    serde_json::json!({ "method": method, "id": 1, "params": params }),
                 )
             })
             .and_then(|_| input.flush())
-            .map_err(|e| format!("failed to query Codex rate limits: {e}"))?;
-        let response = wait_app_server_response(&rx, 1, Duration::from_secs(12))?;
-        parse_live_codex_rate_limits(&response)
-            .ok_or_else(|| "Codex app-server returned no primary rate-limit window".to_string())
+            .map_err(|e| format!("failed to send Codex account request: {e}"))?;
+        wait_app_server_response(&rx, 1, Duration::from_secs(12))
     })();
 
     drop(input);
@@ -610,7 +682,8 @@ fn parse_live_codex_rate_limits(result: &Value) -> Option<CodexUsage> {
     let snapshot = result
         .get("rateLimitsByLimitId")
         .and_then(|buckets| buckets.get("codex"))
-        .or_else(|| result.get("rateLimits"))?;
+        .or_else(|| result.get("rateLimits"))
+        .unwrap_or(&Value::Null);
     let parse_window = |key: &str| {
         let w = snapshot.get(key)?;
         if w.is_null() {
@@ -626,6 +699,10 @@ fn parse_live_codex_rate_limits(result: &Value) -> Option<CodexUsage> {
         })
     };
     let usage = CodexUsage {
+        reset_credits: result
+            .get("rateLimitResetCredits")
+            .and_then(|v| v.get("availableCount"))
+            .and_then(Value::as_u64),
         primary: parse_window("primary"),
         secondary: parse_window("secondary"),
         plan_type: snapshot
@@ -633,7 +710,8 @@ fn parse_live_codex_rate_limits(result: &Value) -> Option<CodexUsage> {
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    (usage.primary.is_some() || usage.secondary.is_some()).then_some(usage)
+    (usage.primary.is_some() || usage.secondary.is_some() || usage.reset_credits.is_some())
+        .then_some(usage)
 }
 
 /// Reads the newest Codex rollout containing rate limits. Because usage is account-level, this keeps Info available
@@ -691,6 +769,7 @@ fn last_codex_rate_limits(text: &str) -> Option<CodexUsage> {
             continue;
         }
         let usage = CodexUsage {
+            reset_credits: None,
             primary: rl.get("primary").and_then(parse_codex_window),
             secondary: rl.get("secondary").and_then(parse_codex_window),
             plan_type: rl
@@ -721,6 +800,7 @@ pub fn source_path(kind: SessionKind, agent_session_id: &str) -> Option<std::pat
         SessionKind::Claude => resume::find_claude_transcript(agent_session_id),
         SessionKind::Codex => resume::find_codex_rollout(agent_session_id),
         SessionKind::Grok => resume::find_grok_updates(agent_session_id),
+        SessionKind::Pi | SessionKind::Omp => resume::find_pi_session(kind, agent_session_id),
         // OpenCode/Copilot/Cursor lack flat parseable files; terminal/browser nodes have no conversation.
         _ => None,
     }
@@ -733,8 +813,45 @@ pub fn read_at(kind: SessionKind, path: &Path) -> Result<Vec<TranscriptMessage>,
         SessionKind::Claude => parse_file(path, parse_claude_line),
         SessionKind::Codex => parse_file(path, parse_codex_line),
         SessionKind::Grok => parse_grok_file(path),
+        SessionKind::Pi | SessionKind::Omp => parse_pi_file(path),
         _ => Err("Transcript parsing is not supported for this session kind".to_string()),
     }
+}
+
+/// Parse a Pi or OMP recording for the archive view. The shared parser keeps only the active branch of the
+/// tree; thinking, tool results and local commands are not part of the prose the archive shows.
+fn parse_pi_file(path: &Path) -> Result<Vec<TranscriptMessage>, String> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read transcript: {e}"))?;
+    Ok(merge(pi_pieces(&content).into_iter()))
+}
+
+fn pi_pieces(content: &str) -> Vec<Piece> {
+    use crate::agent::export::{pi_events, Event};
+    pi_events(content)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::User { text, ts } => Some(Piece {
+                role: "user",
+                text,
+                timestamp: ts,
+                tools: Vec::new(),
+            }),
+            Event::AssistantText { text, ts } => Some(Piece {
+                role: "assistant",
+                text,
+                timestamp: ts,
+                tools: Vec::new(),
+            }),
+            Event::ToolUse { name, ts, .. } => Some(Piece {
+                role: "assistant",
+                text: String::new(),
+                timestamp: ts,
+                tools: vec![name],
+            }),
+            Event::Thinking { .. } | Event::ToolResult { .. } | Event::Command { .. } => None,
+        })
+        .collect()
 }
 
 /// Parses an entire JSONL file line-by-line and merges adjacent fragments of the same role. Used by the
@@ -781,10 +898,11 @@ pub fn read(kind: SessionKind, agent_session_id: &str) -> Result<Vec<TranscriptM
         SessionKind::Cline => {
             Err("Transcript view is not supported for cline sessions yet".to_string())
         }
-        // Pi uses flat JSONL with a header and tree entries, but its parser is not integrated; archives use recording playback.
-        SessionKind::Pi => Err("Transcript view is not supported for pi sessions yet".to_string()),
-        // OMP inherited Pi's flat JSONL format, and like Pi it has no parser yet; archives use recording playback.
-        SessionKind::Omp => Err("Transcript view is not supported for omp sessions yet".to_string()),
+        // Pi and OMP record an append-only entry tree; the shared parser keeps the active branch.
+        SessionKind::Pi | SessionKind::Omp => {
+            let content = resume::read_pi_transcript(kind, agent_session_id)?;
+            Ok(merge(pi_pieces(&content).into_iter()))
+        }
         // Crush uses an internal database under ~/.local/share/crush; archives fall back to recording playback.
         SessionKind::Crush => {
             Err("Transcript view is not supported for crush sessions yet".to_string())
@@ -911,15 +1029,24 @@ fn opencode_pieces(messages: &[crate::agent::opencode_store::OpencodeMessage]) -
     let mut pieces: Vec<Piece> = Vec::new();
     for event in crate::agent::chat::opencode_timeline::events(messages) {
         match event {
-            crate::agent::export::Event::User { text, ts } => {
-                pieces.push(Piece { role: "user", text, timestamp: ts, tools: Vec::new() })
-            }
-            crate::agent::export::Event::AssistantText { text, ts } => {
-                pieces.push(Piece { role: "assistant", text, timestamp: ts, tools: Vec::new() })
-            }
-            crate::agent::export::Event::ToolUse { name, ts, .. } => {
-                pieces.push(Piece { role: "assistant", text: String::new(), timestamp: ts, tools: vec![name] })
-            }
+            crate::agent::export::Event::User { text, ts } => pieces.push(Piece {
+                role: "user",
+                text,
+                timestamp: ts,
+                tools: Vec::new(),
+            }),
+            crate::agent::export::Event::AssistantText { text, ts } => pieces.push(Piece {
+                role: "assistant",
+                text,
+                timestamp: ts,
+                tools: Vec::new(),
+            }),
+            crate::agent::export::Event::ToolUse { name, ts, .. } => pieces.push(Piece {
+                role: "assistant",
+                text: String::new(),
+                timestamp: ts,
+                tools: vec![name],
+            }),
             _ => {}
         }
     }
@@ -947,7 +1074,9 @@ fn merge(pieces: impl Iterator<Item = Piece>) -> Vec<TranscriptMessage> {
     let mut out: Vec<TranscriptMessage> = Vec::new();
     for p in pieces {
         if let Some(last) = out.last_mut() {
-            if last.role == p.role {
+            // Cross-session submissions are complete messages, even when no assistant text separates them.
+            let workflow_boundary=p.role=="user" && (last.text.starts_with("[VelaTerm message ") || p.text.starts_with("[VelaTerm message "));
+            if last.role == p.role && !workflow_boundary {
                 if !p.text.is_empty() {
                     if !last.text.is_empty() {
                         last.text.push_str("\n\n");
@@ -1146,6 +1275,95 @@ fn parse_codex_line(line: &str) -> Option<Piece> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn reset_credit_count_is_authoritative_and_optional() {
+        let value = serde_json::json!({
+            "rateLimits": null,
+            "rateLimitResetCredits": { "availableCount": 3, "credits": [] }
+        });
+        assert_eq!(
+            parse_live_codex_rate_limits(&value).unwrap().reset_credits,
+            Some(3)
+        );
+        let value = serde_json::json!({ "rateLimitResetCredits": { "availableCount": 0 } });
+        assert_eq!(
+            parse_live_codex_rate_limits(&value).unwrap().reset_credits,
+            Some(0)
+        );
+        assert!(parse_live_codex_rate_limits(
+            &serde_json::json!({ "rateLimitResetCredits": null })
+        )
+        .is_none());
+        let old: CodexUsage = serde_json::from_value(serde_json::json!({
+            "primary": null, "secondary": null, "planType": "pro"
+        }))
+        .unwrap();
+        assert_eq!(old.reset_credits, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reset_request_roundtrip_preserves_idempotency_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("vlx-reset-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let program = dir.join("codex");
+        // The mock speaks stdio only and cannot contact Codex or redeem a real credit.
+        std::fs::write(
+            &program,
+            r#"#!/bin/sh
+IFS= read -r init
+printf '%s\n' "$init" > "$0.request"
+printf '%s\n' '{"id":0,"result":{}}'
+IFS= read -r initialized
+IFS= read -r request
+printf '%s\n' "$request" >> "$0.request"
+printf '%s\n' '{"id":1,"result":{"outcome":"alreadyRedeemed"}}'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = uuid::Uuid::new_v4().to_string();
+        for _ in 0..2 {
+            assert_eq!(
+                consume_codex_reset_credit(program.to_str(), &key).unwrap(),
+                CodexResetOutcome::AlreadyRedeemed
+            );
+            let text = std::fs::read_to_string(dir.join("codex.request")).unwrap();
+            let messages: Vec<Value> = text
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(
+                messages[0]["params"]["capabilities"]["experimentalApi"],
+                true
+            );
+            assert_eq!(
+                messages[1]["method"],
+                "account/rateLimitResetCredit/consume"
+            );
+            assert_eq!(messages[1]["params"]["idempotencyKey"], key);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reset_outcomes_and_request_validation() {
+        for name in ["reset", "alreadyRedeemed", "nothingToReset", "noCredit"] {
+            let value = serde_json::Value::String(name.into());
+            let outcome: CodexResetOutcome = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(outcome).unwrap(), value);
+        }
+        assert!(
+            serde_json::from_value::<CodexResetOutcome>(serde_json::json!("unexpected")).is_err()
+        );
+        // Invalid requests must fail before even starting the configured executable.
+        assert_eq!(
+            consume_codex_reset_credit(Some("/nonexistent-codex"), "").unwrap_err(),
+            "Invalid reset request UUID"
+        );
+    }
+
     /// Claude merges user strings and multi-row assistant text/tool_use into messages while skipping tool results,
     /// sidechains, and attachments.
     #[test]
@@ -1262,8 +1480,13 @@ mod tests {
             r#"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","limit_name":null,"primary":null,"secondary":null,"plan_type":"free"}}}"#,
         ]
         .join("\n");
-        let usage = last_codex_rate_limits(&text).expect("the earlier real snapshot should be kept rather than the empty one at the tail");
-        let primary = usage.primary.as_ref().expect("primary must not be cleared by an empty snapshot");
+        let usage = last_codex_rate_limits(&text).expect(
+            "the earlier real snapshot should be kept rather than the empty one at the tail",
+        );
+        let primary = usage
+            .primary
+            .as_ref()
+            .expect("primary must not be cleared by an empty snapshot");
         assert_eq!(primary.used_percent, 100.0);
         assert_eq!(primary.window_minutes, 43200);
         assert_eq!(primary.resets_at, Some(1784444950));
@@ -1368,6 +1591,26 @@ mod tests {
         assert!(tokens.is_none());
     }
 
+    /// A Pi or OMP tail yields the latest model, its provider, and the prompt the model was sent.
+    #[test]
+    fn pi_tail_context_reads_the_last_assistant_usage() {
+        let text = [
+            r#"{"type":"model_change","id":"m1","parentId":null,"provider":"deepseek","modelId":"deepseek-flash"}"#,
+            r#"{"type":"message","id":"u1","parentId":"m1","message":{"role":"user","content":"go"}}"#,
+            r#"{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","provider":"deepseek","model":"deepseek-flash","usage":{"input":100,"output":20,"cacheRead":800,"cacheWrite":100}}}"#,
+            r#"{"type":"message","id":"a2","parentId":"a1","message":{"role":"assistant","provider":"deepseek","model":"deepseek-v4-pro","usage":{"input":150,"output":10,"cacheRead":900,"cacheWrite":0}}}"#,
+            "not json",
+        ]
+        .join("\n");
+        let latest = pi_tail_context(&text);
+        assert_eq!(latest.model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(latest.provider.as_deref(), Some("deepseek"));
+        assert_eq!(latest.context_tokens, Some(1050));
+        let empty = pi_tail_context("{}\nnot json");
+        assert!(empty.model.is_none());
+        assert!(empty.context_tokens.is_none());
+    }
+
     /// Maps real model IDs, including dated suffixes, to 1M windows and uses 200k for unknown models.
     #[test]
     fn context_limit_for_model_maps_window() {
@@ -1412,20 +1655,20 @@ mod tests {
         let text = [
             // Previous turn, which must be ignored.
             r#"{"type":"user","message":{"role":"user","content":"old turn"}}"#,
-            r#"{"type":"assistant","message":{"model":"claude-x","usage":{"output_tokens":5},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"old.ts"}}]}}"#,
+            r#"{"type":"assistant","message":{"model":"claude-x","usage":{"input_tokens":0,"output_tokens":5},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"old.ts"}}]}}"#,
             // Current-turn boundary: the final genuine user message.
             r#"{"type":"user","message":{"role":"user","content":"new turn"}}"#,
-            r#"{"type":"assistant","message":{"model":"claude-x","usage":{"output_tokens":100},"content":[{"type":"text","text":"ok"},{"type":"tool_use","name":"Edit","input":{"file_path":"a.ts"}}]}}"#,
+            r#"{"type":"assistant","message":{"model":"claude-x","usage":{"input_tokens":0,"output_tokens":100},"content":[{"type":"text","text":"ok"},{"type":"tool_use","id":"edit-a","name":"Edit","input":{"file_path":"a.ts"}}]}}"#,
             // A user-role all-tool_result row is not a new turn boundary.
-            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"done"}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"edit-a","content":"done"}]}}"#,
             // Read does not change a file; Write repeats Edit's a.ts and is deduplicated.
-            r#"{"type":"assistant","message":{"model":"claude-x","usage":{"output_tokens":40},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"x.ts"}},{"type":"tool_use","name":"Write","input":{"file_path":"a.ts"}}]}}"#,
+            r#"{"type":"assistant","message":{"model":"claude-x","usage":{"input_tokens":0,"output_tokens":40},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"x.ts"}},{"type":"tool_use","name":"Write","input":{"file_path":"a.ts"}}]}}"#,
         ]
         .join("\n");
         let stats = turn_stats_from_text(&text);
-        assert_eq!(stats.tokens, 140); // 100 + 40; exclude 5 from the previous turn.
-        assert_eq!(stats.tools_used, 3); // Edit + Read + Write
-        assert_eq!(stats.files_touched, 1); // Deduplicate Edit/Write of a.ts; exclude Read.
+        assert_eq!(stats.tokens, Some(140)); // 100 + 40; exclude 5 from the previous turn.
+        assert_eq!(stats.tools_used, Some(3)); // Edit + Read + Write
+        assert_eq!(stats.files_touched, Some(1)); // Deduplicate Edit/Write of a.ts; exclude Read.
     }
 
     /// Tail reading returns the full text when cap covers it, otherwise discards the first partial line.

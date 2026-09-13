@@ -1,9 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
-import { memoryCancel, memoryJobs, memoryModels, memoryOptions, memoryRetry, memoryStart, type MemoryJob } from "../../ipc/memory";
+import { memoryCancel, memoryJobs, memoryModels, memoryOptions, memoryRetry, memoryStart, type MemoryJob, type MemoryOptions } from "../../ipc/memory";
 import { useTermStore } from "../../store/termStore";
+import type { SessionKind } from "../../types";
 import { MemoryLink, memoryNavigate, memoryUrl, useMemoryLocation } from "./navigation";
 import { LoadState, StateLabel, memoryError, memoryEffortLabel, memoryTime, useMemoryLoad } from "./shared";
+
+/** The remembered agent when it is still installed, otherwise the backend's first available one. */
+function rememberedAgent(data: MemoryOptions): string {
+  const saved = useTermStore.getState().memoryPrefs.agent;
+  if (saved && data.agents.some((item) => item.id === saved && item.available)) return saved;
+  return data.defaultAgent;
+}
 
 export function MemoryCompile({ sessionId }: { sessionId: string }) {
   const t = useT(); const session = useTermStore((s) => [...s.sessions, ...s.archivedSessions].find((item) => item.id === sessionId));
@@ -14,7 +22,22 @@ export function MemoryCompile({ sessionId }: { sessionId: string }) {
   const modelReady = !!agent && models.data?.agent === agent;
   const selectedModel = modelReady ? models.data?.items.find((item) => item.id === model) : undefined;
   const [busy, setBusy] = useState(false); const [failure, setFailure] = useState("");
-  useEffect(() => { if (data) setAgent(data.defaultAgent); }, [data]);
+  const seeded = useRef(false);
+  const remember = (patch: { agent?: SessionKind | null; model?: string | null; effort?: string | null }) =>
+    useTermStore.getState().setMemoryPrefs(patch);
+  useEffect(() => { if (data) setAgent(rememberedAgent(data)); }, [data]);
+  // Restore the remembered model and effort once, as soon as the seeded agent's catalogue arrives. A model
+  // the agent no longer offers falls back to its default, and an effort the model no longer supports to none.
+  useEffect(() => {
+    if (seeded.current || !data || !modelReady) return;
+    seeded.current = true;
+    const prefs = useTermStore.getState().memoryPrefs;
+    const items = models.data?.items ?? [];
+    const chosen = prefs.agent === agent && items.some((item) => item.id === prefs.model) ? (prefs.model ?? "") : "";
+    const spec = items.find((item) => item.id === chosen);
+    setModel(chosen);
+    setEffort(chosen && prefs.effort && spec?.effortLevels.includes(prefs.effort) ? prefs.effort : "");
+  }, [data, modelReady, agent, models.data]);
   if (!data) return <LoadState error={error} reload={reload} />;
   const start = async () => {
     if (!modelReady) return;
@@ -29,23 +52,23 @@ export function MemoryCompile({ sessionId }: { sessionId: string }) {
       <legend>{t("memory.selectAgent")}</legend>
       <div className="memory-agent-options">
         {data.agents.map((item) => <label className="memory-agent-option" key={item.id}>
-          <input type="radio" name="memory-agent" value={item.id} checked={agent === item.id} disabled={!item.available} onChange={() => { setAgent(item.id); setModel(""); setEffort(""); }} />
+          <input type="radio" name="memory-agent" value={item.id} checked={agent === item.id} disabled={!item.available} onChange={() => { setAgent(item.id); setModel(""); setEffort(""); remember({ agent: item.id as SessionKind, model: null, effort: null }); }} />
           <span><strong>{item.label}</strong>{!item.available && <small>{t("memory.unavailable")}</small>}</span>
         </label>)}
       </div>
     </fieldset>
     {!modelReady ? <LoadState error={models.error} reload={models.reload} /> : <>
-      <label>{t("memory.model")}<select className="input" value={model} disabled={busy} onChange={(e) => { setModel(e.target.value); setEffort(""); }}>
+      <label>{t("memory.model")}<select className="input" value={model} disabled={busy} onChange={(e) => { setModel(e.target.value); setEffort(""); remember({ model: e.target.value, effort: null }); }}>
         <option value="">{t("chat.modelDefault")}</option>
         {models.data!.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
       </select></label>
-      <label>{t("chat.effortTooltip")}<select className="input" value={effort} disabled={busy || !selectedModel?.effortLevels.length} onChange={(e) => setEffort(e.target.value)}>
+      <label>{t("chat.effortTooltip")}<select className="input" value={effort} disabled={busy || !selectedModel?.effortLevels.length} onChange={(e) => { setEffort(e.target.value); remember({ effort: e.target.value }); }}>
         <option value="">{t("spawn.modelDefault")}</option>
         {selectedModel?.effortLevels.map((level) => <option key={level} value={level}>{memoryEffortLabel(level)}</option>)}
       </select></label>
     </>}
     {failure && <p className="memory-error" role="alert">{failure}</p>}
-    <p className="memory-muted">{t("memory.closeHint")}</p>
+    <p className="memory-muted">{t("memory.schedulingHint")} {t("memory.closeHint")}</p>
     <footer className="memory-row"><MemoryLink route="" className="btn">{t("common.cancel")}</MemoryLink><span className="memory-spacer" /><button className="btn btn-primary" disabled={busy || !modelReady || !data.agents.some((item) => item.id === agent && item.available)}>{t(busy ? "common.loading" : "memory.compile")}</button></footer>
   </form>;
 }
@@ -84,11 +107,12 @@ export function MemoryJobs({ id }: { id?: string }) {
         <div className="memory-row"><MemoryLink route={`job/${job.id}`}><strong>{job.sessionName}</strong></MemoryLink><span className="memory-spacer" /><span className={`memory-status ${job.status}`}><StateLabel value={job.status} /></span></div>
         <p className="memory-muted">{job.agent === "claude" ? "Claude" : "Codex"}{` · ${job.model || t("chat.modelDefault")}`} · {t("chat.effortTooltip")}: {job.effort ? memoryEffortLabel(job.effort) : t("spawn.modelDefault")} · {memoryTime(job.createdAt)}</p>
         {job.status === "running" && <><p role="status"><StateLabel value={job.stage} /> · {job.progress} / {job.total || "…"}</p><progress max={job.total || 1} value={job.progress} /></>}
+        {job.status === "queued" && <p className="memory-muted" role="status">{t("memory.waitingHint")}</p>}
         {job.error && <p className="memory-error">{memoryError(job.error)}</p>}
         {job.status === "completed" && !job.entries.length && <p>{t("memory.noKnowledge")}</p>}
         <div className="memory-job-entries">{job.entries.map((entryId, index) => <MemoryLink key={entryId} className="btn" route={`entry/${entryId}`}>{t("memory.entries")} {index + 1} ↗</MemoryLink>)}</div>
         <footer className="memory-row"><MemoryLink route={`source/${job.sourceId}`}>{t("memory.source")}</MemoryLink><span className="memory-spacer" />
-          {job.status === "running" && <button className="btn" disabled={busy === job.id} onClick={() => void command(job, true)}>{t("common.cancel")}</button>}
+          {["queued", "running"].includes(job.status) && <button className="btn" disabled={busy === job.id} onClick={() => void command(job, true)}>{t("common.cancel")}</button>}
           {["failed", "cancelled"].includes(job.status) && <button className="btn" disabled={busy === job.id} onClick={() => void command(job, false)}>{t("common.retry")}</button>}
         </footer>
       </article>)}

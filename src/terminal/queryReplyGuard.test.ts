@@ -4,15 +4,19 @@
 //! directly observable through `onData`. This preserves the key cross-client isolation invariant:
 //! during mirroring or replay, this client must never write query replies into the shared PTY input.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { Terminal } from "@xterm/xterm";
 import { ClipboardAddon, type IClipboardProvider } from "@xterm/addon-clipboard";
 
 import { installQueryReplyGuard } from "./queryReplyGuard";
 
+const terminals: Terminal[] = [];
+afterEach(() => terminals.splice(0).forEach((term) => term.dispose()));
+
 /** Create a headless terminal with a mutable arbitration flag and an onData collector. */
 function setup(withClipboard = false) {
   const term = new Terminal({ allowProposedApi: true });
+  terminals.push(term);
   const clipboardWrites: string[] = [];
   let clipboardReads = 0;
   if (withClipboard) {
@@ -47,7 +51,21 @@ describe("queryReplyGuard", () => {
     await feed("\x1b[?2026$p"); // DECRQM
     expect(replies.join("")).toContain("c"); // DA1 reply: ESC[?1;2c
     expect(replies.some((r) => /\x1b\[\d+;\d+R/.test(r))).toBe(true); // CPR coordinates
-    expect(replies.some((r) => r.includes("$y"))).toBe(true); // DECRPM
+    expect(replies).toContain("\x1b[?2026;2$y"); // Recognized, currently reset.
+  });
+
+  it("keeps synchronized frames active across chunks without answering mirror queries", async () => {
+    const { term, flags, replies, feed } = setup();
+    await feed("\x1b[?2026h\x1b[?25l\x1b[3;20Hdraw");
+    expect(term.modes.synchronizedOutputMode).toBe(true);
+    await feed("\x1b[?2026$p");
+    expect(replies).toContain("\x1b[?2026;1$y");
+    flags.swallowReplies = true;
+    replies.length = 0;
+    await feed("\x1b[?2026$p\x1b[5;3H\x1b[?25h\x1b[?2026l");
+    expect(replies).toEqual([]);
+    expect(term.modes.synchronizedOutputMode).toBe(false);
+    expect([term.buffer.active.cursorX, term.buffer.active.cursorY]).toEqual([2, 4]);
   });
 
   it("answers no query at all when swallowing (mirror-side and replay semantics)", async () => {

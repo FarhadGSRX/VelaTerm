@@ -14,14 +14,23 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
 import { recordRequestError } from "../ipc/reqLog";
+import { apiUrl, isShareSurface } from "../ipc/shareBase";
+import { remoteText } from "../sharing/remoteApi";
 import { isTauri } from "../ipc/transport";
 import { wsClient } from "../ipc/wsClient";
+import "./login-gate.css";
+
+type NativeLogin = { savePassword(password: string): Promise<void>; back(): void };
+function nativeLogin() {
+  return (window as { __VELATERM_LOGIN__?: NativeLogin }).__VELATERM_LOGIN__;
+}
 
 type Phase =
   | "checking"
   | "need-login"
   | "need-pairing"
   | "auth-failed"
+  | "share-unavailable"
   | "ready";
 
 /** Extract a session token from a login response and give it to wsClient. It is this window's sole
@@ -54,6 +63,42 @@ export function LoginGate({ children }: { children: ReactNode }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [remember, setRemember] = useState(true);
+  const [visible, setVisible] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const pendingPassword = useRef<string | null>(null);
+  const failedPassword = useRef<string | null>(null);
+  const native = nativeLogin();
+  const nativeMenu = (window as { __VELATERM_CONNECTION_MENU__?: boolean }).__VELATERM_CONNECTION_MENU__;
+  const canBack = !!native || !!nativeMenu || window.history.length > 1;
+  const [narrow, setNarrow] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const resize = () => setNarrow(window.innerWidth < 768);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  const persistPassword = async (value: string) => {
+    setSaving(true);
+    try {
+      await nativeLogin()?.savePassword(value);
+      failedPassword.current = null;
+      setSaveError(false);
+    } catch {
+      failedPassword.current = value;
+      setSaveError(true);
+    } finally { setSaving(false); }
+  };
+  useEffect(() => {
+    if (!nativeLogin() || isTauri) return;
+    // Pairing is authenticated only after the encrypted handshake succeeds.
+    return wsClient.onConnState(state => {
+      if (state !== "online" || pendingPassword.current === null) return;
+      const value = pendingPassword.current;
+      pendingPassword.current = null;
+      void persistPassword(value);
+    });
+  }, []);
   // Refs expose current relogin state to the mount-time onAuthLost callback: passwordRef tracks the
   // injected or submitted password, reloginBusy prevents concurrent attempts, and reloginRejected
   // suppresses retries after explicit rejection until a manual login succeeds.
@@ -71,6 +116,11 @@ export function LoginGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isTauri) return;
     return wsClient.onAuthLost((reason) => {
+      if(isShareSurface){setPhase("share-unavailable");return;}
+      pendingPassword.current = null;
+      failedPassword.current = null;
+      setSaveError(false);
+      setVisible(false);
       if (wsClient.isPairingMode()) {
         // Server-side login throttling is temporary, not a credential failure: return to the
         // password form with the rate-limit message (the same key the HTTP 429 path uses below)
@@ -88,7 +138,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
         reloginBusy.current = true;
         void (async () => {
           try {
-            const r = await fetch("/api/login", {
+            const r = await fetch(apiUrl("/api/login"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ password: pw }),
@@ -137,17 +187,30 @@ export function LoginGate({ children }: { children: ReactNode }) {
         setPhase("need-login");
         return;
       }
-      fetch("/api/me", { headers: wsClient.authHeaders() })
+      fetch(apiUrl("/api/me"), { headers: wsClient.authHeaders() })
         .then((r) => setPhase(r.ok ? "ready" : "need-login"))
         .catch(() => setPhase("need-login"));
     };
 
-    fetch("/api/mode")
+    fetch(apiUrl("/api/mode"))
       .then((r) => (r.ok ? r.json() : { requirePairing: false }))
-      .then((cfg: { requirePairing?: boolean }) => {
-        if (cfg.requirePairing) setPhase("need-pairing");
-        else proceedPlaintext();
-      })
+      .then(
+        (cfg: {
+          requirePairing?: boolean;
+          share?: boolean;
+          e2eeKey?: string;
+        }) => {
+          if (cfg.share && cfg.e2eeKey) {
+            // Public share surface: the relay authorized this grant, so pair with the host key reported
+            // by the server and skip password login entirely.
+            wsClient.setSharePairing(cfg.e2eeKey);
+            setPhase("ready");
+            return;
+          }
+          if (cfg.requirePairing) setPhase("need-pairing");
+          else proceedPlaintext();
+        },
+      )
       .catch(() => proceedPlaintext());
   }, []);
 
@@ -171,7 +234,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
     }
     void (async () => {
       try {
-        const r = await fetch("/api/login", {
+        const r = await fetch(apiUrl("/api/login"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ password: pw }),
@@ -187,105 +250,22 @@ export function LoginGate({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (phase === "ready") return <>{children}</>;
-
-  if (phase === "checking") {
-    return (
-      <div style={screenStyle}>
-        <div style={{ color: "var(--text-dim)", fontSize: 13 }}>{t("login.connecting")}</div>
-      </div>
-    );
-  }
-
-  // A pairing-required LanTls server without link data shows pairing guidance, not a password form.
-  if (phase === "need-pairing") {
-    return (
-      <div style={screenStyle}>
-        <div style={cardStyle}>
-          <div
-            style={{
-              fontWeight: 700,
-              fontSize: 15,
-              color: "var(--text)",
-              marginBottom: 8,
-            }}
-          >
-            VelaTerm
-          </div>
-          <div
-            style={{ fontSize: 13, color: "var(--text-dim)", lineHeight: 1.6 }}
-          >
-            {t("login.pairingRequired")}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Treat E2EE handshake failure as terminal guidance; the password may be correct but the link expired.
-  if (phase === "auth-failed") {
-    return (
-      <div style={screenStyle}>
-        <div style={cardStyle}>
-          <div
-            style={{
-              fontWeight: 700,
-              fontSize: 15,
-              color: "var(--text)",
-              marginBottom: 8,
-            }}
-          >
-            VelaTerm
-          </div>
-          <div
-            style={{ fontSize: 13, color: "var(--text-dim)", lineHeight: 1.6 }}
-          >
-            {t("login.authFailed")}
-          </div>
-          {/* Without a way back this page is a dead end: the window has to be closed and reopened
-              even when the rejection was momentary. Returning to the password form keeps the typed
-              password in state, so confirming it re-runs the handshake in place. */}
-          <button
-            type="button"
-            onClick={() => {
-              setError("");
-              setPhase("need-login");
-            }}
-            style={{
-              marginTop: 16,
-              width: "100%",
-              padding: "10px 0",
-              border: "none",
-              borderRadius: 8,
-              background: "var(--accent)",
-              color: "var(--bg-0)",
-              fontSize: 13.5,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!password) return;
+    if (!password || submitting) return;
     setSubmitting(true);
     setError("");
     // In E2EE pairing, give wsClient the password as a second factor. Mounting App initiates handshake;
     // onAuthLost returns here on failure. No `/api/login` or cookie is involved.
     if (wsClient.isPairingMode()) {
+      pendingPassword.current = native ? (remember ? password : "") : null;
       wsClient.setPairingPassword(password);
       setSubmitting(false);
       setPhase("ready");
       return;
     }
     try {
-      const r = await fetch("/api/login", {
+      const r = await fetch(apiUrl("/api/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
@@ -293,6 +273,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
       if (r.ok) {
         if (await captureSessionToken(r)) {
           reloginRejected.current = false;
+          if (native) await persistPassword(remember ? password : "");
           setPhase("ready");
         } else setError(t("login.failed"));
       } else if (r.status === 429) {
@@ -306,115 +287,89 @@ export function LoginGate({ children }: { children: ReactNode }) {
     }
   };
 
+  if (phase === "share-unavailable") return <div className="login-screen"><div className="login-content">
+    <section className="login-card" role="alert" style={{display:"flex",flexDirection:"column",gap:16}}>
+      <p>{remoteText("Connection interrupted or access revoked. Reconnect to continue.")}</p>
+      <a href="/account">{remoteText("Account")}</a>
+    </section>
+  </div></div>;
+
+  if (phase === "ready") return <>{children}{saveError && (
+    <div className="login-save-error" role="alert">
+      <span>{t("login.passwordSaveFailed")}</span>
+      <button type="button" disabled={saving} onClick={() => {
+        if (failedPassword.current !== null) void persistPassword(failedPassword.current);
+      }}>{t("common.retry")}</button>
+      <button type="button" onClick={() => { failedPassword.current = null; setSaveError(false); }}>{t("common.close")}</button>
+    </div>
+  )}</>;
+
+  const back = () => {
+    pendingPassword.current = null;
+    if (native) native.back();
+    else if (nativeMenu) window.location.assign("velaterm-ui://connections");
+    else window.history.back();
+  };
+  // Preserve the established desktop password screen. Only phone layouts use the new card.
+  if (!narrow && !native && !nativeMenu) {
+    const actionStyle = {marginTop: 16, width: "100%", padding: "10px 0", border: "none", borderRadius: 8, background: "var(--accent)", color: "var(--bg-0)", fontSize: 13.5, fontWeight: 600, cursor: "pointer"};
+    return <div style={{position: "fixed", inset: 0, display: "grid", placeItems: "center", background: "var(--bg-app, var(--bg-0))"}}>
+      {phase === "checking" ? <div style={{color: "var(--text-dim)", fontSize: 13}}>{t("login.connecting")}</div> :
+      <form onSubmit={submit} style={{width: "min(320px, calc(100vw - 32px))", padding: 24, background: "var(--bg-2)", border: "1px solid var(--border-strong)", borderRadius: 14, boxShadow: "var(--shadow)"}}>
+        {phase === "need-login" ? <>
+          <div style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 6}}>
+            <span style={{width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--accent)", color: "var(--bg-0)", fontWeight: 800}}>V</span>
+            <div><div style={{fontWeight: 700, fontSize: 15, color: "var(--text)"}}>VelaTerm</div><div style={{fontSize: 11, color: "var(--text-dim)"}}>{t("login.remoteAccess")}</div></div>
+          </div>
+          <div style={{fontSize: 12, color: "var(--text-dim)", marginBottom: 14}}>{t("login.desc")}</div>
+          <input type="password" value={password} placeholder={t("login.passwordPlaceholder")} autoFocus autoComplete="current-password" onChange={e => setPassword(e.target.value)}
+            style={{width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 12, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-0)", color: "var(--text)", fontSize: 14, outline: "none"}} />
+          <button type="submit" disabled={submitting || !password} style={{...actionStyle, marginTop: 0, opacity: submitting || !password ? .6 : 1}}>{submitting ? t("login.connecting") : t("login.connect")}</button>
+          {error && <div style={{marginTop: 12, fontSize: 12, color: "var(--danger, #ff6b6b)", textAlign: "center"}}>{error}</div>}
+        </> : <>
+          <div style={{fontWeight: 700, fontSize: 15, color: "var(--text)", marginBottom: 8}}>VelaTerm</div>
+          <div style={{fontSize: 13, color: "var(--text-dim)", lineHeight: 1.6}}>{t(phase === "need-pairing" ? "login.pairingRequired" : "login.authFailed")}</div>
+          {phase === "auth-failed" && <button type="button" style={actionStyle} onClick={() => {setError(""); setPhase("need-login");}}>{t("common.retry")}</button>}
+        </>}
+      </form>}
+    </div>;
+  }
   return (
-    <div style={screenStyle}>
-      <form onSubmit={submit} style={cardStyle}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            marginBottom: 6,
-          }}
-        >
-          <span
-            style={{
-              width: 30,
-              height: 30,
-              borderRadius: 8,
-              display: "grid",
-              placeItems: "center",
-              background: "var(--accent)",
-              color: "var(--bg-0)",
-              fontWeight: 800,
-            }}
-          >
-            V
-          </span>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>
-              VelaTerm
+    <div className="login-screen">
+      {canBack && <nav className="login-navigation">
+        <button type="button" onClick={back}>{t("mobile.back")}</button>
+      </nav>}
+      <main className="login-content">
+        <section className="login-card" aria-label={t("login.remoteAccess")}>
+          <div className="login-brand"><span aria-hidden="true" className="login-mark">V</span><strong>VelaTerm</strong></div>
+          <h1>{t("login.remoteAccess")}</h1>
+          <p className="login-host">{window.location.host}</p>
+          {phase === "checking" ? <p role="status">{t("login.connecting")}</p> :
+          phase === "need-pairing" ? <p role="status">{t("login.pairingRequired")}</p> :
+          phase === "auth-failed" ? <>
+            <p role="alert">{t("login.authFailed")}</p>
+            <button className="login-submit" type="button" onClick={() => {setError(""); setPhase("need-login");}}>{t("common.retry")}</button>
+          </> : <form onSubmit={submit}>
+            <p className="login-description">{t("login.desc")}</p>
+            <label className="login-label" htmlFor="remote-password">{t("login.passwordPlaceholder")}</label>
+            <div className="login-password">
+              <input id="remote-password" name="password" type={visible ? "text" : "password"}
+                value={password} placeholder={t("login.passwordPlaceholder")} autoComplete="current-password"
+                autoCapitalize="none" spellCheck={false} enterKeyHint="go" required
+                aria-invalid={!!error} aria-describedby={error ? "login-error" : undefined}
+                onChange={e => {setPassword(e.target.value); setError("");}} />
+              <button type="button" className="login-visibility" aria-pressed={visible}
+                onClick={() => setVisible(!visible)}>{t(visible ? "login.hidePassword" : "login.showPassword")}</button>
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-              {t("login.remoteAccess")}
-            </div>
-          </div>
-        </div>
-
-        <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 14 }}>
-          {t("login.desc")}
-        </div>
-
-        <input
-          type="password"
-          value={password}
-          placeholder={t("login.passwordPlaceholder")}
-          autoFocus
-          onChange={(e) => setPassword(e.target.value)}
-          style={{
-            width: "100%",
-            boxSizing: "border-box",
-            padding: "10px 12px",
-            marginBottom: 12,
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            background: "var(--bg-0)",
-            color: "var(--text)",
-            fontSize: 14,
-            outline: "none",
-          }}
-        />
-
-        <button
-          type="submit"
-          disabled={submitting || !password}
-          style={{
-            width: "100%",
-            padding: "10px 0",
-            border: "none",
-            borderRadius: 8,
-            background: "var(--accent)",
-            color: "var(--bg-0)",
-            fontSize: 13.5,
-            fontWeight: 600,
-            cursor: submitting ? "default" : "pointer",
-            opacity: submitting || !password ? 0.6 : 1,
-          }}
-        >
-          {submitting ? t("login.connecting") : t("login.connect")}
-        </button>
-
-        {error && (
-          <div
-            style={{
-              marginTop: 12,
-              fontSize: 12,
-              color: "var(--danger, #ff6b6b)",
-              textAlign: "center",
-            }}
-          >
-            {error}
-          </div>
-        )}
-      </form>
+            {native && <label className="login-remember"><input type="checkbox" checked={remember}
+              onChange={e => setRemember(e.target.checked)} />{t("connect.rememberPassword")}</label>}
+            {error && <p id="login-error" className="login-error" role="alert">{error}</p>}
+            <button className="login-submit" type="submit" disabled={submitting || !password}>
+              {submitting ? t("login.connecting") : t("login.connect")}
+            </button>
+          </form>}
+        </section>
+      </main>
     </div>
   );
 }
-
-const screenStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  display: "grid",
-  placeItems: "center",
-  background: "var(--bg-app, var(--bg-0))",
-};
-
-const cardStyle: React.CSSProperties = {
-  // Avoid overflow below a 352px mobile viewport or under zoom; retain a fixed 320px desktop width.
-  width: "min(320px, calc(100vw - 32px))",
-  padding: 24,
-  background: "var(--bg-2)",
-  border: "1px solid var(--border-strong)",
-  borderRadius: 14,
-  boxShadow: "var(--shadow)",
-};

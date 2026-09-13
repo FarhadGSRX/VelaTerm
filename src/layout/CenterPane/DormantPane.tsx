@@ -14,6 +14,7 @@ export function DormantPane({
   area,
   hidden,
   onActivate,
+  onClose,
 }: {
   session: Session;
   /** Absolute percentage rectangle from the pane layout, matching TerminalView. */
@@ -21,6 +22,7 @@ export function DormantPane({
   hidden: boolean;
   /** Focus the owning pane, keeping click-to-focus behavior identical to a live terminal. */
   onActivate?: () => void;
+  onClose?: () => void;
 }) {
   const t = useT();
   const wakeSession = useTermStore((s) => s.wakeSession);
@@ -70,25 +72,50 @@ export function DormantPane({
         <div style={{ fontSize: 12, lineHeight: 1.6, color: "var(--text-dim)" }}>
           {t("dormant.body")}
         </div>
-        <button
-          onClick={start}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "7px 16px",
-            border: "none",
-            borderRadius: 7,
-            background: "var(--accent)",
-            color: "var(--bg-0)",
-            fontSize: 12.5,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          <Icons.terminal size={14} />
-          {t("dormant.start")}
-        </button>
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 10 }}>
+          <button
+            type="button"
+            onClick={start}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "7px 16px",
+              border: "none",
+              borderRadius: 7,
+              background: "var(--accent)",
+              color: "var(--bg-0)",
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            <Icons.terminal size={14} />
+            {t("dormant.start")}
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "7px 16px",
+                border: "1px solid var(--border)",
+                borderRadius: 7,
+                background: "var(--bg-1)",
+                color: "var(--text)",
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              <Icons.close size={14} />
+              {t("common.close")}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

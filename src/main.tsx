@@ -12,12 +12,18 @@ import "./styles/fonts.css";
 import "./styles/index.css";
 import App from "./App";
 import { initI18n, t } from "./i18n";
-import { recordRequestError } from "./ipc/reqLog";
 import MobileApp from "./mobile/MobileApp";
 import { isMobileView } from "./mobile/detect";
 import { LoginGate } from "./remote/LoginGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { isDeferredResizeNotification } from "./platform/resizeObserverError";
+import { installTauriLinkHandler } from "./platform/tauriLinkHandler";
+import { platform } from "./platform";
+
+// Scope automatic system-browser links to application pages. The opener plugin's global injection
+// would also intercept links in unprivileged browser tabs before their native new-window handler.
+const removeTauriLinkHandler = installTauriLinkHandler((url) => platform.opener.openExternal(url));
+if (import.meta.hot) import.meta.hot.dispose(removeTauriLinkHandler);
 
 // The main UI uses only application context menus. WKWebView otherwise shows native Reload/AutoFill
 // items in uncovered areas, mixing unrelated actions and styles. Cancel only the browser default in
@@ -46,7 +52,7 @@ installGlobalErrorOverlay();
 
 // ─── Terminal glyph-width correction for desktop WKWebView ─────────────────
 // WKWebView canvas measureText may miss the requested font: 13 px Menlo `W` measured 14.30 px while
-// the DOM rendered 7.84 px. xterm 5.5 prefers OffscreenCanvas in CharSizeService and treats the
+// the DOM rendered 7.84 px. xterm 6 still prefers OffscreenCanvas in CharSizeService and treats the
 // difference from DOM glyph width as letter spacing, spreading every character. Hiding OffscreenCanvas
 // makes xterm fall back to consistent DOM measurement. Chrome remote access does not need this, and
 // no project or xterm component other than CharSizeService uses OffscreenCanvas here.
@@ -105,6 +111,13 @@ function installGlobalErrorOverlay() {
     const pre = overlayEl.querySelector("pre")!;
     pre.textContent = title + "\n" + detail;
     overlayEl.querySelector("button")!.onclick = () => location.reload();
+    const native = (window as { __VELATERM_CONNECTION_MENU__?: boolean }).__VELATERM_CONNECTION_MENU__;
+    if (native || (window.innerWidth < 768 && history.length > 1)) {
+      const back = overlayEl.querySelector("button")!.cloneNode(false) as HTMLButtonElement;
+      back.textContent = t("mobile.back"); back.style.marginLeft = "12px"; back.style.minHeight = "44px";
+      back.onclick = () => native ? location.assign("velaterm-ui://close") : history.back();
+      overlayEl.querySelector("button")!.after(back);
+    }
     document.body.appendChild(overlayEl);
   }
 
@@ -115,10 +128,6 @@ function installGlobalErrorOverlay() {
     }
     const message = e.error?.message ?? e.message ?? "Unknown error";
     const detail = e.error?.stack ?? `at ${e.filename}:${e.lineno}:${e.colno}`;
-    if (isBenignDisposedCallbackError(message, detail)) {
-      recordRequestError("uncaught:benign", `${message}\n${detail}`);
-      return;
-    }
     show(message, detail);
   });
 
@@ -131,30 +140,9 @@ function installGlobalErrorOverlay() {
       return;
     }
     if (err instanceof Error) {
-      if (isBenignDisposedCallbackError(err.message, err.stack ?? "")) {
-        recordRequestError("uncaught:benign", `${err.message}\n${err.stack ?? ""}`);
-        return;
-      }
       show(err.message, err.stack ?? "");
     } else {
       show("Unhandled Promise Rejection", String(err));
     }
   });
-}
-
-/** Known-harmless failures from callbacks that outlive the object they belong to.
- *
- * xterm's Viewport constructor schedules `setTimeout(() => this.syncScrollArea())` and `reset()` schedules
- * the same call through requestAnimationFrame, and neither is cancelled on dispose. A terminal opened and
- * disposed within one macrotask (session tree rebuilds during remote connect do exactly that) therefore
- * still runs the callback, which reads `RenderService.dimensions` after the MutableDisposable holding the
- * renderer was cleared. The throw comes from a timer, so no try/catch or error boundary can reach it, and
- * nothing is actually broken: the terminal it belonged to is already gone.
- *
- * Match narrowly rather than suppressing uncaught errors in general, so real crashes still reach the
- * overlay. Engines word the message differently (WebKit prints the failing expression, Chromium prints the
- * missing property), hence the check against both message and stack. */
-function isBenignDisposedCallbackError(message: string, stack: string): boolean {
-  if (!/syncScrollArea/.test(stack) && !/syncScrollArea/.test(message)) return false;
-  return /_renderer|dimensions/.test(message);
 }

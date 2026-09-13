@@ -38,6 +38,7 @@ import nacl from "tweetnacl";
 import { t } from "../i18n";
 import { handshakeFailureReason, mapBackendError, type HandshakeFailure } from "./backendError";
 import { recordRequestError } from "./reqLog";
+import { apiUrl, shareBasePath } from "./shareBase";
 import type { PtySpawnArgs, PtySpawnResult } from "./transport";
 
 type EventCb = (payload: unknown) => void;
@@ -238,7 +239,14 @@ class WsClient {
 
   // ── E2EE (end-to-end encryption) state ──
   /** Pairing data for this visit (token + server public key); null selects unencrypted token auth. */
-  private readonly pairing: Pairing | null = readPairing();
+  private pairing: Pairing | null = readPairing();
+  /**
+   * Public share visits have no pairing fragment: the relay page receives the server key from `/api/mode`
+   * and is authorized by the grant the relay injected into the tunnel. In that mode there is no password
+   * gate and the handshake sends an empty device token.
+   */
+  private shareMode = false;
+  private shareRevoked = false;
   /** E2EE second-factor password, injected by LoginGate and sent with deviceToken. */
   private password = "";
   /** Ephemeral client key pair, regenerated for every connection. */
@@ -268,7 +276,7 @@ class WsClient {
 
   constructor() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    this.url = `${proto}://${location.host}/ws`;
+    this.url = `${proto}://${location.host}${shareBasePath}/ws`;
     // Restore this window's session token so a refresh does not require another login.
     try {
       this.sessionToken = sessionStorage.getItem(TOKEN_STORAGE_KEY);
@@ -297,6 +305,17 @@ class WsClient {
   /** Set the E2EE second-factor password collected by LoginGate for the ensure() handshake. */
   setPairingPassword(pw: string): void {
     this.password = pw;
+  }
+
+  /**
+   * Enter public-share pairing using the host key reported by `/api/mode`. There is no pairing token and
+   * no second-factor password: the relay authorized this grant, and E2EE only protects the content from
+   * the relay itself.
+   */
+  setSharePairing(serverPubB64: string): void {
+    this.shareMode = true;
+    this.pairing = { token: "", serverPub: b64ToBytes(serverPubB64) };
+    this.password = "";
   }
 
   /** Set the session token issued after login and persist it in this window's sessionStorage so
@@ -360,13 +379,13 @@ class WsClient {
 
   /** Ensure the socket is connected; concurrent callers share one connection promise. */
   private ensure(): Promise<void> {
+    if(this.shareRevoked)return Promise.reject(new TransportError(t("transport.wsDisconnected")));
     if (this.ws && this.ws.readyState === WebSocket.OPEN) return Promise.resolve();
     if (this.connectPromise) return this.connectPromise;
     // Pairing mode must wait for its second-factor password. An empty-password handshake would be
     // rejected, causing endless reconnects and a false "wrong password" message before the user
-    // can type one. Suspend this attempt without connecting, retrying, reporting, or caching it;
-    // a later ensure call after setPairingPassword will connect normally.
-    if (this.pairing && !this.password) {
+    // can type one. Public share visits have no password at all, so they bypass this gate.
+    if (this.pairing && !this.password && !this.shareMode) {
       return new Promise<void>(() => {});
     }
     // Token gate: outside pairing mode, **never create a connection** without a token. Queue it
@@ -437,7 +456,7 @@ class WsClient {
         if (this.ws !== ws) return;
         this.onMessage(ev);
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         // A superseded socket closing is expected and owns none of the state below; the live socket
         // drives reconnection. Reacting here would clear the new connection's keys mid-handshake.
         if (this.ws !== ws) return;
@@ -452,6 +471,14 @@ class WsClient {
         for (const p of this.pending.values())
           p.reject(new TransportError(t("transport.wsDisconnected")));
         this.pending.clear();
+        if(this.shareMode && event.code===1008) {
+          this.shareRevoked=true;
+          this.everConnected=false;
+          clearTimeout(this.reconnectTimer);this.reconnectTimer=undefined;
+          this.emitConnState("offline");
+          for(const cb of this.authLostCbs)cb();
+          return;
+        }
         // Reconnect automatically with exponential backoff. A failed socket fires onclose after
         // onerror, so scheduling only here prevents duplicate timers.
         this.emitConnState("offline");
@@ -553,11 +580,14 @@ class WsClient {
 
   /** Broadcast connection state to all subscribers. */
   private emitConnState(state: ConnState) {
+    // No URL, handshake frame, cookie or payload is included in this diagnostic.
+    console.info("[vlx] connection", { state: state === "online" ? "connected" : "unavailable", retryCount: this.reconnectAttempts });
     for (const cb of this.connStateCbs) cb(state, this.reconnectAttempts);
   }
 
   /** Schedule one backoff retry unless a reconnect timer already exists. */
   private scheduleReconnect() {
+    if(this.shareRevoked)return;
     if (this.reconnectTimer) return;
     const delay = Math.min(
       RECONNECT_BASE_MS * 2 ** this.reconnectAttempts,
@@ -586,7 +616,7 @@ class WsClient {
       return;
     }
     try {
-      const r = await fetch("/api/me", { headers: this.authHeaders() });
+      const r = await fetch(apiUrl("/api/me"), { headers: this.authHeaders() });
       if (r.status === 401 || r.status === 403) {
         for (const cb of this.authLostCbs) cb();
         return;
@@ -743,8 +773,11 @@ class WsClient {
 
   // ─────────────────────────── Public API ───────────────────────────
 
-  async invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-    return (await this.request({ t: "invoke", cmd, args: args ?? {} })) as T;
+  /** Diagnostics must never establish connections or queue while offline. */
+  isDiagnosticReady(): boolean { return this.ws?.readyState === WebSocket.OPEN && !this.pendingConnect; }
+
+  async invoke<T>(cmd: string, args?: Record<string, unknown>, diagnostic?: { requestId: string; operationId?: string }): Promise<T> {
+    return (await this.request({ t: "invoke", cmd, args: args ?? {}, diagnostic })) as T;
   }
 
   async listen<T>(name: string, cb: (payload: T) => void): Promise<UnlistenFn> {
@@ -769,7 +802,7 @@ class WsClient {
   ): Promise<PtySpawnResult> {
     const res = (await this.request(
       attachOnly
-        ? { t: "pty-spawn", sid, args, attachOnly: true }
+        ? { t: "pty-spawn", sid, args: { ...args, diagnosticRequestId: crypto.randomUUID(), diagnosticOperationId: undefined }, attachOnly: true }
         : { t: "pty-spawn", sid, args },
     )) as {
       pid: number;

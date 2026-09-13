@@ -12,6 +12,8 @@ Typing latency is specifically engineered: when agents flood the screen, input t
 
 ## 2. In-terminal search (⌘F)
 
+For native command suggestions, see [Command suggestions](terminal-completion_20260908.md).
+
 Search the current terminal's scrollback, with next/previous navigation:
 
 ![In-terminal search](../assets/manuals/terminal-search.png)

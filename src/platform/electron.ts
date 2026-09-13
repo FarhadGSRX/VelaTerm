@@ -22,10 +22,13 @@ import { env } from "./env";
 import type {
   BadgeCapability,
   BrowserCapability,
+  BrowserPopupPayload,
   BrowserRect,
   BrowserStatePayload,
   ClipboardCapability,
   DialogCapability,
+  FontCatalog,
+  FontCapability,
   NotifyCapability,
   OpenerCapability,
   Platform,
@@ -40,6 +43,7 @@ import type {
 
 /** Controlled native API exposed as `window.vlxNative` by electron/preload.cjs. */
 interface VlxNativeBridge {
+  fontCatalog?(): Promise<FontCatalog>;
   saveFile(opts?: SaveFileOptions): Promise<string | null>;
   pickDirectory(): Promise<string | null>;
   openExternal(url: string): Promise<void>;
@@ -77,6 +81,8 @@ interface VlxBrowserBridge {
   close(tabId: string): Promise<void>;
   /** Subscribe to browser-tab status events; callers filter by tabId. Returns an unsubscribe function. */
   onState(cb: (s: BrowserStatePayload & { tabId: string }) => void): () => void;
+  /** Subscribe to new-window requests; callers filter by tabId. Returns an unsubscribe function. */
+  onPopup(cb: (p: BrowserPopupPayload & { tabId: string }) => void): () => void;
 }
 
 /** Return the preload bridge, degrading capabilities safely if unexpectedly unavailable. */
@@ -87,6 +93,18 @@ function bridge(): VlxNativeBridge | undefined {
 const transport: TransportCapability = {
   invoke: transportInvoke,
   listen: transportListen,
+};
+
+const fonts: FontCapability = {
+  async catalog() {
+    const native = bridge();
+    try {
+      if (!native?.fontCatalog) throw new Error("Local font enumeration is unavailable");
+      return await native.fontCatalog();
+    } catch {
+      return transportInvoke("bundled_font_catalog");
+    }
+  },
 };
 
 const dialog: DialogCapability = {
@@ -245,10 +263,18 @@ const browser: BrowserCapability = {
       if (s.tabId === tabId) cb({ url: s.url, title: s.title, loading: s.loading });
     });
   },
+  async onPopup(tabId, cb): Promise<UnlistenFn> {
+    const b = bridge()?.browser;
+    if (!b) return () => {};
+    return b.onPopup((p) => {
+      if (p.tabId === tabId) cb({ url: p.url });
+    });
+  },
 };
 
 /** Electron platform implementation. */
 export const electronPlatform: Platform = {
+  fonts,
   env,
   transport,
   dialog,

@@ -2,20 +2,19 @@
 name: vsearch
 description: >-
   You CAN search other sessions' conversations. This is a full-text search across every vlx-term session
-  on this machine, so a past discussion is findable even when nobody remembers which session held it. Use
+  on this machine or within one specified session, so a past discussion is findable even when nobody remembers which session held it. Use
   it whenever the user gestures at earlier work — "last time", "we solved this before", "the other
   branch", "didn't we discuss this" — in any language, and use it on your own initiative when an error or
   design question feels like one already settled somewhere. Search first, then read the conversation with
   vrefer. Never claim past sessions are unreachable. Read-only: nothing is disturbed. Available only
   inside vlx-term-hosted local sessions.
-argument-hint: "<words...> [--all|--archived] [--limit N]"
 allowed-tools: Bash(vsearch:*)
 ---
 
 # vsearch
 
-`vsearch` searches the conversation history of **every vlx-term session on this machine**, not just this
-one. It is a pure read: nothing is written, and no other session is interrupted.
+`vsearch` searches conversation history across **every vlx-term session on this machine**, or within one
+specified session. It is a pure read: nothing is written, and no other session is interrupted.
 
 ## When to use it
 
@@ -35,11 +34,15 @@ Do not use it for searching code or files — that is what Grep and Glob are for
 ## How to run it
 
 ```bash
-vsearch <words...> [--all|--archived] [--limit N] [--json]
+vsearch <words...> [--session <session>] [--all|--archived] [--limit N] [--json]
 ```
 
 - Multiple words are an implicit AND and word order does not matter. Two or three distinctive words work
   better than a long sentence.
+- `--session <session>` restricts the search to one session. It accepts the same full id, id prefix,
+  exact name, or unique name substring as `vrefer`; quote names containing spaces. A specified session
+  is searched whether live or archived unless an explicit scope flag is supplied; `--archived` limits
+  it to archived targets, while `--all` retains the broad target scope.
 - By default only live sessions are searched. Add `--all` to include archived ones, or `--archived` to
   search only those.
 - `--limit N` caps how many sessions come back (default 10).
@@ -47,7 +50,8 @@ vsearch <words...> [--all|--archived] [--limit N] [--json]
 
 ## What it searches
 
-Conversations only. Sessions whose agent keeps a readable transcript — claude, codex, grok — are the ones
+Conversations only. Sessions whose agent keeps a readable transcript — claude, codex, opencode, pi, omp,
+and grok — are the ones
 it can reach. Other agents store their history in private formats that are not parsed yet, so their
 sessions are invisible to it, as are plain terminal sessions. When a query matched such a session through
 its terminal recording, the output says how many were left out; that is expected, not a failure.

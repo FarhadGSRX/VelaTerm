@@ -1,3 +1,4 @@
+import { safeError } from "../../../ipc/diagnosticSafety";
 //! Browser-tab body with a React navigation toolbar, quick-access bar, and native child-WebView placeholder.
 //!
 //! Web content is not in the DOM. Rust attaches a native WKWebView to the main window and overlays it
@@ -21,6 +22,7 @@ import {
   browserSetBounds,
   browserSetVisible,
   browserStop,
+  onBrowserPopup,
   onBrowserState,
 } from "../../../ipc/browser";
 import { openPath } from "../../../ipc/transport";
@@ -102,7 +104,7 @@ export function BrowserView({ tab, hidden }: { tab: BrowserTab; hidden: boolean 
     if (!rect) return;
     openedRef.current = true;
     browserOpen(tab.id, tab.url, rect).catch((e) => {
-      console.error("browser_open failed:", e);
+      console.error("browser_open failed:", safeError(e));
     });
   };
 
@@ -119,12 +121,28 @@ export function BrowserView({ tab, hidden }: { tab: BrowserTab; hidden: boolean 
         if (document.activeElement !== inputRef.current) setEditing(null);
       }
     });
+    // Standalone pages keep popup navigation in the current tab; ordinary browser popups open new tabs.
+    const unlistenPopup = onBrowserPopup(tab.id, ({ url }) => {
+      const parent = useTermStore.getState().browserTabs[tab.id];
+      if (parent?.chromeHidden) {
+        void browserNavigate(tab.id, url).catch((e) => {
+          console.error("browser popup navigation failed:", safeError(e));
+        });
+        return;
+      }
+      useTermStore.getState().openBrowserTab(url, {
+        chromeHidden: false,
+        openerTabId: tab.id,
+        openerUrl: parent && parent.url !== "about:blank" ? parent.url : undefined,
+      });
+    });
     // Focus the address bar on a new blank tab, following browser convention.
     if (tab.url === "about:blank") {
       requestAnimationFrame(() => inputRef.current?.focus());
     }
     return () => {
       void unlisten.then((fn) => fn());
+      void unlistenPopup.then((fn) => fn());
       void browserClose(tab.id);
     };
     // Mount/unmount only; subsequent URLs arrive through state events without rebuilding the WebView.
@@ -181,11 +199,29 @@ export function BrowserView({ tab, hidden }: { tab: BrowserTab; hidden: boolean 
     browserNavigate(tab.id, value).catch((e) => {
       pendingNavRef.current = false;
       setEditing(null);
-      console.error("browser_navigate rejected:", e);
+      console.error("browser_navigate rejected:", safeError(e));
     });
   };
 
   const navigate = () => navigateTo(editing ?? "");
+
+  /**
+   * Back control for standalone pages: return to the tab that opened this one and close the current
+   * child tab, fall back to its recorded URL when that tab is gone, and finally use page history.
+   */
+  const returnToPrevious = () => {
+    const state = useTermStore.getState();
+    if (tab.openerTabId && state.openTabs.includes(tab.openerTabId)) {
+      state.setActiveTab(tab.openerTabId);
+      state.closeTab(tab.id);
+      return;
+    }
+    if (tab.openerUrl) {
+      void browserNavigate(tab.id, tab.openerUrl);
+      return;
+    }
+    void browserBack(tab.id);
+  };
 
   return (
     <div
@@ -199,80 +235,113 @@ export function BrowserView({ tab, hidden }: { tab: BrowserTab; hidden: boolean 
         background: "var(--bg-1)",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 4,
-          padding: "5px 8px",
-          borderBottom: "1px solid var(--border)",
-          flex: "none",
-        }}
-      >
-        <ToolBtn title={t("browser.back")} onClick={() => void browserBack(tab.id)}>
-          <Icons.arrowLeft size={14} />
-        </ToolBtn>
-        <ToolBtn title={t("browser.forward")} onClick={() => void browserForward(tab.id)}>
-          <Icons.arrowRight size={14} />
-        </ToolBtn>
-        {tab.loading ? (
-          <ToolBtn title={t("browser.stop")} onClick={() => void browserStop(tab.id)}>
-            <Icons.x size={14} />
-          </ToolBtn>
-        ) : (
-          <ToolBtn title={t("browser.reload")} onClick={() => void browserReload(tab.id)}>
-            <Icons.restart size={14} />
-          </ToolBtn>
-        )}
-        <input
-          ref={inputRef}
-          value={editing ?? shownUrl}
-          placeholder={t("browser.addressPlaceholder")}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          onFocus={(e) => {
-            setEditing(e.currentTarget.value);
-            e.currentTarget.select();
-          }}
-          onBlur={() => {
-            // After navigation blur, retain the submitted address until loading completes.
-            if (pendingNavRef.current) return;
-            setEditing(null);
-          }}
-          onChange={(e) => setEditing(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              navigate();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setEditing(null);
-              inputRef.current?.blur();
-            }
-            // Prevent non-global keystrokes from bubbling while normal input editing continues.
-            e.stopPropagation();
-          }}
+      {tab.chromeHidden ? (
+        // Standalone pages keep a compact toolbar with navigation buttons but no address bar. The bar sits
+        // above the native view rectangle, so its buttons are never covered by the overlaid child WebView.
+        <div
           style={{
-            flex: 1,
-            minWidth: 0,
-            height: 26,
-            padding: "0 10px",
-            fontSize: 12.5,
-            color: "var(--text)",
-            background: "var(--bg-2)",
-            border: "1px solid var(--border-strong)",
-            borderRadius: 6,
-            outline: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "5px 8px",
+            borderBottom: "1px solid var(--border)",
+            flex: "none",
           }}
-        />
-        {shownUrl.startsWith("http") && (
-          <ToolBtn title={t("browser.openExternal")} onClick={() => void openPath(tab.url)}>
-            <Icons.external size={14} />
+        >
+          <ToolBtn title={t("browser.back")} onClick={returnToPrevious}>
+            <Icons.arrowLeft size={14} />
           </ToolBtn>
-        )}
-      </div>
-      <BrowserQuickAccess label={t("browser.quickAccess")} onNavigate={navigateTo} />
+          <ToolBtn title={t("browser.forward")} onClick={() => void browserForward(tab.id)}>
+            <Icons.arrowRight size={14} />
+          </ToolBtn>
+          {tab.loading ? (
+            <ToolBtn title={t("browser.stop")} onClick={() => void browserStop(tab.id)}>
+              <Icons.x size={14} />
+            </ToolBtn>
+          ) : (
+            <ToolBtn title={t("browser.reload")} onClick={() => void browserReload(tab.id)}>
+              <Icons.restart size={14} />
+            </ToolBtn>
+          )}
+        </div>
+      ) : (
+        <>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "5px 8px",
+              borderBottom: "1px solid var(--border)",
+              flex: "none",
+            }}
+          >
+            <ToolBtn title={t("browser.back")} onClick={() => void browserBack(tab.id)}>
+              <Icons.arrowLeft size={14} />
+            </ToolBtn>
+            <ToolBtn title={t("browser.forward")} onClick={() => void browserForward(tab.id)}>
+              <Icons.arrowRight size={14} />
+            </ToolBtn>
+            {tab.loading ? (
+              <ToolBtn title={t("browser.stop")} onClick={() => void browserStop(tab.id)}>
+                <Icons.x size={14} />
+              </ToolBtn>
+            ) : (
+              <ToolBtn title={t("browser.reload")} onClick={() => void browserReload(tab.id)}>
+                <Icons.restart size={14} />
+              </ToolBtn>
+            )}
+            <input
+              ref={inputRef}
+              value={editing ?? shownUrl}
+              placeholder={t("browser.addressPlaceholder")}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              onFocus={(e) => {
+                setEditing(e.currentTarget.value);
+                e.currentTarget.select();
+              }}
+              onBlur={() => {
+                // After navigation blur, retain the submitted address until loading completes.
+                if (pendingNavRef.current) return;
+                setEditing(null);
+              }}
+              onChange={(e) => setEditing(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  navigate();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setEditing(null);
+                  inputRef.current?.blur();
+                }
+                // Prevent non-global keystrokes from bubbling while normal input editing continues.
+                e.stopPropagation();
+              }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                height: 26,
+                padding: "0 10px",
+                fontSize: 12.5,
+                color: "var(--text)",
+                background: "var(--bg-2)",
+                border: "1px solid var(--border-strong)",
+                borderRadius: 6,
+                outline: "none",
+              }}
+            />
+            {shownUrl.startsWith("http") && (
+              <ToolBtn title={t("browser.openExternal")} onClick={() => void openPath(tab.url)}>
+                <Icons.external size={14} />
+              </ToolBtn>
+            )}
+          </div>
+          <BrowserQuickAccess label={t("browser.quickAccess")} onNavigate={navigateTo} />
+        </>
+      )}
       {/* Placeholder rectangle for the overlaid native child WebView; content is outside the DOM. */}
       <div ref={placeholderRef} style={{ flex: 1, minHeight: 0 }} />
     </div>

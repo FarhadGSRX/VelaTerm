@@ -1,3 +1,41 @@
+## v0.2.0 — 2026-09-13
+
+- 📱 Aplicación VelaTerm para iOS y Android (versión preliminar): conéctate a una máquina por SSH o URL tras confirmar la huella del host, carga la interfaz remota completa dentro de la aplicación, rellena los datos de conexión escaneando un código QR e inicia sesión en una cuenta remota.
+
+- 🛡️ Auditoría de código experimental: inicia desde el menú contextual de un proyecto una auditoría de todo el repositorio, de un directorio o archivo, o de los cambios sin confirmar del árbol de trabajo, con Codex o Claude Code; revisa los hallazgos contra el código fuente y exporta un informe en Markdown o JSON.
+
+- 📓 Base de conocimientos local: abre una carpeta de notas Markdown desde el panel derecho, edita las notas en el editor WYSIWYG, busca por ruta y en texto completo, gestiona etiquetas y favoritos y recupera notas eliminadas de la papelera. Los agentes pueden consultar las notas con `vkb`; las importaciones de carpetas se ejecutan en segundo plano y dejan un registro que puedes expandir, revisar o cancelar.
+
+- 🤖 Sesiones de planificación y ejecución: `vspawn --plan-execute` abre una sesión de planificación que divide la tarea en sesiones de ejecución; `vflow` propone la división, `vtell --report` devuelve el resultado de cada ejecución para su aceptación y una reelaboración reutiliza la sesión de ejecución original. Los worktrees pueden compartirse entre todos los roles o crearse por sesión.
+
+- 🔗 Los proyectos y sesiones compartidos ahora cargan la interfaz real del host detrás de la URL compartida, reenviada por un túnel saliente y limitada al proyecto o la sesión autorizados. Los dispositivos y las autorizaciones se gestionan desde las páginas de cuenta.
+
+- 🧠 La base de conocimientos de sesión admite grupos de proyectos, sesiones y entradas con arrastrar y soltar, cambio de nombre y eliminación; una nueva organización de la misma sesión sustituye a la que estaba en cola.
+
+- 💬 Vista de conversación: los historiales largos se cargan página a página hasta el primer mensaje, todos los agentes compatibles con el motor de conversación (incluido OMP) abren la vista de conversación por defecto y los turnos consecutivos de un mismo agente comparten una sola fila de autor.
+
+- ⌨️ Terminal: las sugerencias nativas del shell ofrecen autocompletado con Tab para zsh, bash, fish y PowerShell en macOS y Linux, las flechas siguen recuperando comandos anteriores mientras la lista está abierta y el núcleo del terminal pasa a xterm 6.
+
+- 📊 El panel Info muestra estadísticas del turno actual para Claude, Codex, Grok, OpenCode, Pi y OMP: tokens de entrada y salida, tasa de aciertos de caché, velocidad de generación, llamadas a herramientas y modificaciones de archivos registradas. Los controles menos usados de la zona de escritura pasan a «Más».
+
+- 🔐 La zona de escritura muestra el modo de permisos configurado, el vigente y el pendiente, y pide confirmación cuando hace falta reiniciar para aplicar un cambio.
+
+- 🔔 Las notificaciones muestran el nombre de la sesión y un resumen breve; al hacer clic se abre la sesión, y la aplicación móvil puede recibirlas mediante el servicio de notificaciones push del sistema.
+
+- 🌐 La lista de modelos de Claude ahora proviene del catálogo de modelos publicado en el sitio, se guarda en caché local y se actualiza cada seis horas, combinada con los modelos que informa la CLI.
+
+- 🧵 Las flechas arriba y abajo de la zona de escritura recuperan tus mensajes anteriores, incluidos los que están en cola o pendientes de confirmación, y restauran al final el borrador sin enviar.
+
+- ↩️ Al revertir un mensaje, sus imágenes vuelven a la zona de escritura para poder enviarlas de nuevo.
+
+- 🔑 Los agentes iniciados en macOS heredan el entorno completo del shell de inicio de sesión, por lo que también se encuentran las herramientas instaladas fuera del PATH predeterminado.
+
+- 💡 Una entrada de comentarios en la barra de título abre la página de comentarios.
+
+- 🕹️ Una entrada del Centro de juegos en la barra de pestañas abre el centro de juegos del sitio (PIXEL WING); en el escritorio, el juego se abre en el navegador integrado.
+
+---
+
 ## v0.1.108 — 2026-09-08
 
 - 💬 Vista de conversación experimental para Claude, Codex y OpenCode, con respuestas en streaming, razonamiento, detalles de herramientas, permisos y formularios de preguntas. Las configuraciones nuevas siguen usando la vista de terminal por defecto.

@@ -8,6 +8,8 @@ import { FormModal } from "../../components/FormModal";
 import Icons from "../../components/Icons";
 import { useT } from "../../i18n";
 import { knowledgeUrl } from "../Knowledge/navigation";
+import { securityUrl } from "../Security/navigation";
+import { securityText } from "../Security/text";
 import { memoryNavigate } from "../Memory/navigation";
 import {
   type SidebarTreeView,
@@ -614,9 +616,19 @@ export function LeftSidebar() {
         },
         buildMarkItem("project", node.id),
         {
-          label: `${t("knowledge.title")} · ${t("common.experimental")}`,
-          href: knowledgeUrl(node.projectId),
-          onClick: (event) => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); memoryNavigate(knowledgeUrl(node.projectId)); } },
+          label: t("common.experimental"),
+          submenu: [
+            {
+              label: t("knowledge.title"),
+              href: knowledgeUrl(node.projectId),
+              onClick: (event) => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); memoryNavigate(knowledgeUrl(node.projectId)); } },
+            },
+            {
+              label: securityText("title"),
+              href: securityUrl(node.projectId),
+              onClick: (event) => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); memoryNavigate(securityUrl(node.projectId)); } },
+            },
+          ],
         },
         rename,
         {

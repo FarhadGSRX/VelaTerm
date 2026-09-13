@@ -47,6 +47,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* History prepends and virtual row measurements restore their own message anchor. */
+  overflow-anchor: none;
   padding: 14px 18px 6px;
   /* Conversation typography is independent of interface density and terminal preferences. */
   font-family: var(--chat-font);
@@ -271,6 +273,19 @@
   background: var(--accent-line);
 }
 
+/* The line that opens an agent turn. It shares the message head's shape and gutter mark, drawn once
+   above the turn's reasoning, tool calls and prose rather than once per message, so all of the work
+   that follows reads as the agent's. */
+.sv-turn-head {
+  display: grid;
+  grid-template-columns: var(--sv-gutter) minmax(0, 1fr);
+  column-gap: var(--sv-gutter-gap);
+  margin: 13px 0 3px;
+}
+.sv-turn-head .sv-msg-head {
+  margin-bottom: 0;
+}
+
 /* Rewind stays quiet until the user returns to a message. Its menu spells out the scope because the
    difference between conversation history and files on disk is too important to hide behind an icon. */
 .sv-rewind {
@@ -303,7 +318,7 @@
 }
 .sv-rewind-menu {
   position: absolute;
-  right: 0;
+  left: 0;
   top: calc(100% + 3px);
   z-index: 40;
   display: block;
@@ -315,13 +330,6 @@
   background: var(--bg-2);
   box-shadow: 0 10px 28px rgb(0 0 0 / 28%);
   font-family: var(--chat-font);
-}
-.sv-rewind-warning {
-  display: block;
-  padding: 4px 7px 6px;
-  color: var(--red);
-  font-size: calc(var(--ui-fs) - 2px);
-  line-height: 1.4;
 }
 .sv-rewind-choice {
   display: block;
@@ -760,12 +768,51 @@
   border-radius: var(--r-sm);
   overflow: hidden;
 }
-.sv-code-lang {
-  padding: 2px 8px;
+.sv-code-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 4px 8px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   color: var(--text-faint);
   font-size: calc(var(--ui-fs) - 2.5px);
+}
+.sv-code-lang {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sv-code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.sv-code-copy:hover:not([aria-disabled="true"]) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.sv-code-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sv-code-copy[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.6;
+}
+.sv-code-copy-error {
+  flex-basis: 100%;
+  color: var(--red);
+  overflow-wrap: anywhere;
 }
 .sv-code pre {
   margin: 0;
@@ -933,6 +980,30 @@
 .sv-queue-text:hover {
   color: var(--text-mid);
 }
+/* Two lines are enough to recognize the message; the full text lives in the preview dialog. */
+.sv-queue-text-lines {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sv-queue-view {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.sv-queue-view:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 .sv-queue-edit {
   flex: 1;
   min-width: 0;
@@ -989,6 +1060,7 @@
 
 .sv-queue-steer:focus-visible,
 .sv-queue-text:focus-visible,
+.sv-queue-view:focus-visible,
 .sv-queue-drop:focus-visible,
 .sv-queue-edit:focus-visible {
   outline: 2px solid var(--accent);
@@ -1176,6 +1248,65 @@
   object-fit: contain;
 }
 
+/* The full text of a queued message, when the composer row can only show its first two lines. */
+.sv-queue-preview {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 3vh 3vw;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+.sv-queue-preview::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+/* Flex so the panel's auto margins center it on both axes; a block box would only center horizontally. */
+.sv-queue-preview[open] {
+  display: flex;
+  flex-direction: column;
+}
+.sv-queue-preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: 100%;
+  margin: auto;
+  overflow: hidden;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+}
+.sv-queue-preview-toolbar {
+  display: flex;
+  flex: none;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.sv-queue-preview-close {
+  margin-left: auto;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.sv-queue-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--ui-fs);
+  line-height: 1.6;
+}
+
 .sv-controls {
   display: flex;
   align-items: center;
@@ -1185,8 +1316,68 @@
   flex: 1;
 }
 
+.sv-toolbar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.sv-controls-main,
+.sv-controls-primary,
+.sv-controls-actions,
+.sv-controls-secondary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.sv-controls-main {
+  gap: 6px;
+}
+.sv-controls-primary {
+  display: contents;
+}
+.sv-controls-actions {
+  flex: none;
+  margin-left: auto;
+}
+.sv-controls-secondary {
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+.sv-controls-secondary[hidden],
+.sv-controls-status:empty {
+  display: none;
+}
+.sv-controls-secondary > .sv-chip-box {
+  flex: 0 1 auto;
+}
+.sv-controls-secondary .sv-chip {
+  max-width: 100%;
+}
+.sv-controls-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.sv-more-toggle {
+  flex: none;
+}
+.sv-more-toggle[aria-expanded="true"] {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+.sv-more-toggle[aria-expanded="true"] > svg:last-child {
+  transform: rotate(180deg);
+}
+
 .sv-permission-control {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   align-items: center;
   min-width: 0;
 }
@@ -1207,15 +1398,17 @@
   min-width: 0;
   flex-shrink: 1;
 }
-/* The 22ch cap keeps a long model name from crowding the chips beside it. The 100% is what stops the
-   button overflowing its own box once the row runs out of room: without it the box shrinks and the button
-   does not, and the chips end up drawn on top of each other. */
+/* The 22ch cap on the label keeps a long model name from crowding the chips beside it. It sits on the
+   label rather than on the button: a `max-width: min(22ch, 100%)` on the button cannot be resolved while
+   the flex item measures its intrinsic width, so the surrounding box grew to the full name while the
+   button stopped at the cap, leaving a gap before the next chip. The button keeps a 100% cap so it still
+   cannot overflow its box once the row runs out of room. */
 .sv-chip {
   display: flex;
   align-items: center;
   gap: 4px;
   height: 26px;
-  max-width: min(22ch, 100%);
+  max-width: 100%;
   padding: 0 6px;
   background: transparent;
   border: none;
@@ -1244,6 +1437,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 22ch;
 }
 
 /* The filter box above a long chip menu, drawn like the rows under it rather than like a form field. */
@@ -1999,4 +2193,186 @@ select.sv-pill {
 }
 
 .sv-sync-state { display: flex; align-items: center; gap: 8px; color: var(--text-muted); padding: 8px 0; font-size: 12px; }
-.sv-history-more { display: block; margin-bottom: 12px; }
+.sv-history { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0 14px; }
+.sv-history-more { flex: none; font-size: 12px; }
+.sv-history-error { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+
+.sv-message-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sv-message-editor .sv-attach,
+.sv-message-editor .sv-attach-note,
+.sv-message-editor p {
+  margin: 0;
+}
+.sv-message-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+.sv-message-editor p {
+  color: var(--red);
+  font-size: var(--ui-fs);
+}
+.sv-message-editor .sv-rewind-actions {
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 0;
+}
+.sv-message-editor .vlx-btn {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--text);
+  min-height: 34px;
+  max-width: 100%;
+  padding: 7px 14px;
+  font-size: var(--ui-fs);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.sv-message-editor .vlx-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg-0);
+}
+.sv-message-editor .vlx-btn:hover:not(:disabled) {
+  border-color: var(--text-muted);
+  filter: brightness(0.95);
+}
+.sv-message-editor .vlx-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sv-rewind-target {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--red);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.sv-msg-user .sv-msg-head {
+  flex-wrap: wrap;
+}
+
+/* Keep message actions at the right edge without covering the message text. */
+.sv-msg-user .sv-msg-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.sv-message-content {
+  flex: 1;
+  min-width: 0;
+}
+.sv-message-tools {
+  order: 1;
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 0;
+  margin-top: -3px;
+  margin-right: -3px;
+}
+.sv-message-tools .sv-rewind-button,
+.sv-message-tools .sv-message-copy-button,
+.sv-message-tools .sv-message-edit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  opacity: 1;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.sv-message-tools button:hover,
+.sv-message-tools button[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.sv-message-tools button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sv-message-tools .sv-rewind-menu {
+  left: auto;
+  right: 0;
+  max-width: calc(100vw - 48px);
+}
+@media (pointer: coarse) {
+  .sv-message-tools .sv-rewind-button,
+  .sv-message-tools .sv-message-copy-button,
+  .sv-message-tools .sv-message-edit-button {
+    width: 34px;
+    height: 34px;
+  }
+}
+.sv-message-tools button:disabled {
+  color: var(--text-faint);
+  background: transparent;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* Catalogue status and its refresh action share the model menu's existing spacing. */
+.sv-model-catalog-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 4px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.sv-model-catalog-status > div { flex: 1; min-width: 0; }
+.sv-model-catalog-refresh { flex-shrink: 0; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-panel); color: var(--text); cursor: pointer; }
+.sv-model-catalog-refresh:disabled { opacity: .5; cursor: default; }
+.sv-model-catalog-error { color: var(--text); }
+
+/* Unresolved authentication is inline; manual account actions live in a popover. */
+.sv-auth {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sv-pad);
+  margin-block: var(--sv-pad);
+  font-size: 13px;
+}
+.sv-auth-panel {
+  padding: var(--sv-pad);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.sv-auth p { margin: 0; overflow-wrap: anywhere; }
+.sv-auth-hint { color: var(--text-mid); font-size: 12px; }
+.sv-auth-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sv-pad); }
+.sv-auth-code { font-size: 18px; font-weight: 600; letter-spacing: 0.08em; }
+.sv-auth button { padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; }
+.sv-auth a { color: var(--accent); text-decoration: underline; }
+.sv-auth button:disabled { opacity: 0.5; cursor: default; }
+
+.sv-auth-confirm { display: flex; flex-direction: column; gap: var(--sv-pad); }
+.sv-auth-menu { padding: var(--sv-pad); white-space: normal; }
+.sv-auth-menu .sv-auth { margin: 0; padding: 0; border: 0; }
+
+.sv-auth-form { display: flex; flex-direction: column; gap: var(--sv-pad); }
+.sv-auth-form input { flex: 1; min-width: 0; width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-2); color: inherit; }

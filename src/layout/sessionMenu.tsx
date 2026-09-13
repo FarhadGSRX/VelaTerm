@@ -2,7 +2,10 @@
 //! session items, per-session actions, a dialog opener, and dialog JSX. Centralizing former LeftSidebar logic prevents
 //! tab and tree menus from drifting apart.
 
-import { useEffect, useState } from "react";
+import { AgentPermissionSelect } from "../components/AgentPermissionSelect";
+import { Backdrop } from "../components/Backdrop";
+import { chatStop } from "../ipc/chat";
+import { useEffect, useId, useRef, useState } from "react";
 import { type MenuItem } from "../components/ContextMenu";
 import { FormModal, type FieldDef } from "../components/FormModal";
 import Icons from "../components/Icons";
@@ -32,6 +35,7 @@ import {
   prefetchGitBranchInfo,
 } from "../hooks/useGitBranch";
 import { type SelNode, useTermStore } from "../store/termStore";
+import { defaultEngineFor } from "../store/settings";
 import {
   isVirtualProject,
   projectRoot,
@@ -58,6 +62,7 @@ import {
 import { importSessionsUrl, openImportSessions } from "./ImportSessions";
 import { memoryNavigate, memoryUrl } from "./Memory/navigation";
 import { kindLabel, supportsAgentArgs } from "./sessionMenuShared";
+import { navigatePlanExecute, planExecuteUrl } from "../components/planExecuteNavigation";
 
 /** Number of direct agent shortcuts on the first New Session menu level. */
 const QUICK_AGENT_COUNT = 3;
@@ -209,6 +214,32 @@ export function useSessionMenu(): SessionMenu {
   const sessions = useTermStore((s) => s.sessions);
 
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [killError, setKillError] = useState<string | null>(null);
+  const [killTarget, setKillTarget] = useState<{ id: string; name: string } | null>(null);
+  const [killBusy, setKillBusy] = useState(false);
+  const killInFlight = useRef(false);
+  const killDialogId = useId();
+  const cancelKill = () => { if (!killInFlight.current) setKillTarget(null); };
+  const confirmKill = async () => {
+    if (!killTarget || killInFlight.current) return;
+    killInFlight.current = true;
+    setKillBusy(true);
+    setKillError(null);
+    try {
+      const st = useTermStore.getState();
+      const session = st.sessions.find((s) => s.id === killTarget.id);
+      if (session?.engine === "chat") await chatStop(killTarget.id);
+      else await ptyKill(killTarget.id);
+      st.setRuntime(killTarget.id, { status: "exited", pid: undefined });
+      st.closeSession(killTarget.id);
+      setKillTarget(null);
+    } catch (error) {
+      setKillError(String(error));
+    } finally {
+      killInFlight.current = false;
+      setKillBusy(false);
+    }
+  };
   // Detect platform shells once for selectors. Empty/legacy results use a text input and omit quick switching.
   const [shells, setShells] = useState<ShellOption[]>([]);
   // Windows Git Bash status controls whether Download Full Git Bash appears in the Shell submenu.
@@ -386,6 +417,11 @@ export function useSessionMenu(): SessionMenu {
       opts?.permissionMode !== undefined ? opts.permissionMode : def.permissionMode ?? null;
     // Inherit a group's cwd/worktreePath/baseRef when present.
     const wt = groupWorktreeDefault(groupId, kind);
+    // No explicit choice means the quick "New <agent> Session" path, whose view follows that agent's
+    // default from its own settings. A session without a conversation view leaves the field unset.
+    const engine =
+      opts?.engine ??
+      (supportsChatEngine(kind) ? defaultEngineFor(kind, st.agentDefaults) : null);
     const created = await addSession({
       projectId,
       groupId,
@@ -397,9 +433,7 @@ export function useSessionMenu(): SessionMenu {
       permissionMode: rawPerm || null,
       agentPresetId: opts?.agentPresetId ?? null,
       agentPath: opts?.agentPath ?? null,
-      // No explicit choice means the quick "New <agent> Session" path, which follows the app-wide setting
-      // for which view a new session opens in. Terminal sessions ignore the field entirely.
-      engine: opts?.engine ?? (supportsChatEngine(kind) ? st.defaultSessionEngine : null),
+      engine,
       // A group worktree wins over a typed directory, because the session belongs to that worktree.
       ...(wt
         ? { cwd: wt.cwd, worktreePath: wt.worktreePath, worktreeBaseRef: wt.worktreeBaseRef }
@@ -709,6 +743,11 @@ export function useSessionMenu(): SessionMenu {
         },
       ],
     },
+    ...(() => {
+      const href = planExecuteUrl({ projectId, groupId, parentSessionId });
+      return [{ label: t("tree.newPlanExecuteSession"), icon: <Icons.planExecute size={14} />, href,
+        onClick: () => navigatePlanExecute(href) }];
+    })(),
     // New Worktree Session shares the custom dialog but opens in new-worktree mode; users can change to existing/none.
     // It needs a repository to branch from, so it is omitted inside a collection that has none.
     ...(worktreeRepoRoot(projectId, groupId, parentSessionId)
@@ -937,8 +976,15 @@ export function useSessionMenu(): SessionMenu {
       ...(sessionRec && canExportContext(sessionRec)
         ? [{ label: t("tree.exportSession"), onClick: () => void exportSessionToFile(sessionRec) }]
         : []),
+      // The session knowledge base is a regular feature; the action stays at the top level of the menu.
       ...(sessionRec
-        ? [{ label: `${t("memory.add")} · ${t("common.experimental")}`, href: memoryUrl(`compile/${node.id}`), onClick: () => memoryNavigate(memoryUrl(`compile/${node.id}`)) }]
+        ? [
+            {
+              label: t("memory.add"),
+              href: memoryUrl(`compile/${node.id}`),
+              onClick: () => memoryNavigate(memoryUrl(`compile/${node.id}`)),
+            },
+          ]
         : []),
       // Show the Git submenu for any session whose working directory is a repository, not just worktrees.
       ...buildGitItems({
@@ -978,8 +1024,8 @@ export function useSessionMenu(): SessionMenu {
               cwd: s?.cwd ?? "",
               initCmd: s?.initCmd ?? "",
               agentArgs: s?.agentArgs ?? "",
-              // Two-state toggle: checked maps to "skip"; empty/legacy values are unchecked.
-              permissionMode: s?.permissionMode === "skip" ? "skip" : "",
+              // Preserve the full permission mode when editing unrelated session fields.
+              permissionMode: s?.permissionMode ?? "",
             },
           });
         },
@@ -987,14 +1033,15 @@ export function useSessionMenu(): SessionMenu {
     ];
     if (renameItem) items.push(renameItem);
     items.push(sep, buildMoveTo(), sep);
-    // End Process appears only while running. Browser tab closure merely detaches, so this is required to stop
-    // headless processes. Local kill broadcasts are filtered, so close this view directly while others close by event.
+    // Chat processes live outside the PTY manager. Closing their pane only releases them when idle,
+    // so explicitly stop the owning engine before closing the view.
     if (useTermStore.getState().runtimes[node.id]?.status === "running") {
       items.push({
         label: t("tree.killProcess"),
         onClick: () => {
-          void ptyKill(node.id).catch(() => {});
-          useTermStore.getState().closeSession(node.id);
+          if (killInFlight.current) return;
+          setKillError(null);
+          setKillTarget({ id: node.id, name: node.name });
         },
       });
     }
@@ -1133,6 +1180,27 @@ export function useSessionMenu(): SessionMenu {
 
   const dialogs = (
     <>
+      {killTarget !== null && (
+        <Backdrop onClose={cancelKill}>
+          <div className="quit-card" role="alertdialog" aria-modal="true" aria-busy={killBusy}
+            aria-labelledby={`${killDialogId}-title`} aria-describedby={`${killDialogId}-body`}
+            onKeyDown={event => {
+              if (event.key === "Escape") { event.stopPropagation(); cancelKill(); }
+            }}>
+            <div className="quit-head">
+              <div className="quit-title" id={`${killDialogId}-title`}>{t("tree.killProcess")}</div>
+              <div className="quit-body" id={`${killDialogId}-body`} style={{ overflowWrap: "anywhere" }}>
+                {t("tree.killProcessConfirm", killTarget.name)}
+              </div>
+              {killError !== null && <p role="alert" style={{ marginTop: 12, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{killError}</p>}
+            </div>
+            <div className="quit-foot">
+              <button className="quit-btn ghost" disabled={killBusy} autoFocus onClick={cancelKill}>{t("common.cancel")}</button>
+              <button className="quit-btn primary" disabled={killBusy} onClick={() => void confirmKill()}>{t("tree.killProcess")}</button>
+            </div>
+          </div>
+        </Backdrop>
+      )}
       {dialog?.type === "newGroup" && (
         <NewGroup
           projectId={dialog.projectId}
@@ -1227,6 +1295,7 @@ export function useSessionMenu(): SessionMenu {
               editableShells,
               supportsAgentArgs(k),
               supportsPermissionToggle(k),
+              k,
             );
           })()}
           initial={dialog.initial}
@@ -1395,13 +1464,14 @@ export function useSessionMenu(): SessionMenu {
   };
 }
 
-// Show custom launch arguments only for agents. Show the two-state skip-permissions toggle only for supported agents;
-// OpenCode has no flag and Pi has no permission mechanism. Nonempty shells render a selector plus custom input;
+// Show custom launch arguments and supported permission controls for agents.
+// Nonempty shells render a selector plus custom input;
 // otherwise use a plain text field.
 const sessionFields = (
   shells: ShellOption[],
   isAgent: boolean,
   canPermission: boolean,
+  kind: SessionKind,
 ): FieldDef[] => [
   { key: "name", label: t("tree.sessionName"), required: true, autoFocus: true },
   {
@@ -1433,10 +1503,16 @@ const sessionFields = (
     ? [
         {
           key: "permissionMode",
-          label: t("tree.permissionSkipLabel"),
-          type: "checkbox" as const,
-          checkedValue: "skip",
-          hint: t("tree.permissionSkipHint"),
+          ...(["claude", "codex", "opencode"].includes(kind) ? {
+            label: t("info.permission"),
+            render: (value: string, onChange: (value: string) => void) =>
+              <AgentPermissionSelect kind={kind} value={value} onChange={onChange} />,
+          } : {
+            label: t("tree.permissionSkipLabel"),
+            type: "checkbox" as const,
+            checkedValue: "skip",
+            hint: t("tree.permissionSkipHint"),
+          }),
         },
       ]
     : []),

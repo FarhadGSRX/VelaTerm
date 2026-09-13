@@ -11,6 +11,9 @@ import { velaSailMarkEl } from "../../../components/brandIcons";
 import Icons from "../../../components/Icons";
 import { fmtTokens } from "../../../format";
 import { dateLocale, useT } from "../../../i18n";
+import { platform } from "../../../platform";
+import { env } from "../../../platform/env";
+import { imageFromNativeClipboard, imagesFromClipboard } from "../../../terminal/imageInput";
 import {
   resolveChatImage,
   loadChatTool,
@@ -21,14 +24,14 @@ import {
   type ChatRewindScope,
   type SubagentInfo,
 } from "../../../ipc/chat";
-import { dataUrl } from "./attachments";
+import { attachImages, dataUrl, MAX_IMAGES, MAX_IMAGE_BYTES } from "./attachments";
 import { useImageMenu } from "./useImageMenu";
 import { ChatImagePreview } from "./ChatImagePreview";
 import { Markdown } from "./markdown";
 import { parseAnsweredQuestions, type AnsweredQuestion } from "./questionForm";
 import { ToolBody, toolSummary } from "./toolCards";
 import { runSummaryText, type ToolRow } from "./toolRuns";
-import { createMessageSelectionClipboardContent } from "./selectionCopy";
+import { copyAttributes, createMessageSelectionClipboardContent } from "./selectionCopy";
 
 /**
  * What to show for the instant a message was written.
@@ -81,6 +84,52 @@ function handleMessageCopy(event: ClipboardEvent<HTMLDivElement>) {
   event.preventDefault();
   event.clipboardData.setData("text/plain", content.plainText);
   event.clipboardData.setData("text/html", content.html);
+}
+
+/** Copy the original message text without its timestamp, attachments, or action labels. */
+function MessageCopyButton({ text }: { text: string }) {
+  const t = useT();
+  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
+  const request = useRef(0);
+
+  useEffect(() => {
+    setStatus("idle");
+    return () => { request.current += 1; };
+  }, [text]);
+
+  useEffect(() => {
+    if (status !== "copied") return;
+    const timer = window.setTimeout(() => setStatus("idle"), 2000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
+  const copy = async () => {
+    if (status === "copying") return;
+    const id = ++request.current;
+    setStatus("copying");
+    try {
+      await platform.clipboard.writeText(text, { reportFailure: true });
+      if (request.current === id) setStatus("copied");
+    } catch {
+      if (request.current === id) setStatus("failed");
+    }
+  };
+  const label = t(status === "copied" ? "common.copied" : status === "failed" ? "common.copyFailed" : "common.copy");
+
+  return (
+    <button
+      type="button"
+      className="sv-message-copy-button"
+      title={label}
+      aria-label={label}
+      disabled={status === "copying"}
+      aria-busy={status === "copying"}
+      onClick={() => void copy()}
+    >
+      {status === "copied" ? <Icons.check size={16} /> : status === "failed" ? <Icons.x size={16} /> : <Icons.copy size={16} />}
+      <span className="sv-sr" aria-live="polite">{status === "copied" || status === "failed" ? label : ""}</span>
+    </button>
+  );
 }
 
 /** Load snapshot-backed bytes only when the row or queue item containing this image is actually mounted. */
@@ -145,6 +194,64 @@ export function ChatImageView({
   );
 }
 
+/** The author line every message and every agent turn opens with. */
+function MessageHead({
+  who,
+  icon,
+  at,
+  durationMs,
+}: {
+  who: string;
+  icon?: ReactNode;
+  at?: string | number;
+  durationMs?: number;
+}) {
+  const when = messageTime(at);
+  return (
+    <div className="sv-msg-head">
+      <span className="sv-msg-author">
+        <span className="sv-msg-mark" aria-hidden>
+          {icon}
+        </span>
+        <span className="sv-msg-who">{who}</span>
+      </span>
+      {when ? (
+        <time className="sv-msg-time" title={when.full}>
+          {when.short}
+        </time>
+      ) : null}
+      {durationMs !== undefined && Number.isFinite(durationMs) ? (
+        <span className="sv-msg-duration">· {formatTurnDuration(durationMs)}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The line that opens an agent turn: its mark, its name, when it replied, and how long the turn took.
+ *
+ * Drawn once per turn rather than once per message, so the agent's reasoning, tool calls and prose all
+ * sit under a single author line. A reasoning row right below a prompt otherwise carries no author of
+ * its own, and reads as though the person had written it.
+ */
+export function TurnHead({
+  who,
+  icon,
+  at,
+  durationMs,
+}: {
+  who: string;
+  icon?: ReactNode;
+  at?: number;
+  durationMs?: number;
+}) {
+  return (
+    <div className="sv-turn-head">
+      <MessageHead who={who} icon={icon} at={at} durationMs={durationMs} />
+    </div>
+  );
+}
+
 /**
  * A message from the person or from the agent, with whatever was attached to it.
  *
@@ -163,7 +270,11 @@ export function MessageBubble({
   text,
   images,
   durationMs,
+  showHead = true,
   onRewind,
+  onEditSend,
+  rewindDisabledReason,
+  editDisabledReason,
   rewindScopes,
   openRewindToken,
   onRewindMenuOpened,
@@ -178,8 +289,13 @@ export function MessageBubble({
   images?: ChatImageValue[];
   /** Total wall-clock time for a completed assistant turn. */
   durationMs?: number;
-  /** Present only for top-level user turns while the conversation is safe to rewind. */
+  /** Draw the author line. Inside a marked turn the turn's own line already names the speaker. */
+  showHead?: boolean;
+  /** Present for top-level user turns; availability is separate from visibility. */
   onRewind?: (scope: ChatRewindScope) => void;
+  onEditSend?: (text: string, images: ChatImageValue[]) => void;
+  rewindDisabledReason?: string;
+  editDisabledReason?: string;
   rewindScopes?: ChatRewindScope[];
   /** A new token asks this already-rendered message to open its normal rewind scope menu. */
   openRewindToken?: number;
@@ -188,6 +304,7 @@ export function MessageBubble({
 }) {
   const t = useT();
   const [rewindMenu, setRewindMenu] = useState(false);
+  const [editing, setEditing] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (openRewindToken === undefined) return;
@@ -195,16 +312,6 @@ export function MessageBubble({
     window.requestAnimationFrame(() => rootRef.current?.scrollIntoView({ block: "center" }));
     onRewindMenuOpened?.(openRewindToken);
   }, [openRewindToken, onRewindMenuOpened]);
-  const when = messageTime(at);
-  const time = when ? (
-    <time className="sv-msg-time" title={when.full}>
-      {when.short}
-    </time>
-  ) : null;
-  const duration =
-    !isUser && durationMs !== undefined && Number.isFinite(durationMs) ? (
-      <span className="sv-msg-duration">· {formatTurnDuration(durationMs)}</span>
-    ) : null;
   // Pictures come before the words, the way they sit above the input while being written.
   const pictures =
     images && images.length > 0 ? (
@@ -223,21 +330,21 @@ export function MessageBubble({
 
   if (isUser) {
     const rewind =
-      onRewind && rewindScopes && rewindScopes.length > 0 ? (
+      onRewind ? (
         <span className="sv-rewind">
           <button
             className="sv-rewind-button"
-            title={t("chat.rewind.title")}
+            title={rewindDisabledReason || t("chat.rewind.title")}
+            disabled={!!rewindDisabledReason || !rewindScopes?.length}
             aria-label={t("chat.rewind.title")}
             aria-expanded={rewindMenu}
             onClick={() => setRewindMenu((open) => !open)}
           >
-            <Icons.restart size={12} />
+            <Icons.restart size={16} />
           </button>
-          {rewindMenu ? (
+          {rewindMenu && !rewindDisabledReason ? (
             <span className="sv-rewind-menu">
-              <span className="sv-rewind-warning">{t("chat.rewind.warning")}</span>
-              {rewindScopes.map((scope) => (
+              {rewindScopes?.map((scope) => (
                 <button
                   key={scope}
                   className="sv-rewind-choice"
@@ -256,19 +363,17 @@ export function MessageBubble({
     return (
       <div className="sv-msg sv-msg-user" ref={rootRef}>
         <div className="sv-msg-turn">
-          <div className="sv-msg-head">
-            <span className="sv-msg-author">
-              <span className="sv-msg-mark" aria-hidden>
-                <span className="sv-user-sail">{velaSailMarkEl(14)}</span>
-              </span>
-              <span className="sv-msg-who">{who}</span>
-            </span>
-            {time}
-            {rewind}
-          </div>
+          <MessageHead who={who} icon={icon ?? <span className="sv-user-sail">{velaSailMarkEl(14)}</span>} at={at} />
           <div className="sv-msg-body" onCopy={handleMessageCopy}>
-            {pictures}
-            {body}
+            {!editing && (text || rewind || onEditSend) ? <div className="sv-message-tools" {...copyAttributes.ignore}>
+              {rewind}
+              {onEditSend ? <button className="sv-message-edit-button" disabled={!!editDisabledReason} title={editDisabledReason || t("chat.rewind.edit")} aria-label={t("chat.rewind.edit")} onClick={() => setEditing(true)}><Icons.rename size={16} /></button> : null}
+              {text ? <MessageCopyButton text={text} /> : null}
+            </div> : null}
+            <div className="sv-message-content">
+            {editing ? <MessageEditor text={text} images={images} disabled={!!editDisabledReason}
+              onCancel={() => setEditing(false)} onSend={onEditSend} /> : <>{pictures}{body}</>}
+            </div>
           </div>
         </div>
       </div>
@@ -276,16 +381,7 @@ export function MessageBubble({
   }
   return (
     <div className="sv-msg sv-msg-assistant">
-      <div className="sv-msg-head">
-        <span className="sv-msg-author">
-          <span className="sv-msg-mark" aria-hidden>
-            {icon}
-          </span>
-          <span className="sv-msg-who">{who}</span>
-        </span>
-        {time}
-        {duration}
-      </div>
+      {showHead ? <MessageHead who={who} icon={icon} at={at} durationMs={durationMs} /> : null}
       {pictures}
       {body ? (
         <div className="sv-msg-body" onCopy={handleMessageCopy}>
@@ -294,6 +390,86 @@ export function MessageBubble({
       ) : null}
     </div>
   );
+}
+
+/** Keep an edit's attachments local until the user reviews and confirms the replacement. */
+function MessageEditor({ text, images = [], disabled, onCancel, onSend }: {
+  text: string;
+  images?: ChatImageValue[];
+  disabled: boolean;
+  onCancel: () => void;
+  onSend?: (text: string, images: ChatImageValue[]) => void;
+}) {
+  const t = useT();
+  const [editedText, setEditedText] = useState(text);
+  const [attachments, setAttachments] = useState(images);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const current = useRef(images);
+  const queue = useRef(Promise.resolve());
+  const pending = useRef(0);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+
+  const enqueue = (load: () => Promise<File[]>) => {
+    pending.current += 1;
+    setBusy(true);
+    queue.current = queue.current.then(async () => {
+      if (!active.current) return;
+      const files = await load();
+      if (!active.current) return;
+      const result = await attachImages(current.current, files);
+      if (!active.current) return;
+      current.current = result.attachments;
+      setAttachments(result.attachments);
+      const first = result.rejected[0];
+      setNote(!first ? null : first.reason === "tooMany" ? t("chat.attach.tooMany", MAX_IMAGES)
+        : first.reason === "tooLarge" ? t("chat.attach.tooLarge", first.name, MAX_IMAGE_BYTES / (1024 * 1024))
+        : t("chat.attach.unreadable", first.name));
+    }).catch(() => {
+      if (active.current) setNote(t("chat.attach.unreadable", "clipboard"));
+    }).finally(() => {
+      pending.current -= 1;
+      if (active.current) setBusy(pending.current > 0);
+    });
+  };
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = imagesFromClipboard(event.clipboardData);
+    if (files.length > 0) {
+      event.preventDefault();
+      enqueue(() => Promise.resolve(files));
+    } else if (env.isTauri && !event.clipboardData?.getData("text/plain")) {
+      event.preventDefault();
+      enqueue(() => imageFromNativeClipboard().then(file => [file]).catch(() => []));
+    }
+  };
+  const remove = (index: number) => {
+    current.current = current.current.filter((_, i) => i !== index);
+    setAttachments(current.current);
+    setNote(null);
+  };
+  return <div className="sv-message-editor" aria-busy={busy}>
+    {attachments.length > 0 ? <div className="sv-attach">
+      {attachments.map((image, index) => <div className="sv-attach-item" key={"attachmentId" in image ? image.attachmentId : index}>
+        <ChatImageView image={image} className="sv-attach-thumb" alt="" />
+        <button type="button" className="sv-attach-drop" disabled={disabled || busy}
+          title={t("chat.attach.remove")} aria-label={t("chat.attach.remove")} onClick={() => remove(index)}><Icons.x size={10} /></button>
+      </div>)}
+    </div> : null}
+    {note ? <div className="sv-attach-note" role="status">{note}</div> : null}
+    <textarea aria-label={t("chat.rewind.edit")} value={editedText} disabled={disabled}
+      onChange={event => setEditedText(event.target.value)} onPaste={onPaste} rows={5} />
+    <p>{t("chat.rewind.editWarning")}</p>
+    <div className="sv-rewind-actions">
+      <button type="button" className="vlx-btn" onClick={onCancel}>{t("chat.rewind.cancel")}</button>
+      <button type="button" className="vlx-btn vlx-btn-primary"
+        disabled={!onSend || disabled || busy || attachments.length > MAX_IMAGES || (!editedText.trim() && !attachments.length)}
+        onClick={() => { if (!pending.current) onSend?.(editedText.trim(), current.current); }}>{t("chat.rewind.editSend")}</button>
+    </div>
+  </div>;
 }
 
 /** Reasoning, folded away by default: it explains how an answer was reached, which is rarely what a reader wants first. */

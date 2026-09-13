@@ -52,8 +52,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 34px;
-  padding: 0 10px;
+  min-height: 42px;
+  padding: 6px 12px;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
   background: var(--bg-1);
   font-size: var(--ui-fs);
@@ -63,6 +64,9 @@
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .docview-head .path {
@@ -84,7 +88,7 @@
   overflow: hidden;
 }
 .docview-seg button {
-  padding: 2.5px 10px;
+  padding: 5px 10px;
   font-size: 11.5px;
   color: var(--text-dim);
   background: transparent;
@@ -99,7 +103,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 10px;
+  padding: 5px 10px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   color: var(--text);
@@ -184,10 +188,10 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 6px 0;
+  padding: 10px 6px;
 }
 .docview-outline-row {
-  padding: 3px 10px;
+  padding: 5px 10px;
   cursor: pointer;
   color: var(--text-mid);
   font-size: 12px;
@@ -258,48 +262,86 @@
   cursor: text;
 }
 
-/* WYSIWYG content uses at least 90% of the panel. Side gutters are 5%, clamped from 24 to 72 px. */
+/* Keep one gutter on the editor itself: Crepe's default 120px padding must not stack
+   with an outer gutter. Reserve room for block handles while limiting long reading lines. */
 .docview-wysiwyg {
+  width: 100%;
+  max-width: 920px;
+  min-height: 100%;
   margin: 0 auto;
-  padding: 20px clamp(24px, 5%, 72px) 96px;
+  padding: 0;
 }
 .docview-wysiwyg .milkdown { outline: none; }
-
-/* ── Reading typography adjustments over Crepe defaults ──
-   - Increase body line height from 1.5 to 1.8 for comfortable long-form CJK reading.
-   - Reduce headings to Typora-like scale (h1 around 2em) and use weight 600 for hierarchy.
-   - Add more space above headings to separate sections. */
-.docview .milkdown .ProseMirror p {
+.docview .milkdown .ProseMirror {
+  padding: 40px clamp(40px, 7%, 80px) 160px;
+  font-size: 16px;
   line-height: 1.8;
-  padding: 5px 0;
+  overflow-wrap: anywhere;
+  caret-color: var(--accent);
 }
-/* Remove extra paragraph spacing inside list items, which already have 4 px spacing. */
-.docview .milkdown .ProseMirror li > p {
-  padding: 1px 0;
+.docview-body { scroll-padding-block: 32px; container-type: inline-size; }
+.docview .milkdown .ProseMirror p {
+  font-size: inherit;
+  line-height: 1.8;
+  padding: 0;
+  margin: 0 0 0.9em;
 }
-/* List markers and task boxes use --text-mid. Crepe's default outline color maps to a very faint
-   border in light mode. Do not change --crepe-color-outline globally because tables and dividers use it. */
-.docview .milkdown .milkdown-list-item-block li .label-wrapper {
-  color: var(--text-mid);
-}
-.docview .milkdown .milkdown-list-item-block li .label-wrapper svg {
-  fill: var(--text-mid);
-}
-.docview .milkdown .ProseMirror h1,
-.docview .milkdown .ProseMirror h2,
-.docview .milkdown .ProseMirror h3,
-.docview .milkdown .ProseMirror h4,
-.docview .milkdown .ProseMirror h5,
-.docview .milkdown .ProseMirror h6 {
+.docview .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
   font-weight: 600;
   line-height: 1.4;
+  padding: 0;
+  margin-bottom: 0.55em;
+  scroll-margin-top: 32px;
+  text-wrap: pretty;
 }
-.docview .milkdown .ProseMirror h1 { font-size: 32px; margin-top: 40px; }
-.docview .milkdown .ProseMirror h2 { font-size: 25px; margin-top: 36px; }
-.docview .milkdown .ProseMirror h3 { font-size: 21px; margin-top: 28px; }
-.docview .milkdown .ProseMirror h4 { font-size: 18px; margin-top: 24px; }
-.docview .milkdown .ProseMirror h5 { font-size: 16px; margin-top: 20px; }
-.docview .milkdown .ProseMirror h6 { font-size: 15px; margin-top: 20px; }
+.docview .milkdown .ProseMirror h1 { font-size: 2em; margin-top: 1.5em; }
+.docview .milkdown .ProseMirror h2 {
+  font-size: 1.55em;
+  margin-top: 1.6em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.docview .milkdown .ProseMirror h3 { font-size: 1.3em; margin-top: 1.5em; }
+.docview .milkdown .ProseMirror h4 { font-size: 1.125em; margin-top: 1.4em; }
+.docview .milkdown .ProseMirror h5 { font-size: 1em; margin-top: 1.3em; }
+.docview .milkdown .ProseMirror h6 { font-size: 0.9375em; margin-top: 1.3em; color: var(--text-mid); }
+.docview .milkdown .ProseMirror > :first-child { margin-top: 0; }
+.docview .milkdown .ProseMirror :is(ul, ol) { margin-block: 0.5em 1em; }
+.docview .milkdown .ProseMirror li :is(ul, ol) { margin-block: 0.2em; }
+.docview .milkdown .ProseMirror li p { margin: 0; padding: 2px 0; }
+.docview .milkdown .milkdown-list-item-block li .label-wrapper { color: var(--text-mid); }
+.docview .milkdown .milkdown-list-item-block li .label-wrapper svg { fill: var(--text-mid); }
+.docview .milkdown .ProseMirror blockquote {
+  margin: 1.2em 0;
+  padding: 8px 18px;
+  color: var(--text-mid);
+  background: color-mix(in srgb, var(--bg-1), transparent 35%);
+  border-radius: 0 6px 6px 0;
+}
+.docview .milkdown .ProseMirror blockquote::before {
+  width: 3px;
+  top: 0;
+  bottom: 0;
+  border-radius: 0;
+  background: var(--border-strong);
+}
+.docview .milkdown .ProseMirror blockquote > :last-child { margin-bottom: 0; }
+.docview .milkdown .ProseMirror hr { margin-block: 1.75em; background-color: var(--border); }
+.docview .milkdown .ProseMirror a {
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--accent), transparent 50%);
+}
+.docview .milkdown .ProseMirror code {
+  display: inline;
+  padding: 0.15em 0.35em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.docview .milkdown .ProseMirror pre code { border: 0; padding: 0; }
+.docview .milkdown .ProseMirror img { border-radius: 6px; }
 
 /* ── Tables: prevent overlap and improve column allocation ──
    ProseMirror's fixed layout forces equal columns, causing long URLs/version strings to overlap and
@@ -313,7 +355,10 @@
 .docview .milkdown .ProseMirror th,
 .docview .milkdown .ProseMirror td {
   overflow-wrap: anywhere;
-  word-break: break-word;
+  word-break: normal;
+  border-color: var(--border-strong);
+  padding: 8px 12px;
+  vertical-align: top;
 }
 /* When minimum-width columns still overflow, scroll within the table container instead of widening
    the document. Edge add-row/column controls may be partly clipped in extreme cases. */
@@ -330,19 +375,71 @@
 /* Remove body paragraph spacing inside tables for appropriate density. */
 .docview .milkdown .ProseMirror th p,
 .docview .milkdown .ProseMirror td p {
+  margin: 0;
   padding: 1px 0;
   line-height: 1.6;
 }
 
-/* ── WYSIWYG CodeMirror blocks ──
-   Crepe hardcodes oneDark while our block background follows the application theme. Its dark active-line
-   and line-number highlight therefore becomes a black patch in light mode. Override both with theme-aware
-   --bg-hover, matching source mode. */
+/* Keep active-line backgrounds consistent with the application theme in both editor modes. */
 .docview .milkdown .milkdown-code-block .cm-activeLine {
   background: var(--bg-hover);
 }
 .docview .milkdown .milkdown-code-block .cm-activeLineGutter {
   background: var(--bg-hover);
+}
+
+/* Editing controls stay visible while a code block contains keyboard focus. */
+.docview .milkdown .milkdown-code-block {
+  margin: 1.2em 0;
+  padding: 10px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: normal;
+}
+.docview .milkdown .milkdown-code-block .cm-editor { color: var(--text); }
+.docview .milkdown .milkdown-code-block .cm-scroller {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.docview .milkdown .milkdown-code-block .cm-cursor { border-left-color: var(--accent); }
+.docview .milkdown .milkdown-code-block .cm-gutters { color: var(--text-dim); }
+.docview .milkdown .milkdown-code-block .language-button { opacity: 1; background: transparent; }
+.docview .milkdown .milkdown-code-block:focus-within .tools-button-group button { opacity: 1; }
+.docview .milkdown .milkdown-table-block { margin: 1.2em 0; }
+.docview .milkdown .ProseMirror th { background: var(--bg-1); font-weight: 600; }
+.docview .milkdown :is(.milkdown-toolbar, .milkdown-slash-menu, .milkdown-link-preview, .milkdown-link-edit) {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+.docview .milkdown .milkdown-toolbar .toolbar-item { margin: 3px; }
+.docview .milkdown .milkdown-toolbar .toolbar-item:not(.active) svg {
+  color: var(--text-mid);
+  fill: var(--text-mid);
+}
+.docview .milkdown .milkdown-toolbar .divider { margin: 7px 3px; }
+.docview .milkdown .milkdown-block-handle { flex-direction: column; }
+.docview .milkdown .milkdown-block-handle .operation-item { width: 24px; height: 24px; padding: 2px; }
+.docview .milkdown .milkdown-block-handle .operation-item svg { width: 20px; height: 20px; fill: var(--text-mid); }
+.docview button:focus-visible,
+.docview .milkdown button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.docview { container-type: inline-size; }
+@container (max-width: 600px) {
+  .docview-head { gap: 6px; }
+  .docview-head .path { display: none; }
+  .docview-head .title { margin-right: auto; max-width: 45%; }
+  .docview-side { max-width: 35%; }
+  .docview .milkdown .ProseMirror { padding: 28px 44px 120px; }
+  .docsearch { left: 8px; right: 8px; max-width: calc(100% - 16px); overflow-x: auto; }
+  .docsearch-input { width: 120px; min-width: 60px; }
+}
+@media (hover: none) {
+  .docview .milkdown .milkdown-code-block .tools-button-group button { opacity: 1; }
 }
 
 /* Source mode: CodeMirror owns scrolling and fills the unrestricted body. */
@@ -553,4 +650,153 @@
   white-space: pre-wrap;
   word-break: break-word;
   text-align: left;
+}
+
+/* Document writing surface: quiet typography, restrained controls, and a bounded reading column. */
+.doc-markdown-layout {
+  --doc-paper: #fff;
+  --doc-ink: #333;
+  --doc-muted: #777;
+  --doc-rule: #e7e7e7;
+  --doc-code: #f6f8fa;
+  --doc-link: #4183c4;
+  --doc-pane-gap: 12px;
+  position: absolute;
+  inset: 0;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  background: var(--doc-paper);
+}
+[data-theme="dark"] .doc-markdown-layout {
+  --doc-paper: #202124;
+  --doc-ink: #d8dadd;
+  --doc-muted: #a0a4aa;
+  --doc-rule: #373b40;
+  --doc-code: #292c31;
+  --doc-link: #80b7ea;
+}
+.doc-markdown-pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.doc-markdown-visual { overflow: auto; scroll-padding-block: 28px; container-type: inline-size; }
+.doc-markdown-layout--compare {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--doc-pane-gap);
+  padding: var(--doc-pane-gap);
+  background: var(--bg-term);
+}
+.doc-markdown-layout--compare > .doc-markdown-pane {
+  border: 1px solid var(--doc-rule);
+  border-radius: 6px;
+  background: var(--doc-paper);
+}
+.doc-markdown-layout .docview-wysiwyg { max-width: 860px; }
+.doc-markdown-layout .milkdown {
+  --crepe-color-background: var(--doc-paper);
+  --crepe-color-on-background: var(--doc-ink);
+  --crepe-color-inline-code: var(--doc-ink);
+  --crepe-color-inline-area: var(--doc-code);
+  --crepe-color-primary: var(--doc-link);
+  color: var(--doc-ink);
+}
+.doc-markdown-layout .milkdown .ProseMirror {
+  min-height: 100%;
+  padding: 40px clamp(24px, 6%, 48px) 120px;
+  font-size: 16px;
+  line-height: 1.65;
+  letter-spacing: 0;
+  caret-color: var(--doc-ink);
+}
+.doc-markdown-layout .milkdown .ProseMirror p { line-height: 1.65; margin-bottom: 0.85em; }
+.doc-markdown-layout .milkdown .ProseMirror :is(h1,h2,h3,h4,h5,h6) {
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--doc-ink);
+  margin-block: 1.4em 0.65em;
+}
+.doc-markdown-layout .milkdown .ProseMirror h1 {
+  font-size: 2.15em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--doc-rule);
+}
+.doc-markdown-layout .milkdown .ProseMirror h2 {
+  font-size: 1.65em;
+  padding-bottom: 0.3em;
+  border-color: var(--doc-rule);
+}
+.doc-markdown-layout .milkdown .ProseMirror h3 { font-size: 1.35em; }
+.doc-markdown-layout .milkdown .ProseMirror h4 { font-size: 1.15em; }
+.doc-markdown-layout .milkdown .ProseMirror h5 { font-size: 1em; }
+.doc-markdown-layout .milkdown .ProseMirror h6 { font-size: 0.95em; color: var(--doc-muted); }
+.doc-markdown-layout .milkdown .ProseMirror > :first-child,
+.doc-markdown-layout .milkdown .ProseMirror > .prosemirror-virtual-cursor:first-child + * { margin-top: 0; }
+.doc-markdown-layout .milkdown .ProseMirror blockquote {
+  margin-block: 1em;
+  padding: 2px 16px;
+  background: transparent;
+  color: var(--doc-muted);
+  border-radius: 0;
+}
+.doc-markdown-layout .milkdown .ProseMirror blockquote::before { width: 4px; background: var(--doc-rule); }
+.doc-markdown-layout .milkdown .ProseMirror a { color: var(--doc-link); text-decoration-color: currentColor; }
+.doc-markdown-layout .milkdown .ProseMirror code {
+  background: var(--doc-code);
+  border-color: transparent;
+  font-size: 0.9em;
+  padding: 0.12em 0.3em;
+  border-radius: 3px;
+}
+.doc-markdown-layout .milkdown .milkdown-code-block {
+  display: flex;
+  flex-direction: column;
+  background: var(--doc-code);
+  border-color: var(--doc-rule);
+  border-radius: 5px;
+  padding: 8px 14px 12px;
+  margin-block: 1em;
+}
+.doc-markdown-layout .milkdown .milkdown-code-block .cm-editor { color: var(--doc-ink); }
+.doc-markdown-layout .milkdown .milkdown-code-block .language-button { color: var(--doc-muted); font-size: 11px; }
+.doc-markdown-layout .milkdown .ProseMirror :is(th,td) { border-color: var(--doc-rule); padding: 7px 12px; }
+.doc-markdown-layout .milkdown .ProseMirror th { background: var(--doc-code); }
+.doc-markdown-layout .milkdown .ProseMirror tr:nth-child(even) td { background: color-mix(in srgb, var(--doc-code), transparent 50%); }
+.doc-markdown-layout .milkdown .ProseMirror img { border-radius: 3px; }
+.doc-markdown-layout .milkdown .milkdown-image-block > .image-wrapper img { max-width: 100%; object-fit: contain; }
+.doc-markdown-layout .milkdown .milkdown-table-block { margin-block: 1em; }
+.doc-markdown-layout--compare .milkdown .ProseMirror { padding: 32px clamp(24px, 6%, 36px) 100px; }
+.doc-markdown-error {
+  position: absolute; inset: 0; display: flex; gap: 12px; align-items: center; justify-content: center;
+  padding: 24px; background: var(--doc-paper); color: var(--doc-ink);
+}
+.docview-head .docview-seg button { font-family: var(--font-ui, sans-serif); }
+.doc-markdown-layout .milkdown .katex { color: var(--doc-ink); }
+.doc-markdown-layout .milkdown .milkdown-code-block .cm-editor { background: transparent; }
+.doc-markdown-layout .milkdown .milkdown-code-block .cm-gutters { display: none; }
+.doc-markdown-layout .milkdown .milkdown-code-block:not(:focus-within) .cm-activeLine { background: transparent; }
+.doc-markdown-layout .milkdown .milkdown-code-block .tools {
+  order: 1;
+  min-height: 24px;
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.doc-markdown-layout .milkdown .milkdown-code-block:is(:hover, :focus-within) .tools { opacity: 1; }
+.doc-markdown-layout .milkdown .milkdown-code-block .cm-content { font-size: 14px; line-height: 1.6; }
+.doc-markdown-layout .milkdown .ProseMirror :is(th, td) p { margin: 0; }
+.doc-markdown-layout .milkdown .ProseMirror li p { margin-block: 0; }
+.doc-markdown-layout .milkdown .ProseMirror blockquote > :last-child { margin-bottom: 0; }
+.doc-markdown-layout .milkdown .milkdown-image-block > .image-wrapper img { min-height: 0; }
+.doc-markdown-code .cm-editor { font-size: 14px; color: var(--doc-ink); }
+.doc-markdown-code .cm-content { padding-block: 28px; }
+.doc-markdown-code .cm-line { padding-inline: 16px; }
+.doc-markdown-code .cm-editor:not(.cm-focused) :is(.cm-activeLine, .cm-activeLineGutter) { background: transparent; }
+@container (max-width: 480px) {
+  .doc-markdown-layout .milkdown .ProseMirror { padding: 28px 24px 96px; }
+  .doc-markdown-layout .milkdown .ProseMirror h1 { font-size: 1.85em; }
+  .doc-markdown-layout .milkdown .ProseMirror h2 { font-size: 1.45em; }
+}
+@media (hover: none) {
+  .doc-markdown-layout .milkdown .milkdown-code-block .tools { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .doc-markdown-layout .milkdown .milkdown-code-block .tools { transition: none; }
 }

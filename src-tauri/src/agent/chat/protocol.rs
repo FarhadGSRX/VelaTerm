@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 /// Permission modes the agent's command line accepts. `skip` — what a terminal-driven session stores when
 /// the user turns confirmations off — is not among them, so it is translated rather than passed through.
-const CLI_PERMISSION_MODES: &[&str] = &["plan", "default", "acceptEdits", "auto", "bypassPermissions"];
+use crate::agent::permission_catalog::CLAUDE_MODES as CLI_PERMISSION_MODES;
 
 /// Translate a session's stored permission mode into one the agent accepts, or None to let it decide.
 ///
@@ -74,6 +74,9 @@ pub fn launch_args(
         args.push(effort.into());
     }
     if let Some(mode) = permission_mode {
+        if mode == "bypassPermissions" {
+            args.push("--dangerously-skip-permissions".into());
+        }
         args.push("--permission-mode".into());
         args.push(mode.into());
     }

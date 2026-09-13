@@ -60,6 +60,10 @@ fn main() {
     // not call generate_context! or need frontend output; skipping this step allows builds without ../dist.
     // Cargo injects CARGO_FEATURE_GUI when the feature is enabled.
     if std::env::var_os("CARGO_FEATURE_GUI").is_some() {
-        tauri_build::build();
+        tauri_build::try_build(tauri_build::Attributes::new().plugin(
+            "local-fonts",
+            tauri_build::InlinedPlugin::new().commands(&["catalog"]),
+        ))
+        .expect("Tauri build configuration");
     }
 }

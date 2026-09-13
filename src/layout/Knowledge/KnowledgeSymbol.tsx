@@ -1,14 +1,19 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useT } from "../../i18n";
 import { knowledgeLink, knowledgeNode, knowledgeReview, knowledgeUnlink, type CodeEdge, type KnowledgeIndex } from "../../ipc/knowledge";
 import { memoryGet, memoryOptions } from "../../ipc/memory";
 import { MemoryLink, memoryNavigate } from "../Memory/navigation";
 import { MemoryMarkdown } from "../Memory/shared";
 import { KnowledgeLink, knowledgeUrl } from "./navigation";
+import { KnowledgeSource } from "./KnowledgeSource";
+import { KnowledgeCalls, KnowledgeImpact, KnowledgePath } from "./KnowledgeAnalysis";
 import { knowledgeError, KnowledgeState, useKnowledgeLoad } from "./shared";
 
-export function KnowledgeSymbol({ index, nodeId, linkEntry }: { index: KnowledgeIndex; nodeId: string; linkEntry: string | null }) {
-  const t = useT(); const { data,error,reload } = useKnowledgeLoad(() => knowledgeNode(index.id,nodeId), [index.id,nodeId]);
+export function KnowledgeSymbol({ index, nodeId, linkEntry, params }: { index: KnowledgeIndex; nodeId: string; linkEntry: string | null; params: URLSearchParams }) {
+  const t = useT(); const { data,error,reload } = useKnowledgeLoad(() => knowledgeNode(index.id,nodeId), [index.id,nodeId], true);
+  const panel = params.get("knowledgePanel") || "source";
+  const selectedLine = Number(params.get("knowledgeLine")) || null;
+  const [hoverLine,setHoverLine] = useState<number | null>(null);
   const [failure,setFailure] = useState(""); const [busy,setBusy] = useState(false);
   const perform = async (fn: () => Promise<unknown>) => {
     setBusy(true); setFailure("");
@@ -17,12 +22,13 @@ export function KnowledgeSymbol({ index, nodeId, linkEntry }: { index: Knowledge
   if (!data) return <p className="memory-empty" role={error ? "alert" : "status"}>{error || t("common.loading")}{error && <button className="btn" onClick={reload}>{t("common.retry")}</button>}</p>;
   const existing = data.memories.find((m) => m.entryId === linkEntry);
   return <article className="knowledge-symbol">
-    <div className="knowledge-symbol-heading"><KnowledgeLink className="knowledge-mobile-back" projectId={index.projectId} values={{ knowledgeNode:null,knowledgeLink:null }}>← {t("knowledge.symbols")}</KnowledgeLink><h2>{data.node.qualifiedName}</h2><p>{data.node.filePath}:{data.node.startLine} · {data.node.kind} · {data.node.language}</p><button className="btn" onClick={reload}>{t("knowledge.sync")}</button></div>
+    <div className="knowledge-symbol-heading"><KnowledgeLink className="knowledge-mobile-back" projectId={index.projectId} values={{ knowledgeNode:null,knowledgeLink:null }}>← {t("knowledge.symbols")}</KnowledgeLink><div className="knowledge-section-heading"><div><span className="knowledge-node-kind">{data.node.kind} · {data.node.language}</span><h2>{data.node.name}</h2></div><button className="btn" onClick={reload}>{t("knowledge.refresh")}</button></div><p>{data.node.filePath}:{data.node.startLine}–{data.node.endLine}</p><small>{data.node.qualifiedName}</small></div>
+    <nav className="knowledge-tabs" aria-label={data.node.name}>{(["source","callers","callees","impact","path"] as const).map(view => <KnowledgeLink key={view} projectId={index.projectId} values={{ knowledgePanel:view, knowledgeLink:null }} aria-current={panel===view ? "page" : undefined}>{t(`knowledge.${view}`)}</KnowledgeLink>)}</nav>
     <p className="knowledge-note">{t("knowledge.analysisNote")}</p>
     {(data.changedDuringRead || data.truncated || data.sourceTruncated) && <p className="knowledge-warning" role="status">{t(data.changedDuringRead ? "knowledge.changed" : "knowledge.truncated")}</p>}
-    <div className="knowledge-graph"><EdgeColumn edges={data.incoming} index={index} incoming />
-      <section className="knowledge-source"><h3>{t("knowledge.source")}</h3><pre aria-label={t("knowledge.source")}>{data.source.split("\n").map((line,i) => <div key={i}><span className="knowledge-line" aria-hidden="true">{data.node.startLine+i}</span><code>{line || " "}</code></div>)}</pre></section>
-      <EdgeColumn edges={data.outgoing} index={index} /></div>
+    {panel === "callers" || panel === "callees" ? <KnowledgeCalls index={index} nodeId={nodeId} direction={panel} params={params} /> : panel === "impact" ? <KnowledgeImpact index={index} nodeId={nodeId} params={params} /> : panel === "path" ? <KnowledgePath index={index} nodeId={nodeId} params={params} /> : <div className="knowledge-graph"><EdgeColumn edges={data.incoming} total={data.incomingTotal} index={index} incoming onHover={() => {}} />
+      <KnowledgeSource source={data.source} file={data.node.filePath} start={data.node.startLine} projectId={index.projectId} line={hoverLine ?? selectedLine} callLines={data.outgoing.flatMap(e => e.line ? [e.line] : [])} onHover={setHoverLine} />
+      <EdgeColumn edges={data.outgoing} total={data.outgoingTotal} index={index} selectedLine={hoverLine ?? selectedLine} onHover={setHoverLine} /></div>}
     <section className="knowledge-memories"><div className="memory-row"><h3>{t("memory.related")}</h3><span className="memory-spacer" /><KnowledgeLink className="btn" projectId={index.projectId} values={{ knowledgeLink:"choose" }}>{t("knowledge.linkMemory")}</KnowledgeLink></div>
       {failure && <p className="knowledge-warning" role="alert">{failure}</p>}
       {!data.memories.length && <p className="knowledge-note">{t("knowledge.noLinks")}</p>}
@@ -31,11 +37,12 @@ export function KnowledgeSymbol({ index, nodeId, linkEntry }: { index: Knowledge
     </section>
   </article>;
 }
-function EdgeColumn({ edges,index,incoming=false }: { edges: CodeEdge[]; index: KnowledgeIndex; incoming?: boolean }) {
-  const t = useT();
-  return <section className={`knowledge-edges ${incoming ? "incoming" : "outgoing"}`}><h3>{t(incoming ? "knowledge.incoming" : "knowledge.outgoing")} <span aria-hidden="true">→</span></h3>
+function EdgeColumn({ edges, total, index, incoming=false, selectedLine, onHover }: { edges: CodeEdge[]; total?: number; index: KnowledgeIndex; incoming?: boolean; selectedLine?: number | null; onHover: (line: number | null) => void }) {
+  const t = useT(); const groups = new Map<string, CodeEdge[]>();
+  for (const edge of edges) groups.set(edge.kind, [...(groups.get(edge.kind) || []), edge]);
+  return <section className={`knowledge-edges ${incoming ? "incoming" : "outgoing"}`}><h3>{t(incoming ? "knowledge.incoming" : "knowledge.outgoing")} <span>{total ?? edges.length}</span></h3>
     {!edges.length && <p className="knowledge-note">{t("knowledge.noEdges")}</p>}
-    {edges.map((edge,i) => <KnowledgeLink key={`${edge.node.id}/${edge.kind}/${i}`} className="knowledge-edge" projectId={index.projectId} values={{ knowledgeNode:edge.node.id,knowledgeLink:null }}><strong>{edge.node.name}</strong><small>{edge.kind}{edge.line ? ` · L${edge.line}` : ""}</small><small>{edge.node.filePath}:{edge.node.startLine}</small>{edge.provenance && <small>{edge.provenance}</small>}</KnowledgeLink>)}
+    {[...groups].map(([kind, items]) => <details className="knowledge-relation-group" key={kind} open><summary>{kind}<span>{items.length}</span></summary>{items.map((edge,i) => <Fragment key={`${edge.node.id}/${i}`}>{(i===0 || items[i-1].node.filePath!==edge.node.filePath) && <p className="knowledge-edge-file" title={edge.node.filePath}>{edge.node.filePath.split(/[\\/]/).pop()}</p>}<div className={`knowledge-edge${!incoming && edge.line===selectedLine ? " active" : ""}`} key={`${edge.node.id}/${i}`} onMouseEnter={() => onHover(incoming ? null : edge.line)} onMouseLeave={() => onHover(null)}><KnowledgeLink projectId={index.projectId} values={{ knowledgeNode:edge.node.id,knowledgePanel:"source",knowledgeLine:incoming ? edge.line : null,knowledgeLink:null }}><strong>{edge.node.name}</strong><small title={edge.node.filePath}>{edge.node.filePath}:{edge.node.startLine}</small></KnowledgeLink>{edge.line && <KnowledgeLink className="knowledge-call-line" projectId={index.projectId} values={{ ...(incoming ? { knowledgeNode:edge.node.id } : {}), knowledgeLine:edge.line,knowledgePanel:"source" }}>L{edge.line}</KnowledgeLink>}{edge.inferred && <span className="knowledge-inferred" title={edge.provenance || undefined}>{t("knowledge.uncertain")}</span>}</div></Fragment>)}</details>)}
   </section>;
 }
 function LinkEditor({ index,entryId,busy,existing,onSave }: { index: KnowledgeIndex; entryId: string; busy: boolean; existing: boolean; onSave: (version: number) => void }) {

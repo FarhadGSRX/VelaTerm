@@ -1,3 +1,5 @@
+import { beginDiagnosticOperation } from "../ipc/diagnosticSafety";
+import { diagnosticEvent, uploadImage } from "../ipc/transport";
 //! Global Zustand state: SQLite-backed tree data, session runtime state, and UI state.
 //! The center area uses tabs containing recursively splittable pane trees.
 
@@ -7,10 +9,8 @@ import { t } from "../i18n";
 import { setBrowserUrl } from "../ipc/browser";
 import { chatClear, setSessionEngine } from "../ipc/chat";
 import {
-  composeAgentArgs,
   createWorktree,
   getSessionCwd,
-  orchAttachSession,
   ptyKill,
   ptyWrite,
   resolveSpawn,
@@ -28,15 +28,17 @@ import { pushSetting } from "../ipc/settingsSync";
 import { isTauri } from "../ipc/transport";
 import { env } from "../platform";
 import { genId } from "../genId";
-import type { OrchRequest, SpawnRequest, StatusSignal } from "../ipc/events";
+import type { SpawnRequest, StatusSignal } from "../ipc/events";
 import type { MirrorLayout } from "./mirrorLayout";
 import type { RemoteClient } from "../ipc/mirror";
 import { whenFirstMirrorAlign } from "./mirrorAlign";
 import { notify } from "../notify";
+import { notifyMobileSession } from "../mobile/notificationPreview";
+import { mobileNotifications } from "../mobile/nativeNotifications";
 import type { ScreenDetection } from "../terminal/screenDetect";
 import * as tree from "../ipc/tree";
 import { listAgentPresets } from "../ipc/presets";
-import { applyFlag, modelSpec } from "../agents/modelSpec";
+import { applyLaunchArgs, startPlanExecute } from "../ipc/launch";
 import { platform } from "../platform";
 import {
   collectSessionIds,
@@ -105,7 +107,10 @@ import {
   visualOf,
   type AgentDefaultConfig,
   type ImagePasteMode,
+  type MemoryPrefs,
   type PersistedSettings,
+  type PlanExecuteRolePrefs,
+  type ReferSummaryConfig,
   type TermRenderer,
 } from "./settings";
 import { docKindOf, makeDocTab, type DocTab } from "./docTab";
@@ -116,10 +121,14 @@ export { DEFAULT_MAX_LIVE_TABS } from "./settings";
 export type {
   AgentDefaultConfig,
   ImagePasteMode,
+  ReferSummaryConfig,
   TermRenderer,
 } from "./settings";
 export { docKindOf } from "./docTab";
 export type { DocKind, DocTab } from "./docTab";
+
+// A local claim lets a failed workflow or image upload retry its backend-owned request ID.
+const spawnLaunchClaims = new Set<string>();
 
 const LEFT_MIN = 180;
 const LEFT_MAX = 480;
@@ -745,6 +754,15 @@ export interface BrowserTab {
   title: string;
   /** Loading state used to switch the refresh/stop control. */
   loading: boolean;
+  /**
+   * Hides the navigation toolbar and quick-access bar so the page fills the pane. Set for standalone
+   * experiences such as the game center, where browser chrome would be in the way.
+   */
+  chromeHidden: boolean;
+  /** Browser tab that opened this one through a page popup; the standalone back control prefers it. */
+  openerTabId?: string;
+  /** URL of the page that opened this tab; the standalone back control falls back to navigating here. */
+  openerUrl?: string;
 }
 
 /**
@@ -780,10 +798,6 @@ interface TermStore {
   pendingChatStarts: Record<SessionId, { model?: string; effort?: string }>;
   /** FIFO spawn-confirmation queue processed one item at a time by `SpawnConfirmModal`. */
   pendingSpawns: SpawnRequest[];
-  /** The orchestration proposal awaiting confirmation, or null. Only one is ever pending: a second
-   * arriving while the dialog is open would silently replace it, which cannot happen in practice
-   * because the session that sent the first is blocked until the user answers. */
-  pendingOrch: OrchRequest | null;
   /** Target ID for the open merge dialog, or `null`. */
   mergeTarget: SessionId | null;
   /** Working directory for the open changes dialog, or `null`. */
@@ -954,7 +968,7 @@ interface TermStore {
   inspectorTab: InspectorTab;
   /** Single-tab mode: reuse the session slot and keep replaced tabs alive in the background. */
   singleTabMode: boolean;
-  /** Terminal renderer: stable DOM, GPU-independent 2D canvas, or sharper WebGL with context limits. */
+  /** Terminal renderer: stable DOM or accelerated WebGL with GPU context limits. */
   termRenderer: TermRenderer;
   /** Optional full redraw when returning to a tab, for GPU artifacts or blank frames. */
   redrawOnReveal: boolean;
@@ -997,8 +1011,6 @@ interface TermStore {
   usage: UsageSnapshot | null;
   /** Image-paste mode, configurable only in the local desktop app. */
   imagePasteMode: ImagePasteMode;
-  /** How a new agent session is driven, which is also which of the two views it opens in. */
-  defaultSessionEngine: SessionEngine;
   /** Model a conversation starts on, remembered from the last one picked. */
   chatModel: string;
   /** Model a new conversation starts on, per agent protocol. */
@@ -1007,8 +1019,19 @@ interface TermStore {
   chatEffortByModel: Record<string, string>;
   /** Whether a new Claude conversation opens with fast mode on, per agent protocol. */
   chatFastModeByKind: Record<string, boolean>;
+  /** Last launch choices for each planning-workflow role. */
+  planExecutePrefs: { plan: PlanExecuteRolePrefs; exec: PlanExecuteRolePrefs };
+  /** Last agent, model and effort chosen for knowledge-base compilation. */
+  memoryPrefs: MemoryPrefs;
+  /** Optional global pre-summary selection for `vrefer --ask`. */
+  referSummary: ReferSummaryConfig;
   /** Whether the Info panel's Resources section shows the whole-machine group. */
   showSystemResources: boolean;
+  /**
+   * Info panel sections the user collapsed, keyed by section id. Missing keys are open, matching the
+   * sparse persisted map, so a section the user never touched keeps its default expanded state.
+   */
+  infoCollapsed: Record<string, boolean>;
 
   /** Saved agent launch configurations shown in the new-session menu, in menu order. */
   agentPresets: AgentPreset[];
@@ -1078,14 +1101,6 @@ interface TermStore {
   closeChanges: () => void;
   /** Executes a spawn: creates the child and optional worktree, stores its prompt, and opens it. */
   executeSpawn: (req: SpawnRequest) => Promise<void>;
-  /** Queue an orchestration proposal for confirmation; it never starts anything by itself. */
-  handleOrchRequest: (req: OrchRequest) => void;
-  /** Discard the proposal, recording every entry as dropped. */
-  cancelOrch: () => void;
-  /** Start the proposal as the user edited it in the dialog. */
-  confirmOrch: (edited: OrchRequest) => Promise<void>;
-  /** Create the group, worktrees, child sessions, and coordinator for one confirmed proposal. */
-  executeOrch: (req: OrchRequest) => Promise<void>;
   /** Consumes a session's pending initial spawn prompt after PTY startup. */
   takePendingPrompt: (id: SessionId) => string | undefined;
   /** Archives a chat and retargets its existing pane to the returned fresh session. */
@@ -1197,8 +1212,13 @@ interface TermStore {
   cancelCloseDocTab: (id: string) => void;
   /**
    * Opens a new browser tab without deduplication, starting blank when no URL is supplied.
+   * `chromeHidden` drops the navigation toolbar and quick-access bar for standalone pages; `openerTabId`
+   * and `openerUrl` record the page that opened this tab so its back control can return there.
    */
-  openBrowserTab: (url?: string) => void;
+  openBrowserTab: (
+    url?: string,
+    opts?: { chromeHidden?: boolean; openerTabId?: string; openerUrl?: string },
+  ) => void;
   /** Merges URL, title, and loading patches from `browser://state`. */
   applyBrowserState: (
     id: string,
@@ -1362,15 +1382,25 @@ interface TermStore {
   setSaveWorkspaceOnQuit: (v: boolean) => void;
   /** Sets persisted image-paste mode for subsequent local desktop pastes. */
   setImagePasteMode: (v: ImagePasteMode) => void;
-  setDefaultSessionEngine: (v: SessionEngine) => void;
   /** Remember the model a conversation should start on. */
   setChatModel: (kind: SessionKind, model: string) => void;
   /** Remember the effort chosen for one model; an empty effort forgets it. */
   setChatEffort: (model: string, effort: string) => void;
   /** Remember whether new conversations of this agent open with fast mode on. */
   setChatFastMode: (kind: SessionKind, enabled: boolean) => void;
+  /** Remember the agent, model or effort chosen for one planning-workflow role; null clears a field. */
+  setPlanExecuteRolePrefs: (
+    role: "plan" | "exec",
+    patch: { agent?: SessionKind | null; model?: string | null; effort?: string | null },
+  ) => void;
+  /** Remember the agent, model or effort chosen for knowledge-base compilation; null clears a field. */
+  setMemoryPrefs: (patch: { agent?: SessionKind | null; model?: string | null; effort?: string | null }) => void;
+  /** Updates the one global Agent/model/effort selection used for reference pre-summaries. */
+  setReferSummary: (patch: Partial<ReferSummaryConfig>) => void;
   /** Shows or hides the whole-machine rows in the Info panel's Resources section. */
   setShowSystemResources: (v: boolean) => void;
+  /** Collapses or expands one Info panel section by id, persisting the choice across sessions and shells. */
+  toggleInfoSection: (id: string) => void;
   /** Turns the backend's automatic usage polling on or off. */
   setUsageAutoRefresh: (v: boolean) => void;
   /** Sets how often the backend refreshes the usage snapshot, in seconds. */
@@ -1499,7 +1529,7 @@ function notifyRaw(
   // Suppress only when the window is focused and the session is visible. Use reliable host-maintained
   // `windowFocused`; `document.hasFocus()` can remain true for an unfocused macOS WKWebView.
   const visible = isVisibleSession(store, id);
-  if (store.windowFocused && visible) return;
+  if (store.windowFocused && visible && !mobileNotifications()) return;
   const session =
     store.sessions.find((s) => s.id === id) ?? store.ephemeralSessions[id];
   const name = session?.name ?? t("common.session");
@@ -1507,7 +1537,25 @@ function notifyRaw(
   const prefix = `${agent} · ${name}`;
   // Append an OSC 777 title after the session prefix; OSC 9 and agent state use the prefix alone.
   const heading = title ? `${prefix} · ${title}` : prefix;
-  if (store.notifyEnabled) void notify(id, heading, body, store.soundEnabled);
+  if (store.notifyEnabled) {
+    if (mobileNotifications()) void notifyMobileSession(id, heading, body, store.soundEnabled);
+    else void notify(id, heading, body, store.soundEnabled);
+  }
+}
+
+/** Merges one launch-choice patch into a remembered triple; `undefined` keeps a field and `null` clears it. */
+function mergeLaunchChoice(
+  base: MemoryPrefs,
+  patch: { agent?: SessionKind | null; model?: string | null; effort?: string | null },
+): MemoryPrefs {
+  const next: MemoryPrefs = {};
+  const agent = patch.agent === undefined ? base.agent : (patch.agent ?? undefined);
+  if (agent) next.agent = agent;
+  const model = patch.model === undefined ? base.model : (patch.model ?? undefined);
+  if (typeof model === "string") next.model = model;
+  const effort = patch.effort === undefined ? base.effort : (patch.effort ?? undefined);
+  if (typeof effort === "string") next.effort = effort;
+  return next;
 }
 
 /** Persists appearance and applies it to `documentElement`, resolving automatic accents against brightness. */
@@ -1542,12 +1590,15 @@ function persistAndApplyVisual(getState: () => TermStore) {
     usageAutoRefresh: s.usageAutoRefresh,
     usageRefreshSec: s.usageRefreshSec,
     imagePasteMode: s.imagePasteMode,
-    defaultSessionEngine: s.defaultSessionEngine,
     chatModel: s.chatModel,
     chatModelByKind: s.chatModelByKind,
     chatEffortByModel: s.chatEffortByModel,
     chatFastModeByKind: s.chatFastModeByKind,
+    planExecutePrefs: s.planExecutePrefs,
+    memoryPrefs: s.memoryPrefs,
+    referSummary: s.referSummary,
     showSystemResources: s.showSystemResources,
+    infoCollapsed: s.infoCollapsed,
   };
   saveSettings(ps);
   applyVisual(visualOf(ps));
@@ -1747,7 +1798,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
   pendingPrompts: {},
   pendingChatStarts: {},
   pendingSpawns: [],
-  pendingOrch: null,
   mergeTarget: null,
   changesCwd: null,
   changesPath: null,
@@ -2110,7 +2160,16 @@ export const useTermStore = create<TermStore>((set, get) => ({
         true,
       ).catch(() => true);
       if (!won) return;
-      await get().executeSpawn(req);
+      const retryId = req.planExecute ? req.requestId : null;
+      if (retryId) spawnLaunchClaims.add(retryId);
+      try {
+        await get().executeSpawn(req);
+        if (retryId) spawnLaunchClaims.delete(retryId);
+      } catch (error) {
+        // A skipped launch dialog must not discard a failed workflow's identity or retry settings.
+        if (retryId) set((s) => ({ pendingSpawns: [req, ...s.pendingSpawns] }));
+        throw error;
+      }
       return;
     }
     set((s) => ({ pendingSpawns: [...s.pendingSpawns, req] }));
@@ -2139,15 +2198,23 @@ export const useTermStore = create<TermStore>((set, get) => ({
     // screen everywhere, so two clients can confirm within the same second; whoever loses the claim must
     // stop here, or the task runs twice with two worktrees and two agents. A backend that cannot answer
     // (older build, transport error) falls back to the previous behavior of just executing.
-    if (original) {
+    const retryId = req.planExecute || req.images?.length ? req.requestId : null;
+    if (original && !(retryId && spawnLaunchClaims.has(retryId))) {
       const won = await resolveSpawn(
         original.parentSessionId,
         original.prompt,
         true,
       ).catch(() => true);
       if (!won) return;
+      if (retryId) spawnLaunchClaims.add(retryId);
     }
-    await get().executeSpawn(req);
+    try {
+      await get().executeSpawn(req);
+      if (retryId) spawnLaunchClaims.delete(retryId);
+    } catch (error) {
+      if (retryId || req.images?.length) set((s) => ({ pendingSpawns: [req, ...s.pendingSpawns] }));
+      throw error;
+    }
   },
 
   cancelSpawn: () => {
@@ -2156,6 +2223,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set((s) => ({ pendingSpawns: s.pendingSpawns.slice(1) }));
     // Claim it too, so a cancel racing a confirm on another client settles on one answer instead of
     // dismissing the card here while the other side still spawns.
+    if (first?.requestId) spawnLaunchClaims.delete(first.requestId);
     if (first) void resolveSpawn(first.parentSessionId, first.prompt, false);
   },
 
@@ -2165,6 +2233,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
         (r) => r.parentSessionId === parentSessionId && r.prompt === prompt,
       );
       if (idx < 0) return s;
+      const requestId = s.pendingSpawns[idx].requestId;
+      if (requestId && spawnLaunchClaims.has(requestId)) return s;
       const next = [...s.pendingSpawns];
       next.splice(idx, 1);
       return { pendingSpawns: next };
@@ -2182,149 +2252,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
   closeChanges: () =>
     set({ changesCwd: null, changesPath: null, changesCommit: null }),
 
-  handleOrchRequest: (req) => {
-    // Always confirmed: an orchestration starts several agent processes at once, which is far past the
-    // threshold where a user should be asked. There is no setting to skip it, unlike single spawns.
-    set({ pendingOrch: req });
-    const s = get();
-    if (s.notifyEnabled) {
-      void notify(
-        req.sessionId,
-        t("orch.notifyTitle"),
-        `${req.title} · ${req.agents.length}`,
-        s.soundEnabled,
-      );
-    }
-  },
-
-  cancelOrch: () => {
-    const req = get().pendingOrch;
-    set({ pendingOrch: null });
-    if (!req) return;
-    // Record every entry as dropped so the run reads as "proposed, then declined" rather than as one
-    // that never reported back.
-    req.agents.forEach((_, idx) => {
-      void orchAttachSession(req.orchId, idx, null).catch(() => {});
-    });
-  },
-
-  confirmOrch: async (edited) => {
-    const original = get().pendingOrch;
-    set({ pendingOrch: null });
-    // Entries the user removed in the dialog never reach executeOrch, so report them here; otherwise
-    // the run would read as one that never finished reporting rather than one trimmed on purpose.
-    if (original) {
-      const kept = new Set(edited.agents.map((a, i) => a.idx ?? i));
-      original.agents.forEach((_, idx) => {
-        if (!kept.has(idx)) void orchAttachSession(edited.orchId, idx, null).catch(() => {});
-      });
-    }
-    await get().executeOrch(edited);
-  },
-
-  executeOrch: async (req) => {
-    const state = get();
-    const parent = state.sessions.find((s) => s.id === req.sessionId);
-    if (!parent) return;
-    const project = state.projects.find((p) => p.id === parent.projectId);
-    const repoRoot = parent.cwd || project?.rootPath || null;
-    const mode = req.worktreeMode ?? "each";
-
-    // Everything from one run lives under a group named after it. Five loose sessions per run would
-    // make the tree unusable after a few, and the group is also what carries a shared worktree.
-    let sharedWorktree: { path: string; baseRef: string | null } | null = null;
-    if (mode === "shared" && repoRoot) {
-      try {
-        const wt = await createWorktree(repoRoot, req.title);
-        sharedWorktree = { path: wt.path, baseRef: wt.baseRef || null };
-      } catch {
-        // Without a worktree the run still proceeds in the parent's directory.
-      }
-    }
-    const group = await get().addGroup(
-      parent.projectId,
-      parent.groupId ?? null,
-      req.title.slice(0, 40),
-      sharedWorktree
-        ? { worktreePath: sharedWorktree.path, worktreeBaseRef: sharedWorktree.baseRef }
-        : undefined,
-    );
-
-    for (const [position, agent] of req.agents.entries()) {
-      // Report under the proposal's own index, which differs from the position once entries were removed.
-      const idx = agent.idx ?? position;
-      const kind = (agent.kind || req.defaults?.kind || parent.kind || "claude") as Session["kind"];
-      const model = agent.model ?? req.defaults?.model ?? null;
-      const effort = agent.effort ?? req.defaults?.effort ?? null;
-
-      let cwd: string | null = parent.cwd ?? project?.rootPath ?? null;
-      let worktreePath: string | null = null;
-      let worktreeBaseRef: string | null = null;
-      if (sharedWorktree) {
-        cwd = sharedWorktree.path;
-        worktreePath = sharedWorktree.path;
-        worktreeBaseRef = sharedWorktree.baseRef;
-      } else if ((agent.worktree ?? mode === "each") && repoRoot) {
-        try {
-          const wt = await createWorktree(repoRoot, agent.name);
-          cwd = wt.path;
-          worktreePath = wt.path;
-          worktreeBaseRef = wt.baseRef || null;
-        } catch {
-          // Falls back to the parent directory, same as a single spawn does.
-        }
-      }
-
-      // The flag spelling differs per agent, so the backend renders it; see composeAgentArgs.
-      const defaults = state.agentDefaults[kind] ?? {};
-      let agentArgs: string | null = defaults.args?.trim() || null;
-      if (model || effort) {
-        agentArgs = await composeAgentArgs(kind, model, effort, agentArgs).catch(() => agentArgs);
-      }
-
-      const created = await get().addSession({
-        projectId: parent.projectId,
-        groupId: group.id,
-        name: agent.name.slice(0, 40),
-        kind,
-        cwd,
-        parentSessionId: parent.id,
-        worktreePath,
-        worktreeBaseRef,
-        agentArgs,
-        permissionMode: defaults.permissionMode ?? null,
-      });
-      // Tell the backend what this entry became. Without it an orchestration cannot be reported on:
-      // nothing else connects a new session to the request that asked for it.
-      void orchAttachSession(req.orchId, idx, created?.id ?? null).catch(() => {});
-      if (!created) continue;
-      set((s) => ({
-        pendingPrompts: { ...s.pendingPrompts, [created.id]: agent.prompt },
-      }));
-      // Opening is what starts the process, so every child has to be opened. The coordinator is opened
-      // last and therefore ends up in front, which is the tab worth watching.
-      get().openSession(created.id, { newTab: true });
-    }
-
-    // A coordinator terminal follows the run so the orchestrating session never has to poll. It is a
-    // plain terminal, not an agent: it only displays status, and paying a model to watch would be waste.
-    // The watch command is its persisted init command rather than a pending prompt: a terminal session
-    // takes no launch prompt, and persisting it means reopening the tab later resumes the watch.
-    const coordinator = await get().addSession({
-      projectId: parent.projectId,
-      groupId: group.id,
-      name: t("orch.coordinatorName"),
-      kind: "terminal",
-      cwd: parent.cwd ?? project?.rootPath ?? null,
-      initCmd: `vstat ${req.orchId} --follow`,
-      parentSessionId: parent.id,
-    });
-    if (coordinator) {
-      get().openSession(coordinator.id, { newTab: !get().singleTabMode });
-    }
-  },
-
   executeSpawn: async (req) => {
+    if (req.planExecute) {
+      const result = await startPlanExecute(req);
+      await get().loadTree();
+      get().openSession(result.planner.id, { newTab: !get().singleTabMode });
+      if (result.run.state === "blocked") throw new Error(result.run.summary);
+      return;
+    }
     const state = get();
     const parent = state.sessions.find((s) => s.id === req.parentSessionId);
     if (!parent) return; // Ignore a deleted or unknown parent session.
@@ -2361,6 +2296,19 @@ export const useTermStore = create<TermStore>((set, get) => ({
     const kind = ((req.kind ?? null) || fallbackKind) as Session["kind"];
     const name = req.prompt.trim().slice(0, 24) || t("store.subtask");
 
+    // A spawned child launches like the session that asked for it: the parent's own permission mode, and
+    // its launch arguments when the child runs the same agent. Both fall back to the kind's global
+    // defaults, which is what the "new agent session" menu applies, so a spawned child is never more
+    // restricted than a hand-created one.
+    const kindDefaults = get().agentDefaults[kind] ?? {};
+    const permissionMode =
+      parent.permissionMode || kindDefaults.permissionMode || null;
+    const inheritedArgs = kind === parent.kind ? parent.agentArgs : null;
+    const agentArgs = (inheritedArgs || kindDefaults.args || "").trim() || "";
+    const finalArgs = req.model != null || req.effort != null
+      ? await applyLaunchArgs(kind, agentArgs || null, req.model, req.effort)
+      : agentArgs || null;
+
     // Prefer the exact directory in which vspawn ran. This matters for sessions kept in a collection:
     // neither the parent record nor its project has a directory, while the command itself may run inside a
     // repository. Older clients do not send cwd, so ask the running parent before falling back to persisted data.
@@ -2374,6 +2322,13 @@ export const useTermStore = create<TermStore>((set, get) => ({
     }
     const spawnCwd =
       req.cwd?.trim() || liveParentCwd || parent.cwd || project?.rootPath || null;
+    // Terminal-backed children read uploaded image paths, using the same path-mode convention as paste.
+    let initialPrompt = req.prompt;
+    for (const image of req.images ?? []) {
+      const bytes = Uint8Array.from(atob(image.data), character => character.charCodeAt(0));
+      const path = await uploadImage(bytes, image.mimeType.split("/")[1] || "png");
+      initialPrompt += kind === "codex" ? `\nimage_path: ${path}` : `\n${path}`;
+    }
     // By default, create an isolated worktree in the resolved spawn repository.
     const repoRoot = spawnCwd;
     let cwd: string | null = spawnCwd;
@@ -2389,30 +2344,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
         // Worktree failure falls back to the parent directory without blocking the spawn.
       }
     }
-
-    // A spawned child launches like the session that asked for it: the parent's own permission mode, and
-    // its launch arguments when the child runs the same agent. Both fall back to the kind's global
-    // defaults, which is what the "new agent session" menu applies, so a spawned child is never more
-    // restricted than a hand-created one.
-    const kindDefaults = get().agentDefaults[kind] ?? {};
-    const permissionMode =
-      parent.permissionMode || kindDefaults.permissionMode || null;
-    const inheritedArgs = kind === parent.kind ? parent.agentArgs : null;
-    let agentArgs = (inheritedArgs || kindDefaults.args || "").trim() || "";
-    // Apply model/effort overrides from the spawn confirmation dialog: strip the flag being overridden
-    // so it cannot appear twice, then append the chosen value. Each flag is handled on its own —
-    // stripping both whenever either was chosen would silently drop the parent's model just because
-    // the user picked an effort level. Flag names come from the agent's own spec: `--effort` belongs
-    // to Claude, Kiro, and Antigravity, while Grok and Zoo spell it `--reasoning-effort` and Cline
-    // spells it `--thinking`, so a hardcoded name would launch most agents with an unknown flag.
-    const spec = modelSpec(kind ?? "");
-    if (req.model && spec) {
-      agentArgs = applyFlag(agentArgs, spec.modelFlag, req.model);
-    }
-    if (req.effort && spec?.effort) {
-      agentArgs = applyFlag(agentArgs, spec.effort.flag, req.effort);
-    }
-    const finalArgs = agentArgs || null;
 
     const created = await get().addSession({
       projectId: parent.projectId,
@@ -2430,7 +2361,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
 
     // Store the prompt for `usePtySession` to inject as a positional launch argument, avoiding a timed later write.
     set((s) => ({
-      pendingPrompts: { ...s.pendingPrompts, [created.id]: req.prompt },
+      pendingPrompts: { ...s.pendingPrompts, [created.id]: initialPrompt },
     }));
     // Follow single-tab policy by backgrounding the parent without stopping it, or use a new tab in multi-tab mode.
     get().openSession(created.id, { newTab: !get().singleTabMode });
@@ -2773,6 +2704,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
           url: sess.browserUrl || "about:blank",
           title: "",
           loading: false,
+          chromeHidden: false,
         };
         return {
           notifications,
@@ -3170,12 +3102,15 @@ export const useTermStore = create<TermStore>((set, get) => ({
     ),
 
   // ── Browser tabs, desktop only ──
-  openBrowserTab: (url) => {
+  openBrowserTab: (url, opts) => {
     const tab: BrowserTab = {
       id: `browser-${genId()}`,
       url: url ?? "about:blank",
       title: "",
       loading: false,
+      chromeHidden: opts?.chromeHidden ?? false,
+      openerTabId: opts?.openerTabId,
+      openerUrl: opts?.openerUrl,
     };
     set((state) => ({
       browserTabs: { ...state.browserTabs, [tab.id]: tab },
@@ -4030,12 +3965,15 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
 
   restartSession: async (id) => {
+    const started=performance.now();
+    diagnosticEvent("restart",{sessionId:id,status:"started"});
     // Say it is a restart. Other clients then keep their pane and wait for the new process instead of
     // reading a bare death announcement as "closed" and wiping the tab everywhere.
-    await ptyKill(id, "restart").catch(() => {});
+    const terminated = await ptyKill(id, "restart").then(() => true).catch(() => { diagnosticEvent("restart",{sessionId:id,status:"failed",step:"kill"}); return false; });
     set((state) => ({
       epochs: { ...state.epochs, [id]: (state.epochs[id] ?? 0) + 1 },
     }));
+    diagnosticEvent("restart",{sessionId:id,status:terminated ? "success" : "failed",clientDurationMs:Math.round(performance.now()-started)});
   },
 
   setSessionEngineMode: async (id, engine) => {
@@ -4519,10 +4457,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set({ imagePasteMode: v });
     persistAndApplyVisual(get);
   },
-  setDefaultSessionEngine: (v) => {
-    set({ defaultSessionEngine: v });
-    persistAndApplyVisual(get);
-  },
   setChatModel: (kind, model) => {
     set((state) => ({
       // Keep the old key current for a downgrade and for existing Claude-only settings readers.
@@ -4546,8 +4480,33 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set((state) => ({ chatFastModeByKind: { ...state.chatFastModeByKind, [kind]: enabled } }));
     persistAndApplyVisual(get);
   },
+  setPlanExecuteRolePrefs: (role, patch) => {
+    set((state) => ({
+      planExecutePrefs: { ...state.planExecutePrefs, [role]: mergeLaunchChoice(state.planExecutePrefs[role], patch) },
+    }));
+    persistAndApplyVisual(get);
+  },
+  setMemoryPrefs: (patch) => {
+    set((state) => ({ memoryPrefs: mergeLaunchChoice(state.memoryPrefs, patch) }));
+    persistAndApplyVisual(get);
+  },
+  setReferSummary: (patch) => {
+    set((state) => ({ referSummary: { ...state.referSummary, ...patch } }));
+    persistAndApplyVisual(get);
+  },
   setShowSystemResources: (v) => {
     set({ showSystemResources: v });
+    persistAndApplyVisual(get);
+  },
+  toggleInfoSection: (id) => {
+    set((state) => {
+      // Expanding deletes the key instead of storing `false`, keeping the persisted map as sparse as its
+      // schema promises and letting a default change reach sections nobody has explicitly closed.
+      const next = { ...state.infoCollapsed };
+      if (next[id]) delete next[id];
+      else next[id] = true;
+      return { infoCollapsed: next };
+    });
     persistAndApplyVisual(get);
   },
   setUsageAutoRefresh: (v) => {
@@ -4635,14 +4594,15 @@ export const useTermStore = create<TermStore>((set, get) => ({
         ...(s.agentDefaults[kind] ?? {}),
         ...patch,
       };
-      // Normalize empty arguments/paths and default permissions as unset to keep storage compact.
+      // Normalize empty arguments and paths, retaining explicit permission choices.
       const clean: AgentDefaultConfig = {};
       const args = merged.args?.trim();
       if (args) clean.args = args;
-      if (merged.permissionMode && merged.permissionMode !== "default")
+      if (merged.permissionMode)
         clean.permissionMode = merged.permissionMode;
       const path = merged.path?.trim();
       if (path) clean.path = path;
+      if (merged.engine === "chat" || merged.engine === "tui") clean.engine = merged.engine;
       const next = { ...s.agentDefaults };
       if (Object.keys(clean).length) next[kind] = clean;
       else delete next[kind];
@@ -4806,6 +4766,10 @@ export const useTermStore = create<TermStore>((set, get) => ({
     }),
 
   switchSessionShell: async (id, shellPath) => {
+    const operationId=beginDiagnosticOperation(id);
+    const started=performance.now();
+    diagnosticEvent("shell_switch", { operationId, sessionId:id, status:"started" });
+    try {
     const st = get();
     const persisted = st.sessions.find((x) => x.id === id);
     if (persisted) {
@@ -4818,11 +4782,17 @@ export const useTermStore = create<TermStore>((set, get) => ({
     } else if (st.ephemeralSessions[id]) {
       get().setEphemeralShell(id, shellPath || null);
     } else {
+      diagnosticEvent("shell_switch", { operationId, sessionId:id, status:"cancelled" });
       return;
     }
     // Restart a running session by killing and incrementing its generation so the new shell applies immediately.
     if (get().runtimes[id]?.status === "running") {
       await get().restartSession(id);
+    }
+    diagnosticEvent("shell_switch", { operationId, sessionId:id, status:"success", clientDurationMs:Math.round(performance.now()-started) });
+    } catch (error) {
+      diagnosticEvent("shell_switch", { operationId, sessionId:id, status:"failed", clientDurationMs:Math.round(performance.now()-started) });
+      throw error;
     }
   },
 }));

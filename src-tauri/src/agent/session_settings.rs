@@ -74,10 +74,14 @@ pub fn session(ctx: &AppCtx, id: &str) -> Result<Session, String> {
         repo::get_session(&ctx.db().conn.lock().unwrap(), id)?.ok_or("Session not found")?;
     if !matches!(
         session.kind,
-        SessionKind::Claude | SessionKind::Codex | SessionKind::Opencode
+        SessionKind::Claude
+            | SessionKind::Codex
+            | SessionKind::Opencode
+            | SessionKind::Pi
+            | SessionKind::Omp
     ) {
         return Err(
-            "Model transfer is available only for Claude, Codex, and OpenCode sessions".into(),
+            "Model transfer is available only for chat-capable sessions".into(),
         );
     }
     Ok(session)
@@ -392,6 +396,10 @@ pub fn from_args(kind: SessionKind, text: Option<&str>) -> Selection {
                 state.effort = clean(value).filter(|v| v != "default");
                 true
             }
+            "--thinking" if matches!(kind, SessionKind::Pi | SessionKind::Omp) => {
+                state.effort = clean(value);
+                true
+            }
             "-c" | "--config" if kind == SessionKind::Codex => {
                 if let Some((key, value)) = value.and_then(config_choice) {
                     let value = serde_json::from_str::<String>(value)
@@ -428,6 +436,7 @@ pub fn without_selection_args(kind: SessionKind, text: Option<&str>) -> String {
         let remove = matches!(flag, "--model" | "-m")
             || (kind == SessionKind::Claude && flag == "--effort")
             || (kind == SessionKind::Opencode && flag == "--variant")
+            || (matches!(kind, SessionKind::Pi | SessionKind::Omp) && flag == "--thinking")
             || (kind == SessionKind::Codex
                 && matches!(flag, "-c" | "--config")
                 && value.and_then(config_choice).is_some());

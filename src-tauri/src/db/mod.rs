@@ -3,13 +3,14 @@
 pub mod repo;
 pub mod schema;
 
-use std::sync::Mutex;
+use crate::diagnostics::DatabaseMutex as Mutex;
 
 use rusqlite::{Connection, OptionalExtension};
 
 /// Database handle injected as Tauri managed state.
 pub struct Db {
     pub conn: Mutex<Connection>,
+    pub(crate) memory_worker: std::sync::atomic::AtomicBool,
 }
 
 impl Db {
@@ -24,7 +25,7 @@ impl Db {
         {
             use std::os::unix::fs::PermissionsExt;
             if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
-                eprintln!("failed to restrict database file permissions: {e}");
+                crate::diagnostic_warn!("failed to restrict database file permissions: {e}");
             }
         }
         // Connection PRAGMAs are ordered deliberately. busy_timeout waits up to five seconds on locks so
@@ -39,12 +40,18 @@ impl Db {
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
         migrate(&conn)?;
         conn.execute_batch(crate::agent::chat::submissions::SCHEMA).map_err(|e| e.to_string())?;
+        conn.execute_batch(crate::agent::plan_execute::SCHEMA).map_err(|e| e.to_string())?;
+        conn.execute_batch(crate::agent::tell::SCHEMA).map_err(|e| e.to_string())?;
+        crate::mobile_push::init(&conn)?;
         crate::memory::init(&conn)?;
+        crate::kb::init(&conn)?;
         crate::knowledge::init(&conn)?;
+        crate::security::init(&conn)?;
         // Create FTS5/trigram separately so an unavailable extension disables search without blocking startup.
         init_search_index(&conn);
         Ok(Self {
             conn: Mutex::new(conn),
+            memory_worker: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -53,7 +60,7 @@ impl Db {
 /// and swallowed. [`table_exists`] then reports search unavailable without preventing application startup.
 fn init_search_index(conn: &Connection) {
     if let Err(e) = conn.execute_batch(schema::SESSION_FTS_DDL) {
-        eprintln!(
+        crate::diagnostic_warn!(
             "[VelaTerm] Search index unavailable: failed to create FTS5 table ({e}). \
              Full-text search will be disabled. This SQLite build may lack FTS5/trigram support."
         );
@@ -63,7 +70,7 @@ fn init_search_index(conn: &Connection) {
     // table starts empty; search::index::backfill_words fills it from those rows on the next refresh (the
     // startup warm-up runs one in the background), so no transcript is parsed again.
     if let Err(e) = conn.execute_batch(schema::SESSION_WORDS_DDL) {
-        eprintln!(
+        crate::diagnostic_warn!(
             "[VelaTerm] Search index unavailable: failed to create word index table ({e}). \
              Full-text search will be disabled."
         );

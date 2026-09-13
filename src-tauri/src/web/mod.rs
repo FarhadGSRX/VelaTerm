@@ -15,12 +15,18 @@ pub(crate) mod dispatch;
 // dispatch mints download tickets, so this is reachable from the crate rather than private to web transport.
 pub(crate) mod download;
 mod e2ee;
+#[cfg(test)]
+mod remote_audit_fixture;
 // The desktop's always-on loopback link for SSH mirror connections (see local_link.rs).
 pub(crate) mod local_link;
 pub(crate) mod mirror;
 pub(crate) mod presence;
 mod rate_limit;
 pub(crate) mod share_policy;
+// Loopback Web server instance serving the real app to public share visitors through the account tunnel.
+pub(crate) mod share_server;
+// Outbound WebSocket tunnel dialing the relay and forwarding the share server's HTTP and WebSocket traffic.
+pub(crate) mod share_tunnel;
 pub(crate) mod public_relay;
 mod sniff;
 mod static_assets;
@@ -63,6 +69,9 @@ pub(crate) struct Ctx {
     /// Shared per data directory across in-process instances (see `LoginRateLimiter::shared`), so a
     /// dual-instance `--serve` setup cannot double the per-IP attempt budget.
     pub limiter: Arc<rate_limit::LoginRateLimiter>,
+    /// Per-launch secret required on every request of a `ShareTunnel` instance. The tunnel client holds it
+    /// in memory and adds it as a header; local processes cannot reach the share surface without it.
+    pub tunnel_secret: Option<String>,
 }
 
 /// Public web-service status returned to the frontend in camelCase.
@@ -116,6 +125,10 @@ pub enum ServeMode {
     /// Plain HTTP/ws on LAN for native mobile shells whose RN WebView cannot bypass self-signed certificates,
     /// especially Android. This sacrifices LAN encryption (architecture section 20).
     LanHttp,
+    /// Plain HTTP/ws on `127.0.0.1` for the public account share server. Reachable only through the outbound
+    /// account tunnel, and every request must carry the per-launch tunnel secret; visitors are authorized by
+    /// the relay (account and grant) and tagged with a share scope on the WebSocket.
+    ShareTunnel,
 }
 
 impl ServeMode {
@@ -123,17 +136,17 @@ impl ServeMode {
     fn plaintext(self) -> bool {
         !matches!(self, ServeMode::LanTls)
     }
-    /// Bind address octets: LoopbackHttp uses 127.0.0.1; both LAN modes use 0.0.0.0.
+    /// Bind address octets: loopback modes use 127.0.0.1; both LAN modes use 0.0.0.0.
     fn bind_octets(self) -> [u8; 4] {
         match self {
-            ServeMode::LoopbackHttp => [127, 0, 0, 1],
+            ServeMode::LoopbackHttp | ServeMode::ShareTunnel => [127, 0, 0, 1],
             _ => [0, 0, 0, 0],
         }
     }
     /// Bind-host string used for port preflight.
     fn bind_host(self) -> &'static str {
         match self {
-            ServeMode::LoopbackHttp => "127.0.0.1",
+            ServeMode::LoopbackHttp | ServeMode::ShareTunnel => "127.0.0.1",
             _ => "0.0.0.0",
         }
     }
@@ -183,6 +196,9 @@ pub enum StartAuth {
     Password(String),
     /// Persisted Argon2id PHC verifier string used by auto-start, where no plaintext exists anymore.
     PasswordHash(String),
+    /// Tunnel-only mode for the public share server: no password is disclosed, every request must carry the
+    /// tunnel secret, and WebSocket visitors are authorized by the share scope on the request headers.
+    Tunnel { secret: String },
 }
 
 /// Tauri-managed web-service state holding the running handle behind a Mutex for start/stop transitions.
@@ -221,19 +237,29 @@ impl WebServer {
         port: Option<u16>,
         mode: ServeMode,
     ) -> Result<WebServerStatus, String> {
-        // Normalize both variants to an Argon2id PHC verifier; plaintext never outlives this scope.
-        let verifier_phc = match auth {
+        // Normalize both password variants to an Argon2id PHC verifier; plaintext never outlives this
+        // scope. Tunnel-only mode hashes a random throwaway password so the same AuthState plumbing
+        // applies while no usable password ever exists.
+        let (verifier_phc, tunnel_secret) = match auth {
             StartAuth::Password(pw) => {
                 if pw.trim().is_empty() {
                     return Err("Please set an access password first".into());
                 }
-                auth::hash_password(&pw)?
+                (auth::hash_password(&pw)?, None)
             }
             StartAuth::PasswordHash(phc) => {
                 if phc.trim().is_empty() {
                     return Err("Please set an access password first".into());
                 }
-                phc
+                (phc, None)
+            }
+            StartAuth::Tunnel { secret } => {
+                let throwaway = format!(
+                    "{}{}",
+                    uuid::Uuid::new_v4().simple(),
+                    uuid::Uuid::new_v4().simple()
+                );
+                (auth::hash_password(&throwaway)?, Some(secret))
             }
         };
         let mut guard = self.inner.lock().unwrap();
@@ -276,6 +302,7 @@ impl WebServer {
             e2ee_keys: e2ee_keys.clone(),
             mode,
             limiter: rate_limit::LoginRateLimiter::shared(&data_dir),
+            tunnel_secret,
         };
         let handle = axum_server::Handle::new();
         let handle_clone = handle.clone();
@@ -291,7 +318,7 @@ impl WebServer {
                 {
                     Ok(rt) => rt,
                     Err(e) => {
-                        eprintln!("failed to start Web service tokio runtime: {e}");
+                        crate::diagnostic_warn!("failed to start Web service tokio runtime: {e}");
                         return;
                     }
                 };
@@ -310,7 +337,7 @@ impl WebServer {
                             {
                                 Ok(c) => c,
                                 Err(e) => {
-                                    eprintln!("TLS configuration failed: {e}");
+                                    crate::diagnostic_warn!("TLS configuration failed: {e}");
                                     return;
                                 }
                             };
@@ -324,7 +351,7 @@ impl WebServer {
                                 .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
                                 .await
                             {
-                                eprintln!("Web service exited abnormally: {e}");
+                                crate::diagnostic_warn!("Web service exited abnormally: {e}");
                             }
                         }
                         None => {
@@ -334,7 +361,7 @@ impl WebServer {
                                 .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
                                 .await
                             {
-                                eprintln!("Web service exited abnormally: {e}");
+                                crate::diagnostic_warn!("Web service exited abnormally: {e}");
                             }
                         }
                     }
@@ -456,8 +483,10 @@ fn status_from(
         "http"
     };
     let urls: Vec<String> = match mode {
-        // Loopback plaintext exposes only 127.0.0.1 for Electron sidecar.
-        ServeMode::LoopbackHttp => vec![format!("http://127.0.0.1:{port}")],
+        // Loopback plaintext exposes only 127.0.0.1 for the Electron sidecar and the share tunnel server.
+        ServeMode::LoopbackHttp | ServeMode::ShareTunnel => {
+            vec![format!("http://127.0.0.1:{port}")]
+        }
         // LAN modes enumerate LAN addresses and choose HTTP for mobile or HTTPS for browser remote access.
         ServeMode::LanHttp | ServeMode::LanTls => {
             // Fall back to localhost when no LAN IP is found, preserving local access.
@@ -487,6 +516,7 @@ fn status_from(
 
 /// Builds public login/static routes and protected `/api/*` plus `/ws` routes.
 fn build_router(ctx: Ctx) -> Router {
+    let tunnel_secret = ctx.tunnel_secret.clone();
     Router::new()
         .route("/api/login", post(auth::login))
         .route("/api/me", get(auth::me))
@@ -502,15 +532,66 @@ fn build_router(ctx: Ctx) -> Router {
         .route("/api/download", get(download::handler))
         .route("/ws", get(ws::ws_handler))
         .fallback(static_handler)
+        .layer(axum::middleware::from_fn(audit_http))
+        .layer(axum::middleware::from_fn_with_state(
+            tunnel_secret,
+            tunnel_gate,
+        ))
         .with_state(ctx)
+}
+
+/// Rejects any request on a `ShareTunnel` instance that lacks the per-launch tunnel secret. Only the
+/// in-process tunnel client holds the secret, so other local processes cannot reach the share surface and
+/// bypass the relay's account and grant authorization. Other serve modes carry `None` and are unaffected.
+async fn tunnel_gate(
+    State(secret): State<Option<String>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some(expected) = secret {
+        let provided = request
+            .headers()
+            .get("x-vlx-tunnel-secret")
+            .and_then(|v| v.to_str().ok());
+        if provided != Some(expected.as_str()) {
+            return (StatusCode::FORBIDDEN, "Tunnel secret required").into_response();
+        }
+    }
+    next.run(request).await
+}
+
+/// HTTP headers and payloads never enter diagnostics; query credentials are intentionally ignored.
+async fn audit_http(mut request: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    let started=std::time::Instant::now();
+    let id=request.headers().get("X-Request-Id").and_then(|v|v.to_str().ok())
+        .filter(|s|s.len()==36 && uuid::Uuid::parse_str(s).is_ok())
+        .map(str::to_owned).unwrap_or_else(||uuid::Uuid::new_v4().to_string());
+    let method=request.method().as_str().to_owned();
+    let path=match request.uri().path() {"/api/login"=>"/api/login","/api/me"=>"/api/me","/api/mode"=>"/api/mode","/api/logout"=>"/api/logout","/api/download"=>"/api/download","/ws"=>"/ws",_=>"static"};
+    // Diagnostic IDs are UUIDs; arbitrary header text is never copied to either log sink.
+    let diagnostic_id=uuid::Uuid::parse_str(&id).map(|u|u.to_string()).unwrap_or_else(|_|uuid::Uuid::new_v4().to_string());
+    request.headers_mut().insert("X-Request-Id",axum::http::HeaderValue::from_str(&id).expect("validated request id"));
+    crate::diagnostics::record("INFO","http_request",serde_json::json!({"requestId":diagnostic_id,"method":method,"path":path,"status":"started"}));
+    let mut response=next.run(request).await;
+    response.headers_mut().insert("X-Request-Id",axum::http::HeaderValue::from_str(&id).expect("validated request id"));
+    crate::diagnostics::record("INFO","http_response",serde_json::json!({"requestId":diagnostic_id,"method":method,"path":path,"statusCode":response.status().as_u16(),"step":"prepare","durationMs":started.elapsed().as_millis() as u64}));
+    response
 }
 
 /// Tells the frontend whether pairing is mandatory (LanTls only). Without pairing data, mandatory mode asks for a
 /// pairing link instead of showing password login; plaintext loopback/LAN modes retain password login.
+/// The share tunnel instance additionally reports the server public key and share flag, because visitors have no
+/// pairing fragment: their E2EE handshake is authorized by the tunnel-injected grant instead.
 async fn mode_info(State(ctx): State<Ctx>) -> impl IntoResponse {
-    axum::Json(serde_json::json!({
+    let mut info = serde_json::json!({
         "requirePairing": ctx.mode == ServeMode::LanTls,
-    }))
+    });
+    if ctx.mode == ServeMode::ShareTunnel {
+        info["requirePairing"] = serde_json::json!(true);
+        info["share"] = serde_json::json!(true);
+        info["e2eeKey"] = serde_json::json!(ctx.e2ee_keys.public_key_b64());
+    }
+    axum::Json(info)
 }
 
 /// Serves embedded SPA assets, falling back to index.html for frontend routing. Assets contain no secrets and are

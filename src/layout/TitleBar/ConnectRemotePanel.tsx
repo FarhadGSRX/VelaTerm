@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
 import { useT } from "../../i18n";
+import { env } from "../../platform/env";
+import { RemoteDevices } from "../../sharing/RemoteDevices";
+import { sharingNavigate, useSharingLocation } from "../../sharing/navigation";
 import { Backdrop } from "../../components/Backdrop";
 import { PasswordField } from "../../components/PasswordField";
 import { invoke, listen } from "../../ipc/transport";
 
-//! Client panel for connecting to a remote service through one of two modes:
+//! Client panel for connecting to a remote service through SSH, URL, or account Remote:
 //! - SSH: enter user@host, verify new or changed host fingerprints, trust through known_hosts, then probe
 //!   the system, provision vela-server, start serving, forward a port, and log in automatically. Backend
 //!   `ssh://progress` events drive a progress bar. The four latest hosts appear inline and older entries
@@ -45,7 +48,7 @@ type UrlHostInfo = {
   hasPassword: boolean;
 };
 
-type Mode = "ssh" | "url";
+type Mode = "ssh" | "url" | "remote";
 
 /** Maximum recent connections shown inline; remaining entries appear under View All. */
 const RECENT_INLINE_MAX = 4;
@@ -63,7 +66,9 @@ export function ConnectRemotePanel({
   showSharedDb?: boolean;
 }) {
   const t = useT();
-  const [mode, setMode] = useState<Mode>("ssh");
+  const selectedMode = new URLSearchParams(useSharingLocation()).get("connect");
+  const mode: Mode = selectedMode === "remote" ? "remote" : selectedMode === "url" ? "url" : "ssh";
+  const setMode = (m: Mode) => {const u = new URL(location.href);u.searchParams.set("connect",m);sharingNavigate(u.href);};
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -449,12 +454,15 @@ export function ConnectRemotePanel({
         >
           <div style={sectionLabelStyle}>{t("connect.title")}</div>
 
-          {/* Mode switch: SSH or URL. */}
+          {/* Connection modes share one restorable URL. */}
           <div style={{ display: "flex", gap: 6, margin: "2px 0 10px" }}>
-            {(["ssh", "url"] as Mode[]).map((m) => (
-              <button
+            {((env.isElectron ? ["remote"] : ["ssh", "url", "remote"]) as Mode[]).map((m) => (
+              <a
                 key={m}
-                onClick={() => {
+                href={(() => {const url=new URL(location.href);url.searchParams.set("connect",m);return url.href;})()}
+                onClick={(event) => {
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
                   setMode(m);
                   resetTransient();
                 }}
@@ -466,15 +474,18 @@ export function ConnectRemotePanel({
                   background: mode === m ? "var(--accent)" : "var(--bg-0)",
                   color: mode === m ? "var(--bg-0)" : "var(--text-dim)",
                   fontSize: 12,
+                  textAlign: "center",
+                  textDecoration: "none",
                   fontWeight: 600,
                   cursor: "pointer",
                 }}
               >
-                {m === "ssh" ? "SSH" : "URL"}
-              </button>
+                {m === "ssh" ? "SSH" : m === "url" ? "URL" : "Remote"}
+              </a>
             ))}
           </div>
 
+          {mode === "remote" ? <RemoteDevices onClose={onClose}/> : <>
           {mode === "url" ? (
             <input
               type="text"
@@ -680,6 +691,7 @@ export function ConnectRemotePanel({
           )}
 
           {error && pwHost === null && <div style={errorStyle}>{error}</div>}
+          </>}
         </div>
       </Backdrop>
 

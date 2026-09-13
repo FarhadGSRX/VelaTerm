@@ -23,7 +23,9 @@ use serde_json::Value;
 use crate::models::SessionKind;
 
 use crate::agent::chat::engine::{ChatRow, SubagentInfo};
-use crate::agent::export::{claude_events, codex_events, codex_user_message_is_injected, Event};
+use crate::agent::export::{
+    claude_events, codex_events, codex_user_message_is_injected, pi_events, Event,
+};
 use crate::agent::resume;
 use crate::agent::transcript::is_injected_context;
 
@@ -101,6 +103,10 @@ pub fn read(kind: SessionKind, agent_session_id: &str) -> Result<Vec<ChatEvent>,
         SessionKind::Opencode => {
             let messages = crate::agent::opencode_store::messages(agent_session_id)?;
             super::opencode_timeline::events(&messages)
+        }
+        // Pi and OMP record an append-only tree of entries; the parser keeps the active branch.
+        SessionKind::Pi | SessionKind::Omp => {
+            pi_events(&resume::read_pi_transcript(kind, agent_session_id)?)
         }
         // Other agents keep their history in SQLite blobs or formats we do not parse. Use a fallback arm so a
         // newly added session kind compiles as unsupported rather than silently rendering an empty view.
@@ -343,16 +349,6 @@ fn push_message(out: &mut Vec<ChatEvent>, kind: &'static str, text: String, ts: 
 
 // ─────────────────────────── Replaying into a live conversation ───────────────────────────
 
-/// How many rows a resumed conversation gets back.
-///
-/// A session worked in for days holds thousands of rows, and every one of them would travel to every
-/// connected client on each snapshot. The tail is what a reader looks at, so only that is replayed and the
-/// rest is reported as a count.
-const REPLAY_LIMIT: usize = 400;
-
-/// A child timeline is useful context, but must not make one Task card unbounded after a long session.
-const CHILD_REPLAY_LIMIT: usize = 200;
-
 #[derive(Clone, Debug)]
 struct CodexSubagentReplay {
     thread_id: String,
@@ -368,7 +364,7 @@ struct CodexSubagentReplay {
 /// The prefix keeps these apart from the ids the live conversation uses — a message id with a block index,
 /// a tool id, `u-<n>` for a turn the view echoed itself — so a replayed row can never be overwritten by a
 /// live one, or the other way round. The index is the row's position in the whole recording, not in the
-/// replayed tail, so the ids do not shift when a longer recording is truncated further.
+/// displayed page, so the ids do not shift when a client loads earlier history.
 fn replay_id(index: usize) -> String {
     format!("h-{index}")
 }
@@ -441,15 +437,8 @@ fn claude_replay(
         }
     }
     let events = fold(claude_events(content));
-    let omitted = events.len().saturating_sub(if depth == 0 { REPLAY_LIMIT } else { CHILD_REPLAY_LIMIT });
-    let mut rows = Vec::new();
-    if omitted > 0 {
-        rows.push(ChatRow::Notice {
-            id: format!("h-omitted-{depth}"),
-            message: format!("{omitted} earlier messages are not shown."),
-        });
-    }
-    for event in events.into_iter().skip(omitted) {
+    let mut rows = Vec::with_capacity(events.len());
+    for event in events {
         let result = event.native_id.as_ref().and_then(|id| links.get(id));
         let mut row = to_row(event, None);
         if let (Some(result), ChatRow::Tool { name, input, children, subagent, status, .. }) = (result, &mut row) {
@@ -489,7 +478,9 @@ fn claude_replay(
                                 *status = if last.pointer("/message/stop_reason").and_then(Value::as_str) == Some("end_turn") { "completed" } else { "running" };
                             }
                         }
-                        claude_replay(&normalized, read_child, ancestors, depth + 1)
+                        let mut rows = claude_replay(&normalized, read_child, ancestors, depth + 1);
+                        scope_child_rows(&mut rows, id);
+                        rows
                     });
                     ancestors.remove(id);
                     loaded
@@ -515,7 +506,21 @@ fn codex_replay_event_visible(event: &ChatEvent) -> bool {
     )
 }
 
-/// Turn parsed rows into timeline rows, keeping at most `REPLAY_LIMIT` of them.
+/// Deferred details are addressed by row id across the whole timeline, including nested cards.
+/// Each Claude recording starts at h-0, so its child rows need their recording's namespace.
+fn scope_child_rows(rows: &mut [ChatRow], agent_id: &str) {
+    for row in rows {
+        let id = match row {
+            ChatRow::User { id, .. } | ChatRow::Assistant { id, .. } | ChatRow::Reasoning { id, .. }
+            | ChatRow::Tool { id, .. } | ChatRow::Error { id, .. } | ChatRow::Command { id, .. }
+            | ChatRow::Notice { id, .. } | ChatRow::Compaction { id, .. } => id,
+        };
+        *id = format!("child-{agent_id}-{id}");
+        if let ChatRow::Tool { children, .. } = row { scope_child_rows(children, agent_id); }
+    }
+}
+
+/// Restore every parsed row. Snapshot windows bound transport; replay must retain the source for paging.
 fn to_rows(events: Vec<ChatEvent>) -> Vec<ChatRow> {
     to_rows_with_subagents(events, &HashMap::new())
 }
@@ -524,15 +529,8 @@ fn to_rows_with_subagents(
     events: Vec<ChatEvent>,
     subagents: &HashMap<String, CodexSubagentReplay>,
 ) -> Vec<ChatRow> {
-    let omitted = events.len().saturating_sub(REPLAY_LIMIT);
-    let mut rows: Vec<ChatRow> = Vec::with_capacity(events.len().min(REPLAY_LIMIT) + 1);
-    if omitted > 0 {
-        rows.push(ChatRow::Notice {
-            id: "h-omitted".to_string(),
-            message: format!("{omitted} earlier messages are not shown. The agent still has them."),
-        });
-    }
-    for ev in events.into_iter().skip(omitted) {
+    let mut rows: Vec<ChatRow> = Vec::with_capacity(events.len());
+    for ev in events {
         let subagent = ev.native_id.as_ref().and_then(|id| subagents.get(id)).cloned();
         rows.push(to_row(ev, subagent));
     }
@@ -768,15 +766,6 @@ where
         }
     }
 
-    if rows.len() > CHILD_REPLAY_LIMIT {
-        let omitted = rows.len() - CHILD_REPLAY_LIMIT;
-        let mut tail = rows.split_off(omitted);
-        tail.insert(0, ChatRow::Notice {
-            id: format!("child-{thread_id}-omitted"),
-            message: format!("{omitted} earlier subagent steps are not shown."),
-        });
-        rows = tail;
-    }
     Ok((rows, total_tokens, model))
 }
 
@@ -933,7 +922,7 @@ fn recorded_command(value: Option<&Value>) -> Value {
 
 /// Milliseconds since the epoch for an ISO timestamp the recording wrote down, or None when it has none
 /// or the format is not one this understands. A missing time only costs the row its timestamp line.
-fn parsed_at(timestamp: Option<&str>) -> Option<i64> {
+pub(crate) fn parsed_at(timestamp: Option<&str>) -> Option<i64> {
     let raw = timestamp?.trim();
     // `2026-09-03T10:45:12.345Z`, the shape Claude writes. Parsed by hand: the crate has no date library,
     // and every other reader of these recordings passes the string straight through to the frontend.
@@ -1045,6 +1034,40 @@ mod tests {
             serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":tool,"name":"Agent","input":{"description":"Inspect"}}]}}),
             serde_json::json!({"type":"user","toolUseResult":{"agentId":agent,"totalTokens":42,"totalToolUseCount":1,"totalDurationMs":100},"message":{"content":[{"type":"tool_result","tool_use_id":tool,"content":"summary"}]}}),
         ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn claude_replay_keeps_long_root_and_child_histories() {
+        let content = (0..1003).map(|i| serde_json::json!({
+            "type":"user", "message":{"content":format!("message {i}")}
+        }).to_string()).collect::<Vec<_>>().join("\n");
+        let mut reader = |_: &str| Ok(content.clone());
+        let root = claude_replay(&content, &mut reader, &mut HashSet::new(), 0);
+        let parent = claude_replay(&claude_task_record("task", "child"), &mut reader, &mut HashSet::new(), 0);
+        let ChatRow::Tool { children, .. } = &parent[0] else { panic!("missing task") };
+        assert_ne!(parent[0].id(), children[0].id(), "deferred child details must not resolve to the parent");
+        for rows in [&root, children] {
+            assert_eq!(rows.len(), 1003);
+            assert!(matches!(&rows[0], ChatRow::User { text, .. } if text == "message 0"));
+            assert!(matches!(&rows[1002], ChatRow::User { text, .. } if text == "message 1002"));
+        }
+    }
+
+    #[test]
+    fn codex_replay_keeps_every_step_of_a_long_child() {
+        let content = (0..503).map(|i| serde_json::json!({
+            "type":"event_msg", "payload":{"type":"item_completed", "item":{
+                "type":"AgentMessage", "id":format!("step-{i}"),
+                "content":[{"type":"Text","text":format!("step {i}")}]
+            }}
+        }).to_string()).collect::<Vec<_>>().join("\n");
+        let (rows, _, _) = recorded_codex_thread_rows(
+            "child", &mut |_| Ok(content.clone()), &mut HashSet::new(), 0,
+        ).unwrap();
+        assert_eq!(rows.len(), 503);
+        for (index, row) in rows.iter().enumerate() {
+            assert!(matches!(row, ChatRow::Assistant { text, .. } if text == &format!("step {index}")));
+        }
     }
 
     #[test]
@@ -1419,11 +1442,10 @@ mod tests {
         }
     }
 
-    /// A recording longer than the limit replays its tail, says how much was left out, and keeps the ids
-    /// the untruncated rows already had.
+    /// The first row remains available beyond the former 400-row cap, with stable chronological ids.
     #[test]
-    fn a_long_recording_replays_its_tail_and_says_so() {
-        let events: Vec<ChatEvent> = (0..REPLAY_LIMIT + 3)
+    fn a_long_recording_keeps_every_row_for_paging() {
+        let events: Vec<ChatEvent> = (0..1003)
             .map(|i| {
                 let mut ev = ChatEvent::message("user", format!("m{i}"), None);
                 ev.index = i;
@@ -1431,12 +1453,11 @@ mod tests {
             })
             .collect();
         let rows = to_rows(events);
-        assert_eq!(rows.len(), REPLAY_LIMIT + 1, "the tail plus one notice");
-        match &rows[0] {
-            ChatRow::Notice { message, .. } => assert!(message.starts_with("3 earlier"), "got {message}"),
-            other => panic!("expected a notice row, got {other:?}"),
+        assert_eq!(rows.len(), 1003);
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(row.id(), format!("h-{index}"));
+            assert!(matches!(row, ChatRow::User { text, .. } if text == &format!("m{index}")));
         }
-        assert_eq!(rows[1].id(), "h-3", "ids stay the row's place in the whole recording");
     }
 
     /// A recording that fits replays whole, with no notice in front of it.

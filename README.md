@@ -40,8 +40,14 @@ transcripts that survive restarts, and remote access from a browser or over SSH.
 - **Document, image, and browser tabs** — open Markdown in a WYSIWYG editor, source files with syntax
   highlighting, images in a viewer, and URLs in a built-in browser tab.
 - **Git integration** — branch, ahead/behind, and change counts per session, plus common actions.
-- **Code intelligence and memory** — enable CodeGraph per working directory, browse symbol relationships,
-  query code and global memory with `vknowledge`, and review memory references when their source files change.
+- **Code audits** — bundled Codex Security workflows using your logged-in local Codex or Claude Code,
+  with model and effort selection, source evidence, retained checkpoints, coverage limits, and Markdown/JSON reports. See the
+  [code audit guide](docs/manuals/code-audits_20260908.md).
+- **Code intelligence and knowledge base** — enable CodeGraph per working directory, browse symbol relationships,
+  query code and saved knowledge with `vkb`, and review code references when their source files change.
+- **Local notebooks** — open existing Markdown folders, import files and folders, write with autosave,
+  and navigate tags, favorites, links, and backlinks. Notes remain ordinary files on disk. See the
+  [notebook guide](docs/manuals/knowledge-notebooks_20260910.md).
 - **Remote access** — reach your sessions from a browser with end-to-end encrypted device pairing, or
   connect to a remote machine over SSH and run sessions there.
 - **Mobile view** — a browser layout tuned for phones, served by the same remote access stack.

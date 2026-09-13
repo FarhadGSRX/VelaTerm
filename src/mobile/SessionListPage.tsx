@@ -1,3 +1,6 @@
+import { ConnectionMenuEntry } from "./ConnectionMenuEntry";
+import { apiUrl, isShareSurface } from "../ipc/shareBase";
+import { sharedSessionUrl } from "../sharing/sessionNavigation";
 //! First-level screen showing projects, nested groups, sessions, and nested child sessions. The
 //! header provides name search and status chips. This initial version remains read-only; create,
 //! delete, and edit operations stay on desktop. Collapse state persists through toggleCollapsed
@@ -10,7 +13,7 @@
 //! - Filtering expands everything and ignores collapse state.
 //! Rows contain an optional collapse arrow, session status dot, name, and type label.
 
-import { memo, useMemo } from "react";
+import { memo, useMemo, type CSSProperties } from "react";
 import Icons from "../components/Icons";
 import { StatusIndicator } from "../components/StatusIndicator";
 import { t, useT } from "../i18n";
@@ -124,13 +127,18 @@ const SessionRow = memo(function SessionRow(p: SessionRowProps) {
       <span className="m-row-dot">
         <StatusIndicator status={status} unread={unread} />
       </span>
-      <span className="m-row-name">{s.name}</span>
+      {isShareSurface ? <a className="m-row-name" href={sharedSessionUrl(s.id)} style={{color:"inherit",textDecoration:"none"}} onClick={e=>{
+        e.stopPropagation();if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;
+        e.preventDefault();p.onOpen(s.id);
+      }}>{s.name}</a> : <span className="m-row-name">{s.name}</span>}
       <span className="m-row-kind">{kindLabel(s)}</span>
     </div>
   );
 });
 
-export function SessionListPage({ onOpen }: { onOpen: (id: SessionId) => void }) {
+export function SessionListPage({ onOpen, loading=false, error=null, onRefresh }: {
+  onOpen:(id:SessionId)=>void;loading?:boolean;error?:string|null;onRefresh?:()=>void;
+}) {
   const tr = useT();
   const projects = useTermStore((s) => s.projects);
   const groups = useTermStore((s) => s.groups);
@@ -340,17 +348,19 @@ export function SessionListPage({ onOpen }: { onOpen: (id: SessionId) => void })
     <div className="m-page">
       <header className="m-header">
         <span className="m-brand">
-          <span className="m-logo">V</span>
+          <img className="m-logo" src={apiUrl("/velaterm-light.svg")} alt="" draggable={false}
+            style={{"--brand-logo-light":`url("${apiUrl("/velaterm-light.svg")}")`,"--brand-logo-dark":`url("${apiUrl("/velaterm-dark.svg")}")`} as CSSProperties} />
           VelaTerm
         </span>
         <span className="m-sp" />
-        <button
-          type="button"
-          className="m-desktop-link"
-          onClick={() => applyViewOverride("desktop")}
-        >
-          {tr("mobile.toDesktop")}
-        </button>
+        <details className="m-menu">
+          <summary aria-label={tr("mobile.more")}>•••</summary>
+          <div className="m-menu-items">
+            <ConnectionMenuEntry />
+            {onRefresh && <button type="button" disabled={loading} onClick={onRefresh}>{tr("common.refresh")}</button>}
+            <button type="button" onClick={()=>applyViewOverride("desktop")}>{tr("mobile.toDesktop")}</button>
+          </div>
+        </details>
       </header>
 
       {sessions.length > 0 && (
@@ -378,16 +388,18 @@ export function SessionListPage({ onOpen }: { onOpen: (id: SessionId) => void })
         </div>
       )}
 
-      <div className="m-list">
+      {loading && <div className="m-load-status" role="status">{tr("common.loading")}</div>}
+      {error && <div className="m-load-error" role="alert"><p>{error}</p><button type="button" onClick={onRefresh}>{tr("common.retry")}</button></div>}
+      <div className="m-list" aria-busy={loading}>
         {rows}
-        {sessions.length === 0 && (
+        {!loading && !error && sessions.length === 0 && (
           <div className="m-empty">
             {tr("mobile.empty1")}
             <br />
             {tr("mobile.empty2")}
           </div>
         )}
-        {sessions.length > 0 && rows.length === 0 && (
+        {!loading && !error && sessions.length > 0 && rows.length === 0 && (
           <div className="m-nomatch">{tr("mobile.noMatch")}</div>
         )}
       </div>

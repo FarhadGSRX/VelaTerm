@@ -66,6 +66,86 @@ pub fn query_phrase(term: &str) -> Option<String> {
     Some(format!("\"{}\"", words.join(" ").replace('"', "\"\"")))
 }
 
+/// Extract a small set of useful search terms from a natural-language question.
+///
+/// `vsearch` itself retains its exact AND semantics. This helper is for `vrefer --ask`, which searches
+/// each term independently in the already resolved target session and uses those original snippets to
+/// ground an answer made from a compressed transcript.
+pub fn query_keywords(question: &str) -> Vec<String> {
+    const STOP: &[&str] = &[
+        "a",
+        "an",
+        "and",
+        "are",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "how",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "this",
+        "to",
+        "was",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "with",
+        "了",
+        "什么",
+        "怎么",
+        "怎样",
+        "为什么",
+        "如何",
+        "是否",
+        "是",
+        "的",
+        "在",
+        "和",
+        "与",
+        "或",
+        "从",
+        "中",
+        "里",
+        "呢",
+        "吗",
+        "请",
+    ];
+    let mut out = Vec::new();
+    for token in JIEBA.cut(question, true) {
+        let word = token
+            .word
+            .trim_matches(|c: char| !c.is_alphanumeric() && !"-_./:@+#".contains(c));
+        if !is_word(word) {
+            continue;
+        }
+        let normalized = word.to_lowercase();
+        let length = word.chars().count();
+        let ascii = word.is_ascii();
+        if STOP.contains(&normalized.as_str()) || (ascii && length < 2) || (!ascii && length < 2) {
+            continue;
+        }
+        if !out.iter().any(|item| item == &normalized) {
+            out.push(normalized);
+            if out.len() == 8 {
+                break;
+            }
+        }
+    }
+    out
+}
+
 /// Result of decoding FTS5 `highlight()` output over the boundary-marked column.
 pub struct Highlighted {
     /// Original fragment text with boundary and highlight markers removed.
@@ -139,13 +219,26 @@ mod tests {
     }
 
     #[test]
+    fn question_keywords_drop_filler_and_keep_searchable_terms() {
+        assert_eq!(
+            query_keywords("vrefer 的总结机制是怎么工作的？"),
+            vec!["vrefer", "总结", "机制", "工作"]
+        );
+        assert_eq!(
+            query_keywords("How did output scheduler throttling work?"),
+            vec!["output", "scheduler", "throttling", "work"]
+        );
+    }
+
+    #[test]
     fn parse_highlight_restores_text_and_merges_adjacent_spans() {
         let h = parse_highlight("打开\u{200B}\u{1}终端\u{2}\u{200B}\u{1}搜索\u{2}\u{200B}功能");
         assert_eq!(h.text, "打开终端搜索功能");
         assert_eq!(h.spans, vec![(6, 18)]);
         assert_eq!(&h.text[6..18], "终端搜索");
 
-        let h = parse_highlight("open \u{1}vlx\u{2}\u{200B}-\u{200B}\u{1}term\u{2} and \u{1}vlx\u{2}");
+        let h =
+            parse_highlight("open \u{1}vlx\u{2}\u{200B}-\u{200B}\u{1}term\u{2} and \u{1}vlx\u{2}");
         assert_eq!(h.text, "open vlx-term and vlx");
         assert_eq!(h.spans, vec![(5, 13), (18, 21)]);
 
@@ -155,4 +248,3 @@ mod tests {
         assert_eq!(h.spans.len(), 3);
     }
 }
-

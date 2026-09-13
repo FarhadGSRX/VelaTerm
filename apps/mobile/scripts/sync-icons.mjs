@@ -1,0 +1,16 @@
+import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { sourceURL, iconURL, manifestURL, sha256, validateIcon, checkIcons } from './check-icons.mjs';
+const root = new URL('../../../', import.meta.url);
+const output = new URL('../.build/icons/', import.meta.url);
+const cli = new URL('node_modules/@tauri-apps/cli/tauri.js', root);
+const result = spawnSync(process.execPath, [fileURLToPath(cli), 'icon', fileURLToPath(sourceURL), '--output', fileURLToPath(output)], { stdio:'inherit' });
+if (result.error) throw result.error;
+if (result.status !== 0) throw new Error('图标生成失败；请先安装仓库根目录依赖');
+const generated = new URL('ios/AppIcon-512@2x.png', output);
+const icon = await readFile(generated);
+validateIcon(icon);
+await copyFile(generated, iconURL);
+await writeFile(manifestURL, JSON.stringify({ sourceSHA256: sha256(await readFile(sourceURL)), iconSHA256: sha256(icon) }, null, 2) + '\n');
+await checkIcons();

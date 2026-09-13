@@ -267,6 +267,15 @@ pub fn set_alive(ctx: &AppCtx, session_id: &str, alive: bool) -> bool {
     update(ctx, session_id, |s| s.alive = alive)
 }
 
+/// A deliberately stopped chat process has no active turn. Apply this immediately, without the
+/// display hold, so a delayed Waiting transition cannot overwrite a replacement's Working state.
+pub fn set_stopped(ctx: &AppCtx, session_id: &str) -> bool {
+    update_with(ctx, session_id, false, |record| {
+        record.alive = false;
+        record.agent_state = Some("waiting".to_string());
+    })
+}
+
 /// Agent states that mean "a human should look at this".
 const NOTIFY_STATES: [&str; 2] = ["asking", "waiting"];
 
@@ -318,6 +327,10 @@ pub fn observe_status(
             record.unread = true;
         }
     });
+    if notable {
+        let state = payload.get("state").and_then(serde_json::Value::as_str).unwrap_or("waiting");
+        crate::mobile_push::observe(ctx, session_id, state, payload.get("body").and_then(serde_json::Value::as_str));
+    }
 }
 
 /// Fold one status signal into a session's record.

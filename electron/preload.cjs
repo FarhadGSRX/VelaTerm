@@ -18,11 +18,14 @@ contextBridge.exposeInMainWorld("__VLX_ELECTRON__", true);
 contextBridge.exposeInMainWorld("__VLX_ELECTRON_DEV__", isElectronDev);
 
 contextBridge.exposeInMainWorld("vlxNative", {
+  /** Enumerate fonts on this computer, independently of the connected server. */
+  fontCatalog: () => ipcRenderer.invoke("vlx:fonts:catalog"),
   /** Open the system Save As dialog; return null when canceled. */
   saveFile: (opts) => ipcRenderer.invoke("vlx:dialog:saveFile", opts),
   /** Open the system directory picker; return null when canceled. */
   pickDirectory: () => ipcRenderer.invoke("vlx:dialog:pickDirectory"),
-  /** Open a URL with the system default application (external browser or system-settings scheme). */
+  /** Open the account Remote relay URL in a dedicated application window. */
+  openAccountRemoteWindow: (url) => ipcRenderer.invoke("vlx:account:remote", url),
   openExternal: (url) => ipcRenderer.invoke("vlx:shell:openExternal", url),
   /** Open a path with the system default application (file manager). */
   openPath: (p) => ipcRenderer.invoke("vlx:shell:openPath", p),
@@ -91,6 +94,12 @@ contextBridge.exposeInMainWorld("vlxNative", {
       const handler = (_e, payload) => cb(payload);
       ipcRenderer.on("vlx:browser:state", handler);
       return () => ipcRenderer.removeListener("vlx:browser:state", handler);
+    },
+    /** Subscribe to new-window requests from all browser tabs; callers filter by tabId. */
+    onPopup: (cb) => {
+      const handler = (_e, payload) => cb(payload);
+      ipcRenderer.on("vlx:browser:popup", handler);
+      return () => ipcRenderer.removeListener("vlx:browser:popup", handler);
     },
   },
 });
