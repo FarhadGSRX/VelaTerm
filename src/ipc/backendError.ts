@@ -39,3 +39,19 @@ export function mapBackendError(raw: string): string {
       return raw;
   }
 }
+
+/**
+ * Stable code the chat backend returns instead of the raw OS error when the agent executable does
+ * not exist (`agent_not_installed:<kind>`). The conversation view turns it into installation
+ * guidance; the plain spawn message stays reserved for real launch failures.
+ */
+const AGENT_NOT_INSTALLED = "agent_not_installed";
+
+/** Whether an invoke rejection or stored submission error is the missing-executable code. */
+export function isAgentNotInstalledError(value: unknown): boolean {
+  const raw =
+    typeof value === "string" ? value : value instanceof Error ? value.message : "";
+  // A rejection that was stringified carries the standard Error prefix (`String(new Error(code))`).
+  const text = raw.startsWith("Error: ") ? raw.slice("Error: ".length) : raw;
+  return text === AGENT_NOT_INSTALLED || text.startsWith(`${AGENT_NOT_INSTALLED}:`);
+}

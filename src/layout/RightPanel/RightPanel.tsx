@@ -14,7 +14,7 @@ import { GitTab } from "./git/GitTab";
 import { InfoTab } from "./InfoTab";
 import { KV, Section } from "./parts";
 import { KnowledgeNavigation } from "../Notebook/KnowledgeNavigation";
-import { MemoryIcon } from "../Memory/MemoryRoute";
+import { MemoryIcon } from "../Memory/shared";
 import { memoryNavigate, useMemoryLocation } from "../Memory/navigation";
 
 const INSPECTOR_TABS = [

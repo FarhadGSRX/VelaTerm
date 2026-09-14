@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld("vlxNative", {
   saveFile: (opts) => ipcRenderer.invoke("vlx:dialog:saveFile", opts),
   /** Open the system directory picker; return null when canceled. */
   pickDirectory: () => ipcRenderer.invoke("vlx:dialog:pickDirectory"),
+  /** Open the system file picker; return null when canceled. */
+  pickFile: (opts) => ipcRenderer.invoke("vlx:dialog:pickFile", opts),
   /** Open the account Remote relay URL in a dedicated application window. */
   openAccountRemoteWindow: (url) => ipcRenderer.invoke("vlx:account:remote", url),
   openExternal: (url) => ipcRenderer.invoke("vlx:shell:openExternal", url),

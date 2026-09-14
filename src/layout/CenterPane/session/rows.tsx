@@ -271,6 +271,8 @@ export function MessageBubble({
   images,
   durationMs,
   showHead = true,
+  renderText,
+  footnote,
   onRewind,
   onEditSend,
   rewindDisabledReason,
@@ -291,6 +293,10 @@ export function MessageBubble({
   durationMs?: number;
   /** Draw the author line. Inside a marked turn the turn's own line already names the speaker. */
   showHead?: boolean;
+  /** Draw the body from the raw text instead of Markdown; the archive marks search literals in it. */
+  renderText?: (text: string) => ReactNode;
+  /** A muted line under the body, such as the tools an archived turn used. */
+  footnote?: ReactNode;
   /** Present for top-level user turns; availability is separate from visibility. */
   onRewind?: (scope: ChatRewindScope) => void;
   onEditSend?: (text: string, images: ChatImageValue[]) => void;
@@ -326,7 +332,7 @@ export function MessageBubble({
         ))}
       </div>
     ) : null;
-  const body = text ? <Markdown text={text} /> : null;
+  const body = text ? (renderText ? renderText(text) : <Markdown text={text} />) : null;
 
   if (isUser) {
     const rewind =
@@ -372,7 +378,7 @@ export function MessageBubble({
             </div> : null}
             <div className="sv-message-content">
             {editing ? <MessageEditor text={text} images={images} disabled={!!editDisabledReason}
-              onCancel={() => setEditing(false)} onSend={onEditSend} /> : <>{pictures}{body}</>}
+              onCancel={() => setEditing(false)} onSend={onEditSend} /> : <>{pictures}{body}{footnote}</>}
             </div>
           </div>
         </div>
@@ -383,9 +389,10 @@ export function MessageBubble({
     <div className="sv-msg sv-msg-assistant">
       {showHead ? <MessageHead who={who} icon={icon} at={at} durationMs={durationMs} /> : null}
       {pictures}
-      {body ? (
+      {body || footnote ? (
         <div className="sv-msg-body" onCopy={handleMessageCopy}>
           {body}
+          {footnote}
         </div>
       ) : null}
     </div>

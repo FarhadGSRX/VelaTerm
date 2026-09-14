@@ -5,7 +5,7 @@
 //! the panel and row styling of the app's shared `Select`, so a menu opened here looks like every other
 //! menu in the app even though the trigger deliberately does not.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import Icons from "../../../components/Icons";
 import { SELECT_PANEL, selectRowStyle } from "../../../components/Select";
@@ -13,11 +13,24 @@ import { SELECT_PANEL, selectRowStyle } from "../../../components/Select";
 /** Lists longer than this get a filter box; shorter ones are read at a glance. */
 const FILTER_THRESHOLD = 12;
 
+/** Trailing notes on a row: the saved default, and a choice that has not taken effect yet. */
+const ROW_NOTE: CSSProperties = {
+  flexShrink: 0,
+  padding: "1px 5px",
+  border: "1px solid var(--border)",
+  borderRadius: 4,
+  color: "var(--text-dim)",
+  fontSize: 10,
+  lineHeight: 1.4,
+};
+
 export interface ChipOption<T extends string> {
   value: T;
   label: string;
   /** Dimmed trailing text, for a value that needs a word of explanation. */
   hint?: string;
+  /** Short state note at the row's trailing edge, e.g. a choice waiting for the next turn. */
+  tag?: string;
   /** Mark drawn in the row's left margin, so a list can be scanned by shape before it is read. */
   glyph?: ReactNode;
 }
@@ -252,20 +265,10 @@ export function ControlChip<T extends string>({
                     </span>
                   ) : null}
                   {option.label}
-                  {option.value === defaultValue && (
-                    <span
-                      style={{
-                        marginLeft: "auto",
-                        flexShrink: 0,
-                        padding: "1px 5px",
-                        border: "1px solid var(--border)",
-                        borderRadius: 4,
-                        color: "var(--text-dim)",
-                        fontSize: 10,
-                        lineHeight: 1.4,
-                      }}
-                    >
-                      {defaultLabel}
+                  {(option.tag || option.value === defaultValue) && (
+                    <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                      {option.tag ? <span style={ROW_NOTE}>{option.tag}</span> : null}
+                      {option.value === defaultValue ? <span style={ROW_NOTE}>{defaultLabel}</span> : null}
                     </span>
                   )}
                 </span>

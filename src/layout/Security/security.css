@@ -8,9 +8,9 @@
 .security-shell .btn:hover { background: var(--bg-hover); }
 .security-shell .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--bg-0); }
 .security-shell .btn-primary:hover { background: var(--accent); filter: brightness(.94); }
-.security-shell button:disabled,.security-shell select:disabled { opacity: .5; cursor: not-allowed; }
-.security-shell :is(a,button,input,select,summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.security-shell :is(input:not([type=radio]),select) { width: 100%; min-width: 0; height: 38px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--bg-0); font: inherit; }
+.security-shell button:disabled { opacity: .5; cursor: not-allowed; }
+.security-shell :is(a,button,input,summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.security-shell input:not([type=radio]) { width: 100%; min-width: 0; height: 38px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--bg-0); font: inherit; }
 .security-shell input[type=radio] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; flex-shrink: 0; }
 .security-header { display: flex; align-items: center; padding: 18px 24px; border-bottom: 1px solid var(--border); gap: 12px; flex-shrink: 0; }
 .security-mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: var(--bg-hover); color: var(--accent); flex-shrink: 0; }

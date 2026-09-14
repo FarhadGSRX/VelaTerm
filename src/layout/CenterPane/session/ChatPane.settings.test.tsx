@@ -2,6 +2,7 @@ import { marked } from "marked";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatEvent, ChatPermission, ChatSnapshot } from "../../../ipc/chat";
+import type { SessionPermissionState } from "../../../hooks/useSessionPermissionState";
 import type { PermissionAnswer } from "./permissionCards";
 
 vi.mock("../../../ipc/transport", async (original) => ({
@@ -12,10 +13,10 @@ vi.mock("./engineSwitch", () => ({ useEngineSwitch: () => ({ switchTo: vi.fn(), 
 vi.mock("./controls", () => ({
   LevelBar: () => null,
   ControlChip: ({ title, value, options, onPick }: {
-    title: string; value: string; options: { value: string; label: string }[];
+    title: string; value: string; options: { value: string; label: string; tag?: string }[];
     onPick: (value: string, keep: boolean) => void;
   }) => <select aria-label={title} value={value} onChange={(event) => onPick(event.target.value, true)}>
-    {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+    {options.map((option) => <option key={option.value} value={option.value}>{option.label}{option.tag ? ` — ${option.tag}` : ""}</option>)}
   </select>,
 }));
 vi.mock("./permissionCards", () => ({
@@ -115,6 +116,13 @@ async function mountPane(kind: "claude" | "codex" | "opencode" = "claude", expec
   await waitFor(() => expect((screen.getByRole("combobox", { name: "Model" }) as HTMLSelectElement).value).toBe(expectedModel));
   fireEvent.click(screen.getByRole("button", { name: "More" }));
   return view;
+}
+
+/** Serve `session_permission_state` from a value the test can change between events. */
+function mockPermissionState(read: () => SessionPermissionState) {
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "session_permission_state"
+    ? Promise.resolve(read()) as Promise<never> : previous(command, args));
 }
 
 it("resynchronizes on reconnection and reuses the uncertain submission identifier", async () => {
@@ -516,17 +524,23 @@ it("retains the approval card and does not approve the tool when its required mo
 it("marks a saved Codex permission choice for the next turn without stopping or answering approvals", async () => {
   snapshotOverrides = { mode: "auto" };
   permissions = [{ id: "r", subtype: "can_use_tool", tool_name: "Bash", input: {} }];
+  let state: SessionPermissionState = { configured: "auto", current: "auto", launch: null,
+    pending: null, activation: "applied", running: true };
+  mockPermissionState(() => state);
   await mountPane("codex");
-  const select = screen.getByRole("combobox", { name: "Permission mode" }) as HTMLSelectElement;
+  const select = screen.getByRole("combobox", { name: /Permission mode/ }) as HTMLSelectElement;
   fireEvent.change(select, { target: { value: "full-access" } });
   expect(select.value).toBe("auto");
-  expect(screen.queryByText("Next turn")).toBeNull();
+  expect(screen.queryByRole("option", { name: /Next turn/ })).toBeNull();
   await act(async () => {
+    state = { configured: "full-access", current: "auto", launch: null,
+      pending: "full-access", activation: "nextTurn", running: true };
     eventCallback({ type: "settingsChanged", mode: "full-access", pendingPermissionMode: { current: "auto", next: "full-access" } });
     complete();
   });
   expect(select.value).toBe("full-access");
-  expect(screen.getByText("Next turn").getAttribute("title")).toContain("Full Access will apply to the next turn");
+  // The chip shows the chosen mode; its menu carries the note that the choice waits for the next turn.
+  expect((await screen.findByRole("option", { name: /Full Access — Next turn/ })).textContent).toContain("Full Access");
   expect(screen.getByRole("button", { name: "Approve plan" })).toBeTruthy();
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_interrupt" || command === "chat_permission")).toBe(false);
   // A new native turn notification, steering, and unrelated settings are not policy acknowledgements.
@@ -536,38 +550,54 @@ it("marks a saved Codex permission choice for the next turn without stopping or 
     eventCallback({ type: "turnCompleted" });
     eventCallback({ type: "turnStarted", startedAt: Date.now() });
   });
-  expect(screen.getByText("Next turn")).toBeTruthy();
-  act(() => eventCallback({ type: "settingsChanged", mode: "full-access", pendingPermissionMode: null }));
+  expect(screen.getByRole("option", { name: /Next turn/ })).toBeTruthy();
+  await act(async () => {
+    state = { configured: "full-access", current: "full-access", launch: null,
+      pending: null, activation: "applied", running: true };
+    eventCallback({ type: "settingsChanged", mode: "full-access", pendingPermissionMode: null });
+  });
+  await waitFor(() => expect(screen.queryByRole("option", { name: /Next turn/ })).toBeNull());
   expect(select.value).toBe("full-access");
-  expect(screen.queryByText("Next turn")).toBeNull();
 });
 
 it("restores a pending permission choice from the backend when reopening the pane", async () => {
   snapshotOverrides = { mode: "full-access", pendingPermissionMode: { current: "auto", next: "full-access" } };
+  let state: SessionPermissionState = { configured: "full-access", current: "auto", launch: null,
+    pending: "full-access", activation: "nextTurn", running: true };
+  mockPermissionState(() => state);
   const view = await mountPane("codex");
-  expect(screen.getByText("Next turn")).toBeTruthy();
+  expect(await screen.findByRole("option", { name: /Full Access — Next turn/ })).toBeTruthy();
   view.unmount();
   await mountPane("codex");
-  expect(screen.getByText("Next turn")).toBeTruthy();
+  expect(await screen.findByRole("option", { name: /Full Access — Next turn/ })).toBeTruthy();
+  state = { configured: "read-only", current: "auto", launch: null,
+    pending: "read-only", activation: "nextTurn", running: true };
   act(() => eventCallback({ type: "settingsChanged", mode: "read-only", pendingPermissionMode: { current: "auto", next: "read-only" } }));
-  expect((screen.getByRole("combobox", { name: "Permission mode" }) as HTMLSelectElement).value).toBe("read-only");
-  expect(screen.getByText("Next turn").getAttribute("title")).toContain("Read Only");
+  expect((screen.getByRole("combobox", { name: /Permission mode/ }) as HTMLSelectElement).value).toBe("read-only");
+  expect(await screen.findByRole("option", { name: /Read Only — Next turn/ })).toBeTruthy();
   // Choosing the current permissions again cancels the deferred change.
+  state = { configured: "auto", current: "auto", launch: null, pending: null, activation: "applied", running: true };
   act(() => eventCallback({ type: "settingsChanged", mode: "auto", pendingPermissionMode: null }));
-  expect(screen.queryByText("Next turn")).toBeNull();
+  await waitFor(() => expect(screen.queryByRole("option", { name: /Next turn/ })).toBeNull());
+  state = { configured: "full-access", current: "auto", launch: null,
+    pending: "full-access", activation: "nextTurn", running: true };
   act(() => eventCallback({ type: "settingsChanged", mode: "full-access", pendingPermissionMode: { current: "auto", next: "full-access" } }));
+  expect(await screen.findByRole("option", { name: /Full Access — Next turn/ })).toBeTruthy();
+  state = { configured: "full-access", current: "full-access", launch: null, pending: null, activation: "applied", running: true };
   act(() => eventCallback({ type: "reset" }));
-  expect(screen.queryByText("Next turn")).toBeNull();
+  await waitFor(() => expect(screen.queryByRole("option", { name: /Next turn/ })).toBeNull());
 });
 
 it("retains the confirmed pending choice when saving another permission mode fails", async () => {
   snapshotOverrides = { mode: "full-access", pendingPermissionMode: { current: "auto", next: "full-access" } };
+  mockPermissionState(() => ({ configured: "full-access", current: "auto", launch: null,
+    pending: "full-access", activation: "nextTurn", running: true }));
   await mountPane("codex");
-  const select = screen.getByRole("combobox", { name: "Permission mode" }) as HTMLSelectElement;
+  const select = screen.getByRole("combobox", { name: /Permission mode/ }) as HTMLSelectElement;
   fireEvent.change(select, { target: { value: "read-only" } });
   await act(async () => reject(new Error("mode unavailable")));
   expect(select.value).toBe("full-access");
-  expect(screen.getByText("Next turn").getAttribute("title")).toContain("Full Access");
+  expect((await screen.findByRole("option", { name: /Full Access — Next turn/ })).textContent).toContain("Full Access");
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_interrupt" || command === "chat_permission")).toBe(false);
 });
 

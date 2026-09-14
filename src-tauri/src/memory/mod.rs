@@ -82,6 +82,11 @@ pub fn dispatch(app: &AppCtx, cmd: &str, args: &Value) -> Result<Value, String> 
         "memory_options" => runner::options(app),
         "memory_models" => Ok(json!(runner::models(app, required("agent")?)?)),
         "memory_list" => repo::list(app, args),
+        // Archived sessions grouped by their original project for the Collections hierarchy.
+        "memory_collections" => {
+            let conn = app.db().conn.lock().map_err(|e| e.to_string())?;
+            hierarchy::collections(&conn)
+        }
         "memory_get" => repo::detail(
             app,
             required("id")?,

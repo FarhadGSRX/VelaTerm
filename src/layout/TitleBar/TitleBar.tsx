@@ -489,17 +489,6 @@ export function TitleBar() {
         </button>
       )}
 
-      {/* Feedback opens the feedback page in the system browser on every platform and surface. */}
-      <button
-        className="tb-btn"
-        title={t("titlebar.feedback")}
-        onClick={() => {
-          void platform.opener.openExternal(FEEDBACK_URL).catch(() => {});
-        }}
-      >
-        <Icons.feedback size={15} />
-      </button>
-
       {/* Share appears on every platform and shares its dialog with the macOS native menu action. Public
           share windows serve a single grant, so sharing and settings stay hidden there. */}
       {!isShareSurface && (
@@ -539,6 +528,17 @@ export function TitleBar() {
           <Icons.account size={15} />
         </SharingLink>
       )}
+
+      {/* Feedback opens the feedback page in the system browser on every platform and surface. */}
+      <button
+        className="tb-btn"
+        title={t("titlebar.feedback")}
+        onClick={() => {
+          void platform.opener.openExternal(FEEDBACK_URL).catch(() => {});
+        }}
+      >
+        <Icons.feedback size={15} />
+      </button>
 
       {/* VS Code-style panel toggles sit at the far right and fill their corresponding side when open. */}
       <div className="tb-pair">

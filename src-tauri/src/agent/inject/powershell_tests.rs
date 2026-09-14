@@ -320,6 +320,7 @@ fn pwsh_native_arguments_round_trip() {
             None,
             None,
             false,
+            false,
         );
         spawn.env.extend(selection_env);
         probe.assert_argv(

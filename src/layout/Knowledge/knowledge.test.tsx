@@ -127,7 +127,10 @@ describe("代码图谱完整工作区", () => {
     expect(screen.getByRole("link", { name: "L1" }).getAttribute("href")).toContain("knowledgeLine=1");
     fireEvent.click(screen.getByRole("link", { name: "Impact analysis" }));
     await screen.findByText("1 Symbols");
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Traversal depth" }));
+    fireEvent.click(screen.getByRole("option", { name: "2" }));
+    // jsdom re-activates the wrapping label after the row click, unlike browsers; toggle the popup shut.
+    if (screen.queryAllByRole("listbox").length) fireEvent.click(screen.getByRole("combobox", { name: "Traversal depth" }));
     await waitFor(() => expect(location.search).toContain("knowledgeDepth=2"));
     const { invoke } = await import("../../ipc/transport");
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("knowledge_query", { id:"index", action:"impact", nodeId:"run", depth:2 }));
@@ -136,10 +139,12 @@ describe("代码图谱完整工作区", () => {
     window.history.replaceState(null,"","/?knowledge=project&knowledgeIndex=index&knowledgeView=symbols&knowledgeNode=run&knowledgePanel=callers&knowledgeCallDepth=2");
     render(<KnowledgeRoute />);
     await screen.findByText("Callers · 1");
-    expect(screen.getByRole("combobox")).toHaveProperty("value", "2");
+    expect(screen.getByRole("combobox", { name: "Traversal depth" }).textContent).toContain("2");
     fireEvent.click(screen.getByRole("link", { name: "Callees" }));
     await screen.findByText("Callees · 1");
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Traversal depth" }));
+    fireEvent.click(screen.getByRole("option", { name: "4" }));
+    if (screen.queryAllByRole("listbox").length) fireEvent.click(screen.getByRole("combobox", { name: "Traversal depth" }));
     const { invoke } = await import("../../ipc/transport");
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("knowledge_query", { id:"index", action:"callees", nodeId:"run", depth:4 }));
     expect(location.search).toContain("knowledgeCallDepth=4");

@@ -1,4 +1,3 @@
-import { kindIconEl } from "./sessionMeta";
 //! Agent transcript viewer for scrollable, searchable, copyable messages parsed by the backend.
 //!
 //! Two caller-selected modes:
@@ -7,6 +6,10 @@ import { kindIconEl } from "./sessionMeta";
 //!   the target. It omits the internal header because the outer search console already owns search
 //!   and match navigation. `initialQuery` controls highlighting; the target uses active styling and
 //!   other matches use regular styling (see highlight.tsx).
+//!
+//! Messages are drawn with the session view's conversation components and stylesheet, so an archived
+//! conversation reads like the live one. The text stays plain rather than Markdown so search literals
+//! can be marked exactly as the index matched them.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -14,7 +17,11 @@ import Icons from "../../components/Icons";
 import { dateLocale, useT } from "../../i18n";
 import type { TranscriptMessage } from "../../ipc/commands";
 import type { Session } from "../../types";
+import { MessageBubble } from "../CenterPane/session/rows";
 import { highlightMatches } from "./highlight";
+import { kindIconEl } from "./sessionMeta";
+import "../CenterPane/session/session-view.css";
+import "./transcript-viewer.css";
 
 /** Assistant display name based on session type. */
 export function assistantLabel(kind: Session["kind"]): string {
@@ -85,35 +92,19 @@ export function TranscriptViewer({
   }, [isLocate, scrollToMessageIndex, messages]);
 
   return (
-    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}>
+    <div className="sv">
       {/* Browsing mode shows the query and message count. Locate mode delegates search and navigation to its outer console. */}
       {!isLocate && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "6px 8px",
-            borderBottom: "1px solid var(--border)",
-          }}
-        >
-          <div className="box" style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+        <div className="searchbar tv-searchbar">
+          <div className="box">
             <Icons.search size={13} />
             <input
               placeholder={t("archive.searchTranscript")}
               value={browseQuery}
               onChange={(e) => setBrowseQuery(e.target.value)}
-              style={{
-                flex: 1,
-                background: "transparent",
-                border: "none",
-                outline: "none",
-                color: "var(--text-primary)",
-                fontSize: 12.5,
-              }}
             />
           </div>
-          <span style={{ fontSize: 11.5, color: "var(--text-muted)", flex: "0 0 auto" }}>
+          <span className="tv-count">
             {browseQuery.trim()
               ? t("archive.msgCountFiltered", visible.length, messages.length)
               : t("archive.msgCountAll", messages.length)}
@@ -121,62 +112,36 @@ export function TranscriptViewer({
         </div>
       )}
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "10px 16px" }}>
+      <div className="sv-scroll">
         {visible.map(({ m, idx }) => {
           const isUser = m.role === "user";
           const isTarget = isLocate && idx === scrollToMessageIndex;
+          const origin = m.origin;
+          const who = isUser
+            ? origin
+              ? `${origin.name}${origin.role === "plan" || origin.role === "exec" ? ` · ${t(origin.role === "plan" ? "chat.origin.plan" : "chat.origin.exec")}` : ""}`
+              : t("archive.you")
+            : label;
           return (
-            <div
-              key={idx}
-              ref={isTarget ? targetRef : undefined}
-              style={{
-                margin: "10px 0",
-                padding: "8px 12px",
-                borderRadius: 8,
-                background: isUser ? "var(--bg-hover)" : "transparent",
-                border: isUser ? "none" : "1px solid var(--border)",
-                borderLeft: isUser ? "3px solid var(--accent)" : "1px solid var(--border)",
-                // Give the located message a prominent outline.
-                boxShadow: isTarget ? "0 0 0 2px var(--accent)" : undefined,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-                <span
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: isUser ? "var(--accent)" : "var(--text-primary)",
-                  }}
-                >
-                  {isUser && m.origin ? <>{kindIconEl(m.origin.agent, 14)} {m.origin.name}{(m.origin.role === "plan" || m.origin.role === "exec") && <> · {t(m.origin.role === "plan" ? "chat.origin.plan" : "chat.origin.exec")}</>}</> : isUser ? t("archive.you") : label}
-                </span>
-                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{fmtTs(m.timestamp)}</span>
-              </div>
-              {m.text && (
-                <div
-                  style={{
-                    fontSize: 13,
-                    lineHeight: 1.65,
-                    color: "var(--text-primary)",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    userSelect: "text",
-                  }}
-                >
-                  {/* Use active highlighting for the target and regular highlighting for other matches. */}
-                  {terms.length > 0 ? highlightMatches(m.text, terms, isTarget) : m.text}
-                </div>
-              )}
-              {m.tools.length > 0 && (
-                <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 6 }}>
-                  {t("archive.toolsUsed", m.tools.join(" · "))}
-                </div>
-              )}
+            <div key={idx} ref={isTarget ? targetRef : undefined} className={isTarget ? "tv-target" : undefined}>
+              <MessageBubble
+                who={who}
+                icon={isUser ? (origin ? kindIconEl(origin.agent, 14) : undefined) : kindIconEl(session.kind, 14)}
+                isUser={isUser}
+                at={m.timestamp ?? undefined}
+                text={m.text ?? ""}
+                renderText={(text) => (
+                  <div className="tv-text">
+                    {terms.length > 0 ? highlightMatches(text, terms, isTarget) : text}
+                  </div>
+                )}
+                footnote={m.tools.length > 0 ? <div className="tv-tools">{t("archive.toolsUsed", m.tools.join(" · "))}</div> : undefined}
+              />
             </div>
           );
         })}
         {visible.length === 0 && (
-          <div style={{ padding: 20, fontSize: 13, color: "var(--text-muted)" }}>
+          <div className="sv-empty">
             {browseQuery.trim() ? t("archive.noMatch") : t("archive.emptyTranscript")}
           </div>
         )}

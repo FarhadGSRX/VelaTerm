@@ -1,6 +1,7 @@
 //! Transactional memory documents, independent full-text search and immutable revisions.
 use super::{now, Edit, Entry};
 use crate::host::AppCtx;
+use crate::search::fuzzy;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -418,6 +419,128 @@ fn relevance_score(values: &mut Vec<rusqlite::types::Value>, query: &str) -> Opt
     ))
 }
 
+/// One fuzzy hit's derived fields: rank, snippet position and the literals to highlight.
+struct Found {
+    score: usize,
+    line: usize,
+    snippet: String,
+    matched: Vec<String>,
+}
+
+/// First body line containing any term, clipped around the hit; `None` when nothing matches.
+fn exact_snippet(content: &str, terms: &[&str]) -> Option<(usize, String)> {
+    fuzzy::exact_line(content, &content.to_lowercase(), terms)
+}
+
+/// Fuzzy fallback ranking: a full title hit beats a full summary hit, which beats tags, which beats
+/// body frequency. Every term must match at least one field.
+fn match_entry_fuzzy(entry: &Entry, terms: &[&str]) -> Option<Found> {
+    let title = entry.title.to_lowercase();
+    let summary = entry.summary.to_lowercase();
+    let tags = entry.tags.join(" ").to_lowercase();
+    let content = entry.content.to_lowercase();
+    let mut title_exact = true;
+    let mut title_any = true;
+    let mut summary_exact = true;
+    let mut summary_any = true;
+    let mut tags_exact = true;
+    let mut tags_any = true;
+    let mut body_exact = 0usize;
+    let mut body_fuzzy = 0usize;
+    let mut matched: Vec<String> = Vec::new();
+    let mut fuzzy_snippet: Option<(usize, usize)> = None;
+    for term in terms {
+        let in_title = title.contains(*term);
+        let in_summary = summary.contains(*term);
+        let in_tags = tags.contains(*term);
+        let fuzzy_title = in_title || fuzzy::fuzzy_text(term, &title);
+        let fuzzy_summary = in_summary || fuzzy::fuzzy_text(term, &summary);
+        let fuzzy_tags = in_tags || fuzzy::fuzzy_text(term, &tags);
+        let exact = content.matches(*term).count();
+        let loose = if exact == 0 {
+            fuzzy::word_hit(&entry.content, term)
+        } else {
+            None
+        };
+        if !fuzzy_title && !fuzzy_summary && !fuzzy_tags && exact == 0 && loose.is_none() {
+            return None;
+        }
+        title_exact &= in_title;
+        title_any &= fuzzy_title;
+        summary_exact &= in_summary;
+        summary_any &= fuzzy_summary;
+        tags_exact &= in_tags;
+        tags_any &= fuzzy_tags;
+        body_exact += exact;
+        if in_title || in_summary || in_tags || exact > 0 {
+            matched.push((*term).to_string());
+        } else if let Some(word) = fuzzy::fuzzy_word_in(term, &entry.title) {
+            matched.push(word);
+        }
+        if let Some((line, word, offset)) = loose {
+            body_fuzzy += 1;
+            matched.push(word);
+            if fuzzy_snippet.is_none_or(|(current, _)| line < current) {
+                fuzzy_snippet = Some((line, offset));
+            }
+        }
+    }
+    let (line, snippet) = if let Some((line, text)) = exact_snippet(&entry.content, terms) {
+        (line, text)
+    } else if let Some((line, offset)) = fuzzy_snippet {
+        let raw = entry.content.lines().nth(line - 1).unwrap_or("");
+        (
+            line,
+            fuzzy::clip(raw, raw[..offset.min(raw.len())].chars().count(), 200),
+        )
+    } else {
+        (0, fuzzy::leading_line(&entry.content, 220))
+    };
+    let score = usize::from(title_exact) * 100
+        + usize::from(!title_exact && title_any) * 60
+        + usize::from(summary_exact) * 20
+        + usize::from(!summary_exact && summary_any) * 12
+        + usize::from(tags_exact) * 10
+        + usize::from(!tags_exact && tags_any) * 6
+        + body_exact.min(20) * 5
+        + body_fuzzy.min(20) * 2;
+    Some(Found {
+        score,
+        line,
+        snippet,
+        matched,
+    })
+}
+
+/// Score every entry inside the base scope for the fuzzy fallback. Only called when the exact
+/// search found nothing, so the scan cost is paid once per typo, not once per keystroke.
+fn fuzzy_entries(
+    conn: &Connection,
+    base: &str,
+    values: &[rusqlite::types::Value],
+    terms: &[&str],
+) -> Result<Vec<(Entry, Found)>, String> {
+    let mut stmt = conn
+        .prepare(&format!("SELECT {COLS} FROM memory_entries WHERE {base}"))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(values.iter()), row)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut scored: Vec<(Entry, Found)> = rows
+        .into_iter()
+        .filter_map(|entry| match_entry_fuzzy(&entry, terms).map(|found| (entry, found)))
+        .collect();
+    scored.sort_by(|a, b| {
+        b.1.score
+            .cmp(&a.1.score)
+            .then(b.0.updated_at.cmp(&a.0.updated_at))
+            .then(a.0.id.cmp(&b.0.id))
+    });
+    Ok(scored)
+}
+
 pub fn list(app: &AppCtx, args: &Value) -> Result<Value, String> {
     let query = args
         .get("query")
@@ -435,26 +558,12 @@ pub fn list(app: &AppCtx, args: &Value) -> Result<Value, String> {
         .min(100_000);
     let sort_title = args.get("sort").and_then(Value::as_str) == Some("title");
     let conn = app.db().conn.lock().map_err(|e| e.to_string())?;
-    let mut conditions = vec![
+    // Scope filters stay separate from the query text so the fuzzy fallback can reuse them.
+    let mut base_conditions = vec![
         "(?1='' OR EXISTS(SELECT 1 FROM json_each(memory_entries.tags) WHERE value=?1))"
             .to_string(),
     ];
-    let mut values: Vec<rusqlite::types::Value> = vec![tag.to_string().into()];
-    for word in query.split_whitespace() {
-        let n = values.len() + 1;
-        if word.chars().count() >= 3 {
-            conditions.push(format!(
-                "rowid IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?{n})"
-            ));
-            values.push(format!("\"{}\"", word.replace('"', "\"\"")).into());
-        } else {
-            conditions.push(format!(
-                "instr(lower(title||' '||summary||' '||content||' '||tags),lower(?{n}))>0"
-            ));
-            values.push(word.to_string().into());
-        }
-    }
-    let tree = super::hierarchy::tree(&conn, &conditions.join(" AND "), &values)?;
+    let mut base_values: Vec<rusqlite::types::Value> = vec![tag.to_string().into()];
     let selected = args
         .get("selectedId")
         .and_then(Value::as_str)
@@ -473,22 +582,22 @@ pub fn list(app: &AppCtx, args: &Value) -> Result<Value, String> {
         })
         .or_else(|| args.get("sessionId").and_then(Value::as_str));
     if let Some(session) = session_filter {
-        let n = values.len() + 1;
-        conditions.push(format!("session_id=?{n}"));
-        values.push(
+        let n = base_values.len() + 1;
+        base_conditions.push(format!("session_id=?{n}"));
+        base_values.push(
             if session == "__manual__" { "" } else { session }
                 .to_string()
                 .into(),
         );
     } else if let Some(project) = args.get("projectId").and_then(Value::as_str) {
-        let n = values.len() + 1;
+        let n = base_values.len() + 1;
         if project == "__manual__" {
-            conditions.push("session_id=''".into());
+            base_conditions.push("session_id=''".into());
         } else {
-            conditions.push(format!(
+            base_conditions.push(format!(
                 "session_id IN (SELECT id FROM memory_sessions WHERE project_id=?{n})"
             ));
-            values.push(
+            base_values.push(
                 if project == "__unknown__" {
                     ""
                 } else {
@@ -499,35 +608,103 @@ pub fn list(app: &AppCtx, args: &Value) -> Result<Value, String> {
             );
         }
     }
+    let base = base_conditions.join(" AND ");
+    let push_word = |conditions: &mut Vec<String>,
+                     values: &mut Vec<rusqlite::types::Value>,
+                     word: &str| {
+        let n = values.len() + 1;
+        if word.chars().count() >= 3 {
+            conditions.push(format!(
+                "rowid IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?{n})"
+            ));
+            values.push(format!("\"{}\"", word.replace('"', "\"\"")).into());
+        } else {
+            conditions.push(format!(
+                "instr(lower(title||' '||summary||' '||content||' '||tags),lower(?{n}))>0"
+            ));
+            values.push(word.to_string().into());
+        }
+    };
+    // The exact filter adds the query words to the scope. The tree keeps its historical filter of
+    // tag plus query words without the selected group.
+    let mut conditions = base_conditions.clone();
+    let mut values = base_values.clone();
+    let mut tree_conditions = vec![base_conditions[0].clone()];
+    let mut tree_values: Vec<rusqlite::types::Value> = vec![tag.to_string().into()];
+    for word in query.split_whitespace() {
+        push_word(&mut conditions, &mut values, word);
+        push_word(&mut tree_conditions, &mut tree_values, word);
+    }
     let filter = conditions.join(" AND ");
-    let total: i64 = conn
+    let total_exact: i64 = conn
         .query_row(
             &format!("SELECT count(*) FROM memory_entries WHERE {filter}"),
             rusqlite::params_from_iter(values.iter()),
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    // Searches rank by relevance: a title hit outranks a summary hit, which outranks tags and raw term
-    // frequency. The heuristic works for every language, while BM25 over the trigram index cannot rank
-    // the two-character Chinese words that are common in queries here.
-    let mut select_values = values;
-    let order = if sort_title {
-        "title COLLATE NOCASE ASC,id".to_string()
-    } else if let Some(score) = relevance_score(&mut select_values, query) {
-        format!("{score} DESC,updated_at DESC,id")
+    let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut found: HashMap<String, Found> = HashMap::new();
+    // Typos and abbreviations only get a second look when the exact search came up empty, so plain
+    // queries never pay for a full scan and never mix loosened hits into exact ones.
+    let (entries, total, tree) = if total_exact == 0 && !terms.is_empty() {
+        let refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+        let scored = fuzzy_entries(&conn, &base, &base_values, &refs)?;
+        let total = scored.len() as i64;
+        let ids: Vec<String> = scored.iter().map(|(entry, _)| entry.id.clone()).collect();
+        let tree = if ids.is_empty() {
+            Vec::new()
+        } else if ids.len() <= 900 {
+            let mut tree_values: Vec<rusqlite::types::Value> = vec![tag.to_string().into()];
+            let placeholders: Vec<String> = ids
+                .iter()
+                .enumerate()
+                .map(|(index, _)| format!("?{}", index + 2))
+                .collect();
+            tree_values.extend(ids.iter().cloned().map(rusqlite::types::Value::from));
+            super::hierarchy::tree(
+                &conn,
+                &format!(
+                    "(?1='' OR EXISTS(SELECT 1 FROM json_each(memory_entries.tags) WHERE value=?1)) AND id IN ({})",
+                    placeholders.join(",")
+                ),
+                &tree_values,
+            )?
+        } else {
+            super::hierarchy::tree(&conn, &base, &base_values)?
+        };
+        let mut entries = Vec::new();
+        for (entry, hit) in scored.into_iter().skip((page * 40) as usize).take(40) {
+            found.insert(entry.id.clone(), hit);
+            entries.push(entry);
+        }
+        (entries, total, tree)
     } else {
-        "updated_at DESC,id".to_string()
+        // Searches rank by relevance: a title hit outranks a summary hit, which outranks tags and raw
+        // term frequency. The heuristic works for every language, while BM25 over the trigram index
+        // cannot rank the two-character Chinese words that are common in queries here.
+        let mut select_values = values;
+        let order = if sort_title {
+            "title COLLATE NOCASE ASC,id".to_string()
+        } else if let Some(score) = relevance_score(&mut select_values, query) {
+            format!("{score} DESC,updated_at DESC,id")
+        } else {
+            "updated_at DESC,id".to_string()
+        };
+        let sql = format!(
+            "SELECT {COLS} FROM memory_entries WHERE {filter} ORDER BY {order} LIMIT 40 OFFSET {}",
+            page * 40
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let entries = stmt
+            .query_map(rusqlite::params_from_iter(select_values.iter()), row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let tree = super::hierarchy::tree(&conn, &tree_conditions.join(" AND "), &tree_values)?;
+        (entries, total_exact, tree)
     };
-    let sql = format!(
-        "SELECT {COLS} FROM memory_entries WHERE {filter} ORDER BY {order} LIMIT 40 OFFSET {}",
-        page * 40
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let entries = stmt
-        .query_map(rusqlite::params_from_iter(select_values.iter()), row)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+    let fuzzy_results = total_exact == 0 && !terms.is_empty() && total > 0;
     // Search results carry their directly related entries so a reader can follow the association without
     // opening each hit. Browsing stays lean and returns the previous shape.
     let expanding = !query.is_empty();
@@ -540,6 +717,18 @@ pub fn list(app: &AppCtx, args: &Value) -> Result<Value, String> {
     let entries: Vec<Value> = entries.into_iter().map(|e| {
         let mut value = json!({"id":e.id,"title":e.title,"summary":e.summary,"tags":e.tags,"version":e.version,"updatedAt":e.updated_at,"sourceCount":e.sources.len(),"sessionId":e.session_id});
         if expanding {
+            let (line, snippet, matched) = match found.remove(&e.id) {
+                Some(hit) => (hit.line, hit.snippet, hit.matched),
+                None => {
+                    let refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+                    let (line, snippet) = exact_snippet(&e.content, &refs)
+                        .unwrap_or_else(|| (0, fuzzy::leading_line(&e.content, 220)));
+                    (line, snippet, terms.clone())
+                }
+            };
+            value["line"] = json!(line);
+            value["snippet"] = json!(snippet);
+            value["matched"] = json!(matched);
             value["related"] = json!(related.get(&e.id).cloned().unwrap_or_default());
         }
         value
@@ -551,7 +740,7 @@ pub fn list(app: &AppCtx, args: &Value) -> Result<Value, String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     Ok(
-        json!({"selectedSessionId":session_filter,"projects":tree,"entries":entries,"total":total,"pageSize":40,"tags":tags}),
+        json!({"selectedSessionId":session_filter,"projects":tree,"entries":entries,"total":total,"pageSize":40,"tags":tags,"fuzzy":fuzzy_results}),
     )
 }
 

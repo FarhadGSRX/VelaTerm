@@ -130,6 +130,7 @@ const ptBR: typeof en = {
   "nb.folder": "Pasta",
   "nb.generatedHint": "Conhecimento organizado a partir das suas sessões, com fontes e histórico de revisões.",
   "nb.homeHint": "Explore a base de conhecimento de sessões e as bases de conhecimento locais.",
+  "nb.homeSearch": "Pesquise no conhecimento das sessões e nas notas locais…",
   "nb.loadMore": "Carregar mais",
   "nb.import": "Importar",
   "nb.importFiles": "Escolher arquivos",
@@ -186,6 +187,8 @@ const ptBR: typeof en = {
   "nb.searchAllVaults": "Todas as bases de conhecimento",
   "nb.searchCount": (count: string) => `${count} resultados`,
   "nb.searchEmpty": "Nenhuma nota corresponde a esta busca.",
+  "nb.searchEmptyAll": "Nada corresponde a esta busca.",
+  "nb.searchFuzzy": "Nenhuma correspondência exata. Exibindo resultados aproximados.",
   "nb.searchLine": (line: string) => `Linha ${line}`,
   "nb.searchMatches": (count: string) => `${count} ocorrências`,
   "nb.searchMore": "Apenas os primeiros resultados são listados. Refine a busca para ver os demais.",
@@ -204,6 +207,9 @@ const ptBR: typeof en = {
   "nb.welcome": "Seus cadernos",
   "nb.welcomeText": "Escreva livremente, conecte ideias e mantenha suas notas em arquivos locais comuns. Abra uma pasta Markdown existente ou importe documentos para um novo caderno.",
   "memory.globalMemory": "Base de conhecimento de sessões",
+  "memory.collections": "Sessões arquivadas",
+  "memory.collectionConversation": "Conversa",
+  "memory.collectionEmptyEntries": "Esta conversa ainda não tem artigos de conhecimento.",
   "memory.title": "Base de conhecimento",
   "memory.add": "Organizar na base de conhecimento de sessões",
   "memory.intro": "Organize o conhecimento por projeto e sessão. Os artigos salvos permanecem independentes das fontes e podem ser editados manualmente.",
@@ -781,6 +787,8 @@ const ptBR: typeof en = {
   "tree.exportSession": "Exportar sessão…", // Export Session…
   "tree.sessionInfo": "Informações da sessão", // Session Info
   "tree.groupInfo": "Informações do grupo", // Group Info
+  "tree.collectionInfo": "Informações da coleção", // Collection Info
+  "tree.projectInfo": "Informações do projeto", // Project Info
   "info.branch": "Ramo", // Branch
   "info.path": "Caminho", // Path
   "info.recentCommits": "Commits recentes", // Recent Commits
@@ -961,6 +969,7 @@ const ptBR: typeof en = {
   "info.notYetCaptured":
     "Ainda não gerado (capturado após a primeira execução)", // Not yet generated (captured after first run)
   "info.sessionId": "ID da sessão", // Session ID
+  "info.projectId": "ID do projeto", // Project ID
   "info.cwd": "Diretório", // Working dir
   "info.initCmd": "Comando", // Startup cmd
   "info.agentArgs": "Argumentos", // Launch args
@@ -1156,6 +1165,11 @@ const ptBR: typeof en = {
   "agentInstall.doneDesc": "Reinicie esta sessão para começar a usá-lo.", // Relaunch this session to start using it.
   "agentInstall.restartNow": "Reiniciar agora", // Relaunch now
   "agentInstall.later": "Mais tarde", // Later
+  "agentInstall.pathLabel": "Caminho do executável", // Executable path
+  "agentInstall.pathPlaceholder": (bin: string) => `~/.local/bin/${bin}`,
+  "agentInstall.pathHint": "Já instalado fora do PATH? Informe o caminho completo do executável.", // Already installed outside PATH?
+  "agentInstall.pathSave": "Usar este caminho", // Use this path
+  "agentInstall.pathBrowse": "Procurar…", // Browse…
   "search.placeholder": "Buscar no terminal", // Search in terminal
 
   // ── Document tabs ──
@@ -1432,6 +1446,7 @@ const ptBR: typeof en = {
   "crepe.collapse": "Recolher", // Collapse
   // ── Painel direito / barra inferior ──
   "info.project": "Projeto", // Project
+  "info.collection": "Coleção", // Collection
   "panel.sessionInfo": "Informações da sessão", // Session info
   "panel.gitTitle": "Status do Git", // Git status
   "panel.gitProbing": "Verificando…", // Checking…

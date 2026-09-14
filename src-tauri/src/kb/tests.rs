@@ -412,6 +412,46 @@ fn search_lists_directly_linked_notes_as_related() {
 }
 
 #[test]
+fn search_falls_back_to_abbreviations_and_typos_and_reports_matches() {
+    let f = Fixture::new();
+    f.write("Knowledge Base.md", "release notes\n");
+    f.write("Topic.md", "throttle management record\n");
+    f.write("Unrelated.md", "nothing here\n");
+
+    // Exact results keep the strict path and never carry the fuzzy flag.
+    let exact = dispatch(&f.app, "kb_search", &json!({"query":"throttle"})).unwrap();
+    assert_eq!(exact["fuzzy"], false);
+    assert_eq!(exact["total"], 1);
+    assert_eq!(exact["entries"][0]["path"], "Topic.md");
+    assert_eq!(exact["entries"][0]["matched"], json!(["throttle"]));
+
+    // An abbreviation matches the note name by subsequence and marks the original word.
+    let abbreviated = dispatch(&f.app, "kb_search", &json!({"query":"knwl"})).unwrap();
+    assert_eq!(abbreviated["fuzzy"], true);
+    assert_eq!(abbreviated["total"], 1);
+    assert_eq!(abbreviated["entries"][0]["path"], "Knowledge Base.md");
+    assert_eq!(abbreviated["entries"][0]["line"], 0);
+    assert_eq!(abbreviated["entries"][0]["matched"], json!(["Knowledge"]));
+
+    // A typo matches the body, and the snippet shows the word that was actually found.
+    let typo = dispatch(&f.app, "kb_search", &json!({"query":"throtle"})).unwrap();
+    assert_eq!(typo["fuzzy"], true);
+    assert_eq!(typo["total"], 1);
+    assert_eq!(typo["entries"][0]["path"], "Topic.md");
+    assert_eq!(typo["entries"][0]["line"], 1);
+    assert_eq!(typo["entries"][0]["matched"], json!(["throttle"]));
+    assert!(typo["entries"][0]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("throttle"));
+
+    // A term that cannot loosen (Chinese) keeps the exact contract and matches nothing here.
+    let none = dispatch(&f.app, "kb_search", &json!({"query":"知识库搜索"})).unwrap();
+    assert_eq!(none["total"], 0);
+    assert_eq!(none["fuzzy"], false);
+}
+
+#[test]
 fn malformed_markdown_does_not_block_valid_notes_or_byte_preserving_imports() {
     let f = Fixture::new();
     f.write("Valid.md", "# Valid");

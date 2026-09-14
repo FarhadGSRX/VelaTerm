@@ -1583,6 +1583,55 @@ select.sv-pill {
   }
 }
 
+/* Missing-agent guidance inside the conversation. The install itself runs in the terminal view, so this
+   notice stays informational: it explains the state and offers the way there. */
+.sv-agent-missing {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--bg-hover);
+}
+.sv-agent-missing-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: var(--ui-fs);
+}
+.sv-agent-missing-title {
+  font-weight: 600;
+}
+.sv-agent-missing-desc {
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: calc(var(--ui-fs) - 0.5px);
+  line-height: 1.5;
+}
+.sv-agent-missing-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.sv-agent-missing-spacer {
+  flex: 1;
+}
+.sv-agent-missing-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: calc(var(--ui-fs) - 1px);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.sv-agent-missing-link:hover {
+  color: var(--text-mid);
+}
+
 /* Permission questions sit directly above the composer, where the answer is expected. */
 .sv-permissions {
   flex: none;
@@ -2137,7 +2186,6 @@ select.sv-pill {
   color: var(--text-faint);
   font-size: calc(var(--ui-fs) - 2px);
 }
-.sv-elicit-field select.sv-question-other,
 .sv-elicit-field textarea.sv-question-other {
   resize: vertical;
 }

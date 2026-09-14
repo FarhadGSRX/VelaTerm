@@ -65,12 +65,22 @@ export interface SaveFileOptions {
   filters?: { name: string; extensions: string[] }[];
 }
 
+/** File picker options. */
+export interface PickFileOptions {
+  /** Dialog title, where supported. */
+  title?: string;
+  /** File-type filters. */
+  filters?: { name: string; extensions: string[] }[];
+}
+
 /** File-dialog capability. */
 export interface DialogCapability {
   /** Open the system Save As dialog; return the selected absolute path, or null on cancel/outside desktop. */
   saveFile(opts?: SaveFileOptions): Promise<string | null>;
   /** Open the system directory picker; return null on cancel or in browsers, which use the server-directory modal. */
   pickDirectory(): Promise<string | null>;
+  /** Open the system file picker; return the selected absolute path, or null on cancel or without a native picker. */
+  pickFile(opts?: PickFileOptions): Promise<string | null>;
 }
 
 /** External-opening capability using default applications or the file manager. */

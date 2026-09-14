@@ -11,8 +11,9 @@ export const notebookUnregister=(vaultId:string)=>invoke<void>("kb_unregister",{
 /** Rename the vault's root folder on disk and follow it in the registration. */
 export const notebookVaultRename=(vaultId:string,name:string)=>invoke<NotebookVault>("kb_vault_rename",{vaultId,name});
 export interface NotebookSearchRelated { path:string; name:string; absolutePath:string }
-export interface NotebookSearchHit { vaultId:string; vaultName:string; path:string; absolutePath:string; name:string; summary:string; line:number; matches:number; score:number; updatedAt:number; favorite:boolean; tags:string[]; related:NotebookSearchRelated[] }
-export interface NotebookSearchResult { entries:NotebookSearchHit[]; total:number; hasMore:boolean; unavailable:{vaultId:string;vaultName:string}[] }
+export interface NotebookSearchHit { vaultId:string; vaultName:string; path:string; absolutePath:string; name:string; summary:string; line:number; matches:number; score:number; updatedAt:number; favorite:boolean; tags:string[]; matched?:string[]; related:NotebookSearchRelated[] }
+/** `fuzzy` marks a page answered by the loosened pass, so the host can say exact matches were empty. */
+export interface NotebookSearchResult { entries:NotebookSearchHit[]; total:number; hasMore:boolean; unavailable:{vaultId:string;vaultName:string}[]; fuzzy?:boolean }
 export const notebookTree=(vaultId:string,filter="",tag="",sort="updated")=>invoke<NotebookTree>("kb_tree",{vaultId,filter,tag,sort});
 /** Content lookup across notes. An empty vaultId searches every registered notebook. */
 export const notebookSearch=(query:string,vaultId="",limit=100)=>invoke<NotebookSearchResult>("kb_search",{query,limit,...(vaultId?{vaultId}:{})});

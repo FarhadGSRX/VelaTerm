@@ -79,7 +79,9 @@ import { AgentAccountMenu, AgentAuth } from "./AgentAuth";
 import { CodexResetCredits } from "./CodexResetCredits";
 import { useEngineSwitch } from "./engineSwitch";
 import { ConversationViewHint } from "./ConversationViewHint";
+import { AgentMissingNotice } from "./AgentMissingNotice";
 import { isShareSurface } from "../../../ipc/shareBase";
+import { isAgentNotInstalledError } from "../../../ipc/backendError";
 import { usePermissionRestart } from "./permissionRestart";
 import { PermissionCard, type PermissionAnswer } from "./permissionCards";
 import { isMode, type Mode } from "./permissions";
@@ -333,6 +335,8 @@ export function ChatPane({
   };
   const [turnStartedAt, setTurnStartedAt] = useState<number | undefined>();
   const [error, setError] = useState<string | null>(null);
+  /** Which failed send's missing-agent notice the user closed, so it does not reappear until the next one. */
+  const [agentNoticeDismissed, setAgentNoticeDismissed] = useState<string | null>(null);
   const keepRestartPermission = useRef(false);
   const permissionCatalog = useAgentPermissions(session.kind);
   const permissionRestart = usePermissionRestart(session.id, () => {
@@ -1065,6 +1069,13 @@ export function ChatPane({
     await chatStart(session.id, model, effort || undefined, extras.fastMode === true);
   };
 
+  /** Hand a one-click install to the terminal view: it is the view with a shell to run the recipe in,
+   *  and its own card completes the installation and detects the new executable path. */
+  const installAgent = () => {
+    useTermStore.getState().setRuntime(session.id, { agentAutoInstall: true });
+    switchTo("tui");
+  };
+
   /** Make sure the agent is running and has opened its native session. */
   const ensureStarted = async () => {
     if (engineRunning) return;
@@ -1584,9 +1595,23 @@ export function ChatPane({
         ]
       : []),
   ];
+  // The permission chip shows the mode that was chosen; whether that choice is already the running
+  // mode is carried by the chip's mark and by the menu's row notes. Only Codex defers the change to
+  // the next turn, so the two facts differ during that window and nothing else has to say so in words.
+  const permissionValue = permissionState?.value;
+  const permissionPending = permissionValue?.activation === "nextTurn" || permissionValue?.activation === "restart";
+  const pendingMode = permissionPending ? permissionValue?.pending : null;
+  const appliedMode = permissionValue?.running ? permissionValue?.current : null;
   const modeOptions: ChipOption<Mode>[] = (permissionCatalog?.catalog?.modes ?? []).map((value) => ({
     value,
     label: t(modeLabelKeyFor(session.kind, value)),
+    // The effective row is noted only while it differs from the target being waited on; on its own,
+    // "Applied" says nothing the chip has not already said.
+    tag: pendingMode && value === pendingMode
+      ? t(permissionValue?.activation === "restart" ? "permission.restart" : "chat.modeNextTurn")
+      : pendingMode && appliedMode === value && appliedMode !== pendingMode
+        ? t("permission.applied")
+        : undefined,
   }));
   // Pi runs every tool without asking, so it exposes no permission control and nothing to report about
   // one. A caption for a setting this agent does not have reads as a fact about it that is not true.
@@ -1603,6 +1628,16 @@ export function ChatPane({
   );
   const selectedCollaboration = collaborationModes.find((preset) => preset.mode === collaborationMode);
 
+  // A send that failed because the agent executable is missing becomes an actionable notice rather than
+  // a raw spawn error. Only the newest failure gets the notice so repeated sends do not stack cards, and
+  // closing it keeps it closed until the next failure.
+  const agentMissingItem = [...pendingSubmissions]
+    .reverse()
+    .find((item) => item.status === "failed" && isAgentNotInstalledError(item.error));
+  const agentMissingKey =
+    agentMissingItem?.id ?? (isAgentNotInstalledError(error) ? "session-error" : null);
+  const showAgentNotice = agentMissingKey !== null && agentNoticeDismissed !== agentMissingKey;
+
   const submissionFeedback = (id: string) => {
     const item = pendingSubmissions.find(value => value.id === id);
     if (!item) return null;
@@ -1611,7 +1646,7 @@ export function ChatPane({
       {(item.status === "failed" || item.status === "unknown") && <button disabled={submissionReceipts !== true} onClick={() => void retrySubmission(session.id, item, item.status === "failed" && !engineRunning ? startAgent : undefined)}>
         {t(item.status === "unknown" ? "chat.submission.check" : "common.retry")}
       </button>}
-      {item.error && <ErrorRow message={item.error} />}
+      {item.error && !isAgentNotInstalledError(item.error) && <ErrorRow message={item.error} />}
     </div>;
   };
 
@@ -1777,7 +1812,15 @@ export function ChatPane({
               ))}
               {turnStartedAt !== undefined && <WorkingRow startedAt={turnStartedAt} />}
               {extras.apiRetry && <RetryLine retry={extras.apiRetry} />}
-              {error && <ErrorRow message={error} />}
+              {showAgentNotice && (
+                <AgentMissingNotice
+                  key={agentMissingKey}
+                  session={session}
+                  onInstall={installAgent}
+                  onDismiss={() => setAgentNoticeDismissed(agentMissingKey)}
+                />
+              )}
+              {error && !isAgentNotInstalledError(error) && <ErrorRow message={error} />}
               {catalogueError && <ErrorRow message={catalogueError} />}
               {(session.kind === "codex" || session.kind === "claude") && !readOnly && <AgentAuth provider={session.kind === "claude" ? "Claude" : "Codex"} sessionId={session.id} state={extras.auth} busy={turnStartedAt !== undefined} />}
             </div>
@@ -2090,13 +2133,17 @@ export function ChatPane({
                   {hasPermissionControl && (
                     <div className="sv-permission-control">
                       <ControlChip
-                        glyph={<Icons.lock size={14} />}
-                        label={session.kind === "omp" && mode === "default"
-                          ? t("chat.mode.agentDefault")
-                          : currentPermissionLabel(permissionState?.value)}
-                        title={permissionState?.value?.activation === "applied"
-                          ? `${t("chat.modeTooltip")} · ${t("permission.applied")}`
-                          : t("chat.modeTooltip")}
+                        glyph={permissionPending
+                          ? <Icons.clock size={14} style={{ color: "var(--accent)" }} />
+                          : <Icons.lock size={14} />}
+                        label={t(modeLabelKeyFor(session.kind, mode))}
+                        title={permissionValue?.activation === "nextTurn"
+                          ? `${t("chat.modeTooltip")} · ${t("chat.modePendingHint", currentPermissionLabel(permissionValue), t(modeLabelKeyFor(session.kind, mode)))}`
+                          : permissionValue?.activation === "restart"
+                            ? `${t("chat.modeTooltip")} · ${t("permission.restart")}`
+                            : permissionValue?.activation === "applied"
+                              ? `${t("chat.modeTooltip")} · ${t("permission.applied")}`
+                              : t("chat.modeTooltip")}
                         value={mode}
                         options={modeOptions}
                         disabled={!permissionCatalog?.catalog}
@@ -2190,19 +2237,10 @@ export function ChatPane({
                 </>}
                 status={hasPermissionControl ? <>
                   {permissionCatalog?.error && <span role="alert">{permissionCatalog.error}</span>}
-                  <PermissionStateDetails state={permissionState?.value} error={permissionState?.error} />
-                  {!permissionState?.value && pendingPermissionMode && (
-                    <span
-                      className="sv-mode-pending"
-                      role="status"
-                      title={t(
-                        "chat.modePendingHint",
-                        isMode(pendingPermissionMode.current) ? t(modeLabelKey(pendingPermissionMode.current)) : pendingPermissionMode.current,
-                        isMode(pendingPermissionMode.next) ? t(modeLabelKey(pendingPermissionMode.next)) : pendingPermissionMode.next,
-                      )}
-                    >
-                      {t("chat.modeNextTurn")}
-                    </span>
+                  {/* A next-turn choice is carried by the chip's mark and the menu row notes; the states
+                      that need a word of their own, like a restart, stay in this line. */}
+                  {permissionValue?.activation !== "nextTurn" && (
+                    <PermissionStateDetails state={permissionState?.value} error={permissionState?.error} />
                   )}
                 </> : null}
               />

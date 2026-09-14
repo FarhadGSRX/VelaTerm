@@ -1,3 +1,27 @@
+## v0.2.1 — 2026-09-14
+
+- 🔎 Trang chủ của cơ sở tri thức có thêm ô tìm kiếm: một truy vấn tìm đồng thời tri thức phiên và ghi chú cục bộ, kết quả được nhóm theo nguồn. Kết quả khớp chính xác được ưu tiên; tìm gần đúng (viết tắt, dãy con và lỗi gõ) chỉ chạy khi không có kết quả khớp chính xác nào, còn truy vấn tiếng Trung vẫn tìm theo chuỗi con.
+
+- 🗂️ Phiên đã lưu trữ được đưa vào cơ sở tri thức. Nút ở thanh bên chuyển đến đây thay vì mở bảng riêng, cây bên phải có thêm nhánh gốc "Phiên đã lưu trữ" nhóm theo dự án gốc, và vùng chính liệt kê toàn bộ phiên đã lưu trữ cùng các thao tác khôi phục, sắp xếp, xuất và xóa ngay tại chỗ.
+
+- 🔍 Phiên đã lưu trữ có tìm kiếm toàn văn riêng: kết quả nhóm theo phiên kèm số lần khớp, khung xem trước lần lượt định vị từng kết quả với cách tô sáng giống tìm kiếm toàn cục. Khi mở một phiên, bạn chuyển giữa "Hội thoại" và "Mục tri thức".
+
+- 🤖 Chế độ hội thoại: khi thiếu tệp thực thi của tác nhân, một hướng dẫn cài đặt hiện dưới tin nhắn thay cho lỗi khởi chạy thô, và "Cài ngay" chuyển sang chế độ terminal để chạy lệnh đề xuất. Nếu tác nhân được cài ngoài PATH, thẻ hướng dẫn cho nhập trực tiếp đường dẫn tệp thực thi, kèm trình chọn tệp của hệ thống trên máy tính.
+
+- 🩹 Phát hiện những bản cài trông như đã có nhưng đã hỏng: trình bao npm toàn cục có đích bị xóa hoặc thay thế được coi là chưa cài đặt, và đường dẫn bạn cấu hình trỏ tới trình bao như vậy vẫn mở hướng dẫn cài đặt mà không ghi đè cài đặt của bạn.
+
+- 🔐 Mục chế độ quyền hiển thị trực tiếp chế độ bạn chọn, và menu ghi bên mỗi dòng lựa chọn đã có hiệu lực hay đang chờ lượt tiếp theo.
+
+- 🔽 Mọi danh sách thả xuống giờ dùng thành phần Select có sẵn thay cho điều khiển gốc, nên hiển thị giống nhau trên macOS 15 và 26, không còn lớp điều khiển hệ thống chồng lên.
+
+- ℹ️ Dự án và bộ sưu tập có hộp thoại thông tin trong menu chuột phải.
+
+- 🪟 Windows: các tiến trình con do chế độ hội thoại khởi chạy (tác nhân, danh mục mô hình và kiểm tra git) không còn nháy cửa sổ console.
+
+- 💡 Nút phản hồi trên thanh tiêu đề chuyển ra sau nút chia sẻ.
+
+---
+
 ## v0.2.0 — 2026-09-13
 
 - 📱 Ứng dụng VelaTerm cho iOS và Android (bản đầu): kết nối tới máy qua SSH hoặc URL sau khi xác nhận dấu vân tay của máy chủ, tải toàn bộ giao diện từ xa ngay trong ứng dụng, điền thông tin kết nối bằng cách quét mã QR và đăng nhập vào tài khoản từ xa.

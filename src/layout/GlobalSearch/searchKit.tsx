@@ -1,8 +1,9 @@
-//! Shared knowledge-base search console used by GlobalSearch and ArchivePanel. Each panel supplies its own
-//! overlay, header, and field, while this module owns the two-column body and search logic.
+//! Shared knowledge-base search console used by GlobalSearch and the knowledge base Collections view. Each
+//! host supplies its own header and field, while this module owns the two-column body and search logic.
 //!
-//! - `useContentSearch(scope)` manages a controlled query, 250ms debounce, and request sequencing before
-//!   calling searchSessionContent. Scope changes immediately repeat the search in the new range.
+//! - `useContentSearch(scope, query?)` manages a controlled query, 250ms debounce, and request sequencing
+//!   before calling searchSessionContent. Scope changes immediately repeat the search in the new range. An
+//!   external `query` drives the search for hosts that keep it in the URL; internally it stays in state.
 //! - `useSearchNav(results)` flattens hits into ordered FlatMatch entries and navigates continuously across
 //!   sessions with arrow keys, Enter, or Shift+Enter.
 //! - `summarizeResults(results)` computes actual total, session, and navigable hit counts.
@@ -42,10 +43,13 @@ export interface ContentSearch {
 
 /**
  * Debounced content-search hook. Query or scope changes search the current range after 250ms, with request
- * sequence numbers preventing stale overwrites. Empty queries clear immediately without a request.
+ * sequence numbers preventing stale overwrites. Empty queries clear immediately without a request. When
+ * `externalQuery` is supplied the hook reads it instead of its internal state, letting a host keep the
+ * query in the URL; the returned `setQuery` then has no effect on the search.
  */
-export function useContentSearch(scope: SearchScope): ContentSearch {
-  const [query, setQuery] = useState("");
+export function useContentSearch(scope: SearchScope, externalQuery?: string): ContentSearch {
+  const [internalQuery, setQuery] = useState("");
+  const query = externalQuery ?? internalQuery;
   const [results, setResults] = useState<SessionSearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const reqId = useRef(0);
@@ -246,6 +250,7 @@ export function SearchConsole({
   projects,
   groups,
   liveSessions,
+  sessionLocation,
   onOpenSession,
   renderGroupActions,
   emptyHint,
@@ -258,6 +263,8 @@ export function SearchConsole({
   projects: { id: string; name: string }[];
   groups: { id: string; name: string; parentGroupId?: string | null }[];
   liveSessions: Session[];
+  /** Optional breadcrumb builder for hosts whose tombstoned containers are absent from the live tree. */
+  sessionLocation?: (session: Session) => string;
   /** When supplied, show Open Session for an active nonarchived match. */
   onOpenSession?: (hit: SessionSearchHit) => void;
   /** Optional group-header actions such as archive restore, export, and delete. */
@@ -375,7 +382,7 @@ export function SearchConsole({
       >
         {grouped.map(({ hit, items }) => {
           const sess = sessionById.get(hit.sessionId) ?? null;
-          const loc = sess ? locationOf(sess, projects, groups, liveSessions) : "";
+          const loc = sess ? (sessionLocation ? sessionLocation(sess) : locationOf(sess, projects, groups, liveSessions)) : "";
           const isCollapsed = collapsed.has(hit.sessionId);
           const firstMatchIndex = items[0]?.globalIndex;
           const selectSession = () => {

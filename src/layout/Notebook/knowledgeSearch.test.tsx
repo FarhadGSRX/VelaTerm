@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   tree: vi.fn(),
   search: vi.fn(),
   list: vi.fn(),
+  collections: vi.fn(),
   restore: vi.fn(),
   env: { isBrowser: true },
 }));
@@ -32,7 +33,7 @@ vi.mock("../../ipc/notebook", () => ({
   uploadNotebookFiles: vi.fn(),
   notebookDroppedFiles: vi.fn(),
 }));
-vi.mock("../../ipc/memory", () => ({ memoryList: api.list, memoryGet: vi.fn() }));
+vi.mock("../../ipc/memory", () => ({ memoryList: api.list, memoryGet: vi.fn(), memoryCollections: api.collections }));
 vi.mock("../../platform", () => ({ platform: { env: api.env, dialog: { pickDirectory: vi.fn() } } }));
 vi.mock("../../remote/ServerFileBrowser", () => ({
   cardStyle: {},
@@ -51,6 +52,7 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/");
   useTermStore.setState({ docTabs: {}, openTabs: [], activeTabId: null });
   api.list.mockReset().mockResolvedValue({ projects: [], selectedSessionId: null, entries: [], total: 0, pageSize: 40, tags: [] });
+  api.collections.mockReset().mockResolvedValue({ projects: [], sessions: [] });
   api.overview.mockReset().mockResolvedValue({ vaults: [vault], defaultRoot: "/Notes", limits: { chunkBytes: 1024, noteBytes: 10000, assetBytes: 10000, files: 100 } });
   api.tree.mockReset().mockResolvedValue({ vault, nodes: [node], entries: [node], tags: [], trash: [], skipped: 0 });
   api.search.mockReset().mockResolvedValue({ entries: [hit], total: 1, hasMore: false, unavailable: [] });
@@ -88,7 +90,8 @@ it("widens the workspace search to every notebook through the scope selector", a
   fireEvent.change(await screen.findByRole("textbox", { name: "Search notes…" }), { target: { value: "oolong" } });
   await screen.findByRole("option", { name: /Tea note/ }, { timeout: 3000 });
 
-  fireEvent.change(screen.getByRole("combobox", { name: "Search scope" }), { target: { value: "all" } });
+  fireEvent.click(screen.getByRole("combobox", { name: "Search scope" }));
+  fireEvent.click(screen.getByRole("option", { name: "All knowledge bases" }));
   await waitFor(() => expect(api.search).toHaveBeenLastCalledWith("oolong", "", 100));
   expect(new URLSearchParams(location.search).get("memoryScope")).toBe("all");
   expect(screen.getByRole("option", { name: /Tea note/ })).toBeTruthy();

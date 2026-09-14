@@ -31,6 +31,7 @@ import type {
   FontCapability,
   NotifyCapability,
   OpenerCapability,
+  PickFileOptions,
   Platform,
   QuitCapability,
   SaveFileOptions,
@@ -46,6 +47,7 @@ interface VlxNativeBridge {
   fontCatalog?(): Promise<FontCatalog>;
   saveFile(opts?: SaveFileOptions): Promise<string | null>;
   pickDirectory(): Promise<string | null>;
+  pickFile(opts?: PickFileOptions): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   openPath(path: string): Promise<void>;
   revealPath(path: string): Promise<void>;
@@ -113,6 +115,9 @@ const dialog: DialogCapability = {
   },
   async pickDirectory() {
     return (await bridge()?.pickDirectory()) ?? null;
+  },
+  async pickFile(opts) {
+    return (await bridge()?.pickFile(opts)) ?? null;
   },
 };
 

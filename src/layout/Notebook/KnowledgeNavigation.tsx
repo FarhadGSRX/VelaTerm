@@ -4,6 +4,7 @@ import { useT } from "../../i18n";
 import { notebookOverview, notebookTree } from "../../ipc/notebook";
 import { MemoryLink, useMemoryLocation } from "../Memory/navigation";
 import { MemoryDirectory } from "../Memory/MemoryDirectory";
+import { MemoryCollectionsDirectory } from "../Memory/MemoryCollections";
 import { useTermStore } from "../../store/termStore";
 import { KnowledgeTreeRow, knowledgeSelection, treeKey, useKnowledgeTree } from "./KnowledgeTreeRow";
 import { KnowledgeTreeProvider } from "./KnowledgeTreeActions";
@@ -21,8 +22,9 @@ function KnowledgeNavigationTree() {
   const search = useMemoryLocation();
   const [page, id] = (new URLSearchParams(search).get("memory") ?? "").split('/');
   const { data, error, reload } = useNotebookLoad(notebookOverview, [page, id]);
-  const session = !!page && !["notebook", "notebooks"].includes(page);
-  const selectedRoot = session ? "session" : page === "notebook" ? id : "";
+  const session = !!page && !["notebook", "notebooks", "collections", "collection"].includes(page);
+  const collections = page === "collections" || page === "collection";
+  const selectedRoot = collections ? "collections" : session ? "session" : page === "notebook" ? id : "";
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["local", ...(selectedRoot ? [selectedRoot] : [])]));
   const open = (key: string) => setExpanded(old => old.has(key) ? old : new Set(old).add(key));
   const toggle = (key: string) => setExpanded(old => { const next = new Set(old); if (next.has(key)) next.delete(key); else next.add(key); return next; });
@@ -60,6 +62,11 @@ function KnowledgeNavigationTree() {
           selected={session && page === "library" && !params.has("memoryProject") && !params.has("memorySession")}
           expanded={expanded.has("session")} onToggle={() => toggle("session")} onOpen={() => open("session")}>
           <MemoryDirectory />
+        </KnowledgeTreeRow>
+        <KnowledgeTreeRow name={t("memory.collections")} route="collections" values={{ ...knowledgeSelection, memoryCollectionProject: null, memoryCollectionQuery: null }} depth={0} icon={<Icons.archive size={15} />}
+          selected={collections && !params.has("memoryCollectionProject")}
+          expanded={expanded.has("collections")} onToggle={() => toggle("collections")} onOpen={() => open("collections")}>
+          <MemoryCollectionsDirectory />
         </KnowledgeTreeRow>
         <KnowledgeTreeRow name={t("nb.localVaults")} depth={0} icon={<Icons.folder size={15} />}
           expanded={expanded.has("local")} onToggle={() => toggle("local")} onActivate={() => toggle("local")}>

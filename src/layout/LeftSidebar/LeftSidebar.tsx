@@ -10,7 +10,7 @@ import { useT } from "../../i18n";
 import { knowledgeUrl } from "../Knowledge/navigation";
 import { securityUrl } from "../Security/navigation";
 import { securityText } from "../Security/text";
-import { memoryNavigate } from "../Memory/navigation";
+import { memoryNavigate, memoryUrl } from "../Memory/navigation";
 import {
   type SidebarTreeView,
   useTermStore,
@@ -26,7 +26,6 @@ import {
 import { MARK_LABEL_KEYS, NODE_MARKS, normalizeMark } from "../../marks";
 import { useSessionMenu } from "../sessionMenu";
 import { GlobalSearch } from "../GlobalSearch/GlobalSearch";
-import { ArchivePanel } from "./ArchivePanel";
 import { labelWithCombo } from "../../hooks/shortcutRegistry";
 import {
   ProjectTree,
@@ -411,8 +410,6 @@ export function LeftSidebar() {
   const archiveMany = useTermStore((s) => s.archiveMany);
   const archiveGroup = useTermStore((s) => s.archiveGroup);
   const clearNodeWorktree = useTermStore((s) => s.clearNodeWorktree);
-  const archiveOpen = useTermStore((s) => s.archiveOpen);
-  const setArchiveOpen = useTermStore((s) => s.setArchiveOpen);
   const globalSearchOpen = useTermStore((s) => s.globalSearchOpen);
   const setGlobalSearchOpen = useTermStore((s) => s.setGlobalSearchOpen);
   // Mirror what the Dock badge counts, not just the session dots: when an unanswered spawn card is the
@@ -630,6 +627,10 @@ export function LeftSidebar() {
             },
           ],
         },
+        {
+          label: virtual ? t("tree.collectionInfo") : t("tree.projectInfo"),
+          onClick: () => openDialog({ type: "projectInfo", id: node.id }),
+        },
         rename,
         {
           label: virtual ? t("tree.deleteCollection") : t("tree.removeProject"),
@@ -747,7 +748,7 @@ export function LeftSidebar() {
         >
           <Icons.search size={14} />
         </button>
-        <button className="icon-btn sm" title={t("tree.archivedSessions")} onClick={() => setArchiveOpen(true)}>
+        <button className="icon-btn sm" title={t("tree.archivedSessions")} onClick={() => memoryNavigate(memoryUrl("collections", { memoryProject: null, memorySession: null, memoryCollectionProject: null, memoryCollectionQuery: null, memoryCollectionTab: null }))}>
           <Icons.archive size={14} />
         </button>
         {hasBadges && (
@@ -847,7 +848,6 @@ export function LeftSidebar() {
 
       {dialogs}
 
-      {archiveOpen && <ArchivePanel />}
       {globalSearchOpen && <GlobalSearch />}
     </aside>
   );

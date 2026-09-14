@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Icons from "../../components/Icons";
+import Select from "../../components/Select";
 import { useT } from "../../i18n";
 import { memoryList } from "../../ipc/memory";
+import { highlightMatches } from "../sessionViewers/highlight";
 import { MemoryLink, memoryNavigate, memoryUrl, useMemoryLocation } from "./navigation";
 import { LoadState, memoryTime, useMemoryLoad } from "./shared";
 
@@ -51,26 +53,15 @@ export function MemoryLibrary({ selected, children }: { selected: string; childr
             <input aria-label={t("memory.search")} placeholder={t("memory.search")} value={input} onChange={(e) => setInput(e.target.value)} />
           </label>
           <div className="memory-browser-filters">
-            <label className="memory-toolbar-select" data-active={!!tag}>
-            <select aria-label={t("nb.tags")} title={tag || t("memory.allTags")} value={tag} onChange={(e) => memoryNavigate(memoryUrl("library", { ...scope, memoryTag: e.target.value, memoryPage: null }))}>
-              <option value="">{t("memory.allTags")}</option>
-              {tag && !data?.tags.includes(tag) && <option>{tag}</option>}
-              {data?.tags.map((value) => <option key={value}>{value}</option>)}
-            </select>
-            <Icons.chevD size={12} aria-hidden="true" />
-            </label>
-            <label className="memory-toolbar-select">
-            <select aria-label={t("memory.updated")} value={sort} onChange={(e) => memoryNavigate(memoryUrl("library", { ...scope, memorySort: e.target.value, memoryPage: null }))}>
-              <option value="updated">{t("memory.updated")}</option><option value="title">{t("memory.titleSort")}</option>
-            </select>
-            <Icons.chevD size={12} aria-hidden="true" />
-            </label>
+            <Select size="sm" width={130} value={tag} title={tag || t("memory.allTags")} ariaLabel={t("nb.tags")} onChange={(value) => memoryNavigate(memoryUrl("library", { ...scope, memoryTag: value, memoryPage: null }))} options={[{ value: "", label: t("memory.allTags") }, ...(tag && !data?.tags.includes(tag) ? [{ value: tag, label: tag }] : []), ...(data?.tags ?? []).map((value) => ({ value, label: value }))]} />
+            <Select size="sm" width={130} value={sort} ariaLabel={t("memory.updated")} onChange={(value) => memoryNavigate(memoryUrl("library", { ...scope, memorySort: value, memoryPage: null }))} options={[{ value: "updated", label: t("memory.updated") }, { value: "title", label: t("memory.titleSort") }]} />
             <button type="button" className="memory-toolbar-button" aria-label={t("common.refresh")} title={t("common.refresh")} onClick={reload}><Icons.restart size={15} aria-hidden="true" /></button>
           </div>
         </div>}
       </div>
       <div className="memory-browser-content">
         {selected ? children : !data ? <LoadState error={error} reload={reload} /> : <>
+          {data.fuzzy && <p className="memory-muted">{t("nb.searchFuzzy")}</p>}
           {!data.entries.length ? <p className="memory-empty">{t("memory.empty")}</p> : <div className="memory-entry-list">
             {data.entries.map((entry) => {
               const owner = data.projects?.find((p) => p.sessions.some((s) => s.id === (entry.sessionId || "__manual__")));
@@ -78,7 +69,9 @@ export function MemoryLibrary({ selected, children }: { selected: string; childr
               return <div key={entry.id} className="memory-entry-card">
                 <MemoryLink route={`entry/${entry.id}`} values={{ memoryProject: owner?.id ?? activeProject, memorySession: origin?.id ?? activeSession }} className="memory-entry-card-link">
                   <div className="memory-entry-card-heading"><strong>{entry.title}</strong><span aria-hidden="true">↗</span></div>
-                  {entry.summary && <p>{entry.summary}</p>}
+                  {query && entry.snippet
+                    ? <p>{highlightMatches(entry.snippet, entry.matched?.length ? entry.matched : query.trim().split(/\s+/).filter(Boolean))}</p>
+                    : entry.summary && <p>{entry.summary}</p>}
                   <div className="memory-entry-card-footer">
                     <div className="memory-tags">{entry.tags.map((value) => <span key={value}>{value}</span>)}</div>
                     <small>{owner && origin && !activeSession ? `${groupName(owner)} / ${groupName(origin)} · ` : ""}{memoryTime(entry.updatedAt)}</small>

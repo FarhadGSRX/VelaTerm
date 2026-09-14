@@ -47,7 +47,8 @@ export interface AgentDefaultConfig {
   permissionMode?: string;
   /** Absolute executable path; empty uses command-name lookup through PATH. This is global per type and
    * read from app_settings at spawn time by `agent_bin_path`, so changes affect subsequent launches.
-   * AgentInstallCard fills an empty value after locating a successful one-click installation. */
+   * AgentInstallCard fills it after locating a successful one-click installation, or with a path the
+   * user enters in the card's path field. */
   path?: string;
   /** View a new session of this agent opens in. Missing falls back to the conversation view for every
    * chat-capable agent (`defaultEngineFor`). */

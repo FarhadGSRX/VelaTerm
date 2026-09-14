@@ -25,7 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -1041,7 +1041,7 @@ impl ChatManager {
             model
         };
 
-        let mut cmd = Command::new(bin);
+        let mut cmd = crate::host::command(bin);
         // OpenCode is reached over HTTP: the port it listens on and the password that guards it.
         let mut opencode_launch: Option<(u16, String)> = None;
         let claude_permission = protocol::cli_permission_mode(permission_mode);
@@ -1136,9 +1136,7 @@ impl ChatManager {
         };
 
         crate::agent::executable::prepare_command(&mut cmd, bin);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to start the agent {bin:?} in {}: {e}", cwd.unwrap_or("the inherited working directory")))?;
+        let mut child = cmd.spawn().map_err(|e| spawn_failure(kind, bin, cwd, &e))?;
         let pid = child.id();
         let stdin = child.stdin.take().ok_or("The agent has no input stream")?;
         let stdout = child.stdout.take().ok_or("The agent has no output stream")?;
@@ -2688,6 +2686,19 @@ fn fork_codex_for_rewind(
 }
 
 // ─────────────────────────── Threads ───────────────────────────
+
+/// Message for a failed agent spawn. A missing executable becomes a stable code the conversation view
+/// turns into installation guidance; the OS text for that case is unreadable and varies by platform.
+fn spawn_failure(kind: SessionKind, bin: &str, cwd: Option<&str>, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        crate::diagnostic_warn!("chat: agent executable not found: {bin} ({error})");
+        return format!("agent_not_installed:{}", kind.as_str());
+    }
+    format!(
+        "Failed to start the agent {bin:?} in {}: {error}",
+        cwd.unwrap_or("the inherited working directory")
+    )
+}
 
 fn spawn_stdout_reader(
     app: AppCtx,
@@ -4947,6 +4958,21 @@ fn emit_state(app: &AppCtx, session_id: &str, state: AgentState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
+    /// A missing executable must come back as the stable code the conversation view recognizes; every
+    /// other spawn failure keeps the diagnostic message with the OS detail.
+    #[test]
+    fn a_missing_binary_reports_the_install_code() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(
+            spawn_failure(SessionKind::Codex, "codex", Some("/tmp"), &missing),
+            "agent_not_installed:codex"
+        );
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let message = spawn_failure(SessionKind::Codex, "codex", Some("/tmp"), &denied);
+        assert!(message.starts_with("Failed to start the agent \"codex\" in /tmp:"));
+    }
 
     #[test]
     fn context_info_falls_back_to_session_model_and_preserves_usage() {

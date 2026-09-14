@@ -1,5 +1,6 @@
 import { Fragment, useState } from "react";
 import { useT } from "../../i18n";
+import Select from "../../components/Select";
 import { knowledgeLink, knowledgeNode, knowledgeReview, knowledgeUnlink, type CodeEdge, type KnowledgeIndex } from "../../ipc/knowledge";
 import { memoryGet, memoryOptions } from "../../ipc/memory";
 import { MemoryLink, memoryNavigate } from "../Memory/navigation";
@@ -48,7 +49,7 @@ function EdgeColumn({ edges, total, index, incoming=false, selectedLine, onHover
 function LinkEditor({ index,entryId,busy,existing,onSave }: { index: KnowledgeIndex; entryId: string; busy: boolean; existing: boolean; onSave: (version: number) => void }) {
   const t = useT(); const { data,error } = useKnowledgeLoad(() => memoryOptions(), []);
   return <section className="knowledge-link-editor" aria-label={t("knowledge.linkMemory")}><div className="memory-row"><h3>{t(existing ? "knowledge.inspect" : "knowledge.linkMemory")}</h3><span className="memory-spacer" /><KnowledgeLink projectId={index.projectId} values={{ knowledgeLink:null }}>{t("common.close")}</KnowledgeLink></div>
-    <label>{t("memory.title")}<select className="input" value={entryId === "choose" ? "" : entryId} onChange={(e) => memoryNavigate(knowledgeUrl(index.projectId,{ knowledgeLink:e.target.value || "choose" }))}><option value="">{t("knowledge.chooseMemory")}</option>{data?.catalog.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}</option>)}</select></label>
+    <label>{t("memory.title")}<Select width="100%" value={entryId === "choose" ? "" : entryId} ariaLabel={t("memory.title")} onChange={(value) => memoryNavigate(knowledgeUrl(index.projectId,{ knowledgeLink:value || "choose" }))} options={[{ value: "", label: t("knowledge.chooseMemory") }, ...(data?.catalog.map((entry) => ({ value: entry.id, label: entry.title })) ?? [])]} /></label>
     {error && <p role="alert">{error}</p>}
     {entryId !== "choose" && <MemoryReview key={entryId} id={entryId} busy={busy} existing={existing} onSave={onSave} />}
     {data?.catalog.length === 0 && <MemoryLink route="new">{t("memory.new")}</MemoryLink>}

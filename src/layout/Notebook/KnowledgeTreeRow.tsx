@@ -12,7 +12,7 @@ export const knowledgeSelection = {
   memoryPath: null, memoryQuery: null, memoryFolder: null, memoryFilter: null,
   memoryTag: null, memoryProject: null, memorySession: null, memoryPage: null,
   memorySort: null, memoryQuickQuery: null, memoryLinkPicker: null, kbAction: null,
-  memoryImportPage: null,
+  memoryImportPage: null, memoryCollectionProject: null, memoryCollectionQuery: null, memoryCollectionTab: null,
 };
 
 /** A data row the tree can rename, move or delete. Synthetic groups (`__manual__`, `__legacy__`,

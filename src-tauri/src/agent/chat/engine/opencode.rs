@@ -1101,7 +1101,7 @@ fn ensure_snapshot_scope(proc: &ChatProcess, server: &Server, native: &str) -> R
     let directory = canonical(paths.get("directory").and_then(Value::as_str))?;
     let worktree = canonical(paths.get("worktree").and_then(Value::as_str))?;
     let session_directory = canonical(session.get("directory").and_then(Value::as_str))?;
-    let root = std::process::Command::new("git")
+    let root = crate::host::command("git")
         .arg("-C").arg(&cwd).args(["rev-parse", "--show-toplevel"])
         .output().map_err(|e| format!("Cannot verify the Git root before file restoration: {e}"))?;
     if !root.status.success() {

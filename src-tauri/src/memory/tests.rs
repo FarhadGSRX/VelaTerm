@@ -211,6 +211,61 @@ fn search_ranks_relevance_above_recency_and_lists_relations() {
 }
 
 #[test]
+fn fuzzy_fallback_matches_typos_and_reports_snippets_and_matches() {
+    let f = Fixture::new();
+    let titled = f.save("Knowledge Base", "release notes");
+    let body = f.save("Implementation record", "throttle design notes");
+    f.save("Unrelated topic", "nothing here");
+
+    // The exact search keeps the strict shape and reports snippet, line and literals.
+    let exact = dispatch(
+        &f.app,
+        "memory_list",
+        &json!({"query":"throttle","tag":"","sort":"updated","page":0}),
+    )
+    .unwrap();
+    assert_eq!(exact["total"], 1);
+    assert_eq!(exact["fuzzy"], false);
+    assert_eq!(exact["entries"][0]["id"], body.id);
+    assert_eq!(exact["entries"][0]["line"], 1);
+    assert!(exact["entries"][0]["snippet"]
+        .as_str()
+        .unwrap()
+        .contains("throttle"));
+    assert_eq!(exact["entries"][0]["matched"], json!(["throttle"]));
+
+    // A typo in the title matches the fuzzy fallback and marks the original word.
+    let typo_title = dispatch(
+        &f.app,
+        "memory_list",
+        &json!({"query":"knoledge base","tag":"","sort":"updated","page":0}),
+    )
+    .unwrap();
+    assert_eq!(typo_title["fuzzy"], true);
+    assert_eq!(typo_title["total"], 1);
+    assert_eq!(typo_title["entries"][0]["id"], titled.id);
+    assert_eq!(typo_title["entries"][0]["line"], 0);
+    assert_eq!(
+        typo_title["entries"][0]["matched"],
+        json!(["Knowledge", "base"])
+    );
+    assert_eq!(typo_title["entries"][0]["snippet"], "release notes");
+
+    // A typo in the body shows the word that was actually found.
+    let typo_body = dispatch(
+        &f.app,
+        "memory_list",
+        &json!({"query":"throtle","tag":"","sort":"updated","page":0}),
+    )
+    .unwrap();
+    assert_eq!(typo_body["fuzzy"], true);
+    assert_eq!(typo_body["total"], 1);
+    assert_eq!(typo_body["entries"][0]["id"], body.id);
+    assert_eq!(typo_body["entries"][0]["line"], 1);
+    assert_eq!(typo_body["entries"][0]["matched"], json!(["throttle"]));
+}
+
+#[test]
 fn revisions_reject_stale_writes_and_restore_as_new_version() {
     let f = Fixture::new();
     let first = f.save("事务", "旧内容");
@@ -697,6 +752,42 @@ fn hierarchy_is_complete_across_pages_and_supports_manual_and_unknown_projects()
     assert_eq!(direct["total"], 45);
     let filtered = repo::list(&f.app, &json!({"query":"Topic 44"})).unwrap();
     assert_eq!(filtered["projects"][0]["count"], 1);
+}
+
+#[test]
+fn collections_group_archived_roots_by_original_project_and_keep_group_paths() {
+    let f = Fixture::new();
+    {
+        let conn = f.app.db().conn.lock().unwrap();
+        conn.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES('p','Alpha','/tmp/vlx-a',1)", []).unwrap();
+        conn.execute("INSERT INTO groups(id,project_id,name,created_at) VALUES('g','p','Work',1)", []).unwrap();
+        conn.execute("INSERT INTO groups(id,project_id,parent_group_id,name,created_at) VALUES('g2','p','g','Nested',1)", []).unwrap();
+        conn.execute("INSERT INTO sessions(id,project_id,group_id,name,kind,archived_at,created_at) VALUES('s1','p','g2','Archived one','claude',100,1)", []).unwrap();
+        // Tombstoned containers still name the session's original location, so they must not be filtered.
+        conn.execute("UPDATE projects SET deleted_at=1 WHERE id='p'", []).unwrap();
+        conn.execute("UPDATE groups SET deleted_at=1 WHERE id='g'", []).unwrap();
+        // An archived descendant is not an archive root and gets no row of its own.
+        conn.execute("INSERT INTO sessions(id,project_id,name,kind,parent_session_id,archived_at,created_at) VALUES('s2','p','Child','terminal','s1',100,1)", []).unwrap();
+    }
+    let entry = f.save("Stored topic", "Reusable content");
+    {
+        let conn = f.app.db().conn.lock().unwrap();
+        repo::move_entry(&conn, &entry.id, entry.version, "s1", "manual").unwrap();
+    }
+    let result = dispatch(&f.app, "memory_collections", &json!({})).unwrap();
+    let projects = result["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0]["id"], "p");
+    assert_eq!(projects[0]["name"], "Alpha");
+    assert_eq!(projects[0]["count"], 1);
+    let sessions = projects[0]["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["id"], "s1");
+    assert_eq!(sessions[0]["count"], 1);
+    assert_eq!(sessions[0]["groupPath"], json!(["Work", "Nested"]));
+    assert_eq!(result["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(result["sessions"][0]["id"], "s1");
+    assert_eq!(result["sessions"][0]["name"], "Archived one");
 }
 
 #[test]

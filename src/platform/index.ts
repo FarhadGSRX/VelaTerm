@@ -26,6 +26,7 @@ export type {
   NotifyCapability,
   NotifyPermission,
   OpenerCapability,
+  PickFileOptions,
   Platform,
   PlatformEnv,
   PlatformKind,

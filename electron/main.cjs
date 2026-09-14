@@ -758,6 +758,14 @@ function registerNativeIpc() {
     });
     return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0];
   });
+  ipcMain.handle("vlx:dialog:pickFile", async (_e, opts) => {
+    const res = await dialog.showOpenDialog(state.win ?? undefined, {
+      properties: ["openFile"],
+      title: opts?.title,
+      filters: opts?.filters,
+    });
+    return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0];
+  });
   ipcMain.handle("vlx:shell:openExternal", async (_e, url) => {
     await shell.openExternal(String(url));
   });

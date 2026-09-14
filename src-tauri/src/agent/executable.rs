@@ -26,29 +26,76 @@ fn configured_path(raw: Option<&str>) -> Option<String> {
     Some(path.to_string())
 }
 
+/// Configured path precedence: the session override first, then the agent's global default.
+fn configured_session(session: Option<&str>, global: Option<&str>) -> Option<String> {
+    configured_path(session).or_else(|| configured_path(global))
+}
+
+/// Test-only helper retaining the original precedence and discovery shape.
+#[cfg(test)]
 fn select(
     session: Option<&str>,
     global: Option<&str>,
     discover: impl FnOnce() -> Option<String>,
 ) -> Option<String> {
-    configured_path(session)
-        .or_else(|| configured_path(global))
-        .or_else(discover)
+    configured_session(session, global).or_else(discover)
+}
+
+/// How an agent session's executable was resolved.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LaunchBinary {
+    /// Launch this absolute path.
+    Path(String),
+    /// An installed command wrapper exists but the program it forwards to is gone. Resolving the
+    /// command by name would find that same wrapper and print only cmd.exe's path error, so the
+    /// launch reports the agent as missing and shows the installation guidance instead.
+    Broken,
+    /// No absolute path was found. The interactive shell resolves the command name, which keeps
+    /// installations visible only to a login profile working.
+    Unresolved,
 }
 
 /// Explicit paths remain authoritative even if missing; never silently launch a different installation.
 pub fn resolve(app: &AppCtx, kind: SessionKind, session_path: Option<&str>) -> Option<String> {
-    if matches!(kind, SessionKind::Terminal | SessionKind::Browser) {
-        return None;
+    match resolve_binary(app, kind, session_path) {
+        Ok(LaunchBinary::Path(path)) => Some(path),
+        _ => None,
     }
-    if let Some(path) = configured_path(session_path) {
-        return Some(path);
+}
+
+pub fn for_session(app: &AppCtx, session: &crate::models::Session) -> String {
+    resolve(app, session.kind, session.agent_path.as_deref())
+        .unwrap_or_else(|| command_name(session.kind).to_string())
+}
+
+/// Session-scoped resolution that keeps a proven-broken installation distinguishable from a command
+/// name the interactive shell should resolve itself.
+pub fn resolve_launch_binary(
+    app: &AppCtx,
+    id: &str,
+    kind: SessionKind,
+) -> Result<LaunchBinary, String> {
+    if matches!(kind, SessionKind::Terminal | SessionKind::Browser) {
+        return Ok(LaunchBinary::Unresolved);
+    }
+    let path = {
+        let conn = app.db().conn.lock().unwrap();
+        crate::db::repo::get_agent_path(&conn, id)?
+    };
+    resolve_binary(app, kind, path.as_deref())
+}
+
+fn resolve_binary(
+    app: &AppCtx,
+    kind: SessionKind,
+    session_path: Option<&str>,
+) -> Result<LaunchBinary, String> {
+    if matches!(kind, SessionKind::Terminal | SessionKind::Browser) {
+        return Ok(LaunchBinary::Unresolved);
     }
     let settings = {
-        let conn = app.db().conn.lock().ok()?;
-        crate::db::repo::get_app_settings(&conn)
-            .ok()?
-            .remove("vlx-settings")
+        let conn = app.db().conn.lock().map_err(|e| e.to_string())?;
+        crate::db::repo::get_app_settings(&conn)?.remove("vlx-settings")
     };
     let settings: serde_json::Value = settings
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -58,31 +105,40 @@ pub fn resolve(app: &AppCtx, kind: SessionKind, session_path: Option<&str>) -> O
         .and_then(|v| v.get(kind.as_str()))
         .and_then(|v| v.get("path"))
         .and_then(|v| v.as_str());
-    select(session_path, global, || {
-        super::install::locate_installed_bin(kind.as_str())
-            .or_else(|| find_on_path(command_name(kind)))
-            .or_else(|| find_in_shell(command_name(kind)))
-    })
-}
-
-pub fn for_session(app: &AppCtx, session: &crate::models::Session) -> String {
-    resolve(app, session.kind, session.agent_path.as_deref())
-        .unwrap_or_else(|| command_name(session.kind).to_string())
-}
-
-pub fn resolve_session(
-    app: &AppCtx,
-    id: &str,
-    kind: SessionKind,
-) -> Result<Option<String>, String> {
-    if matches!(kind, SessionKind::Terminal | SessionKind::Browser) {
-        return Ok(None);
+    match configured_session(session_path, global) {
+        Some(path) => Ok(configured_binary(path)),
+        None => Ok(discover(kind)),
     }
-    let path = {
-        let conn = app.db().conn.lock().unwrap();
-        crate::db::repo::get_agent_path(&conn, id)?
-    };
-    Ok(resolve(app, kind, path.as_deref()))
+}
+
+/// A configured path stays authoritative even when missing, so the launch guard can point at
+/// Settings. A wrapper whose payload is gone is not a usable installation at all, so it takes the
+/// broken-install path instead.
+fn configured_binary(path: String) -> LaunchBinary {
+    if shim_payload_missing(Path::new(&path)) {
+        return LaunchBinary::Broken;
+    }
+    LaunchBinary::Path(path)
+}
+
+/// Discovery order: known install locations, then `PATH`, then an interactive login shell (Unix
+/// only), and last a dead command wrapper. Checking the wrapper last keeps a working copy found
+/// anywhere else in the lead.
+fn discover(kind: SessionKind) -> LaunchBinary {
+    let name = command_name(kind);
+    if let Some(path) = super::install::locate_installed_bin(kind.as_str()) {
+        return LaunchBinary::Path(path);
+    }
+    if let Some(path) = find_on_path(name) {
+        return LaunchBinary::Path(path);
+    }
+    if let Some(path) = find_in_shell(name) {
+        return LaunchBinary::Path(path);
+    }
+    if super::install::dangling_npm_install(kind.as_str()) {
+        return LaunchBinary::Broken;
+    }
+    LaunchBinary::Unresolved
 }
 
 /// Include the executable's directory so npm wrappers can find their adjacent Node runtime.
@@ -204,6 +260,16 @@ pub(crate) fn is_executable_file(path: &Path) -> bool {
     if !meta.is_file() {
         return false;
     }
+    // A generated Windows command wrapper counts as executable only while the program it forwards to
+    // is present; otherwise discovery would hand out a wrapper that fails with an opaque cmd.exe
+    // path error instead of letting the install guidance appear.
+    #[cfg(windows)]
+    let shim_dead = shim_payload_missing(path);
+    #[cfg(not(windows))]
+    let shim_dead = false;
+    if shim_dead {
+        return false;
+    }
     // Windows has no permission bit to read here; existing as a file is as far as this check goes.
     #[cfg(unix)]
     let runnable = {
@@ -213,6 +279,87 @@ pub(crate) fn is_executable_file(path: &Path) -> bool {
     #[cfg(not(unix))]
     let runnable = true;
     runnable
+}
+
+/// Reads the program a generated Windows command wrapper forwards to, if the file has that shape.
+///
+/// npm, pnpm, and yarn place `.cmd`/`.bat` wrappers beside the real programs. Generated wrappers
+/// reference their payload as a quoted `%dp0%`-relative path, and the last such path is the one
+/// executed; earlier ones belong to interpreter probing such as `IF EXIST "%dp0%\node.exe"`. Files
+/// without that shape, oversized files, and non-UTF-8 files return None: their format is unknown
+/// rather than wrong, so callers leave them alone.
+fn shim_payload(path: &Path) -> Option<std::path::PathBuf> {
+    let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    if !name.ends_with(".cmd") && !name.ends_with(".bat") {
+        return None;
+    }
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut text = String::new();
+    // Generated wrappers are a few hundred bytes; anything larger is not one.
+    file.take(64 * 1024).read_to_string(&mut text).ok()?;
+    let dir = path.parent()?;
+    let mut payload = None;
+    for segment in text.split('"').skip(1).step_by(2) {
+        let Some(rest) = ["%dp0%", "%~dp0"]
+            .iter()
+            .find_map(|prefix| segment.strip_prefix(prefix))
+        else {
+            continue;
+        };
+        let relative = rest
+            .trim_start_matches(['\\', '/'])
+            .replace('\\', std::path::MAIN_SEPARATOR_STR);
+        if !relative.is_empty() {
+            payload = Some(dir.join(relative));
+        }
+    }
+    payload
+}
+
+/// Whether a wrapper payload is present and, for `.exe` payloads, is a Windows executable.
+///
+/// A half-finished install can leave the wrapper while its payload is missing, or leave a text
+/// placeholder where the real binary belongs; both fail later with an opaque cmd.exe path error.
+fn payload_live(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    if !path.to_string_lossy().to_ascii_lowercase().ends_with(".exe") {
+        return true;
+    }
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut magic = [0u8; 2];
+    file.read_exact(&mut magic).is_ok() && magic == *b"MZ"
+}
+
+/// Whether a generated command wrapper is present without the program it forwards to.
+///
+/// A failed, interrupted, or quarantined install leaves the wrapper while removing the package it
+/// points at, and running the wrapper then prints only cmd.exe's bare "The system cannot find the
+/// path specified." Discovery treats that state as not installed so the installation guidance
+/// appears instead.
+pub(crate) fn shim_payload_missing(path: &Path) -> bool {
+    match shim_payload(path) {
+        Some(payload) => !payload_live(&payload),
+        None => false,
+    }
+}
+
+/// The executable a generated wrapper forwards to, when that payload is present and runnable.
+///
+/// Launching the payload directly skips cmd.exe's re-parsing of the wrapper's arguments, which can
+/// mangle structured values such as JSON.
+pub(crate) fn shim_payload_exe(path: &Path) -> Option<std::path::PathBuf> {
+    let payload = shim_payload(path)?;
+    if payload.to_string_lossy().to_ascii_lowercase().ends_with(".exe") && payload_live(&payload) {
+        Some(payload)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -260,10 +407,8 @@ mod tests {
             }
             assert_eq!(for_session(&app, &session), path);
             assert_eq!(
-                resolve_session(&app, &session.id, session.kind)
-                    .unwrap()
-                    .as_deref(),
-                Some(path)
+                resolve_launch_binary(&app, &session.id, session.kind).unwrap(),
+                LaunchBinary::Path(path.into())
             );
         }
         session.agent_path = Some("/session/codex".into());
@@ -277,10 +422,8 @@ mod tests {
         }
         assert_eq!(for_session(&app, &session), "/session/codex");
         assert_eq!(
-            resolve_session(&app, &session.id, session.kind)
-                .unwrap()
-                .as_deref(),
-            Some("/session/codex")
+            resolve_launch_binary(&app, &session.id, session.kind).unwrap(),
+            LaunchBinary::Path("/session/codex".into())
         );
         drop(app);
         std::fs::remove_dir_all(dir).unwrap();
@@ -371,5 +514,104 @@ mod tests {
                 "/bin".into()
             ]
         );
+    }
+
+    /// Temp directory holding command-wrapper fixtures for one test.
+    fn shim_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("vlx-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Path text with forward slashes so expectations read the same on every platform.
+    fn normalized(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
+
+    #[test]
+    fn shim_payload_reads_the_last_dp0_target() {
+        let dir = shim_dir("shim-payload");
+        // A generated JavaScript wrapper probes `%dp0%\node.exe` first and forwards to the package script.
+        let js = dir.join("cli.cmd");
+        std::fs::write(
+            &js,
+            concat!(
+                "IF EXIST \"%dp0%\\node.exe\" (\r\n",
+                "  SET \"_prog=%dp0%\\node.exe\"\r\n",
+                ")\r\n",
+                "endLocal & \"%_prog%\"  \"%dp0%\\node_modules\\pkg\\cli.js\" %*\r\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            normalized(&shim_payload(&js).unwrap()),
+            format!("{}/node_modules/pkg/cli.js", normalized(&dir))
+        );
+        // A package that ships a native executable forwards straight to it.
+        let exe = dir.join("opencode.cmd");
+        std::fs::write(
+            &exe,
+            "\"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe\"   %*\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            normalized(&shim_payload(&exe).unwrap()),
+            format!("{}/node_modules/opencode-ai/bin/opencode.exe", normalized(&dir))
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn shim_payload_ignores_files_without_a_generated_shape() {
+        let dir = shim_dir("shim-shape");
+        let plain = dir.join("plain.cmd");
+        std::fs::write(&plain, "@echo off\r\necho hello\r\n").unwrap();
+        assert_eq!(shim_payload(&plain), None);
+        // Only batch wrappers carry the pattern; a shell script named like one is left alone.
+        let script = dir.join("bash.cmd");
+        std::fs::write(&script, "#!/bin/sh\nexec bash\n").unwrap();
+        assert_eq!(shim_payload(&script), None);
+        let sh = dir.join("run.sh");
+        std::fs::write(&sh, "#!/bin/sh\nexec \"$basedir/x\"\n").unwrap();
+        assert_eq!(shim_payload(&sh), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn payload_liveness_requires_presence_and_exe_magic() {
+        let dir = shim_dir("shim-live");
+        assert!(!payload_live(&dir.join("missing.exe")));
+        // The placeholder a stalled OpenCode install leaves behind is a text file using the .exe name.
+        let placeholder = dir.join("placeholder.exe");
+        std::fs::write(&placeholder, "echo not installed\n").unwrap();
+        assert!(!payload_live(&placeholder));
+        let real = dir.join("real.exe");
+        std::fs::write(&real, b"MZ\x90\x00rest").unwrap();
+        assert!(payload_live(&real));
+        // Script payloads only need to exist; the interpreter is resolved separately.
+        let script = dir.join("cli.js");
+        std::fs::write(&script, "console.log('ok')\n").unwrap();
+        assert!(payload_live(&script));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dangling_shim_is_reported_missing() {
+        let dir = shim_dir("shim-dangling");
+        let wrapper = dir.join("opencode.cmd");
+        std::fs::write(
+            &wrapper,
+            "\"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe\"   %*\r\n",
+        )
+        .unwrap();
+        assert!(shim_payload_missing(&wrapper));
+        assert_eq!(shim_payload_exe(&wrapper), None);
+        // Putting the real program back restores both liveness and the payload-exe preference.
+        let bin = dir.join("node_modules").join("opencode-ai").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("opencode.exe"), b"MZ\x90\x00rest").unwrap();
+        assert!(!shim_payload_missing(&wrapper));
+        assert_eq!(shim_payload_exe(&wrapper), Some(bin.join("opencode.exe")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

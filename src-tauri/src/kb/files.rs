@@ -1,4 +1,5 @@
 use super::*;
+use crate::search::fuzzy;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 
@@ -514,6 +515,9 @@ struct Hit {
     updated_at: i64,
     favorite: bool,
     tags: Vec<String>,
+    /// Literals actually matched, for frontend highlighting: the query terms for exact hits and the
+    /// original words for fuzzy hits.
+    matched: Vec<String>,
     /// Notes this one links to directly, in link order. Populated for the returned page only.
     related: Vec<Related>,
 }
@@ -531,52 +535,10 @@ struct Found {
     line: usize,
     matches: usize,
     score: usize,
-}
-/// First occurrence of any term in an already lowercased line.
-fn first_hit(lowered: &str, terms: &[&str]) -> Option<usize> {
-    terms.iter().filter_map(|t| lowered.find(*t)).min()
-}
-/// Window of at most `limit` characters around a hit, marked with `…` where the line was trimmed.
-fn clip(line: &str, lowered: &str, offset: usize, limit: usize) -> String {
-    let chars: Vec<char> = line.chars().collect();
-    if chars.len() <= limit {
-        return line.trim().to_string();
-    }
-    let hit = lowered[..offset].chars().count().min(chars.len() - 1);
-    let start = hit
-        .saturating_sub(limit / 3)
-        .min(chars.len().saturating_sub(limit));
-    let end = start + limit;
-    // Reserve one character per trimmed end so the snippet never exceeds `limit`.
-    let room = limit.saturating_sub(usize::from(start > 0) + usize::from(end < chars.len()));
-    let mut start = start;
-    let mut end = end;
-    if end - start > room {
-        end = (start + room).max(hit + 1).min(chars.len());
-        start = end.saturating_sub(room);
-    }
-    let mut text = String::new();
-    if start > 0 {
-        text.push('…');
-    }
-    text.extend(&chars[start..end]);
-    if end < chars.len() {
-        text.push('…');
-    }
-    text
-}
-/// First non-empty line, used when only the name or path matched.
-fn leading_line(content: &str, limit: usize) -> String {
-    content
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
-        .chars()
-        .take(limit)
-        .collect()
+    matched: Vec<String>,
 }
 /// Match every term against name/path/body and derive snippet, hit line, count and rank score.
+/// This is the exact pass; [`match_note_fuzzy`] runs only when it found nothing.
 fn match_note(path: &str, name: &str, content: &str, terms: &[&str]) -> Option<Found> {
     let path_lower = path.to_lowercase();
     let name_lower = name.to_lowercase();
@@ -588,12 +550,8 @@ fn match_note(path: &str, name: &str, content: &str, terms: &[&str]) -> Option<F
         return None;
     }
     let matches: usize = terms.iter().map(|t| body_lower.matches(t).count()).sum();
-    let (line, summary) = content
-        .lines()
-        .zip(body_lower.lines())
-        .enumerate()
-        .find_map(|(i, (raw, low))| first_hit(low, terms).map(|o| (i + 1, clip(raw, low, o, 200))))
-        .unwrap_or_else(|| (0, leading_line(content, 220)));
+    let (line, summary) = fuzzy::exact_line(content, &body_lower, terms)
+        .unwrap_or_else(|| (0, fuzzy::leading_line(content, 220)));
     let score = usize::from(terms.iter().all(|t| name_lower.contains(t))) * 100
         + usize::from(terms.iter().all(|t| path_lower.contains(t))) * 20
         + matches.min(20) * 5;
@@ -602,7 +560,117 @@ fn match_note(path: &str, name: &str, content: &str, terms: &[&str]) -> Option<F
         line,
         matches,
         score,
+        matched: terms.iter().map(|t| t.to_string()).collect(),
     })
+}
+/// Loosened pass used when the exact one found nothing: every term still has to hit the name,
+/// path or body, but abbreviations (`knwl`, `kb`) and typos (`knoledge`) are accepted.
+fn match_note_fuzzy(path: &str, name: &str, content: &str, terms: &[&str]) -> Option<Found> {
+    let path_lower = path.to_lowercase();
+    let name_lower = name.to_lowercase();
+    let body_lower = content.to_lowercase();
+    let mut name_exact = true;
+    let mut name_any = true;
+    let mut path_exact = true;
+    let mut path_any = true;
+    let mut body_exact = 0usize;
+    let mut body_fuzzy = 0usize;
+    let mut matched: Vec<String> = Vec::new();
+    let mut fuzzy_snippet: Option<(usize, usize)> = None;
+    for term in terms {
+        let in_name = name_lower.contains(term);
+        let in_path = path_lower.contains(term);
+        let fuzzy_name = in_name || fuzzy::fuzzy_text(term, &name_lower);
+        let fuzzy_path = in_path || fuzzy::fuzzy_text(term, &path_lower);
+        let exact = body_lower.matches(term).count();
+        let loose = if exact == 0 {
+            fuzzy::word_hit(content, term)
+        } else {
+            None
+        };
+        if !fuzzy_name && !fuzzy_path && exact == 0 && loose.is_none() {
+            return None;
+        }
+        name_exact &= in_name;
+        name_any &= fuzzy_name;
+        path_exact &= in_path;
+        path_any &= fuzzy_path;
+        body_exact += exact;
+        if in_name || in_path || exact > 0 {
+            matched.push((*term).to_string());
+        } else if let Some(word) = fuzzy::fuzzy_word_in(term, name)
+            .or_else(|| fuzzy::fuzzy_word_in(term, path))
+        {
+            matched.push(word);
+        }
+        if let Some((line, word, offset)) = loose {
+            body_fuzzy += 1;
+            matched.push(word);
+            if fuzzy_snippet.is_none_or(|(current, _)| line < current) {
+                fuzzy_snippet = Some((line, offset));
+            }
+        }
+    }
+    let exact_snippet = fuzzy::exact_line(content, &body_lower, terms);
+    let (line, summary) = if let Some((line, hit)) = exact_snippet {
+        (line, hit)
+    } else if let Some((line, offset)) = fuzzy_snippet {
+        let raw = content.lines().nth(line - 1).unwrap_or("");
+        (line, fuzzy::clip(raw, raw[..offset.min(raw.len())].chars().count(), 200))
+    } else {
+        (0, fuzzy::leading_line(content, 220))
+    };
+    let score = usize::from(name_exact) * 100
+        + usize::from(!name_exact && name_any) * 40
+        + usize::from(path_exact) * 20
+        + usize::from(!path_exact && path_any) * 10
+        + body_exact.min(20) * 5
+        + body_fuzzy.min(20) * 2;
+    Some(Found {
+        summary,
+        line,
+        matches: body_exact,
+        score,
+        matched,
+    })
+}
+/// Collect the hits of one vault snapshot with the given matcher. Vault and file metadata are
+/// attached here so both passes share one shape.
+fn vault_hits(
+    vault: &Vault,
+    snapshot: &Snapshot,
+    terms: &[&str],
+    matcher: fn(&str, &str, &str, &[&str]) -> Option<Found>,
+) -> Vec<Hit> {
+    let nodes: HashMap<&str, &Node> =
+        snapshot.nodes.iter().map(|n| (n.path.as_str(), n)).collect();
+    let mut entries = Vec::new();
+    for note in &snapshot.notes {
+        let node = nodes.get(note.path.as_str());
+        let name = node
+            .map(|n| n.name.as_str())
+            .unwrap_or_else(|| note.path.rsplit('/').next().unwrap_or(&note.path));
+        let Some(found) = matcher(&note.path, name, &note.content, terms) else {
+            continue;
+        };
+        entries.push(Hit {
+            vault_id: vault.id.clone(),
+            vault_name: vault.name.clone(),
+            path: note.path.clone(),
+            absolute_path: node.map(|n| n.absolute_path.clone()).unwrap_or_default(),
+            name: name.to_string(),
+            summary: found.summary,
+            line: found.line,
+            matches: found.matches,
+            score: found.score,
+            updated_at: node.map(|n| n.updated_at).unwrap_or_default(),
+            favorite: node.is_some_and(|n| n.favorite),
+            tags: node.map(|n| n.tags.clone()).unwrap_or_default(),
+            matched: found.matched,
+            related: vec![],
+        });
+    }
+    entries
 }
 pub fn search(app: &AppCtx, args: &Value) -> Result<Value> {
     let query = args["query"].as_str().unwrap_or("").trim().to_lowercase();
@@ -613,44 +681,33 @@ pub fn search(app: &AppCtx, args: &Value) -> Result<Value> {
     let terms: Vec<&str> = query.split_whitespace().collect();
     let mut entries: Vec<Hit> = vec![];
     let mut unavailable = vec![];
+    let mut unavailable_ids: HashSet<String> = HashSet::new();
+    let mut fuzzy_results = false;
     if !terms.is_empty() {
         let targets = match args.get("vaultId").and_then(Value::as_str) {
             Some(id) => vec![vault(app, id)?],
             None => vaults(app)?,
         };
-        for v in targets {
-            match scan(app, &v) {
-                Ok(snapshot) => {
-                    let nodes: HashMap<&str, &Node> =
-                        snapshot.nodes.iter().map(|n| (n.path.as_str(), n)).collect();
-                    for note in &snapshot.notes {
-                        let node = nodes.get(note.path.as_str());
-                        let name = node
-                            .map(|n| n.name.as_str())
-                            .unwrap_or_else(|| note.path.rsplit('/').next().unwrap_or(&note.path));
-                        let found = match match_note(&note.path, name, &note.content, &terms) {
-                            Some(found) => found,
-                            None => continue,
-                        };
-                        entries.push(Hit {
-                            vault_id: v.id.clone(),
-                            vault_name: v.name.clone(),
-                            path: note.path.clone(),
-                            absolute_path: node.map(|n| n.absolute_path.clone()).unwrap_or_default(),
-                            name: name.to_string(),
-                            summary: found.summary,
-                            line: found.line,
-                            matches: found.matches,
-                            score: found.score,
-                            updated_at: node.map(|n| n.updated_at).unwrap_or_default(),
-                            favorite: node.is_some_and(|n| n.favorite),
-                            tags: node.map(|n| n.tags.clone()).unwrap_or_default(),
-                            related: vec![],
-                        });
-                    }
+        for v in &targets {
+            match scan(app, v) {
+                Ok(snapshot) => entries.extend(vault_hits(v, &snapshot, &terms, match_note)),
+                Err(_) => {
+                    unavailable_ids.insert(v.id.clone());
+                    unavailable.push(json!({"vaultId":v.id,"vaultName":v.name}));
                 }
-                Err(_) => unavailable.push(json!({"vaultId":v.id,"vaultName":v.name})),
             }
+        }
+        // Exact results keep their precision; the fuzzy pass only runs when nothing matched at all.
+        if entries.is_empty() {
+            for v in &targets {
+                if unavailable_ids.contains(&v.id) {
+                    continue;
+                }
+                if let Ok(snapshot) = scan(app, v) {
+                    entries.extend(vault_hits(v, &snapshot, &terms, match_note_fuzzy));
+                }
+            }
+            fuzzy_results = !entries.is_empty();
         }
     }
     entries.sort_by(|a, b| b.score.cmp(&a.score).then(b.updated_at.cmp(&a.updated_at)));
@@ -658,7 +715,7 @@ pub fn search(app: &AppCtx, args: &Value) -> Result<Value> {
     let has_more = total > limit;
     entries.truncate(limit);
     attach_related(app, &mut entries)?;
-    Ok(json!({"entries":entries,"total":total,"hasMore":has_more,"unavailable":unavailable}))
+    Ok(json!({"entries":entries,"total":total,"hasMore":has_more,"unavailable":unavailable,"fuzzy":fuzzy_results}))
 }
 
 /// Resolve each returned hit's direct links inside its own vault.

@@ -130,6 +130,7 @@ const de: typeof en = {
   "nb.folder": "Ordner",
   "nb.generatedHint": "Aus Ihren Sitzungen aufbereitetes Wissen mit Quellen und Versionsverlauf.",
   "nb.homeHint": "Durchsuchen Sie die Sitzungswissensdatenbank und lokale Wissensbasen.",
+  "nb.homeSearch": "Sitzungswissen und lokale Notizen durchsuchen…",
   "nb.loadMore": "Mehr laden",
   "nb.import": "Importieren",
   "nb.importFiles": "Dateien auswählen",
@@ -186,6 +187,8 @@ const de: typeof en = {
   "nb.searchAllVaults": "Alle Wissensbasen",
   "nb.searchCount": (count: string) => `${count} Ergebnisse`,
   "nb.searchEmpty": "Keine Notiz passt zu dieser Suche.",
+  "nb.searchEmptyAll": "Nichts passt zu dieser Suche.",
+  "nb.searchFuzzy": "Keine genauen Treffer. Es werden ungefähre Ergebnisse angezeigt.",
   "nb.searchLine": (line: string) => `Zeile ${line}`,
   "nb.searchMatches": (count: string) => `${count} Treffer`,
   "nb.searchMore": "Es werden nur die ersten Ergebnisse aufgelistet. Grenzen Sie die Suche ein, um die übrigen zu sehen.",
@@ -204,6 +207,9 @@ const de: typeof en = {
   "nb.welcome": "Ihre Notizbücher",
   "nb.welcomeText": "Schreiben Sie frei, verknüpfen Sie Gedanken und bewahren Sie Ihre Notizen in gewöhnlichen lokalen Dateien auf. Öffnen Sie einen vorhandenen Markdown-Ordner oder importieren Sie Dokumente in ein neues Notizbuch.",
   "memory.globalMemory": "Sitzungswissensdatenbank",
+  "memory.collections": "Archivierte Sitzungen",
+  "memory.collectionConversation": "Konversation",
+  "memory.collectionEmptyEntries": "Für diese Konversation gibt es noch keine Wissenseinträge.",
   "memory.title": "Wissensdatenbank",
   "memory.add": "Für die Sitzungswissensdatenbank aufbereiten",
   "memory.intro": "Wissen nach Projekt und Sitzung organisieren. Gespeicherte Einträge bleiben unabhängig von ihren Quellen und können manuell bearbeitet werden.",
@@ -780,6 +786,8 @@ const de: typeof en = {
   "tree.exportSession": "Sitzung exportieren…", // Export Session…
   "tree.sessionInfo": "Sitzungsinfo", // Session Info
   "tree.groupInfo": "Gruppeninfo", // Group Info
+  "tree.collectionInfo": "Sammlungsinfo", // Collection Info
+  "tree.projectInfo": "Projektinfo", // Project Info
   "info.branch": "Branch", // Branch
   "info.path": "Pfad", // Path
   "info.recentCommits": "Letzte Commits", // Recent Commits
@@ -960,6 +968,7 @@ const de: typeof en = {
   "info.status": "Status", // Status
   "info.notYetCaptured": "Noch nicht erzeugt (nach erstem Lauf erfasst)", // Not yet generated (captured after first run)
   "info.sessionId": "Sitzungs-ID", // Session ID
+  "info.projectId": "Projekt-ID", // Project ID
   "info.cwd": "Arbeitsverz.", // Working dir
   "info.initCmd": "Startbefehl", // Startup cmd
   "info.agentArgs": "Startargumente", // Launch args
@@ -1150,6 +1159,11 @@ const de: typeof en = {
   "agentInstall.doneDesc": "Starten Sie diese Sitzung neu, um loszulegen.", // Relaunch this session to start using it.
   "agentInstall.restartNow": "Jetzt neu starten", // Relaunch now
   "agentInstall.later": "Später", // Later
+  "agentInstall.pathLabel": "Pfad zur ausführbaren Datei", // Executable path
+  "agentInstall.pathPlaceholder": (bin: string) => `~/.local/bin/${bin}`,
+  "agentInstall.pathHint": "Bereits außerhalb von PATH installiert? Geben Sie den vollständigen Pfad zur ausführbaren Datei ein.", // Already installed outside PATH?
+  "agentInstall.pathSave": "Diesen Pfad verwenden", // Use this path
+  "agentInstall.pathBrowse": "Durchsuchen…", // Browse…
   "search.placeholder": "Im Terminal suchen", // Search in terminal
 
   // ── Document tabs ──
@@ -1427,6 +1441,7 @@ const de: typeof en = {
   "crepe.collapse": "Einklappen", // Collapse
   // ── Rechtes Panel / untere Leiste ──
   "info.project": "Projekt", // Project
+  "info.collection": "Sammlung", // Collection
   "panel.sessionInfo": "Sitzungsinfo", // Session info
   "panel.gitTitle": "Git-Status", // Git status
   "panel.gitProbing": "Wird geprüft…", // Checking…

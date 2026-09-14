@@ -6,7 +6,7 @@ const { nativeInvoke, remoteInvoke, env } = vi.hoisted(() => ({
 }));
 vi.mock("./env", () => ({ env }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: nativeInvoke }));
-vi.mock("../ipc/transport", () => ({ invoke: remoteInvoke, listen: vi.fn(), copyText: vi.fn(), openPath: vi.fn(), pickDirectory: vi.fn(), revealPath: vi.fn() }));
+vi.mock("../ipc/transport", () => ({ invoke: remoteInvoke, listen: vi.fn(), copyText: vi.fn(), openPath: vi.fn(), pickDirectory: vi.fn(), pickFile: vi.fn(), revealPath: vi.fn() }));
 vi.mock("../notify", () => ({ getEffectiveNotifyPermission: vi.fn(), getNotifyPermission: vi.fn(), notify: vi.fn(), requestEffectiveNotifyPermission: vi.fn(), requestNotifyPermission: vi.fn() }));
 
 import { tauriPlatform } from "./tauri";

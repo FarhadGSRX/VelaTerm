@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -110,7 +110,7 @@ pub fn with_inputs(mut request: Value, text: &str, commands: &[Value]) -> Value 
 
 /// A catalogue probe opens no conversation and sends no model turn. This also serves an empty composer.
 pub fn lookup(kind: SessionKind, bin: &str, cwd: Option<&str>, args: &[String]) -> Result<Vec<Value>, String> {
-    let mut command = Command::new(bin);
+    let mut command = crate::host::command(bin);
     crate::agent::executable::prepare_command(&mut command, bin);
     match kind {
         SessionKind::Codex => { command.arg("app-server").args(crate::agent::codex_models::app_server_args(args)); }

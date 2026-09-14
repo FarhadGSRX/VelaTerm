@@ -56,6 +56,7 @@ import {
   GroupInfo,
   MoveGroupToWorktree,
   NewGroup,
+  ProjectInfo,
   ResumeSession,
   SessionInfo,
 } from "./sessionMenuDialogs";
@@ -124,6 +125,8 @@ export type Dialog =
   | { type: "editSession"; id: string; initial: Record<string, string> }
   | { type: "sessionInfo"; id: string; advanced?: boolean }
   | { type: "groupInfo"; id: string }
+  // Read-only details for a project or collection node: name, type, root path, ID, and creation time.
+  | { type: "projectInfo"; id: string }
   // Binds an existing group to a worktree; sessions already in the group keep their own directory.
   | { type: "moveGroupWorktree"; groupId: string }
   | { type: "confirmDelete"; node: TreeNodeRef; worktreePaths: string[] }
@@ -1397,6 +1400,9 @@ export function useSessionMenu(): SessionMenu {
       )}
       {dialog?.type === "groupInfo" && (
         <GroupInfo id={dialog.id} onClose={() => setDialog(null)} />
+      )}
+      {dialog?.type === "projectInfo" && (
+        <ProjectInfo id={dialog.id} onClose={() => setDialog(null)} />
       )}
       {dialog?.type === "confirmDelete" && (
         <ConfirmDelete

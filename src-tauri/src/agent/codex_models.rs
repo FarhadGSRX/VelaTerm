@@ -4,7 +4,7 @@
 //! short-lived local app-server process instead of being duplicated in frontend or backend constants.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -48,7 +48,7 @@ pub fn list(bin: &str, extra_args: &[String]) -> Result<Vec<CodexModel>, String>
 
 /// A launch draft may use project-local provider settings before a session exists.
 pub fn list_in_dir(bin: &str, extra_args: &[String], cwd: Option<&str>) -> Result<Vec<CodexModel>, String> {
-    let mut command = Command::new(bin);
+    let mut command = crate::host::command(bin);
     crate::agent::executable::prepare_command(&mut command, bin);
     if let Some(cwd) = cwd { command.current_dir(cwd); }
     command.arg("app-server").arg("--stdio");

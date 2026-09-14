@@ -140,6 +140,7 @@ const ru: typeof en = {
   "nb.folder": "Папка",
   "nb.generatedHint": "Знания, собранные из ваших сеансов, вместе с источниками и историей изменений.",
   "nb.homeHint": "Просматривайте базу знаний сеансов и локальные базы знаний.",
+  "nb.homeSearch": "Поиск по знаниям сеансов и локальным заметкам…",
   "nb.loadMore": "Загрузить ещё",
   "nb.import": "Импорт",
   "nb.importFiles": "Выбрать файлы",
@@ -196,6 +197,8 @@ const ru: typeof en = {
   "nb.searchAllVaults": "Все базы знаний",
   "nb.searchCount": (count: string) => `${count} результатов`,
   "nb.searchEmpty": "Нет заметок, соответствующих этому запросу.",
+  "nb.searchEmptyAll": "Ничего не найдено по этому запросу.",
+  "nb.searchFuzzy": "Точных совпадений нет. Показаны приблизительные результаты.",
   "nb.searchLine": (line: string) => `Строка ${line}`,
   "nb.searchMatches": (count: string) => `${count} совпадений`,
   "nb.searchMore": "Показаны только первые результаты. Уточните запрос, чтобы увидеть остальные.",
@@ -214,6 +217,9 @@ const ru: typeof en = {
   "nb.welcome": "Ваши блокноты",
   "nb.welcomeText": "Записывайте мысли, связывайте идеи и храните заметки в обычных локальных файлах. Откройте существующую папку Markdown или импортируйте документы в новый блокнот.",
   "memory.globalMemory": "База знаний сеансов",
+  "memory.collections": "Архивные сессии",
+  "memory.collectionConversation": "Диалог",
+  "memory.collectionEmptyEntries": "В этом диалоге пока нет статей базы знаний.",
   "memory.title": "База знаний",
   "memory.add": "Подготовить для базы знаний сеансов",
   "memory.intro": "Упорядочивайте знания по проектам и сеансам. Сохранённые статьи не зависят от изменений источников и доступны для ручного редактирования.",
@@ -791,6 +797,8 @@ const ru: typeof en = {
   "tree.exportSession": "Экспортировать сессию…", // Export Session…
   "tree.sessionInfo": "Сведения о сессии", // Session Info
   "tree.groupInfo": "Сведения о группе", // Group Info
+  "tree.collectionInfo": "Сведения о коллекции", // Collection Info
+  "tree.projectInfo": "Сведения о проекте", // Project Info
   "info.branch": "Ветка", // Branch
   "info.path": "Путь", // Path
   "info.recentCommits": "Последние коммиты", // Recent Commits
@@ -970,6 +978,7 @@ const ru: typeof en = {
   "info.status": "Состояние", // Status
   "info.notYetCaptured": "Ещё не создан (фиксируется после первого запуска)", // Not yet generated (captured after first run)
   "info.sessionId": "ID сессии", // Session ID
+  "info.projectId": "ID проекта", // Project ID
   "info.cwd": "Каталог", // Working dir
   "info.initCmd": "Команда", // Startup cmd
   "info.agentArgs": "Аргументы запуска", // Launch args
@@ -1162,6 +1171,11 @@ const ru: typeof en = {
   "agentInstall.doneDesc": "Перезапустите эту сессию, чтобы начать работу.", // Relaunch this session to start using it.
   "agentInstall.restartNow": "Перезапустить сейчас", // Relaunch now
   "agentInstall.later": "Позже", // Later
+  "agentInstall.pathLabel": "Путь к исполняемому файлу", // Executable path
+  "agentInstall.pathPlaceholder": (bin: string) => `~/.local/bin/${bin}`,
+  "agentInstall.pathHint": "Установлено вне PATH? Укажите полный путь к исполняемому файлу.", // Already installed outside PATH?
+  "agentInstall.pathSave": "Использовать этот путь", // Use this path
+  "agentInstall.pathBrowse": "Обзор…", // Browse…
   "search.placeholder": "Поиск в терминале", // Search in terminal
 
   // ── Document tabs ──
@@ -1439,6 +1453,7 @@ const ru: typeof en = {
   "crepe.collapse": "Свернуть", // Collapse
   // ── Правая панель / нижняя строка ──
   "info.project": "Проект", // Project
+  "info.collection": "Коллекция", // Collection
   "panel.sessionInfo": "Сведения о сессии", // Session info
   "panel.gitTitle": "Статус Git", // Git status
   "panel.gitProbing": "Проверка…", // Checking…

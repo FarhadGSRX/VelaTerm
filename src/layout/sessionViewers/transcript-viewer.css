@@ -1,0 +1,41 @@
+/* Transcript viewer — the read-only conversation drawn by the archive and global search.
+ *
+ * The messages themselves come from the session view's conversation design (session-view.css), so an
+ * archived conversation reads like the live one. Only the parts specific to this viewer live here:
+ * the browse search bar, the transcript text with its search marks, the tools line, and the marker
+ * around the message a search located. */
+
+.tv-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tv-count {
+  flex: 0 0 auto;
+  font-size: calc(var(--ui-fs) - 1.5px);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+/* Plain transcript text. Newlines are meaningful, so they are kept rather than collapsed. */
+.tv-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Tools used by an archived assistant turn, under the prose it belongs to. */
+.tv-tools {
+  margin-top: 6px;
+  font-size: calc(var(--ui-fs) - 2px);
+  font-family: var(--chat-font);
+  color: var(--text-faint);
+}
+
+/* The message a search located. An outline marks it without shifting the reading column. */
+.tv-target {
+  border-radius: var(--r-md);
+  outline: 2px solid var(--accent);
+  outline-offset: 6px;
+}

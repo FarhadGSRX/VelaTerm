@@ -51,6 +51,24 @@ const KIND_COLOR: Partial<Record<SessionKind, string>> = {
   kiro: "#A855F7", // Violet, one step brighter than the Copilot and Kimi purples so the ghost mark reads apart
 };
 
+/** Fallback local-agent display names used before install recipes arrive, preventing an empty title flash. */
+export const AGENT_KIND_LABEL: Partial<Record<SessionKind, string>> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  copilot: "GitHub Copilot CLI",
+  cursor: "Cursor CLI",
+  antigravity: "Antigravity CLI",
+  cline: "Cline CLI",
+  pi: "Pi",
+  omp: "OMP",
+  crush: "Crush",
+  kimi: "Kimi Code (K3)",
+  kiro: "Kiro",
+  grok: "Grok Build (Grok 4.5)",
+  zoo: "Zoo Code",
+};
+
 // Sidebar and tab icons can mount for the same session together. Share only the in-flight cwd lookup so they do
 // not launch duplicate `lsof` processes on macOS; do not cache the result because an agent can change directory.
 const runtimeCwdInflight = new Map<string, Promise<string | null>>();

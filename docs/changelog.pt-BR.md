@@ -1,3 +1,27 @@
+## v0.2.1 — 2026-09-14
+
+- 🔎 A página inicial da base de conhecimento ganha uma caixa de busca: uma consulta pesquisa ao mesmo tempo o conhecimento de sessão e as notas locais, agrupando os resultados por origem. As correspondências exatas vêm primeiro; a busca aproximada (abreviações, subsequências e erros de digitação) só entra quando não há nenhuma correspondência exata, e consultas em chinês continuam por subcadeia.
+
+- 🗂️ As sessões arquivadas passam para a base de conhecimento. O botão da barra lateral leva até lá em vez de abrir um painel próprio, a árvore ganha uma raiz "Sessões arquivadas" agrupada pelo projeto de origem, e a área principal lista todas as sessões arquivadas com restaurar, reorganizar, exportar e excluir no próprio lugar.
+
+- 🔍 As sessões arquivadas têm busca em texto completo: os resultados são agrupados por sessão com a contagem de ocorrências, e o painel de prévia percorre cada ocorrência com o mesmo realce da busca global. Ao abrir uma sessão, você alterna entre a conversa e as entradas de conhecimento.
+
+- 🤖 Visão de conversa: quando o executável de um agente está ausente, um guia de instalação aparece sob a mensagem em vez do erro de inicialização bruto, e "Instalar agora" passa para a visão de terminal, que executa o comando recomendado. Se o agente estiver instalado fora do PATH, o guia aceita o caminho do executável diretamente, com seletor de arquivos do sistema no desktop.
+
+- 🩹 Instalações que parecem presentes, mas estão quebradas, agora são detectadas: um wrapper npm global cujo destino foi removido ou substituído é tratado como não instalado, e um caminho configurado que aponta para esse wrapper abre o guia de instalação sem reescrever sua configuração.
+
+- 🔐 O item do modo de permissão mostra direto o modo escolhido, e o menu marca em cada linha se a opção já está valendo ou aguarda o próximo turno.
+
+- 🔽 Todos os menus suspensos agora usam o componente Select interno em vez do controle nativo, então ficam iguais no macOS 15 e 26, sem a sobreposição do controle do sistema.
+
+- ℹ️ Projetos e coleções têm uma caixa de informações no menu de contexto.
+
+- 🪟 Windows: os subprocessos iniciados pela visão de conversa (agentes, catálogo de modelos e verificações do git) não piscam mais janelas de console.
+
+- 💡 O botão de feedback da barra de título passa para depois do botão de compartilhar.
+
+---
+
 ## v0.2.0 — 2026-09-13
 
 - 📱 Aplicativo VelaTerm para iOS e Android (versão preliminar): conecte-se a uma máquina por SSH ou URL após confirmar a impressão digital do host, carregue a interface remota completa dentro do aplicativo, preencha os dados de conexão lendo um código QR e entre em uma conta remota.

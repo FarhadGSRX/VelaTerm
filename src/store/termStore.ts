@@ -775,7 +775,7 @@ interface TermStore {
   projects: Project[];
   groups: Group[];
   sessions: Session[];
-  /** Archived sessions loaded on demand for the archive browser. */
+  /** Archived sessions loaded on demand for the knowledge-base Collections view. */
   archivedSessions: Session[];
   /** False until the first `loadTree` resolves, so the sidebar can avoid flashing the empty state at startup. */
   treeLoaded: boolean;
@@ -917,8 +917,6 @@ interface TermStore {
   /** Whether the notification-permission guidance dialog is open. */
   notifyGuideOpen: boolean;
   setNotifyGuideOpen: (v: boolean) => void;
-  /** Whether the archive browser is open. */
-  archiveOpen: boolean;
   /** Whether the global session-content search overlay is open. */
   globalSearchOpen: boolean;
   /** Whether the browser-mode project-directory picker is open. */
@@ -1135,8 +1133,6 @@ interface TermStore {
   restoreSession: (id: SessionId) => Promise<void>;
   /** Loads archived sessions. */
   loadArchived: () => Promise<void>;
-  /** Opens/closes the archive browser and loads entries on open. */
-  setArchiveOpen: (open: boolean) => void;
   /** Opens/closes global session search; the overlay owns debounced querying. */
   setGlobalSearchOpen: (open: boolean) => void;
   selectSingle: (node: SelNode) => void;
@@ -1846,7 +1842,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
   markFilter: initialPrimarySidebarView.markFilter,
   searchOpen: false,
   notifyGuideOpen: false,
-  archiveOpen: false,
   globalSearchOpen: false,
   selection: [],
   selectionAnchor: null,
@@ -2032,7 +2027,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
       inspectTarget: { id: projectId, kind: "project" },
       revealProjectId: projectId,
       leftCollapsed: false,
-      archiveOpen: false,
       // Reveal requests clear the primary projection's conditions before the one-shot target is consumed.
       sidebarTreeViews: state.sidebarTreeViews.map((view) =>
         view.id === state.primarySidebarTreeViewId
@@ -2555,11 +2549,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
     } catch {
       /* Preserve the previous list if loading fails. */
     }
-  },
-
-  setArchiveOpen: (open) => {
-    set({ archiveOpen: open });
-    if (open) void get().loadArchived();
   },
 
   setGlobalSearchOpen: (open) => {

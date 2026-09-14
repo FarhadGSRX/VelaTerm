@@ -1,9 +1,33 @@
 # Changelog
 
-> Created: 2026-07-09 16:10 · Updated: 2026-09-13
+> Created: 2026-07-09 16:10 · Updated: 2026-09-14
 
 All notable changes to VelaTerm are documented here, newest first.
 v0.1.91 is the first public release; earlier version numbers were internal iterations and are not covered.
+
+---
+
+## v0.2.1 — 2026-09-14
+
+- 🔎 The knowledge base home page gains a search box: one query searches session knowledge and local notes together and groups the results by source. Exact matches come first; a fuzzy pass covering abbreviations, subsequences and typos runs only when nothing matches exactly, while Chinese queries stay substring-based.
+
+- 🗂️ Archived sessions move into the knowledge base. The sidebar button jumps there instead of opening its own panel, the tree gains an "Archived sessions" root grouped by the project they came from, and the main area lists every archived session with restore, reorganize, export and delete available in place.
+
+- 🔍 Archived sessions have their own full-text search: results group by session with a hit count, and the preview pane steps through each hit with the same highlighting as global search. An open session switches between its conversation and its knowledge entries.
+
+- 🤖 Conversation view: when an agent's executable is missing, an install guide appears under the message instead of a raw startup error, and "Install now" hands off to the terminal view to run the recommended command. If the agent is installed outside PATH, the guide accepts an executable path directly, with a system file picker on desktop.
+
+- 🩹 Installs that look present but are broken are now detected: a global npm wrapper whose target was removed or replaced counts as not installed, and a configured path that points at such a wrapper opens the install guide without rewriting your setting.
+
+- 🔐 The permission mode entry shows the mode you picked, and its menu marks each row with whether the choice is already running or waits for the next turn.
+
+- 🔽 Every dropdown now uses the built-in Select component instead of the native control, so they look the same on macOS 15 and 26 without the stacked system appearance.
+
+- ℹ️ Projects and collections have an Info dialog in their right-click menus.
+
+- 🪟 Windows: subprocesses started by the conversation view (agents, model catalog and git checks) no longer flash console windows.
+
+- 💡 The feedback button in the title bar moves after the share button.
 
 ---
 

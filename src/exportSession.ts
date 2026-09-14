@@ -1,4 +1,4 @@
-//! Session-context export flow shared by the sidebar context menu and Archive panel:
+//! Session-context export flow shared by the sidebar context menu and the knowledge-base Collections view:
 //! - Desktop: choose a path in the system Save As dialog, then let the backend generate and write the file.
 //! - Browser: obtain generated content from the backend and trigger a local download through a Blob.
 //! Filenames follow the global `title_YYYYMMDD_HHmm.md` convention. Failures produce a non-disruptive system notification.

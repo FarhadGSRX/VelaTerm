@@ -555,8 +555,15 @@ impl PtyManager {
         cmd.env("VLX_EXE", &exe_path);
 
         // Build in-memory injection and the launch command for typed sessions. Read the configured executable
-        // path at spawn time so settings changes apply to the next launch.
-        let bin_path = crate::agent::executable::resolve_session(&app, &id, kind)?;
+        // path at spawn time so settings changes apply to the next launch. A generated wrapper whose payload is
+        // gone resolves to `Broken`: the launch then reports the agent as missing instead of letting the shell
+        // find the same dead wrapper by name.
+        let (bin_path, bin_broken) =
+            match crate::agent::executable::resolve_launch_binary(&app, &id, kind)? {
+                crate::agent::executable::LaunchBinary::Path(path) => (Some(path), false),
+                crate::agent::executable::LaunchBinary::Broken => (None, true),
+                crate::agent::executable::LaunchBinary::Unresolved => (None, false),
+            };
         // Lazily install the state-bridge extension of whichever agent loads one through `-e`: Pi's under
         // `<data_dir>/pi/`, OMP's under `<data_dir>/omp/`. The static extension reads the session's injected
         // `VLX_*` values and reports without persisting the port or token. If installation fails, log it and let
@@ -638,6 +645,7 @@ impl PtyManager {
             agent_ext_path.as_deref(),
             kiro_agent.as_deref(),
             codex_hooks_supported,
+            bin_broken,
         );
         // Windows only: set Claude's theme explicitly in `--settings`. ConPTY answers OSC 11 with its own
         // always-dark background, making automatic detection incorrect. Unix PTYs handle OSC 11 and live

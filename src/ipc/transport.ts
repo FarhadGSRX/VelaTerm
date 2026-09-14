@@ -317,6 +317,27 @@ export async function pickDirectory(): Promise<string | null> {
 }
 
 /**
+ * Selects a file. Desktop uses the native picker. Outside desktop there is no local file path to offer for a
+ * server-side executable, so this returns null as cancellation.
+ */
+export async function pickFile(opts?: {
+  title?: string;
+  filters?: { name: string; extensions: string[] }[];
+}): Promise<string | null> {
+  if (isTauri) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({
+      directory: false,
+      multiple: false,
+      title: opts?.title,
+      filters: opts?.filters,
+    });
+    return typeof picked === "string" ? picked : null;
+  }
+  return null;
+}
+
+/**
  * Opens a path with the system default application. Desktop uses the opener plugin; browser silently ignores a
  * server-side path that has no meaning on the remote client.
  */

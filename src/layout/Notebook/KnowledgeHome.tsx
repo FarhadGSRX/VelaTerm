@@ -2,6 +2,7 @@ import Icons from "../../components/Icons";
 import { useT } from "../../i18n";
 import type { NotebookOverview } from "../../ipc/notebook";
 import { MemoryLink } from "../Memory/navigation";
+import { KnowledgeHomeSearch } from "./KnowledgeHomeSearch";
 import { knowledgeSelection } from "./KnowledgeTreeRow";
 import { notebookRoute } from "./shared";
 import { showVaultAction } from "./VaultActions";
@@ -22,19 +23,21 @@ export function KnowledgeHome({ overview }: { overview: NotebookOverview }) {
         <progress max={1} value={state.bytes ? state.sent / state.bytes : 1} />
       </MemoryLink>;
     })}
-    <section className="nb-home-group">
-      <h2>{t("memory.globalMemory")}</h2>
-      <div className="nb-vault-grid">
-        <MemoryLink className="nb-vault-card" route="library" values={knowledgeSelection} aria-label={t("memory.globalMemory")}><Icons.layers size={24} /><div><p>{t("nb.generatedHint")}</p></div><Icons.arrowRight /></MemoryLink>
-      </div>
-    </section>
-    <section className="nb-home-group">
-      <h2>{t("nb.localVaults")}</h2>
-      {overview.vaults.length ? <div className="nb-vault-grid">
-        {overview.vaults.map(vault => <MemoryLink key={vault.id} className="nb-vault-card" route={notebookRoute(vault.id)} values={knowledgeSelection}>
-          <Icons.folder size={24} /><div><strong>{vault.name}</strong><p title={vault.root}>{vault.root}</p></div><Icons.arrowRight />
-        </MemoryLink>)}
-      </div> : <p>{t("nb.empty")}</p>}
-    </section>
+    <KnowledgeHomeSearch>
+      <section className="nb-home-group">
+        <h2>{t("memory.globalMemory")}</h2>
+        <div className="nb-vault-grid">
+          <MemoryLink className="nb-vault-card" route="library" values={knowledgeSelection} aria-label={t("memory.globalMemory")}><Icons.layers size={24} /><div><p>{t("nb.generatedHint")}</p></div><Icons.arrowRight /></MemoryLink>
+        </div>
+      </section>
+      <section className="nb-home-group">
+        <h2>{t("nb.localVaults")}</h2>
+        {overview.vaults.length ? <div className="nb-vault-grid">
+          {overview.vaults.map(vault => <MemoryLink key={vault.id} className="nb-vault-card" route={notebookRoute(vault.id)} values={knowledgeSelection}>
+            <Icons.folder size={24} /><div><strong>{vault.name}</strong><p title={vault.root}>{vault.root}</p></div><Icons.arrowRight />
+          </MemoryLink>)}
+        </div> : <p>{t("nb.empty")}</p>}
+      </section>
+    </KnowledgeHomeSearch>
   </main>;
 }

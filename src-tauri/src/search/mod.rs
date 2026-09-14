@@ -13,7 +13,8 @@
 //! rather than the raw query, so what is marked on screen is exactly what the backend matched.
 //!
 //! Dual content sources, index freshness, and extraction live in [`index`]; segmentation lives in
-//! [`tokenize`]; ANSI stripping lives in [`ansi`].
+//! [`tokenize`]; ANSI stripping lives in [`ansi`]; fuzzy text matching shared with the knowledge
+//! searches lives in [`fuzzy`].
 //!
 //! Navigation anchors: transcripts use `message_index`, which the frontend scrolls to; recordings use
 //! `ordinal`, the number of `findNext` operations to perform. A recording ordinal is query-dependent (the
@@ -23,6 +24,7 @@
 //! once, so recording navigation remains best-effort as documented in the design's section 6.
 
 pub mod ansi;
+pub mod fuzzy;
 pub mod index;
 pub mod tokenize;
 

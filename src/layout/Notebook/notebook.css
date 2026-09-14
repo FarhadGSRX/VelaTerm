@@ -46,7 +46,6 @@
 .nb-library h1 { margin:5px 0 0; font-size:24px; font-weight:650; letter-spacing:-.025em; }
 .nb-list-tools { display:flex; align-items:center; flex-wrap:wrap; gap:12px; color:var(--text-muted); font-size:11px; margin-bottom:18px; }
 .nb-spacer { flex:1; }
-.nb-workspace .nb-list-tools select { width:auto; flex:none; min-width:120px; border:1px solid var(--border); border-radius:5px; background:var(--bg-panel); padding:5px 8px; font:inherit; color:var(--text-secondary); }
 .nb-note-list { display:flex; flex-direction:column; gap:10px; }
 .nb-note-row { display:flex; align-items:flex-start; gap:14px; width:100%; padding:16px; border:1px solid var(--border); border-radius:8px; background:transparent; color:var(--text-primary)!important; font:inherit; text-align:left; cursor:pointer; }
 .nb-note-row:hover { background:var(--bg-elevated); border-color:var(--accent); }
@@ -69,7 +68,6 @@
 .nb-dialog p { margin:0; color:var(--text-secondary); font-size:13px; line-height:1.8; }
 .nb-dialog label { display:flex; flex-direction:column; gap:8px; font-size:12px; color:var(--text-secondary); }
 .nb-dialog .input { padding:10px 12px; border:1px solid var(--border); border-radius:6px; color:var(--text-primary); background:var(--bg-panel); font:inherit; }
-.nb-dialog select.input { width:100%; }
 .nb-dialog>footer { display:flex; justify-content:flex-end; gap:10px; padding-top:8px; }
 .nb-dialog .nb-inline>.btn { min-height:38px; }
 .nb-server-browser { min-height:230px; max-height:350px; overflow:auto; border:1px solid var(--border); border-radius:6px; }
@@ -203,7 +201,6 @@
 .nb-search-library { display:flex; flex-direction:column; gap:10px; }
 .nb-search-head { display:flex; align-items:center; gap:12px; color:var(--text-muted); font-size:11px; }
 .nb-search-head>strong { font-weight:600; color:var(--text-secondary); }
-.nb-search-head select { width:auto; flex:none; min-width:150px; border:1px solid var(--border); border-radius:5px; background:var(--bg-panel); padding:4px 7px; font:inherit; font-size:11px; color:var(--text-secondary); }
 .nb-search-results { display:flex; flex-direction:column; gap:6px; min-height:0; }
 .nb-search-row { display:flex; align-items:flex-start; gap:10px; width:100%; padding:9px 11px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--text-primary); font:inherit; text-align:left; cursor:pointer; }
 .nb-search-row:hover,.nb-search-row.active { background:var(--bg-elevated); border-color:var(--border); }
@@ -217,6 +214,17 @@
 .nb-search-related button { padding:1px 7px; border:1px solid var(--border); border-radius:999px; background:transparent; color:var(--text-secondary); font:inherit; cursor:pointer; }
 .nb-search-related button:hover { border-color:var(--accent); color:var(--text-primary); }
 .nb-search-hint { margin:0; padding:8px 4px; color:var(--text-muted); font-size:11px; line-height:1.7; }
+
+/* Home-page search: one field above the sections, grouped hits while a query is active. */
+.nb-home-search { display:flex; align-items:center; gap:10px; margin:0 0 20px; padding:10px 14px; border:1px solid var(--border); border-radius:8px; background:var(--bg-panel); color:var(--text-muted); }
+.nb-home-search:focus-within { border-color:var(--accent); }
+.nb-home-search>input { flex:1; min-width:0; border:0; background:transparent; color:var(--text-primary); font:inherit; font-size:13px; padding:0; outline:none; }
+.nb-home-search>strong { flex:none; color:var(--text-secondary); font-size:11px; font-weight:600; }
+.nb-home-results { display:flex; flex-direction:column; gap:18px; }
+.nb-home-results .nb-search-hint { margin:0; padding:2px 4px; color:var(--text-muted); font-size:11px; }
+.nb-search-group>h3 { display:flex; align-items:center; gap:6px; margin:0 0 8px; color:var(--text-secondary); font-size:12px; font-weight:600; }
+.nb-search-group>h3>svg { color:var(--text-muted); }
+.nb-search-group>h3>span { color:var(--text-muted); font-weight:500; }
 
 /* Import progress entry and import history. */
 .nb-import-chip { display:inline-flex; align-items:center; gap:6px; max-width:260px; padding:3px 8px; border:1px solid var(--border); border-radius:999px; color:var(--accent)!important; font-size:10px; text-decoration:none!important; }

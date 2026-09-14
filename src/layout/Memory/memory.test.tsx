@@ -11,9 +11,9 @@ import { MemoryRoute } from "./MemoryRoute";
 import { MemoryMarkdown } from "./shared";
 import { memoryNavigate, memoryUrl } from "./navigation";
 
-const api = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), options: vi.fn(), save: vi.fn(), start: vi.fn(), models: vi.fn() }));
+const api = vi.hoisted(() => ({ list: vi.fn(), collections: vi.fn(), get: vi.fn(), options: vi.fn(), save: vi.fn(), start: vi.fn(), models: vi.fn() }));
 vi.mock("../../ipc/memory", () => ({
-  memoryList: api.list,
+  memoryList: api.list, memoryCollections: api.collections,
   memoryModels: api.models, memoryGet: api.get, memoryOptions: api.options, memorySave: api.save, memoryStart: api.start,
   memoryDelete: vi.fn(), memoryRestore: vi.fn(), memorySource: vi.fn(), memoryJobs: vi.fn(), memoryCancel: vi.fn(), memoryRetry: vi.fn(),
 }));
@@ -37,6 +37,16 @@ beforeEach(() => {
   api.options.mockResolvedValue({ agents: [{ id: "claude", label: "Claude", available: true }, { id: "codex", label: "Codex", available: true }], defaultAgent: "codex", catalog: [] });
 });
 afterEach(cleanup);
+
+/** Commit one option on a shared `Select`, a combobox button plus a popup list. jsdom runs the
+ *  wrapping label's activation behavior after the row click even though the list stops propagation,
+ *  which reopens the popup; browsers do not, so the stray popup is toggled shut here. */
+function choose(label: string, option: string) {
+  const trigger = screen.getByRole("combobox", { name: label });
+  fireEvent.click(trigger);
+  fireEvent.click(screen.getByRole("option", { name: option }));
+  if (screen.queryAllByRole("listbox").length) fireEvent.click(trigger);
+}
 
 describe("Knowledge Base interactions", () => {
   it.each(["tauri://localhost", "tauri://localhost/"])("builds an explicit close URL for %s", (base) => {
@@ -67,8 +77,9 @@ describe("Knowledge Base interactions", () => {
     const codex = await screen.findByRole("radio", { name: "Codex" }) as HTMLInputElement;
     await waitFor(() => expect(codex.checked).toBe(true));
     fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
-    fireEvent.change(await screen.findByLabelText("Model (optional)"), { target: { value: "chosen-model" } });
-    fireEvent.change(screen.getByLabelText("Thinking effort"), { target: { value: "high" } });
+    await screen.findByRole("combobox", { name: "Model (optional)" });
+    choose("Model (optional)", "Chosen model");
+    choose("Thinking effort", "High");
     fireEvent.click(screen.getByRole("button", { name: "Organize and save" }));
     await waitFor(() => expect(api.start).toHaveBeenCalledWith("session", "claude", "chosen-model", "high"));
     await waitFor(() => expect(new URLSearchParams(location.search).get("memory")).toBe("job/job-1"));
@@ -76,17 +87,17 @@ describe("Knowledge Base interactions", () => {
 
   it("clears effort when changing models and clears both overrides when changing agents", async () => {
     render(<MemoryCompile sessionId="session" />);
-    const model = await screen.findByLabelText("Model (optional)") as HTMLSelectElement;
-    fireEvent.change(model, { target: { value: "chosen-model" } });
-    const effort = screen.getByLabelText("Thinking effort") as HTMLSelectElement;
-    fireEvent.change(effort, { target: { value: "high" } });
-    fireEvent.change(model, { target: { value: "simple-model" } });
-    expect(effort.value).toBe(""); expect(effort.disabled).toBe(true);
-    fireEvent.change(model, { target: { value: "chosen-model" } });
-    fireEvent.change(effort, { target: { value: "low" } });
+    await screen.findByRole("combobox", { name: "Model (optional)" });
+    choose("Model (optional)", "Chosen model");
+    choose("Thinking effort", "High");
+    choose("Model (optional)", "Simple model");
+    expect(screen.getByRole("combobox", { name: "Model (optional)" }).textContent).toContain("Simple model");
+    expect((screen.getByRole("combobox", { name: "Thinking effort" }) as HTMLButtonElement).disabled).toBe(true);
+    choose("Model (optional)", "Chosen model");
+    choose("Thinking effort", "Low");
     fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
-    expect((await screen.findByLabelText("Model (optional)") as HTMLSelectElement).value).toBe("");
-    expect((screen.getByLabelText("Thinking effort") as HTMLSelectElement).value).toBe("");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Model (optional)" }).textContent).toContain("Default model"));
+    expect(screen.getByRole("combobox", { name: "Thinking effort" }).textContent).toContain("Agent default");
   });
 
   it("restores the remembered agent, model and effort on reopen", async () => {
@@ -94,18 +105,19 @@ describe("Knowledge Base interactions", () => {
     render(<MemoryCompile sessionId="session" />);
     const claude = await screen.findByRole("radio", { name: "Claude" }) as HTMLInputElement;
     await waitFor(() => expect(claude.checked).toBe(true));
-    await waitFor(() => expect((screen.getByLabelText("Model (optional)") as HTMLSelectElement).value).toBe("chosen-model"));
-    expect((screen.getByLabelText("Thinking effort") as HTMLSelectElement).value).toBe("high");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Model (optional)" }).textContent).toContain("Chosen model"));
+    expect(screen.getByRole("combobox", { name: "Thinking effort" }).textContent).toContain("High");
   });
 
   it("remembers each selection for the next visit", async () => {
     render(<MemoryCompile sessionId="session" />);
-    await screen.findByLabelText("Model (optional)");
+    await screen.findByRole("combobox", { name: "Model (optional)" });
     fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
     expect(store.setMemoryPrefs).toHaveBeenCalledWith({ agent: "claude", model: null, effort: null });
-    fireEvent.change(await screen.findByLabelText("Model (optional)"), { target: { value: "chosen-model" } });
+    await screen.findByRole("combobox", { name: "Model (optional)" });
+    choose("Model (optional)", "Chosen model");
     expect(store.setMemoryPrefs).toHaveBeenCalledWith({ model: "chosen-model", effort: null });
-    fireEvent.change(screen.getByLabelText("Thinking effort"), { target: { value: "high" } });
+    choose("Thinking effort", "High");
     expect(store.setMemoryPrefs).toHaveBeenCalledWith({ effort: "high" });
   });
 
@@ -115,7 +127,7 @@ describe("Knowledge Base interactions", () => {
     render(<MemoryCompile sessionId="session" />);
     const codex = await screen.findByRole("radio", { name: "Codex" }) as HTMLInputElement;
     await waitFor(() => expect(codex.checked).toBe(true));
-    await waitFor(() => expect((screen.getByLabelText("Model (optional)") as HTMLSelectElement).value).toBe(""));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Model (optional)" }).textContent).toContain("Default model"));
   });
 
   it("blocks compilation after a catalogue failure and retries without submitting", async () => {
@@ -124,7 +136,7 @@ describe("Knowledge Base interactions", () => {
     await screen.findByRole("alert");
     expect((screen.getByRole("button", { name: "Organize and save" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByLabelText("Model (optional)");
+    await screen.findByRole("combobox", { name: "Model (optional)" });
     expect(api.start).not.toHaveBeenCalled();
   });
 
@@ -188,7 +200,7 @@ it("navigates project and session groups through shareable URLs and loads scoped
   expect(within(directory).getByRole("link", { name: /Saved topic/ }).getAttribute("href")).toContain("memory=entry%2Fentry");
   expect(within(directory).queryByText("Snapshot")).toBeNull();
   expect(within(screen.getByRole("main")).getByText("Saved topic")).toBeTruthy();
-  fireEvent.change(screen.getByLabelText("Recently updated"), { target: { value: "title" } });
+  choose("Recently updated", "Title");
   await waitFor(() => expect(new URLSearchParams(location.search).get("memorySort")).toBe("title"));
   expect(new URLSearchParams(location.search).get("memorySession")).toBe("session");
 });

@@ -23,6 +23,7 @@ import { useTermStore } from "../store/termStore";
 import { defaultEngineFor } from "../store/settings";
 import {
   effectiveStatus,
+  isVirtualProject,
   projectRoot,
   type NodeKind,
   type SessionEngine,
@@ -604,6 +605,100 @@ export function GroupInfo({ id, onClose }: { id: string; onClose: () => void }) 
             </div>
           )}
         </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+          <button className="vlx-btn vlx-btn-primary" onClick={onClose}>
+            {t("common.close")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Project Information dialog using the same centered InfoRow shell as Session Information. The sidebar
+ * shows only the project name, so this dialog is the place to read the root path and project ID; both are
+ * monospace and copyable. Collections share the same overlay and report their own type and an absent path.
+ */
+export function ProjectInfo({ id, onClose }: { id: string; onClose: () => void }) {
+  const t = useT();
+  // Suspend native browser views while the dialog is visible so they cannot cover it.
+  useSuspendNativeViews();
+  const project = useTermStore((s) => s.projects.find((p) => p.id === id));
+
+  if (!project) return null;
+  const root = projectRoot(project);
+  const dim = "—";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1100,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          width: 460,
+          maxHeight: "80vh",
+          overflowY: "auto",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: 18,
+          boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 14,
+          }}
+        >
+          <span
+            style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {project.name}
+          </span>
+          <button className="icon-btn sm" title={t("common.close")} onClick={onClose}>
+            <Icons.x size={14} />
+          </button>
+        </div>
+
+        <InfoRow label={t("info.name")} value={project.name} />
+        <InfoRow
+          label={t("info.type")}
+          value={isVirtualProject(project) ? t("info.collection") : t("info.project")}
+        />
+        <InfoRow
+          label={t("info.path")}
+          value={root ?? t("collection.tag")}
+          mono={!!root}
+          copy={root}
+        />
+        <InfoRow label={t("info.projectId")} value={project.id} mono copy={project.id} />
+        <InfoRow
+          label={t("info.createdAt")}
+          // createdAt is stored as Unix seconds; Date expects milliseconds.
+          value={
+            project.createdAt
+              ? new Date(project.createdAt * 1000).toLocaleString(dateLocale())
+              : dim
+          }
+        />
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
           <button className="vlx-btn vlx-btn-primary" onClick={onClose}>

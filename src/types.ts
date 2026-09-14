@@ -247,13 +247,20 @@ export interface SessionRuntime {
    */
   agentInstalling?: boolean;
   /**
-   * Executable path discovered after one-click installation and written into settings automatically. When
-   * non-empty, AgentInstallCard shows the Installation Complete dialog with the path and Restart Now/Later.
-   * Clear after user action or the next successful spawn. This belongs in runtime rather than component state:
-   * restart remounts the whole pane by advancing epoch and would clear component state, while runtime survives
-   * remounts and tab changes. Relevant only to agent sessions.
+   * Executable path discovered after one-click installation, or entered by hand in the install card's path
+   * field, and written into settings automatically. When non-empty, AgentInstallCard shows the Installation
+   * Complete dialog with the path and Restart Now/Later. Clear after user action or the next successful spawn.
+   * This belongs in runtime rather than component state: restart remounts the whole pane by advancing epoch and
+   * would clear component state, while runtime survives remounts and tab changes. Relevant only to agent sessions.
    */
   agentPathSaved?: string | null;
+  /**
+   * A one-click installation requested from the conversation view, handed to the terminal view because
+   * only a terminal has a shell to run the recipe in. The install card consumes it when it appears and
+   * clears the flag; TerminalView clears it on dismiss or retry so a stale request never fires later.
+   * Relevant only to agent sessions.
+   */
+  agentAutoInstall?: boolean;
   /**
    * Complete launch command assembled by the backend and actually written to the PTY for this spawn, including
    * agent flags, resume/permission/custom arguments, and the shell guard. Record after a successful agent-session

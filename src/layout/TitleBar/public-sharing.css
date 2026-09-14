@@ -357,29 +357,6 @@
   display: block;
 }
 
-.public-sharing-target select {
-  width: 100%;
-  min-width: 0;
-  min-height: 36px;
-  padding: 7px 32px 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md, 8px);
-  outline: none;
-  color: var(--text);
-  background: var(--bg-0);
-  font: inherit;
-  font-size: 11px;
-}
-
-.public-sharing-target select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-
-.public-sharing-target select:disabled {
-  opacity: .55;
-}
-
 .public-sharing-form-actions {
   display: flex;
   justify-content: flex-end;

@@ -2,19 +2,15 @@
 import { useEffect, useRef } from "react";
 import { useT } from "../../i18n";
 import { MemoryLibrary } from "./MemoryLibrary";
+import { MemoryCollections } from "./MemoryCollections";
 import { MemoryDocument, MemoryEditor, MemorySourceView } from "./MemoryDocument";
 import { MemoryCompile, MemoryJobs } from "./MemoryTasks";
 import { MemoryLink, useMemoryLocation } from "./navigation";
+import { MemoryIcon } from "./shared";
 import "./memory.css";
 import { KnowledgeVaultDialogs } from "../Notebook/VaultActions";
 import { NotebookSurface } from "../Notebook/NotebookSurface";
 
-export function MemoryIcon({ size = 16 }: { size?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M12 5v15M3 4.5c3.5-1 6-.5 9 1.5 3-2 5.5-2.5 9-1.5v14c-3.5-1-6-.5-9 1.5-3-2-5.5-2.5-9-1.5z" />
-    <path d="M6 8h2m8 0h2M6 12h2m8 0h2" />
-  </svg>;
-}
 export function MemoryRoute() {
   const location = useMemoryLocation();
   const route = new URLSearchParams(location).get("memory");
@@ -31,6 +27,7 @@ function MemorySurface({ route }: { route: string }) {
   }, []);
   const compact = page === "compile";
   const library = ["library", "entry", "history"].includes(page);
+  const collections = page === "collections" || page === "collection";
   const notebook = page === "notebooks" || page === "notebook";
   return <section ref={ref} data-page={page} tabIndex={-1} className="memory-shell memory-tab-surface" role="tabpanel" aria-label={t(notebook ? "memory.title" : "memory.globalMemory")}>
       {!notebook && <header className="memory-header">
@@ -45,7 +42,7 @@ function MemorySurface({ route }: { route: string }) {
       <div className="memory-body">
         {notebook ? <NotebookSurface route={route} /> : library ? <MemoryLibrary selected={id}>
           {id && <MemoryDocument key={`${page}/${id}/${version ?? ""}`} id={id} version={page === "history" ? Number(version) : undefined} />}
-        </MemoryLibrary> : <main className="memory-main" key={route}>
+        </MemoryLibrary> : collections ? <div className="memory-workspace"><MemoryCollections key={page} sessionId={page === "collection" ? id : ""} /></div> : <main className="memory-main" key={route}>
           {page === "compile" ? <MemoryCompile sessionId={id} /> : page === "jobs" || page === "job" ? <MemoryJobs id={page === "job" ? id : undefined} /> : page === "source" ? <MemorySourceView id={id} /> : page === "edit" || page === "new" ? <MemoryEditor id={page === "edit" ? id : undefined} /> : <div className="memory-empty">{t("memory.notFound")}</div>}
         </main>}
       </div>

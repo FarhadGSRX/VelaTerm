@@ -5,7 +5,7 @@
 //! is killed as soon as it answers.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -45,7 +45,7 @@ pub fn list_for_launch(kind: SessionKind, bin: &str, cwd: Option<&str>, extra_ar
 
 fn list_raw(kind: SessionKind, bin: &str, cwd: Option<&str>, extra_args: &[String]) -> Result<Vec<Value>, String> {
     let variant = PiVariant::of(kind).ok_or("This session is not a Pi or OMP conversation")?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = crate::host::command(bin);
     crate::agent::executable::prepare_command(&mut cmd, bin);
     cmd.args(wire::launch_args(variant, None, None, false));
     cmd.args(extra_args);

@@ -130,6 +130,7 @@ const ja: typeof en = {
   "nb.folder": "フォルダー",
   "nb.generatedHint": "セッションから整理されたナレッジで、出典と変更履歴も確認できます。",
   "nb.homeHint": "セッションナレッジベースとローカルナレッジベースを閲覧できます。",
+  "nb.homeSearch": "セッションのナレッジとローカルノートを検索…",
   "nb.loadMore": "さらに読み込む",
   "nb.import": "読み込む",
   "nb.importFiles": "ファイルを選択",
@@ -186,6 +187,8 @@ const ja: typeof en = {
   "nb.searchAllVaults": "すべてのナレッジベース",
   "nb.searchCount": (count: string) => `${count} 件の結果`,
   "nb.searchEmpty": "一致するノートはありません。",
+  "nb.searchEmptyAll": "一致するものはありません。",
+  "nb.searchFuzzy": "完全一致はありません。近似の結果を表示しています。",
   "nb.searchLine": (line: string) => `${line} 行目`,
   "nb.searchMatches": (count: string) => `${count} 件一致`,
   "nb.searchMore": "先頭の結果のみ表示しています。キーワードを絞り込むと残りを確認できます。",
@@ -204,6 +207,9 @@ const ja: typeof en = {
   "nb.welcome": "自分のノート保管庫",
   "nb.welcomeText": "自由に書き、考えをつなぎ、通常のローカルファイルでノートを管理できます。既存の Markdown フォルダーを開くか、新しい保管庫に資料を読み込みましょう。",
   "memory.globalMemory": "セッションナレッジベース",
+  "memory.collections": "アーカイブ済みセッション",
+  "memory.collectionConversation": "会話",
+  "memory.collectionEmptyEntries": "この会話にはまだナレッジ記事がありません。",
   "memory.title": "ナレッジベース",
   "memory.add": "セッションナレッジベースに整理",
   "memory.intro": "プロジェクトとセッションごとに知識を整理します。保存された記事は元の情報の変更に連動せず、手動で編集できます。",
@@ -780,6 +786,8 @@ const ja: typeof en = {
   "tree.exportSession": "セッションをエクスポート…", // Export Session…
   "tree.sessionInfo": "セッション情報", // Session Info
   "tree.groupInfo": "グループ情報", // Group Info
+  "tree.collectionInfo": "コレクション情報", // Collection Info
+  "tree.projectInfo": "プロジェクト情報", // Project Info
   "info.branch": "ブランチ", // Branch
   "info.path": "パス", // Path
   "info.recentCommits": "最近のコミット", // Recent Commits
@@ -960,6 +968,7 @@ const ja: typeof en = {
   "info.status": "状態", // Status
   "info.notYetCaptured": "未生成（初回実行後に取得）", // Not yet generated (captured after first run)
   "info.sessionId": "セッション ID", // Session ID
+  "info.projectId": "プロジェクト ID", // Project ID
   "info.cwd": "作業ディレクトリ", // Working dir
   "info.initCmd": "起動コマンド", // Startup cmd
   "info.agentArgs": "起動引数", // Launch args
@@ -1149,6 +1158,11 @@ const ja: typeof en = {
   "agentInstall.doneDesc": "このセッションを再起動すると使い始められます。", // Relaunch this session to start using it.
   "agentInstall.restartNow": "今すぐ再起動", // Relaunch now
   "agentInstall.later": "後で", // Later
+  "agentInstall.pathLabel": "実行ファイルのパス", // Executable path
+  "agentInstall.pathPlaceholder": (bin: string) => `~/.local/bin/${bin}`,
+  "agentInstall.pathHint": "PATH 以外にインストール済みの場合は、実行ファイルのフルパスを入力します。", // Already installed outside PATH?
+  "agentInstall.pathSave": "このパスを使う", // Use this path
+  "agentInstall.pathBrowse": "参照…", // Browse…
   "search.placeholder": "ターミナル内を検索", // Search in terminal
 
   // ── Document tabs ──
@@ -1425,6 +1439,7 @@ const ja: typeof en = {
   "crepe.collapse": "折りたたむ", // Collapse
   // ── Additional right and bottom bar entries ──
   "info.project": "プロジェクト", // Project
+  "info.collection": "コレクション", // Collection
   "panel.sessionInfo": "セッション情報", // Session info
   "panel.gitTitle": "Git ステータス", // Git status
   "panel.gitProbing": "確認中…", // Checking…

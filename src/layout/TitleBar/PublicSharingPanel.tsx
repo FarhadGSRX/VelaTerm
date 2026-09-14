@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import Icons from "../../components/Icons";
+import Select from "../../components/Select";
 import { getLocale, useT } from "../../i18n";
 import { invoke } from "../../ipc/transport";
 import { platform } from "../../platform";
@@ -277,19 +278,20 @@ export function PublicSharingPanel() {
                 {scope && scope !== "machine" && (
                   <label className="public-sharing-target">
                     <span>{scopeLabel(scope, t)}</span>
-                    <select
-                      required
+                    <Select
+                      width="100%"
                       disabled={busy}
                       value={target}
-                      onChange={(event) => setTarget(event.target.value)}
-                    >
-                      <option value="">{t("Select…")}</option>
-                      {targets.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {"projectName" in item ? `${item.projectName} / ${item.name}` : item.name}
-                        </option>
-                      ))}
-                    </select>
+                      ariaLabel={scopeLabel(scope, t)}
+                      onChange={setTarget}
+                      options={[
+                        { value: "", label: t("Select…") },
+                        ...targets.map((item) => ({
+                          value: item.id,
+                          label: "projectName" in item ? `${item.projectName} / ${item.name}` : item.name,
+                        })),
+                      ]}
+                    />
                   </label>
                 )}
 

@@ -233,14 +233,47 @@ pub fn install_recipe(agent: &str) -> Option<InstallRecipe> {
 /// One-click installers often modify a profile that the current session has not reloaded. Retry Launch uses
 /// this result to fill an empty executable-path setting so the next launch uses the absolute path.
 ///
+/// A generated Windows command wrapper whose payload is gone is not a match: that state comes from a failed
+/// or interrupted install, and handing out the wrapper only produces an opaque cmd.exe path error.
+///
 /// Strategies mirror install_recipe: native installers stat fixed locations; global npm installations query
 /// `npm prefix -g`. Unix uses a login shell for profile/nvm/fnm accuracy; Windows uses cmd /C.
 pub fn locate_installed_bin(agent: &str) -> Option<String> {
+    let (bin, mut candidates, use_npm) = agent_layout(agent)?;
+    if use_npm {
+        push_npm_candidates(&mut candidates, bin);
+    }
+    candidates
+        .into_iter()
+        .find(|p| super::executable::is_executable_file(p))
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+/// Whether the recommended npm installation exists in name only: the generated command wrapper is on
+/// disk but the program it forwards to is gone.
+///
+/// A failed, interrupted, or quarantined install leaves exactly that state, because npm removes the
+/// package while keeping the wrapper it created. Launching that wrapper prints only cmd.exe's bare path
+/// error, so the launch path reports the agent as missing and shows the installation guidance instead.
+pub fn dangling_npm_install(agent: &str) -> bool {
+    let Some((bin, _, true)) = agent_layout(agent) else {
+        return false;
+    };
+    let Some(prefix) = npm_global_prefix() else {
+        return false;
+    };
+    let shim = npm_bin_candidate(&prefix, bin, cfg!(target_os = "windows"));
+    shim.is_file() && !super::executable::is_executable_file(&shim)
+}
+
+/// Install layout for one agent on this host: the command name, fixed-location candidates in priority
+/// order, and whether the recommended installation is a global npm package. npm-only types leave the
+/// fixed list empty; their candidate comes from `npm_bin_candidate`.
+fn agent_layout(agent: &str) -> Option<(&'static str, Vec<std::path::PathBuf>, bool)> {
     let win = cfg!(target_os = "windows");
     let home = crate::host::home_dir()?;
-    // Fixed-location candidates in priority order; npm-only types leave this list empty.
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    let (bin, use_npm) = match agent {
+    let layout = match agent {
         // Claude's official installer targets ~/.local/bin.
         "claude" => {
             candidates.push(
@@ -355,15 +388,23 @@ pub fn locate_installed_bin(agent: &str) -> Option<String> {
         }
         _ => return None,
     };
-    if use_npm {
-        if let Some(prefix) = npm_global_prefix() {
-            candidates.push(npm_bin_candidate(&prefix, bin, win));
-        }
+    Some((layout.0, candidates, layout.1))
+}
+
+/// Adds the global npm candidates for one command: first the real program a generated wrapper forwards
+/// to, then the wrapper itself as the fallback.
+///
+/// Launching the payload directly avoids cmd.exe re-parsing the wrapper's arguments, which can mangle
+/// structured values such as JSON.
+fn push_npm_candidates(candidates: &mut Vec<std::path::PathBuf>, bin: &str) {
+    let Some(prefix) = npm_global_prefix() else {
+        return;
+    };
+    let shim = npm_bin_candidate(&prefix, bin, cfg!(target_os = "windows"));
+    if let Some(exe) = super::executable::shim_payload_exe(&shim) {
+        candidates.push(exe);
     }
-    candidates
-        .into_iter()
-        .find(|p| is_executable(p))
-        .map(|p| p.to_string_lossy().to_string())
+    candidates.push(shim);
 }
 
 /// Executable filename with `.exe` for native Windows installers and a bare name on Unix.
@@ -423,28 +464,39 @@ fn npm_global_prefix() -> Option<std::path::PathBuf> {
     p.is_dir().then_some(p)
 }
 
-/// Whether a regular file is executable; check mode on Unix and existence for Windows .exe/.cmd.
-fn is_executable(p: &std::path::Path) -> bool {
-    let Ok(md) = std::fs::metadata(p) else {
-        return false;
-    };
-    if !md.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        md.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npm_layout_matches_the_host() {
+        // The npm flag drives both candidate probing and dangling-wrapper detection, so it must follow
+        // the platform conditions the recipes document.
+        let win = cfg!(target_os = "windows");
+        let mac = cfg!(target_os = "macos");
+        let expected = [
+            ("opencode", win),
+            ("grok", win),
+            ("crush", !mac),
+            ("codex", true),
+            ("copilot", true),
+            ("cline", true),
+            ("pi", true),
+            ("claude", false),
+            ("cursor", false),
+            ("omp", false),
+            ("antigravity", false),
+            ("kimi", false),
+            ("kiro", false),
+            ("zoo", false),
+        ];
+        for (agent, npm) in expected {
+            let (bin, _, use_npm) =
+                agent_layout(agent).unwrap_or_else(|| panic!("no layout for {agent}"));
+            assert!(!bin.is_empty(), "the command name for {agent} must not be empty");
+            assert_eq!(use_npm, npm, "the npm flag for {agent} on this host");
+        }
+    }
 
     #[test]
     fn known_agents_have_nonempty_recipe() {

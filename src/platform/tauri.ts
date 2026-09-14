@@ -14,6 +14,7 @@ import {
   listen as transportListen,
   openPath as transportOpenPath,
   pickDirectory as transportPickDirectory,
+  pickFile as transportPickFile,
   revealPath as transportRevealPath,
 } from "../ipc/transport";
 import {
@@ -74,6 +75,7 @@ const dialog: DialogCapability = {
     return typeof dest === "string" ? dest : null;
   },
   pickDirectory: transportPickDirectory,
+  pickFile: transportPickFile,
 };
 
 const opener: OpenerCapability = {

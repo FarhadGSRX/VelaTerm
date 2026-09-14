@@ -130,6 +130,7 @@ const ko: typeof en = {
   "nb.folder": "폴더",
   "nb.generatedHint": "세션에서 정리된 지식으로, 출처와 수정 기록도 확인할 수 있습니다.",
   "nb.homeHint": "세션 지식 베이스와 로컬 지식 베이스를 살펴보세요.",
+  "nb.homeSearch": "세션 지식과 로컬 노트 검색…",
   "nb.loadMore": "더 불러오기",
   "nb.import": "가져오기",
   "nb.importFiles": "파일 선택",
@@ -186,6 +187,8 @@ const ko: typeof en = {
   "nb.searchAllVaults": "모든 지식 베이스",
   "nb.searchCount": (count: string) => `${count}개 결과`,
   "nb.searchEmpty": "일치하는 노트가 없습니다.",
+  "nb.searchEmptyAll": "이 검색과 일치하는 항목이 없습니다.",
+  "nb.searchFuzzy": "정확히 일치하는 항목이 없습니다. 유사한 결과를 표시합니다.",
   "nb.searchLine": (line: string) => `${line}번째 줄`,
   "nb.searchMatches": (count: string) => `${count}건 일치`,
   "nb.searchMore": "앞부분의 결과만 표시합니다. 검색어를 좁히면 나머지를 확인할 수 있습니다.",
@@ -204,6 +207,9 @@ const ko: typeof en = {
   "nb.welcome": "내 노트 보관함",
   "nb.welcomeText": "자유롭게 기록하고 생각을 연결하며 일반 로컬 파일로 노트를 보관하세요. 기존 Markdown 폴더를 열거나 새 보관함에 자료를 가져올 수 있습니다.",
   "memory.globalMemory": "세션 지식 베이스",
+  "memory.collections": "보관된 세션",
+  "memory.collectionConversation": "대화",
+  "memory.collectionEmptyEntries": "이 대화에는 아직 지식 항목이 없습니다.",
   "memory.title": "지식 베이스",
   "memory.add": "세션 지식 베이스로 정리",
   "memory.intro": "프로젝트와 세션별로 지식을 정리합니다. 저장된 항목은 원본 변경에 따라 자동으로 갱신되지 않으며 직접 편집할 수 있습니다.",
@@ -776,6 +782,8 @@ const ko: typeof en = {
   "tree.exportSession": "세션 내보내기…", // Export Session…
   "tree.sessionInfo": "세션 정보", // Session Info
   "tree.groupInfo": "그룹 정보", // Group Info
+  "tree.collectionInfo": "컬렉션 정보", // Collection Info
+  "tree.projectInfo": "프로젝트 정보", // Project Info
   "info.branch": "브랜치", // Branch
   "info.path": "경로", // Path
   "info.recentCommits": "최근 커밋", // Recent Commits
@@ -953,6 +961,7 @@ const ko: typeof en = {
   "info.status": "상태", // Status
   "info.notYetCaptured": "아직 생성되지 않음 (첫 실행 후 캡처)", // Not yet generated (captured after first run)
   "info.sessionId": "세션 ID", // Session ID
+  "info.projectId": "프로젝트 ID", // Project ID
   "info.cwd": "작업 디렉터리", // Working dir
   "info.initCmd": "시작 명령", // Startup cmd
   "info.agentArgs": "실행 인자", // Launch args
@@ -1137,6 +1146,11 @@ const ko: typeof en = {
   "agentInstall.doneDesc": "이 세션을 재시작하면 바로 사용할 수 있습니다.", // Relaunch this session to start using it.
   "agentInstall.restartNow": "지금 재시작", // Relaunch now
   "agentInstall.later": "나중에", // Later
+  "agentInstall.pathLabel": "실행 파일 경로", // Executable path
+  "agentInstall.pathPlaceholder": (bin: string) => `~/.local/bin/${bin}`,
+  "agentInstall.pathHint": "PATH 외의 위치에 이미 설치했다면 실행 파일의 전체 경로를 입력합니다.", // Already installed outside PATH?
+  "agentInstall.pathSave": "이 경로 사용", // Use this path
+  "agentInstall.pathBrowse": "찾아보기…", // Browse…
   "search.placeholder": "터미널에서 검색", // Search in terminal
 
   // ── Document tabs ──
@@ -1407,6 +1421,7 @@ const ko: typeof en = {
   "crepe.collapse": "접기", // Collapse
   // ── 오른쪽 패널 / 하단 바 추가 ──
   "info.project": "프로젝트", // Project
+  "info.collection": "컬렉션", // Collection
   "panel.sessionInfo": "세션 정보", // Session info
   "panel.gitTitle": "Git 상태", // Git status
   "panel.gitProbing": "확인 중…", // Checking…

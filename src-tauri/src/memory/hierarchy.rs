@@ -170,6 +170,94 @@ pub fn tree(
     Ok(result)
 }
 
+/// Group names from the top-level group down to the session's own group. Tombstoned groups survive
+/// archiving, so an archived session keeps the original container chain it was stored in.
+fn group_path(conn: &Connection, group_id: Option<&str>) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    let mut current = group_id.map(str::to_string);
+    while let Some(id) = current {
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT name,parent_group_id FROM groups WHERE id=?1",
+                [&id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match row {
+            Some((name, parent)) => {
+                names.insert(0, name);
+                current = parent;
+            }
+            None => break,
+        }
+    }
+    Ok(names)
+}
+
+/// Archived root sessions grouped by their original project for the knowledge-base Collections
+/// hierarchy. Project snapshots are not needed here: archiving keeps the container rows as
+/// tombstones, so a deleted project's name is still available. A session whose project row is gone
+/// collects under `__unknown__`. Each session carries its generated-entry count, and the full session
+/// objects travel alongside so the frontend can render content without a second lookup.
+pub fn collections(conn: &Connection) -> Result<Value, String> {
+    let sessions = crate::db::repo::list_archived(conn)?;
+    let mut projects: BTreeMap<String, Value> = BTreeMap::new();
+    for session in &sessions {
+        let project: Option<(String, String)> = conn
+            .query_row(
+                "SELECT id,name FROM projects WHERE id=?1",
+                [&session.project_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let (project_id, project_name) = project.map_or_else(
+            || ("__unknown__".to_string(), String::new()),
+            |(id, name)| (id, name),
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM memory_entries WHERE session_id=?1",
+                [&session.id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let row = json!({
+            "id": session.id,
+            "name": session.name,
+            "kind": session.kind.as_str(),
+            "count": count,
+            "archivedAt": session.archived_at,
+            "groupPath": group_path(conn, session.group_id.as_deref())?,
+        });
+        let entry = projects.entry(project_id.clone()).or_insert_with(|| {
+            json!({
+                "id": project_id,
+                "name": project_name,
+                "kind": if project_id == "__unknown__" { "unknown" } else { "project" },
+                "count": 0,
+                "sessions": [],
+            })
+        });
+        entry["count"] = json!(entry["count"].as_i64().unwrap_or(0) + count);
+        entry["sessions"].as_array_mut().unwrap().push(row);
+    }
+    let mut result: Vec<_> = projects.into_values().collect();
+    result.sort_by_key(|p| {
+        (
+            p["kind"].as_str() != Some("project"),
+            p["name"].as_str().unwrap_or("").to_lowercase(),
+            p["id"].as_str().unwrap_or("").to_string(),
+        )
+    });
+    let sessions = sessions
+        .iter()
+        .map(|s| serde_json::to_value(s).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({"projects":result,"sessions":sessions}))
+}
+
 pub fn location(conn: &Connection, session_id: &str) -> Result<Value, String> {
     let row: Option<(String, String, String)> = conn
         .query_row(

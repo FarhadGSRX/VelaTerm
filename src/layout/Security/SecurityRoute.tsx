@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usageBrandIconEl } from "../../components/brandIcons";
 import { Backdrop } from "../../components/Backdrop";
+import Select from "../../components/Select";
 import { useT } from "../../i18n";
 import { auditCancel, auditExport, auditGet, auditList, auditModels, auditOptions, auditStart, type AuditOptions, type AuditRun, type AuditSummary } from "../../ipc/security";
 import type { ChatModel } from "../../ipc/chat";
@@ -203,8 +204,8 @@ function NewAudit({ projectId }: { projectId: string }) {
           <span className="security-agent-symbol" aria-hidden="true">{usageBrandIconEl(a.id, 24)}</span><strong>{a.label}</strong><span className="security-choice-check" aria-hidden="true">{agent === a.id ? "✓" : ""}</span>
         </label>)}</div>
         <div className="security-field-grid">
-          <label>{t("spawn.modelLabel")}<select aria-label={t("spawn.modelLabel")} value={model} disabled={busy || !models} onChange={(e) => changeModel(e.target.value)}><option value="">{models ? t("chat.modelDefault") : t("spawn.modelLoading")}</option>{models?.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
-          <label>{t("chat.effortTooltip")}<select aria-label={t("chat.effortTooltip")} value={effort} disabled={busy || !selected?.effortLevels.length} onChange={(e) => setEffort(e.target.value)}><option value="">{t("chat.effort.auto")}</option>{selected?.effortLevels.map((value) => <option key={value} value={value}>{effortLabel(value, t)}</option>)}</select></label>
+          <label>{t("spawn.modelLabel")}<Select width="100%" value={model} disabled={busy || !models} ariaLabel={t("spawn.modelLabel")} onChange={changeModel} options={[{ value: "", label: models ? t("chat.modelDefault") : t("spawn.modelLoading") }, ...(models?.map((m) => ({ value: m.id, label: m.label })) ?? [])]} /></label>
+          <label>{t("chat.effortTooltip")}<Select width="100%" value={effort} disabled={busy || !selected?.effortLevels.length} ariaLabel={t("chat.effortTooltip")} onChange={setEffort} options={[{ value: "", label: t("chat.effort.auto") }, ...(selected?.effortLevels.map((value) => ({ value, label: effortLabel(value, t) })) ?? [])]} /></label>
         </div>
         {modelError && <div className="security-error" role="alert">{auditError(modelError)}<button type="button" className="btn" onClick={() => setModelRevision((v) => v + 1)}>{t("common.retry")}</button></div>}
       </fieldset>

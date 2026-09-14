@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n";
+import Select from "../../components/Select";
 import { memoryCancel, memoryJobs, memoryModels, memoryOptions, memoryRetry, memoryStart, type MemoryJob, type MemoryOptions } from "../../ipc/memory";
 import { useTermStore } from "../../store/termStore";
 import type { SessionKind } from "../../types";
@@ -15,6 +16,10 @@ function rememberedAgent(data: MemoryOptions): string {
 
 export function MemoryCompile({ sessionId }: { sessionId: string }) {
   const t = useT(); const session = useTermStore((s) => [...s.sessions, ...s.archivedSessions].find((item) => item.id === sessionId));
+  const loadArchived = useTermStore((s) => s.loadArchived);
+  // A direct link to the organizer may arrive before the archived list is in the store; load it so an
+  // archived session still shows its name instead of its id.
+  useEffect(() => { if (!session) void loadArchived(); }, [session, loadArchived]);
   const { data, error, reload } = useMemoryLoad(memoryOptions, []);
   const [agent, setAgent] = useState(""); const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
@@ -58,14 +63,8 @@ export function MemoryCompile({ sessionId }: { sessionId: string }) {
       </div>
     </fieldset>
     {!modelReady ? <LoadState error={models.error} reload={models.reload} /> : <>
-      <label>{t("memory.model")}<select className="input" value={model} disabled={busy} onChange={(e) => { setModel(e.target.value); setEffort(""); remember({ model: e.target.value, effort: null }); }}>
-        <option value="">{t("chat.modelDefault")}</option>
-        {models.data!.items.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-      </select></label>
-      <label>{t("chat.effortTooltip")}<select className="input" value={effort} disabled={busy || !selectedModel?.effortLevels.length} onChange={(e) => { setEffort(e.target.value); remember({ effort: e.target.value }); }}>
-        <option value="">{t("spawn.modelDefault")}</option>
-        {selectedModel?.effortLevels.map((level) => <option key={level} value={level}>{memoryEffortLabel(level)}</option>)}
-      </select></label>
+      <label>{t("memory.model")}<Select width="100%" value={model} disabled={busy} ariaLabel={t("memory.model")} onChange={(value) => { setModel(value); setEffort(""); remember({ model: value, effort: null }); }} options={[{ value: "", label: t("chat.modelDefault") }, ...models.data!.items.map((item) => ({ value: item.id, label: item.label }))]} /></label>
+      <label>{t("chat.effortTooltip")}<Select width="100%" value={effort} disabled={busy || !selectedModel?.effortLevels.length} ariaLabel={t("chat.effortTooltip")} onChange={(value) => { setEffort(value); remember({ effort: value }); }} options={[{ value: "", label: t("spawn.modelDefault") }, ...(selectedModel?.effortLevels.map((level) => ({ value: level, label: memoryEffortLabel(level) })) ?? [])]} /></label>
     </>}
     {failure && <p className="memory-error" role="alert">{failure}</p>}
     <p className="memory-muted">{t("memory.schedulingHint")} {t("memory.closeHint")}</p>

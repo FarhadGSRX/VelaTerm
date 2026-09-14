@@ -1,3 +1,27 @@
+## v0.2.1 — 2026-09-14
+
+- 🔎 La page d’accueil de la base de connaissances gagne un champ de recherche : une requête explore à la fois les connaissances de session et les notes locales, et regroupe les résultats par source. Les correspondances exactes passent en premier ; une recherche approximative (abréviations, sous-séquences et fautes de frappe) ne s’active que s’il n’y a aucune correspondance exacte, et les requêtes en chinois restent en sous-chaîne.
+
+- 🗂️ Les sessions archivées rejoignent la base de connaissances. Le bouton de la barre latérale y renvoie au lieu d’ouvrir son propre panneau, l’arborescence ajoute une racine « Sessions archivées » groupée par projet d’origine, et la zone principale liste toutes les sessions archivées avec restauration, réorganisation, export et suppression sur place.
+
+- 🔍 Les sessions archivées disposent de leur propre recherche plein texte : les résultats sont groupés par session avec un nombre de correspondances, et le volet d’aperçu parcourt chaque correspondance avec la même mise en évidence que la recherche globale. Une session ouverte bascule entre sa conversation et ses entrées de connaissances.
+
+- 🤖 Vue conversation : lorsqu’un exécutable d’agent est introuvable, un guide d’installation s’affiche sous le message au lieu de l’erreur de démarrage brute ; « Installer maintenant » bascule vers la vue terminal, qui exécute la commande recommandée. Si l’agent est installé hors du PATH, le guide accepte directement le chemin de l’exécutable, avec un sélecteur de fichiers système sur le bureau.
+
+- 🩹 Les installations qui semblent présentes mais sont cassées sont désormais détectées : un wrapper npm global dont la cible a été supprimée ou remplacée est considéré comme non installé, et un chemin configuré qui pointe vers un tel wrapper ouvre le guide d’installation sans modifier votre réglage.
+
+- 🔐 L’entrée du mode d’autorisation affiche directement le mode choisi, et son menu indique pour chaque ligne si le choix est actif ou attend le prochain tour.
+
+- 🔽 Tous les menus déroulants utilisent désormais le composant Select intégré au lieu du contrôle natif : leur apparence est identique sous macOS 15 et 26, sans superposition du contrôle système.
+
+- ℹ️ Les projets et les collections ont une fenêtre d’informations dans leur menu contextuel.
+
+- 🪟 Windows : les sous-processus lancés par la vue conversation (agents, catalogue de modèles et vérifications git) ne font plus clignoter de fenêtre de console.
+
+- 💡 Le bouton de retour d’information de la barre de titre passe après le bouton de partage.
+
+---
+
 ## v0.2.0 — 2026-09-13
 
 - 📱 Application VelaTerm pour iOS et Android (version préliminaire) : connectez-vous à une machine par SSH ou par URL après avoir confirmé l’empreinte de l’hôte, chargez l’interface distante complète dans l’application, remplissez les informations de connexion par code QR et connectez-vous à un compte distant.

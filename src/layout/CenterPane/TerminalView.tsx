@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 import Icons from "../../components/Icons";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { StatusIndicator } from "../../components/StatusIndicator";
-import { kindIconEl } from "../sessionViewers/sessionMeta";
+import { AGENT_KIND_LABEL, kindIconEl } from "../sessionViewers/sessionMeta";
 import { useT } from "../../i18n";
 import { TermScrollbar } from "./TermScrollbar";
 import { usePtySession } from "../../hooks/usePtySession";
@@ -590,24 +590,6 @@ function ShellPicker({ session }: { session: Session }) {
   );
 }
 
-/** Fallback local-agent display names used before recipes arrive, preventing an empty title flash. */
-const AGENT_KIND_LABEL: Partial<Record<Session["kind"], string>> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  opencode: "OpenCode",
-  copilot: "GitHub Copilot CLI",
-  cursor: "Cursor CLI",
-  antigravity: "Antigravity CLI",
-  cline: "Cline CLI",
-  pi: "Pi",
-  omp: "OMP",
-  crush: "Crush",
-  kimi: "Kimi Code (K3)",
-  kiro: "Kiro",
-  grok: "Grok Build (Grok 4.5)",
-  zoo: "Zoo Code",
-};
-
 /** Locates an installation, fills the agent's global executable-path setting, and immediately flushes it to the
  *  backend. Returns whether a path already existed or was saved. Never overwrite a user-configured path. When
  *  `notify` is true, record agentPathSaved to show the installation-complete dialog; retry-start detection uses
@@ -670,27 +652,42 @@ function useAgentInstallLocator(session: Session) {
   }, [active, kind, session.id]);
 }
 
+/** Write the recipe into this session's shell, mark installation active, and start location polling.
+ *  Shared by the card's button and a request handed over from the conversation view. */
+function runInstall(sessionId: string, command: string) {
+  void ptyWrite(sessionId, command + "\r");
+  useTermStore.getState().setRuntime(sessionId, { agentInstalling: true, agentAutoInstall: false });
+  focusTerminal(sessionId);
+}
+
 /** Missing-agent guidance card shown for local agent sessions when runtime.agentMissing is set.
  *
  *  Three states: (1) an information panel overlays the idle terminal with a copyable recommended command,
- *  one-click install, retry, documentation, authentication guidance, and manual-install option; (2) one-click
- *  install writes the command to this session's shell, removes the card while output scrolls, and leaves location
- *  polling on TerminalView; (3) after the path is detected and saved, a completion dialog offers restart now or
- *  later. Restart increments the epoch, remounts the pane, and spawns using the new path. */
+ *  one-click install, retry, documentation, authentication guidance, an executable-path field for an
+ *  installation outside PATH, and manual-install option; (2) one-click install writes the command to this
+ *  session's shell, removes the card while output scrolls, and leaves location polling on TerminalView;
+ *  (3) after the path is detected or entered and saved, a completion dialog offers restart now or later.
+ *  Restart increments the epoch, remounts the pane, and spawns using the new path. */
 function AgentInstallCard({ session }: { session: Session }) {
   const t = useT();
   const missing = useTermStore((s) => !!s.runtimes[session.id]?.agentMissing);
   const restartSession = useTermStore((s) => s.restartSession);
   const setRuntime = useTermStore((s) => s.setRuntime);
+  const setAgentDefault = useTermStore((s) => s.setAgentDefault);
   const [recipe, setRecipe] = useState<AgentInstallRecipe | null>(null);
   // Briefly show Copied after success so the action has visible feedback.
   const [copied, setCopied] = useState(false);
+  // Manual executable path for an installation the discovery probes cannot see, such as a drop-in
+  // binary in a custom directory. Committed on Enter or the button.
+  const [pathDraft, setPathDraft] = useState("");
   // Keep installation state and the saved path in runtime state so they survive tab switches and pane remounts.
   const installing = useTermStore((s) => !!s.runtimes[session.id]?.agentInstalling);
   const pathSaved = useTermStore((s) => s.runtimes[session.id]?.agentPathSaved ?? null);
 
   const kind = session.kind;
   const eligible = kind in AGENT_KIND_LABEL;
+  // The system file picker exists only in the desktop shells; browsers hide the Browse button.
+  const nativeFilePicker = env.isTauri || env.isElectron;
 
   // Fetch OS-specific installation guidance once when a local agent is marked missing.
   useEffect(() => {
@@ -706,6 +703,21 @@ function AgentInstallCard({ session }: { session: Session }) {
     };
   }, [missing, eligible, kind]);
 
+  // A one-click install requested from the conversation view. The card only appears after the guard's
+  // authoritative not-found signal, so the shell is already up and can take the recipe; the request is
+  // consumed once, and the flag is cleared again by dismiss and retry so it never fires later.
+  const autoInstall = useTermStore((s) => !!s.runtimes[session.id]?.agentAutoInstall);
+  const autoInstallHandled = useRef(false);
+  useEffect(() => {
+    if (!autoInstall) {
+      autoInstallHandled.current = false;
+      return;
+    }
+    if (autoInstallHandled.current || !missing || !eligible || !recipe?.command.trim()) return;
+    autoInstallHandled.current = true;
+    runInstall(session.id, recipe.command);
+  }, [autoInstall, missing, eligible, recipe, session.id]);
+
   if (!eligible || (!missing && !pathSaved)) return null;
 
   const label = recipe?.label ?? AGENT_KIND_LABEL[kind] ?? kind;
@@ -713,7 +725,7 @@ function AgentInstallCard({ session }: { session: Session }) {
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   // Dismissing the card clears installation polling. The hook reports not-found only once, so the card does not
   // reappear until a retry or restart runs detection again and confirms the agent is still missing.
-  const dismiss = () => setRuntime(session.id, { agentMissing: false, agentInstalling: false });
+  const dismiss = () => setRuntime(session.id, { agentMissing: false, agentInstalling: false, agentAutoInstall: false });
   // Completion has two exits: restart now clears installation flags and starts with the new path; later dismisses
   // only the dialog because the saved setting will be used by any future start.
   const restartNow = () => {
@@ -721,6 +733,7 @@ function AgentInstallCard({ session }: { session: Session }) {
       agentMissing: false,
       agentInstalling: false,
       agentPathSaved: null,
+      agentAutoInstall: false,
     });
     void restartSession(session.id);
   };
@@ -729,6 +742,7 @@ function AgentInstallCard({ session }: { session: Session }) {
       agentMissing: false,
       agentInstalling: false,
       agentPathSaved: null,
+      agentAutoInstall: false,
     });
   // Clear flags before restarting to avoid flashing the old card during the epoch remount; detection restores it if needed.
   const retry = async () => {
@@ -739,15 +753,33 @@ function AgentInstallCard({ session }: { session: Session }) {
     } catch {
       /* Detection is best-effort; restart normally if it fails. */
     }
-    setRuntime(session.id, { agentMissing: false, agentInstalling: false });
+    setRuntime(session.id, { agentMissing: false, agentInstalling: false, agentAutoInstall: false });
     void restartSession(session.id);
   };
   const doInstall = () => {
     if (!recipe) return;
-    void ptyWrite(session.id, recipe.command + "\r");
-    // Mark installation active, dismiss the card, and start TerminalView location polling.
-    setRuntime(session.id, { agentInstalling: true });
-    focusTerminal(session.id);
+    runInstall(session.id, recipe.command);
+  };
+  // Save a manually entered executable path for this agent type and show the same completion dialog
+  // as a located installation, which offers the relaunch that applies it.
+  const savePath = () => {
+    const path = pathDraft.trim();
+    if (!path) return;
+    setAgentDefault(kind, { path });
+    // Flush before showing the dialog; spawn reads app_settings immediately and cannot see a debounced value.
+    void flushSettingsSync().then(() => {
+      setRuntime(session.id, { agentPathSaved: path });
+    });
+  };
+  // Fill the field from the system file picker. Only the desktop shells have one; the button is hidden
+  // elsewhere, and a canceled dialog leaves the draft untouched.
+  const browsePath = () => {
+    void platform.dialog
+      .pickFile({ title: t("agentInstall.pathLabel") })
+      .then((picked) => {
+        if (picked) setPathDraft(picked);
+      })
+      .catch(() => {});
   };
   const openDocs = () => {
     if (recipe) void platform.opener.openExternal(recipe.docsUrl).catch(() => {});
@@ -985,6 +1017,62 @@ function AgentInstallCard({ session }: { session: Session }) {
             {recipe.authHint}
           </div>
         )}
+
+        {/* Manual path for an installation outside PATH. Saving it runs through the same completion
+            dialog as a located installation, so the relaunch that applies it is one click away. */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            paddingTop: 12,
+            borderTop: "1px solid var(--border)",
+          }}
+        >
+          <div style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
+            {t("agentInstall.pathLabel")}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className="vlx-input"
+              aria-label={t("agentInstall.pathLabel")}
+              value={pathDraft}
+              placeholder={t("agentInstall.pathPlaceholder", recipe?.bin ?? kind)}
+              spellCheck={false}
+              autoCapitalize="none"
+              autoCorrect="off"
+              onChange={(e) => setPathDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") savePath();
+              }}
+              style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "6px 8px" }}
+            />
+            {nativeFilePicker && (
+              <button
+                style={{ ...ghostBtn, flex: "none" }}
+                onMouseDown={stop}
+                onClick={browsePath}
+              >
+                {t("agentInstall.pathBrowse")}
+              </button>
+            )}
+            <button
+              style={{
+                ...ghostBtn,
+                flex: "none",
+                ...(pathDraft.trim() ? null : { opacity: 0.5, cursor: "not-allowed" }),
+              }}
+              onMouseDown={stop}
+              disabled={!pathDraft.trim()}
+              onClick={savePath}
+            >
+              {t("agentInstall.pathSave")}
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+            {t("agentInstall.pathHint")}
+          </div>
+        </div>
 
         {/* Secondary links. */}
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>

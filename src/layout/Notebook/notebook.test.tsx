@@ -7,9 +7,9 @@ import { KnowledgeNavigation } from "./KnowledgeNavigation";
 import { KnowledgeVaultDialogs } from "./VaultActions";
 import { MemoryRoute } from "../Memory/MemoryRoute";
 
-const api=vi.hoisted(()=>({overview:vi.fn(),tree:vi.fn(),list:vi.fn(),get:vi.fn(),save:vi.fn(),stat:vi.fn(),register:vi.fn(),create:vi.fn(),restore:vi.fn(),pick:vi.fn(),env:{isBrowser:true},move:vi.fn(),trash:vi.fn(),unregister:vi.fn(),vaultRename:vi.fn(),memoryRename:vi.fn(),memoryDelete:vi.fn(),memoryMove:vi.fn(),memoryGroupRename:vi.fn(),memoryGroupMove:vi.fn(),memoryGroupDelete:vi.fn()}));
+const api=vi.hoisted(()=>({overview:vi.fn(),tree:vi.fn(),list:vi.fn(),collections:vi.fn(),get:vi.fn(),save:vi.fn(),stat:vi.fn(),register:vi.fn(),create:vi.fn(),restore:vi.fn(),pick:vi.fn(),env:{isBrowser:true},move:vi.fn(),trash:vi.fn(),unregister:vi.fn(),vaultRename:vi.fn(),memoryRename:vi.fn(),memoryDelete:vi.fn(),memoryMove:vi.fn(),memoryGroupRename:vi.fn(),memoryGroupMove:vi.fn(),memoryGroupDelete:vi.fn()}));
 vi.mock("../../ipc/notebook",()=>({notebookOverview:api.overview,notebookTree:api.tree,notebookGet:api.get,notebookSave:api.save,notebookStat:api.stat,notebookRegister:api.register,notebookCreate:api.create,notebookRestore:api.restore,notebookMove:api.move,notebookTrash:api.trash,notebookUnregister:api.unregister,notebookVaultRename:api.vaultRename,notebookAsset:vi.fn(),notebookFavorite:vi.fn(),uploadNotebookFiles:vi.fn(),notebookDroppedFiles:vi.fn()}));
-vi.mock("../../ipc/memory",()=>({memoryList:api.list,memoryGet:vi.fn(),memoryRename:api.memoryRename,memoryDelete:api.memoryDelete,memoryMove:api.memoryMove,memoryGroupRename:api.memoryGroupRename,memoryGroupMove:api.memoryGroupMove,memoryGroupDelete:api.memoryGroupDelete}));
+vi.mock("../../ipc/memory",()=>({memoryList:api.list,memoryGet:vi.fn(),memoryCollections:api.collections,memoryRename:api.memoryRename,memoryDelete:api.memoryDelete,memoryMove:api.memoryMove,memoryGroupRename:api.memoryGroupRename,memoryGroupMove:api.memoryGroupMove,memoryGroupDelete:api.memoryGroupDelete}));
 vi.mock("../../platform",()=>({platform:{env:api.env,dialog:{pickDirectory:api.pick}}}));
 vi.mock("../../remote/ServerFileBrowser",()=>({cardStyle:{},joinPath:(parent:string,name:string)=>`${parent.replace(/\/$/, "")}/${name}`,useServerBrowser:()=>({selectedDir:"/existing/Markdown"}),ServerBrowserView:()=> <div>Server directory picker</div>}));
 const vault={id:"vault-1",name:"Personal",root:"/notes"};
@@ -18,6 +18,7 @@ beforeEach(()=>{
   setLang("en");api.env.isBrowser=true;api.pick.mockReset();window.history.replaceState(null,"","/");
   useTermStore.setState({docTabs:{},openTabs:[],activeTabId:null});
   api.list.mockReset().mockResolvedValue({projects:[],selectedSessionId:null,entries:[],total:0,pageSize:40,tags:[]});
+  api.collections.mockReset().mockResolvedValue({projects:[],sessions:[]});
   api.overview.mockReset().mockResolvedValue({vaults:[vault],defaultRoot:"/Notes",limits:{chunkBytes:1024,noteBytes:10000,assetBytes:10000,files:100}});
   api.tree.mockReset().mockResolvedValue({vault,nodes:[{...node,path:"Projects",absolutePath:"/notes/Projects",name:"Projects",kind:"folder"},node],entries:[node],tags:[],trash:[],skipped:0});
   api.get.mockReset().mockResolvedValue({});api.stat.mockReset().mockResolvedValue({digest:"old"});api.save.mockReset();api.register.mockReset().mockResolvedValue({id:vault.id});api.create.mockReset().mockResolvedValue({path:"New.md",kind:"note",absolutePath:"/notes/New.md"});api.restore.mockReset().mockResolvedValue({path:"Restored.md"});

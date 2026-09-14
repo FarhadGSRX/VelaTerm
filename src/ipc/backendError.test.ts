@@ -10,7 +10,7 @@ vi.mock("../i18n", () => ({
   t: (key: string, ...args: unknown[]) => [key, ...args].join("|"),
 }));
 
-import { handshakeFailureReason, mapBackendError } from "./backendError";
+import { handshakeFailureReason, isAgentNotInstalledError, mapBackendError } from "./backendError";
 
 describe("mapBackendError", () => {
   it("maps the command gate code to its i18n key with the command as detail", () => {
@@ -58,5 +58,22 @@ describe("handshakeFailureReason", () => {
     expect(handshakeFailureReason({})).toBe("unauthorized");
     // A rate_limited code without the e2ee_error type must not unlock the retry path.
     expect(handshakeFailureReason({ type: "other", code: "rate_limited" })).toBe("unauthorized");
+  });
+});
+
+describe("isAgentNotInstalledError", () => {
+  it("recognizes the missing-executable code with and without its agent detail", () => {
+    expect(isAgentNotInstalledError("agent_not_installed")).toBe(true);
+    expect(isAgentNotInstalledError("agent_not_installed:codex")).toBe(true);
+    expect(isAgentNotInstalledError(new Error("agent_not_installed:codex"))).toBe(true);
+    // The outbox stores `String(error)`, which adds the standard Error prefix.
+    expect(isAgentNotInstalledError("Error: agent_not_installed:codex")).toBe(true);
+  });
+
+  it("leaves other failures alone", () => {
+    expect(isAgentNotInstalledError(undefined)).toBe(false);
+    expect(isAgentNotInstalledError("")).toBe(false);
+    expect(isAgentNotInstalledError("Failed to start the agent \"codex\": program not found")).toBe(false);
+    expect(isAgentNotInstalledError("agent_not_installed_elsewhere")).toBe(false);
   });
 });

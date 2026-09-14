@@ -1,3 +1,27 @@
+## v0.2.1 — 2026-09-14
+
+- 🔎 Die Startseite der Wissensdatenbank erhält ein Suchfeld: Eine Abfrage durchsucht Sitzungswissen und lokale Notizen zugleich und gruppiert die Treffer nach Quelle. Genaue Treffer stehen zuerst; eine unscharfe Suche (Abkürzungen, Teilfolgen und Tippfehler) greift nur, wenn nichts genau passt, und chinesische Anfragen bleiben Teilstring-basiert.
+
+- 🗂️ Archivierte Sitzungen ziehen in die Wissensdatenbank um. Die Schaltfläche in der Seitenleiste springt dorthin statt ein eigenes Fenster zu öffnen, der Baum erhält eine nach dem ursprünglichen Projekt gruppierte Wurzel „Archivierte Sitzungen“, und der Hauptbereich listet alle archivierten Sitzungen mit Wiederherstellen, Neuordnen, Exportieren und Löschen an Ort und Stelle.
+
+- 🔍 Archivierte Sitzungen lassen sich volltextdurchsuchen: Treffer werden je Sitzung mit Anzahl gruppiert, und die Vorschau springt jeden Treffer mit derselben Hervorhebung wie die globale Suche an. Eine geöffnete Sitzung wechselt zwischen ihrem Verlauf und ihren Wissenstreffern.
+
+- 🤖 Konversationsansicht: Fehlt die ausführbare Datei eines Agenten, erscheint unter der Nachricht eine Installationsanleitung statt des rohen Startfehlers; „Jetzt installieren“ wechselt in die Terminalansicht, die den empfohlenen Befehl ausführt. Liegt der Agent außerhalb des PATH, nimmt die Karte direkt einen Pfad zur ausführbaren Datei entgegen, am Desktop mit System-Dateiauswahl.
+
+- 🩹 Installationen, die vorhanden aussehen, aber defekt sind, werden erkannt: Ein globaler npm-Wrapper, dessen Ziel entfernt oder ersetzt wurde, gilt als nicht installiert, und ein konfigurierter Pfad zu einem solchen Wrapper öffnet die Installationsanleitung, ohne deine Einstellung zu überschreiben.
+
+- 🔐 Der Eintrag für den Berechtigungsmodus zeigt direkt den gewählten Modus, und das Menü vermerkt an jeder Zeile, ob die Wahl bereits läuft oder auf den nächsten Zug wartet.
+
+- 🔽 Alle Auswahlmenüs nutzen jetzt die eingebaute Select-Komponente statt des nativen Steuerelements und sehen damit unter macOS 15 und 26 gleich aus, ohne die Überlagerung des Systemelements.
+
+- ℹ️ Projekte und Sammlungen haben einen Info-Dialog im Kontextmenü.
+
+- 🪟 Windows: Von der Konversationsansicht gestartete Unterprozesse (Agenten, Modellkatalog und git-Prüfungen) blitzen nicht mehr als Konsolenfenster auf.
+
+- 💡 Die Feedback-Schaltfläche in der Titelleiste steht jetzt nach der Teilen-Schaltfläche.
+
+---
+
 ## v0.2.0 — 2026-09-13
 
 - 📱 VelaTerm für iOS und Android (frühe Version): Verbinde dich per SSH oder URL mit einem Rechner und bestätige beim ersten Verbinden den Fingerabdruck des Hosts; lade die vollständige entfernte Oberfläche direkt in der App, fülle Verbindungsdaten per QR-Code aus und melde dich bei einem entfernten Konto an.

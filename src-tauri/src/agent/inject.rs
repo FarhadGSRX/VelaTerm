@@ -683,6 +683,17 @@ fn path_missing_message(path: &str) -> String {
     )
 }
 
+/// Message shown when a generated command wrapper exists but the program it forwards to is gone: the
+/// installation failed, was interrupted, or was removed afterwards (antivirus quarantine is a common
+/// cause). The same hook report that accompanies `not_found_message` brings up the installation card,
+/// whose recommended command repairs the installation.
+fn broken_install_message(bin: &str) -> String {
+    format!(
+        "[VelaTerm] {bin} is installed incompletely: its launcher points at a missing program. \
+         Reinstall it, then reopen the session."
+    )
+}
+
 /// Embeds arbitrary text in POSIX/fish single quotes by replacing `'` with `'\''`.
 fn sq_posix(s: &str) -> String {
     s.replace('\'', "'\\''")
@@ -892,12 +903,18 @@ pub fn prepare_with_args(
         // Only the manager installs the Kiro shadow agent, so every other caller launches without `--agent`.
         None,
         true,
+        // Tests drive broken installs through the production entry point directly.
+        false,
     )
 }
 
 /// Production launch entry point. In addition to launch arguments, it explicitly receives whether the
 /// installed Codex supports lifecycle hooks and `--dangerously-bypass-hook-trust`. Older versions receive
 /// only the existing notify integration and retain screen/busy fallbacks, avoiding unsupported CLI options.
+///
+/// `bin_broken` marks an installation whose generated command wrapper exists but whose payload is gone.
+/// Such a session never launches the command: resolving the name in the shell would find the same dead
+/// wrapper and print only cmd.exe's path error, so the launch reports the agent as missing instead.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_with_args_capabilities(
     kind: SessionKind,
@@ -913,6 +930,7 @@ pub fn prepare_with_args_capabilities(
     agent_ext_path: Option<&str>,
     kiro_agent: Option<&str>,
     codex_hooks_supported: bool,
+    bin_broken: bool,
 ) -> AgentSpawn {
     let shell = shell_kind(shell_path);
     let resume = resume_id.and_then(valid_resume_id);
@@ -1373,6 +1391,17 @@ pub fn prepare_with_args_capabilities(
             .env
             .push((NOTFOUND_URL_ENV.to_string(), hook_url(ep, sid, "notfound")));
     }
+    // A generated command wrapper whose payload is gone is not a usable installation. The interactive
+    // shell would resolve that same wrapper by name and print only cmd.exe's path error, so replace the
+    // launch with the missing-agent report, which also shows the installation guidance.
+    if bin_broken && spawn.launch.is_some() {
+        let message = broken_install_message(crate::agent::executable::command_name(kind));
+        spawn.launch = Some(format!(
+            "{}{}",
+            clear_prefix(shell),
+            report_not_found_with(shell, &message)
+        ));
+    }
     spawn
 }
 
@@ -1683,6 +1712,51 @@ mod tests {
             r"if (Test-Path -LiteralPath 'C:\Users\me\.local\bin\claude.exe' -PathType Leaf) { & 'C:\Users\me\.local\bin\claude.exe' --settings $env:X }"
         ));
         assert!(s.contains("$env:VLX_NOTFOUND_URL"), "a miss is still reported through the hook");
+    }
+
+    #[test]
+    fn broken_install_reports_instead_of_resolving_the_dead_wrapper() {
+        // A wrapper whose payload is gone must not be resolved by name again, because the shell would
+        // find that same wrapper and print only its path error. The launch behaves like a missing agent,
+        // and the report still reaches the hook so the installation card appears.
+        let a = prepare_with_args_capabilities(
+            SessionKind::Opencode,
+            "powershell.exe",
+            "/exe",
+            &ep(),
+            "s",
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+            true,
+        );
+        let launch = a.launch.unwrap();
+        assert!(!launch.contains("Get-Command"), "a dead wrapper must not be looked up by name");
+        assert!(launch.contains("VLX_NOTFOUND_URL"), "the report must still reach the hook");
+        assert!(launch.contains("installed incompletely"));
+        // Terminal sessions never launch an agent, so they keep their empty launch.
+        let t = prepare_with_args_capabilities(
+            SessionKind::Terminal,
+            "powershell.exe",
+            "/exe",
+            &ep(),
+            "s",
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+            true,
+        );
+        assert!(t.launch.is_none());
     }
 
     #[test]
@@ -2061,6 +2135,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             false,
         );
         assert!(a.env.iter().any(|(key, _)| key == CODEX_NOTIFY_ENV));
@@ -2575,6 +2650,7 @@ mod tests {
             None,
             Some("vlx-term"),
             true,
+            false,
         );
         assert_launch_inner(
             &a.launch.unwrap(),

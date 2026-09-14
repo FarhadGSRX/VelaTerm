@@ -1,10 +1,12 @@
 //! Knowledge base protocol. Business data and defaults are supplied by the backend.
+import type { Session } from "../types";
 import { invoke } from "./transport";
 export interface MemoryEntry {
   id: string; title: string; summary: string; content: string; tags: string[]; related: string[];
   sources: string[]; version: number; createdAt: number; updatedAt: number;
 }
-export interface MemorySummary { id: string; sessionId?: string; title: string; summary: string; tags: string[]; version: number; updatedAt: number; sourceCount: number; related?: { id: string; title: string }[] }
+/** Snippet, line and matched literals are present while a search query is active, not when browsing. */
+export interface MemorySummary { id: string; sessionId?: string; title: string; summary: string; snippet?: string; line?: number; matched?: string[]; tags: string[]; version: number; updatedAt: number; sourceCount: number; related?: { id: string; title: string }[] }
 export interface MemorySource { id: string; sessionId: string; sessionName: string; kind: string; createdAt: number; digest: string; content?: string; agentSessionId?: string }
 export interface MemoryDetail {
   location?: { sessionId: string; sessionName: string; projectId: string; projectName: string; kind: string };
@@ -13,7 +15,12 @@ export interface MemoryDetail {
 }
 export interface MemorySessionGroup { id: string; name: string; kind: "session" | "manual" | "legacy"; count: number }
 export interface MemoryProjectGroup { id: string; name: string; kind: "project" | "unknown" | "manual" | "legacy"; count: number; sessions: MemorySessionGroup[] }
-export interface MemoryList { projects: MemoryProjectGroup[]; selectedSessionId: string | null; entries: MemorySummary[]; total: number; pageSize: number; tags: string[] }
+export interface MemoryList { projects: MemoryProjectGroup[]; selectedSessionId: string | null; entries: MemorySummary[]; total: number; pageSize: number; tags: string[]; fuzzy?: boolean }
+/** One archived root session inside a Collections project group. */
+export interface MemoryCollectionSession { id: string; name: string; kind: string; count: number; archivedAt: number | null; groupPath: string[] }
+export interface MemoryCollectionProject { id: string; name: string; kind: "project" | "unknown"; count: number; sessions: MemoryCollectionSession[] }
+/** Archived sessions grouped by their original project, plus the complete session objects for viewers. */
+export interface MemoryCollections { projects: MemoryCollectionProject[]; sessions: Session[] }
 export interface MemoryJob {
   id: string; sourceId: string; sessionName: string; agent: string; model: string; effort: string; status: string; stage: string;
   progress: number; total: number; error: string; entries: string[]; createdAt: number; updatedAt: number;
@@ -24,6 +31,7 @@ export interface MemoryModel { id: string; label: string; effortLevels: string[]
 export const memoryModels = (agent: string) => invoke<MemoryModel[]>("memory_models", { agent });
 export const memoryOptions = () => invoke<MemoryOptions>("memory_options");
 export const memoryList = (args: { query: string; tag: string; sort: string; page: number; sessionId?: string; projectId?: string; selectedId?: string }) => invoke<MemoryList>("memory_list", args);
+export const memoryCollections = () => invoke<MemoryCollections>("memory_collections");
 export const memoryGet = (id: string, version?: number) => invoke<MemoryDetail>("memory_get", { id, version });
 export const memorySave = (args: MemoryEdit) => invoke<MemoryEntry>("memory_save", args);
 /** Rename one entry from the knowledge tree; the new title is recorded as a manual revision. */

@@ -25,8 +25,6 @@ const storeState = vi.hoisted(() => ({
   archiveMany: vi.fn(),
   archiveGroup: vi.fn(),
   clearNodeWorktree: vi.fn(),
-  archiveOpen: false,
-  setArchiveOpen: vi.fn(),
   globalSearchOpen: false,
   setGlobalSearchOpen: vi.fn(),
   notifications: {},
@@ -118,7 +116,6 @@ vi.mock("./ProjectTree", () => ({
     </div>
   ),
 }));
-vi.mock("./ArchivePanel", () => ({ ArchivePanel: () => null }));
 vi.mock("../GlobalSearch/GlobalSearch", () => ({ GlobalSearch: () => null }));
 
 import { LeftSidebar } from "./LeftSidebar";

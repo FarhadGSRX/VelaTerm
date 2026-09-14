@@ -13,7 +13,7 @@
 //! switch without knowing which way it is set.
 
 use std::collections::HashMap;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -57,7 +57,7 @@ pub fn lookup(bin: &str, cwd: Option<&str>) -> Vec<ConfigKey> {
 }
 
 fn ask(bin: &str, cwd: Option<&str>) -> Option<Vec<ConfigKey>> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = crate::host::command(bin);
     cmd.args(["-p", "--output-format", "text", "/config"]);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);

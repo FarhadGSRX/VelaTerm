@@ -8,7 +8,7 @@ use crate::{
 };
 use serde_json::{json, Value};
 use std::{
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -347,7 +347,7 @@ pub(in crate::agent::chat::engine) fn logout(
     }
     proc.extras.lock().unwrap().auth = Some(AuthState::new("signingOut"));
     emit_extras(app, session_id, proc);
-    let mut command = Command::new(&proc.bin);
+    let mut command = crate::host::command(&proc.bin);
     command
         .args(&proc.auth_settings_args)
         .args(["auth", "logout"])

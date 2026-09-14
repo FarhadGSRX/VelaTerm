@@ -5,7 +5,7 @@
 //! short-lived one is started for the question and stopped straight after, the way the Codex catalogue
 //! is read from a throwaway app-server.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +19,7 @@ pub fn list(app: &crate::host::AppCtx, session_id: &str, bin: &str, cwd: Option<
     }
     let port = opencode_protocol::configured_port(app, &format!("catalog.{session_id}"))?;
     let password = opencode_protocol::random_password();
-    let mut command = Command::new(bin);
+    let mut command = crate::host::command(bin);
     crate::agent::executable::prepare_command(&mut command, bin);
     command
         .arg("serve")

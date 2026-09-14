@@ -29,7 +29,7 @@ afterEach(cleanup);
 it("explains replacement and opens the new job returned by submission", async () => {
   api.start.mockResolvedValue({ id: "replacement", reused: false });
   render(<MemoryCompile sessionId="session" />);
-  await screen.findByLabelText("Model (optional)");
+  await screen.findByRole("combobox", { name: "Model (optional)" });
   expect(screen.getByText(/Submitting again cancels any unfinished task/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Organize and save" }));
   await waitFor(() => expect(api.start).toHaveBeenCalledWith("session", "codex", "", ""));

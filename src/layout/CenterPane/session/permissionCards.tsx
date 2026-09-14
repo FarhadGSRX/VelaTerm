@@ -16,6 +16,7 @@
 import { useMemo, useState } from "react";
 
 import Icons from "../../../components/Icons";
+import Select from "../../../components/Select";
 import { useT } from "../../../i18n";
 import type { ChatPermission } from "../../../ipc/chat";
 import { Markdown } from "./markdown";
@@ -181,14 +182,7 @@ function ElicitationInput({
       <label className="sv-elicit-field">
         {label}
         {hint}
-        <select className="sv-question-other" value={text} onChange={(e) => onChange(field.name, e.target.value)}>
-          <option value="">{t("chat.elicitation.choose")}</option>
-          {field.options?.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        <Select width="100%" value={text} ariaLabel={field.label} onChange={(value) => onChange(field.name, value)} options={[{ value: "", label: t("chat.elicitation.choose") }, ...(field.options?.map((option) => ({ value: option.value, label: option.label })) ?? [])]} />
       </label>
     );
   }

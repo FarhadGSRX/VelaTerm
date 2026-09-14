@@ -130,6 +130,7 @@ const zhTW: typeof en = {
   "nb.folder": "資料夾",
   "nb.generatedHint": "儲存由工作階段整理出的知識，並保留來源與修訂歷程。",
   "nb.homeHint": "瀏覽工作階段知識庫與本機知識庫。",
+  "nb.homeSearch": "搜尋工作階段知識與本機筆記…",
   "nb.loadMore": "載入更多",
   "nb.import": "匯入",
   "nb.importFiles": "選擇檔案",
@@ -186,6 +187,8 @@ const zhTW: typeof en = {
   "nb.searchAllVaults": "全部知識庫",
   "nb.searchCount": (count: string) => `${count} 筆結果`,
   "nb.searchEmpty": "沒有符合的筆記。",
+  "nb.searchEmptyAll": "沒有符合的內容。",
+  "nb.searchFuzzy": "沒有精確符合的結果，以下為近似結果。",
   "nb.searchLine": (line: string) => `第 ${line} 行`,
   "nb.searchMatches": (count: string) => `${count} 處命中`,
   "nb.searchMore": "僅列出前面的結果，縮小關鍵字即可看到其餘命中。",
@@ -204,6 +207,9 @@ const zhTW: typeof en = {
   "nb.welcome": "個人知識庫",
   "nb.welcomeText": "自由記錄、連結想法，以一般本機檔案儲存筆記。開啟既有 Markdown 資料夾，或將資料匯入新的知識庫。",
   "memory.globalMemory": "工作階段知識庫",
+  "memory.collections": "已封存會話",
+  "memory.collectionConversation": "對話",
+  "memory.collectionEmptyEntries": "這段對話還沒有知識條目。",
   "memory.title": "知識庫",
   "memory.add": "整理至工作階段知識庫",
   "memory.intro": "依專案和工作階段整理知識。條目產生後獨立儲存，不隨來源變更自動更新，可手動編輯。",
@@ -764,6 +770,8 @@ const zhTW: typeof en = {
   "tree.exportSession": "匯出會話…", // Export Session…
   "tree.sessionInfo": "會話資訊", // Session Info
   "tree.groupInfo": "分組資訊", // Group Info
+  "tree.collectionInfo": "集合資訊", // Collection Info
+  "tree.projectInfo": "專案資訊", // Project Info
   "info.branch": "分支", // Branch
   "info.path": "路徑", // Path
   "info.recentCommits": "最近提交", // Recent Commits
@@ -941,6 +949,7 @@ const zhTW: typeof en = {
   "info.status": "狀態", // Status
   "info.notYetCaptured": "尚未產生（首次執行後擷取）", // Not yet generated (captured after first run)
   "info.sessionId": "會話 ID", // Session ID
+  "info.projectId": "專案 ID", // Project ID
   "info.cwd": "工作目錄", // Working dir
   "info.initCmd": "啟動命令", // Startup cmd
   "info.agentArgs": "啟動參數", // Launch args
@@ -1117,6 +1126,11 @@ const zhTW: typeof en = {
   "agentInstall.doneDesc": "重新啟動本會話即可開始使用。", // Relaunch this session to start using it.
   "agentInstall.restartNow": "立即重新啟動", // Relaunch now
   "agentInstall.later": "稍後", // Later
+  "agentInstall.pathLabel": "可執行檔路徑", // Executable path
+  "agentInstall.pathPlaceholder": (bin: string) => `~/.local/bin/${bin}`,
+  "agentInstall.pathHint": "已經安裝在 PATH 之外？填寫可執行檔的完整路徑。", // Already installed outside PATH?
+  "agentInstall.pathSave": "使用這個路徑", // Use this path
+  "agentInstall.pathBrowse": "瀏覽…", // Browse…
   "search.placeholder": "在終端機中搜尋", // Search in terminal
 
   // ── Document tabs ──
@@ -1376,6 +1390,7 @@ const zhTW: typeof en = {
   "crepe.collapse": "收合", // Collapse
   // ── Additional right and bottom bar entries ──
   "info.project": "專案", // Project
+  "info.collection": "集合", // Collection
   "panel.sessionInfo": "會話資訊", // Session info
   "panel.gitTitle": "Git 狀態", // Git status
   "panel.gitProbing": "偵測中…", // Checking…
