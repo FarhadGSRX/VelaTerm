@@ -103,6 +103,7 @@ const ja: typeof en = {
 
   // Knowledge base: saved knowledge organized by project and session.
   "memory.hierarchy": "プロジェクトとセッション",
+  "memory.up": "1つ上の階層へ",
   "memory.manualGroup": "手動作成",
   "memory.legacyGroup": "過去に統合された項目",
   "memory.unknownProject": "元のプロジェクトが不明",
@@ -441,6 +442,8 @@ const ja: typeof en = {
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh
+  "settings.autoContinue": "上限リセット後に自動再開", // Continue after limit resets
+  "settings.autoContinueHint": "Claude または Codex が 5 時間または週間の利用上限で停止した場合、上限のリセット後にタスクを自動的に再開します。", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
   "settings.cleanImages": "貼り付け画像の自動クリーンアップ",
   "settings.cleanImagesHint":
     "ターミナルに貼り付け／ドロップした画像は、まず一時ファイルとして保存されます（パスがエージェントに渡されます）。オンにすると、このセッションの一時ファイルは終了時に削除され、24 時間以上前の残りは起動時に整理されます。ドキュメント内の画像には影響しません。",
@@ -1551,8 +1554,6 @@ const ja: typeof en = {
   "permission.stateUnavailable": "権限の状態を取得できません",
   "permission.currentUnknown": "現在の権限は未確認",
   "permission.notRunning": "停止中",
-  "permission.launch": (mode: string) => "起動時の設定：" + mode,
-  "permission.unconfirmedHint": "現在の権限はまだ確認されていません。カスタム引数やエージェント内での変更により、起動時の設定と実際の動作が異なる場合があります。",
   "permission.applied": "適用済み",
   "permission.nextTurn": "次のメッセージから適用",
   "permission.restart": "このセッションの再起動後に適用",
@@ -1680,6 +1681,10 @@ const ja: typeof en = {
   "chat.toolRun.count": (n: number) => `ツール呼び出し ${n} 件`,
   "chat.toolRun.tooltip": "1 件ずつ表示",
   "chat.backToEnd": "最新のメッセージに戻る",
+  "chat.turnFold.hide": "途中経過を隠す",
+  "chat.turnFold.show": (n: number) => `途中経過を表示（${n} ステップ）`,
+  "chat.turnFold.hideAll": "すべての途中経過を隠す",
+  "chat.turnFold.showAll": "すべての途中経過を表示",
   "chat.elicitation.heading": (server: string) => `${server} が入力を求めています`,
   "chat.elicitation.cancel": "キャンセル",
   "chat.elicitation.decline": "拒否",
@@ -1735,6 +1740,12 @@ const ja: typeof en = {
   "chat.usage.cost": (usd: string) => `セッションの費用: $${usd}`,
   "chat.usage.rateLimited": (resets: string) => `利用上限に達しました。リセット: ${resets}`,
   "chat.usage.rateWarning": (pct: number, resets: string) => `利用上限: ${pct}% 使用済み。リセット: ${resets}`,
+  "chat.autoContinue.fiveHour": (time: string) => `5 時間の利用上限に達しました。${time} にタスクを自動的に再開します。`, // 5-hour usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.weekly": (time: string) => `週間の利用上限に達しました。${time} にタスクを自動的に再開します。`, // Weekly usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.generic": (time: string) => `利用上限に達しました。${time} にタスクを自動的に再開します。`, // Usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.unknownReset": "利用上限に達しました。リセット時刻を取得できないため、タスクは自動的に再開されません。", // Usage limit reached. The reset time is unknown, so the task will not continue automatically.
+  "chat.autoContinue.repeated": "再び利用上限に達したため、タスクの自動再開を停止しました。", // The usage limit was reached again. The task will no longer continue automatically.
+  "chat.autoContinue.failed": "タスクを自動的に再開できませんでした。メッセージを送信すると再開できます。", // The task could not continue automatically. Send a message to continue.
   "chat.mcp.codexScope": "Codex のユーザー設定を変更します。この設定を使用する他のセッションにも影響します。続行しますか？",
   "chat.mcp.tooltip": "MCP サーバー",
   "chat.mcp.loading": "サーバー一覧を読み込んでいます…",

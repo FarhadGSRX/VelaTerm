@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatRow } from "../../../ipc/chat";
 import {
   estimateRowHeight,
+  foldAgentTurns,
   groupToolRuns,
   markAgentTurns,
   mountedStart,
@@ -177,5 +178,52 @@ describe("estimateRowHeight", () => {
   it("treats a folded run as one short row", () => {
     const run = groupToolRuns([tool("t1", "Read"), tool("t2", "Read"), tool("t3", "Read")])[0];
     expect(estimateRowHeight(run)).toBeLessThan(60);
+  });
+});
+
+describe("foldAgentTurns", () => {
+  const reasoning = (id: string): ChatRow => ({ kind: "reasoning", id, text: "hmm", streaming: false });
+  const turns = () => markAgentTurns(groupToolRuns([
+    user("u1"),
+    reasoning("r1"),
+    assistant("a0", "looking"),
+    tool("t1", "Read"),
+    tool("t2", "Read"),
+    tool("t3", "Grep"),
+    { kind: "error", id: "e1", message: "boom" },
+    assistant("a1", "answer"),
+    user("u2"),
+    assistant("a2"),
+  ]));
+
+  it("marks turns with interim work and leaves everything drawn while expanded", () => {
+    const out = foldAgentTurns(turns(), () => false);
+    expect(shape(out.rows)).toEqual(shape(turns()));
+    expect(out.turns).toEqual([{ id: "r1", steps: 5, collapsed: false }]);
+    expect(out.rows[1].head?.fold).toEqual({ id: "r1", steps: 5, collapsed: false });
+    // A turn that is only its answer has nothing to fold.
+    expect(out.rows.at(-1)?.head?.fold).toBeUndefined();
+  });
+
+  it("keeps the answer and remarks of a collapsed turn and moves the author line onto them", () => {
+    const out = foldAgentTurns(turns(), (id) => id === "r1");
+    expect(shape(out.rows)).toEqual(["row:u1", "row:e1", "row:a1", "row:u2", "row:a2"]);
+    expect(out.rows[1].head?.fold?.collapsed).toBe(true);
+    expect(out.rows[2].head).toBeUndefined();
+    expect([...out.hiddenIn]).toEqual([["r1", "r1"], ["a0", "r1"], ["t1", "r1"]]);
+  });
+
+  it("keeps an author line for a collapsed turn with nothing left to show", () => {
+    const entries = markAgentTurns(groupToolRuns([user("u1"), reasoning("r1"), tool("t1", "Read")]));
+    const out = foldAgentTurns(entries, () => true);
+    expect(shape(out.rows)).toEqual(["row:u1", "fold:r1:fold"]);
+    expect(out.rows[1].head?.fold).toEqual({ id: "r1", steps: 2, collapsed: true });
+  });
+
+  it("leaves answered questions visible", () => {
+    const entries = markAgentTurns(groupToolRuns([user("u1"), tool("q1", "AskUserQuestion"), tool("t1", "Read"), assistant("a1")]));
+    const out = foldAgentTurns(entries, () => true);
+    expect(shape(out.rows)).toEqual(["row:u1", "row:q1", "row:a1"]);
+    expect(out.turns[0].steps).toBe(1);
   });
 });

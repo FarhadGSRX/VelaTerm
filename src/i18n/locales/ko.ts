@@ -103,6 +103,7 @@ const ko: typeof en = {
 
   // Knowledge base: saved knowledge organized by project and session.
   "memory.hierarchy": "프로젝트 및 세션",
+  "memory.up": "상위 단계로 이동",
   "memory.manualGroup": "직접 만든 항목",
   "memory.legacyGroup": "이전에 병합된 항목",
   "memory.unknownProject": "원본 프로젝트를 알 수 없음",
@@ -441,6 +442,8 @@ const ko: typeof en = {
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh
+  "settings.autoContinue": "한도 초기화 후 자동으로 계속", // Continue after limit resets
+  "settings.autoContinueHint": "Claude 또는 Codex가 5시간 또는 주간 사용 한도로 중단되면 한도가 초기화된 후 작업을 자동으로 계속합니다.", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
   "settings.cleanImages": "붙여넣은 이미지 자동 정리",
   "settings.cleanImagesHint":
     "터미널에 붙여넣거나 끌어다 놓은 이미지는 먼저 임시 파일로 저장됩니다(경로가 에이전트에 전달됩니다). 켜면 이 세션의 임시 파일은 종료 시 삭제되고, 24시간이 지난 잔여 파일은 시작 시 정리됩니다. 문서 안의 이미지는 영향을 받지 않습니다.",
@@ -1533,8 +1536,6 @@ const ko: typeof en = {
   "permission.stateUnavailable": "권한 상태를 확인할 수 없음",
   "permission.currentUnknown": "현재 권한 미확인",
   "permission.notRunning": "실행 중이 아님",
-  "permission.launch": (mode: string) => "시작 설정: " + mode,
-  "permission.unconfirmedHint": "현재 권한이 아직 확인되지 않았습니다. 사용자 지정 인수나 에이전트 내부의 변경 사항에 따라 시작 설정의 실제 적용 결과가 달라질 수 있습니다.",
   "permission.applied": "적용됨",
   "permission.nextTurn": "다음 메시지부터 적용",
   "permission.restart": "이 세션을 다시 시작하면 적용",
@@ -1662,6 +1663,10 @@ const ko: typeof en = {
   "chat.toolRun.count": (n: number) => `도구 호출 ${n}개`,
   "chat.toolRun.tooltip": "하나씩 보기",
   "chat.backToEnd": "최신 메시지로 이동",
+  "chat.turnFold.hide": "진행 과정 숨기기",
+  "chat.turnFold.show": (n: number) => `진행 과정 보기(${n}단계)`,
+  "chat.turnFold.hideAll": "모든 진행 과정 숨기기",
+  "chat.turnFold.showAll": "모든 진행 과정 보기",
   "chat.elicitation.heading": (server: string) => `${server}에서 입력을 요청합니다`,
   "chat.elicitation.cancel": "취소",
   "chat.elicitation.decline": "거절",
@@ -1717,6 +1722,12 @@ const ko: typeof en = {
   "chat.usage.cost": (usd: string) => `세션 비용: $${usd}`,
   "chat.usage.rateLimited": (resets: string) => `사용 한도에 도달했습니다. 초기화: ${resets}`,
   "chat.usage.rateWarning": (pct: number, resets: string) => `사용 한도: ${pct}% 사용. 초기화: ${resets}`,
+  "chat.autoContinue.fiveHour": (time: string) => `5시간 사용 한도에 도달했습니다. ${time}에 작업을 자동으로 계속합니다.`, // 5-hour usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.weekly": (time: string) => `주간 사용 한도에 도달했습니다. ${time}에 작업을 자동으로 계속합니다.`, // Weekly usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.generic": (time: string) => `사용 한도에 도달했습니다. ${time}에 작업을 자동으로 계속합니다.`, // Usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.unknownReset": "사용 한도에 도달했습니다. 초기화 시간을 확인할 수 없어 작업이 자동으로 계속되지 않습니다.", // Usage limit reached. The reset time is unknown, so the task will not continue automatically.
+  "chat.autoContinue.repeated": "사용 한도에 다시 도달하여 작업을 더 이상 자동으로 계속하지 않습니다.", // The usage limit was reached again. The task will no longer continue automatically.
+  "chat.autoContinue.failed": "작업을 자동으로 계속하지 못했습니다. 메시지를 보내면 계속할 수 있습니다.", // The task could not continue automatically. Send a message to continue.
   "chat.mcp.codexScope": "Codex 사용자 설정이 변경되며, 이 설정을 사용하는 다른 대화에도 영향을 줍니다. 계속하시겠습니까?",
   "chat.mcp.tooltip": "MCP 서버",
   "chat.mcp.loading": "서버 목록을 읽는 중…",

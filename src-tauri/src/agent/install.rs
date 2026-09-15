@@ -57,9 +57,11 @@ pub fn install_recipe(agent: &str) -> Option<InstallRecipe> {
         "opencode" => InstallRecipe {
             label: "OpenCode".into(),
             bin: "opencode".into(),
-            // Unix has a native curl installer; Windows falls back to global npm.
+            // Unix has a native curl installer; Windows falls back to global npm. The package's postinstall is what
+            // creates bin/opencode.exe, and newer npm skips install scripts unless allowed, so allow it explicitly
+            // (older npm only warns about the unknown flag and runs scripts anyway).
             command: if win {
-                "npm install -g opencode-ai".into()
+                "npm install -g --allow-scripts=opencode-ai opencode-ai".into()
             } else {
                 "curl -fsSL https://opencode.ai/install | bash".into()
             },
@@ -139,11 +141,12 @@ pub fn install_recipe(agent: &str) -> Option<InstallRecipe> {
         "crush" => InstallRecipe {
             label: "Crush".into(),
             bin: "crush".into(),
-            // macOS uses the official Homebrew tap; Linux/Windows use global npm containing the Go binary.
+            // macOS uses the official Homebrew tap; Linux/Windows use global npm, whose postinstall downloads the Go
+            // binary. Allow that script so the binary arrives during install instead of on the first launch.
             command: if cfg!(target_os = "macos") {
                 "brew install charmbracelet/tap/crush".into()
             } else {
-                "npm install -g @charmland/crush".into()
+                "npm install -g --allow-scripts=@charmland/crush @charmland/crush".into()
             },
             needs_node: !cfg!(target_os = "macos"),
             docs_url: "https://github.com/charmbracelet/crush".into(),
@@ -188,8 +191,9 @@ pub fn install_recipe(agent: &str) -> Option<InstallRecipe> {
         "grok" => InstallRecipe {
             label: "Grok Build (Grok 4.5)".into(),
             bin: "grok".into(),
+            // Windows uses global npm; allow its postinstall, which places grok.exe under ~/.grok/bin.
             command: if win {
-                "npm install -g @xai-official/grok".into()
+                "npm install -g --allow-scripts=@xai-official/grok @xai-official/grok".into()
             } else {
                 "curl -fsSL https://x.ai/cli/install.sh | bash".into()
             },
@@ -283,8 +287,14 @@ fn agent_layout(agent: &str) -> Option<(&'static str, Vec<std::path::PathBuf>, b
             );
             ("claude", false)
         }
-        // Cursor's official installer also targets ~/.local/bin as cursor-agent.
+        // Cursor's Unix installer links ~/.local/bin/cursor-agent. The Windows installer copies its
+        // cursor-agent* launchers into %LOCALAPPDATA%\cursor-agent instead.
         "cursor" => {
+            if win {
+                let root = local_app_data(&home).join("cursor-agent");
+                candidates.push(root.join("cursor-agent.exe"));
+                candidates.push(root.join("cursor-agent.cmd"));
+            }
             candidates.push(
                 home.join(".local")
                     .join("bin")
@@ -306,9 +316,15 @@ fn agent_layout(agent: &str) -> Option<(&'static str, Vec<std::path::PathBuf>, b
         "cline" => ("cline", true),
         // Pi has no native installer and uses global npm only.
         "pi" => ("pi", true),
-        // OMP's official installer always writes ~/.local/bin/omp (PI_INSTALL_DIR overrides it), so stat that
-        // path rather than reasoning from an npm prefix.
+        // OMP's official installer writes a single binary to PI_INSTALL_DIR when set, otherwise ~/.local/bin/omp
+        // on Unix and %LOCALAPPDATA%\omp\omp.exe on Windows, so stat those paths rather than an npm prefix.
         "omp" => {
+            if let Some(dir) = std::env::var_os("PI_INSTALL_DIR").filter(|d| !d.is_empty()) {
+                candidates.push(std::path::PathBuf::from(dir).join(exe_name("omp", win)));
+            }
+            if win {
+                candidates.push(local_app_data(&home).join("omp").join("omp.exe"));
+            }
             candidates.push(home.join(".local").join("bin").join(exe_name("omp", win)));
             ("omp", false)
         }
@@ -321,9 +337,12 @@ fn agent_layout(agent: &str) -> Option<(&'static str, Vec<std::path::PathBuf>, b
             }
             ("grok", win)
         }
-        // Antigravity's documented installer path is unclear; probe conventional ~/.local/bin/agy and
+        // Antigravity's installer writes ~/.local/bin/agy on Unix and %LOCALAPPDATA%\agy\bin\agy.exe on Windows;
         // otherwise fall back to command-name launch, `agy install`, or a manual setting.
         "antigravity" => {
+            if win {
+                candidates.push(local_app_data(&home).join("agy").join("bin").join("agy.exe"));
+            }
             candidates.push(home.join(".local").join("bin").join(exe_name("agy", win)));
             ("agy", false)
         }
@@ -414,6 +433,14 @@ fn exe_name(name: &str, win: bool) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// `%LOCALAPPDATA%`, falling back to `<home>\AppData\Local` when the variable is missing.
+fn local_app_data(home: &std::path::Path) -> std::path::PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Local"))
 }
 
 /// Global npm executable path: `<prefix>/bin/<name>` on Unix or `<prefix>\<name>.cmd` on Windows.
@@ -567,6 +594,34 @@ mod tests {
             npm_bin_candidate(winp, "codex", true),
             winp.join("codex.cmd")
         );
+    }
+
+    #[test]
+    fn npm_recipes_allow_the_postinstall_that_creates_the_binary() {
+        // Newer npm skips install scripts unless allowed; these packages produce their binary there.
+        if cfg!(target_os = "windows") {
+            let r = install_recipe("opencode").unwrap();
+            assert_eq!(r.command, "npm install -g --allow-scripts=opencode-ai opencode-ai");
+            let r = install_recipe("grok").unwrap();
+            assert!(r.command.contains("--allow-scripts=@xai-official/grok"));
+        }
+        if !cfg!(target_os = "macos") {
+            let r = install_recipe("crush").unwrap();
+            assert!(r.command.contains("--allow-scripts=@charmland/crush"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_installers_are_probed_under_local_app_data() {
+        // Cursor, OMP, and Antigravity install under %LOCALAPPDATA% on Windows, not ~/.local/bin.
+        let local = local_app_data(&crate::host::home_dir().unwrap());
+        let (_, cursor, _) = agent_layout("cursor").unwrap();
+        assert_eq!(cursor[0], local.join("cursor-agent").join("cursor-agent.exe"));
+        let (_, omp, _) = agent_layout("omp").unwrap();
+        assert!(omp.contains(&local.join("omp").join("omp.exe")));
+        let (_, agy, _) = agent_layout("antigravity").unwrap();
+        assert_eq!(agy[0], local.join("agy").join("bin").join("agy.exe"));
     }
 
     #[test]

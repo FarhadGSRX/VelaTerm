@@ -110,3 +110,32 @@ it("says when only approximate results were found", async () => {
   expect(await screen.findByText("No exact matches. Showing approximate results.", {}, { timeout: 3000 })).toBeTruthy();
   expect(await screen.findByRole("option", { name: /Throttle design/ })).toBeTruthy();
 });
+
+it("walks back up from a session group to the knowledge-base home", async () => {
+  window.history.replaceState(null, "", "/?memory=library&memoryProject=p&memorySession=s");
+  render(<MemoryRoute />);
+  const up = () => screen.findByRole("link", { name: "Up one level" });
+  const route = () => Object.fromEntries(new URLSearchParams(location.search));
+
+  fireEvent.click(await up());
+  await waitFor(() => expect(route()).toEqual({ memory: "library", memoryProject: "p" }));
+  fireEvent.click(await up());
+  await waitFor(() => expect(route()).toEqual({ memory: "library" }));
+  fireEvent.click(await up());
+  await waitFor(() => expect(route()).toEqual({ memory: "notebooks" }));
+  expect(screen.queryByRole("link", { name: "Up one level" })).toBeNull();
+});
+
+it("leaves a nested folder for its parent, then the vault, then the home page", async () => {
+  window.history.replaceState(null, "", "/?memory=notebook/vault-1&memoryFolder=Tea/Green");
+  render(<MemoryRoute />);
+  const up = () => screen.findByRole("link", { name: "Up one level" });
+  const route = () => Object.fromEntries(new URLSearchParams(location.search));
+
+  fireEvent.click(await up());
+  await waitFor(() => expect(route()).toEqual({ memory: "notebook/vault-1", memoryFolder: "Tea" }));
+  fireEvent.click(await up());
+  await waitFor(() => expect(route()).toEqual({ memory: "notebook/vault-1" }));
+  fireEvent.click(await up());
+  await waitFor(() => expect(route()).toEqual({ memory: "notebooks" }));
+});

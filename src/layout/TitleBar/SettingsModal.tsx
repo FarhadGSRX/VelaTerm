@@ -282,6 +282,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setUsageAutoRefresh = useTermStore((s) => s.setUsageAutoRefresh);
   const usageRefreshSec = useTermStore((s) => s.usageRefreshSec);
   const setUsageRefreshSec = useTermStore((s) => s.setUsageRefreshSec);
+  const autoContinueAtUsageLimit = useTermStore((s) => s.autoContinueAtUsageLimit);
+  const setAutoContinueAtUsageLimit = useTermStore((s) => s.setAutoContinueAtUsageLimit);
   const soundEnabled = useTermStore((s) => s.soundEnabled);
   const toggleSound = useTermStore((s) => s.toggleSound);
   const uiFontFamily = useTermStore((s) => s.uiFontFamily);
@@ -679,6 +681,27 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                       />
                     </Field>
                   )}
+                  <Field label={t("settings.autoContinue")}>
+                    <Seg<"on" | "off">
+                      value={autoContinueAtUsageLimit ? "on" : "off"}
+                      options={[
+                        ["on", t("common.on")],
+                        ["off", t("common.off")],
+                      ]}
+                      onChange={(v) => setAutoContinueAtUsageLimit(v === "on")}
+                    />
+                  </Field>
+                  <div
+                    style={{
+                      marginTop: 4,
+                      marginBottom: 8,
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                      color: "var(--text-dim)",
+                    }}
+                  >
+                    {t("settings.autoContinueHint")}
+                  </div>
                   <CleanImagesField />
                 </div>
                 <ReferenceContextPanel />

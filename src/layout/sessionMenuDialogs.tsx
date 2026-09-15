@@ -20,7 +20,7 @@ import {
 import { invoke } from "../ipc/transport";
 import { env, platform } from "../platform";
 import { useTermStore } from "../store/termStore";
-import { defaultEngineFor } from "../store/settings";
+import { defaultEngineFor, effectivePermissionMode } from "../store/settings";
 import {
   effectiveStatus,
   isVirtualProject,
@@ -322,6 +322,7 @@ export function SessionInfo({
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );
   const runtime = useTermStore((s) => s.runtimes[id]);
+  const agentDefaults = useTermStore((s) => s.agentDefaults);
 
   if (!session) return null;
 
@@ -412,7 +413,7 @@ export function SessionInfo({
         {session.agentArgs && (
           <InfoRow label={t("info.agentArgs")} value={session.agentArgs} mono copy={session.agentArgs} />
         )}
-        {["skip", "bypassPermissions", "full-access"].includes(session.permissionMode ?? "") && (
+        {["skip", "bypassPermissions", "full-access"].includes(effectivePermissionMode(session, agentDefaults) ?? "") && (
           <InfoRow label={t("info.permission")} value={t("info.permissionSkip")} />
         )}
         {/* Advanced view, opened by holding Option: the full launch command the backend actually wrote to
@@ -1709,7 +1710,7 @@ export function NewAgentSession({
                   type="checkbox"
                   disabled={!permSupported}
                   checked={permSupported && permissionMode === "skip"}
-                  onChange={(e) => setPermissionMode(e.target.checked ? "skip" : "")}
+                  onChange={(e) => setPermissionMode(e.target.checked ? "skip" : "default")}
                 />
                 {t("tree.permissionSkipLabel")}
               </label>
@@ -1946,7 +1947,7 @@ export function ResumeSession({
                   type="checkbox"
                   disabled={!permSupported}
                   checked={permSupported && permissionMode === "skip"}
-                  onChange={(e) => setPermissionMode(e.target.checked ? "skip" : "")}
+                  onChange={(e) => setPermissionMode(e.target.checked ? "skip" : "default")}
                 />
                 {t("tree.permissionSkipLabel")}
               </label>

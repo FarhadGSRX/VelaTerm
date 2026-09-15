@@ -51,19 +51,26 @@ it("shows acknowledged Codex permissions separately from the next turn's saved c
   expect(screen.queryByText("Applies to the next message: Full Access")).toBeNull();
 });
 
-it("never presents terminal launch configuration as confirmed current permissions", async () => {
+it("treats the launch mode as the running permission without a separate launch notice", async () => {
   vi.mocked(invoke).mockResolvedValue({ configured: "bypassPermissions", current: null, launch: "default",
     pending: "bypassPermissions", activation: "restart", running: true });
   render(<View />);
-  expect(await screen.findByText("Current permissions unconfirmed")).toBeTruthy();
-  expect(screen.getByText("Launch setting: Always Ask")).toBeTruthy();
+  expect(await screen.findByText("Always Ask")).toBeTruthy();
   expect(screen.getByText("Applies after restarting this session: Bypass")).toBeTruthy();
+  expect(screen.queryByText("Current permissions unconfirmed")).toBeNull();
   vi.mocked(invoke).mockResolvedValue({ configured: "bypassPermissions", current: null, launch: "bypassPermissions",
     pending: null, activation: "unconfirmed", running: true });
   act(() => events.get("pty://status/s")!({ kind: "agent", agent: "claude" }));
-  expect(await screen.findByText("Launch setting: Bypass")).toBeTruthy();
+  expect(await screen.findByText("Bypass")).toBeTruthy();
   expect(screen.queryByText("Applies after restarting this session: Bypass")).toBeNull();
-  expect(screen.queryByText("Applied")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("reports unconfirmed permissions only when neither a confirmation nor a launch mode exists", async () => {
+  vi.mocked(invoke).mockResolvedValue({ configured: "auto", current: null, launch: null,
+    pending: null, activation: "unconfirmed", running: true });
+  render(<View />);
+  expect(await screen.findAllByText("Current permissions unconfirmed")).toHaveLength(2);
 });
 
 it("discards stale evidence on disconnect and reloads authoritative state on reconnect", async () => {

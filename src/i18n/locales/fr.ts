@@ -103,6 +103,7 @@ const fr: typeof en = {
 
   // Knowledge base: saved knowledge organized by project and session.
   "memory.hierarchy": "Projets et sessions",
+  "memory.up": "Remonter d’un niveau",
   "memory.manualGroup": "Création manuelle",
   "memory.legacyGroup": "Entrées fusionnées précédemment",
   "memory.unknownProject": "Projet source inconnu",
@@ -442,6 +443,8 @@ const fr: typeof en = {
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh
+  "settings.autoContinue": "Reprendre après réinitialisation", // Continue after limit resets
+  "settings.autoContinueHint": "Lorsqu’une limite d’utilisation de 5 heures ou hebdomadaire interrompt Claude ou Codex, la tâche reprend automatiquement après la réinitialisation de la limite.", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
   "settings.cleanImages": "Nettoyer automatiquement les images collées",
   "settings.cleanImagesHint":
     "Les images collées ou déposées dans le terminal sont d'abord enregistrées comme fichiers temporaires (le chemin est envoyé à l'agent). Si activé, les fichiers temporaires de cette session sont supprimés à la fermeture, et les restes de plus de 24 h sont nettoyés au démarrage. Les images des documents ne sont jamais touchées.",
@@ -1566,8 +1569,6 @@ const fr: typeof en = {
   "permission.stateUnavailable": "État des autorisations indisponible",
   "permission.currentUnknown": "Autorisations actuelles non confirmées",
   "permission.notRunning": "À l’arrêt",
-  "permission.launch": (mode: string) => "Réglage au lancement : " + mode,
-  "permission.unconfirmedHint": "Les autorisations actuelles n’ont pas été confirmées. Les arguments personnalisés ou les changements dans l’agent peuvent modifier l’effet des réglages de lancement.",
   "permission.applied": "Appliqué",
   "permission.nextTurn": "S’applique au prochain message",
   "permission.restart": "S’applique après le redémarrage de cette session",
@@ -1696,6 +1697,10 @@ const fr: typeof en = {
   "chat.toolRun.count": (n: number) => `${n} appels d'outils`,
   "chat.toolRun.tooltip": "Afficher chaque appel",
   "chat.backToEnd": "Revenir au message le plus récent",
+  "chat.turnFold.hide": "Masquer les étapes",
+  "chat.turnFold.show": (n: number) => (n === 1 ? "Afficher 1 étape" : `Afficher ${n} étapes`),
+  "chat.turnFold.hideAll": "Masquer toutes les étapes",
+  "chat.turnFold.showAll": "Afficher toutes les étapes",
   "chat.elicitation.heading": (server: string) => `${server} demande des informations`,
   "chat.elicitation.cancel": "Annuler",
   "chat.elicitation.decline": "Refuser",
@@ -1752,6 +1757,12 @@ const fr: typeof en = {
   "chat.usage.rateLimited": (resets: string) => `Limite d’utilisation atteinte ; réinitialisation ${resets}`,
   "chat.usage.rateWarning": (pct: number, resets: string) =>
     `Limite d’utilisation : ${pct} % consommés ; réinitialisation ${resets}`,
+  "chat.autoContinue.fiveHour": (time: string) => `Limite d’utilisation de 5 heures atteinte. Reprise automatique de la tâche : ${time}.`, // 5-hour usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.weekly": (time: string) => `Limite d’utilisation hebdomadaire atteinte. Reprise automatique de la tâche : ${time}.`, // Weekly usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.generic": (time: string) => `Limite d’utilisation atteinte. Reprise automatique de la tâche : ${time}.`, // Usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.unknownReset": "Limite d’utilisation atteinte. L’heure de réinitialisation est inconnue ; la tâche ne reprendra pas automatiquement.", // Usage limit reached. The reset time is unknown, so the task will not continue automatically.
+  "chat.autoContinue.repeated": "La limite d’utilisation a de nouveau été atteinte. La tâche ne reprendra plus automatiquement.", // The usage limit was reached again. The task will no longer continue automatically.
+  "chat.autoContinue.failed": "La tâche n’a pas pu reprendre automatiquement. Envoyez un message pour continuer.", // The task could not continue automatically. Send a message to continue.
   "chat.mcp.codexScope": "Cette action modifie votre configuration utilisateur Codex et affecte les autres conversations qui l’utilisent. Continuer ?",
   "chat.mcp.tooltip": "Serveurs MCP",
   "chat.mcp.loading": "Lecture de la liste des serveurs…",

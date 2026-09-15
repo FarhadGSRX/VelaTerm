@@ -1,3 +1,33 @@
+## v0.2.2 — 2026-09-15
+
+- ⏳ Automatische Fortsetzung nach Nutzungslimits, standardmäßig in den Einstellungen deaktiviert: Wenn Claude oder Codex an einem 5-Stunden- oder Wochenlimit stoppt, setzt die Sitzung von selbst fort, sobald das Limit zurückgesetzt ist. Über der Eingabe erscheint ein Banner mit der Rücksetzzeit und einer Schaltfläche „Abbrechen“; die Wartezeit übersteht einen App-Neustart und endet, sobald du eine Nachricht sendest, zurücksetzt, die Sitzung leerst oder die Einstellung ausschaltest.
+
+- 🪟 Windows: One-Click-Installationen von OpenCode, Grok und Crush übergeben `--allow-scripts`, sodass npm die ausführbare Datei erzeugt; Cursor, OMP und Antigravity werden in ihrem tatsächlichen Installationsordner unter `%LOCALAPPDATA%` gefunden, und OMP beachtet zusätzlich `PI_INSTALL_DIR`.
+
+- 🪟 Windows: Dateien, die noch heruntergeladen oder kopiert werden, gelten nicht mehr als installiert; die Installationskarte wartet mit der Erfolgsmeldung, bis die Installation wirklich beendet ist, und ein veralteter gespeicherter Pfad wird durch den neu gefundenen ersetzt.
+
+- 🧩 Konversationsansicht: Denken, Werkzeugaufrufe und Zwischenantworten einer Runde lassen sich mit „Zwischenschritte ausblenden“ ausblenden, sodass nur die endgültige Antwort bleibt; die Werkzeugleiste blendet alle Runden auf einmal aus oder ein, und die Suche klappt eine ausgeblendete Runde zum Auffinden eines Treffers auf.
+
+- 🔐 Die Berechtigungsschaltfläche zeigt jetzt den Modus, mit dem eine Sitzung gestartet wurde, statt „Aktuelle Berechtigungen unbestätigt“; die doppelte Zeile „Starteinstellung“ ist entfernt, und eine Sitzung, die bereits mit übersprungenen Bestätigungen gestartet wurde, wird in der Statusleiste wieder hervorgehoben.
+
+- 🔐 Eine Sitzung ohne eigene Berechtigungseinstellung folgt in beiden Ansichten dem globalen Standard ihres Agententyps, und beim Bearbeiten einer Sitzung wird der geerbte Wert nicht mehr als fester Wert der Sitzung gespeichert.
+
+- ↩️ Die Seiten der Wissensdatenbank erhalten eine Schaltfläche „Eine Ebene nach oben“: Ein Eintrag führt zurück zu seiner Sitzung, dann zum Projekt und zur Startseite; archivierte Sitzungen, Notizen und Ordner steigen auf dieselbe Weise auf.
+
+- 🌱 Eine Untersitzung öffnet sich in derselben Ansicht wie ihre übergeordnete Sitzung: Aus einer Sitzung in der Konversationsansicht kommt die Aufgabe als erste Nachricht an und Bilder werden zu Anhängen; aus einer Terminalsitzung startet sie im Terminal, wobei die Aufgabe als Startargument übergeben wird.
+
+- 🎨 macOS: Fenster und Titelleisten-Streifen erhalten vor dem Erscheinen des Fensters die Farben des Themes, und ein Themenwechsel zur Laufzeit zeichnet sie sofort neu.
+
+- 🗜️ Claude-Sitzungen behalten die Runden vor einer Kompaktierung im Leseverlauf; ein Zurücksetzen entfernt weiterhin den verworfenen Zweig.
+
+- 🔎 Die Suche in der Konversation hält den ausgewählten Treffer fest, während älterer Verlauf geladen wird; Enter springt zum vorherigen Treffer und Umschalt+Enter zum nächsten.
+
+- 🩹 Die Rückkehr zu einer Konversation, die mitten in ihrem Verlauf stand, stellt die Leseposition wieder her, statt einen leeren Bereich anzuzeigen.
+
+- 🧭 Diagnoseinformationen zum Modellkatalog erscheinen nur beim Öffnen des Modellmenüs mit gedrückter Option-Taste; Fehlerzeilen richten sich am Nachrichtentext aus, und die englische Wissensdatenbank zeigt „Archived Sessions“.
+
+---
+
 ## v0.2.1 — 2026-09-14
 
 - 🔎 Die Startseite der Wissensdatenbank erhält ein Suchfeld: Eine Abfrage durchsucht Sitzungswissen und lokale Notizen zugleich und gruppiert die Treffer nach Quelle. Genaue Treffer stehen zuerst; eine unscharfe Suche (Abkürzungen, Teilfolgen und Tippfehler) greift nur, wenn nichts genau passt, und chinesische Anfragen bleiben Teilstring-basiert.

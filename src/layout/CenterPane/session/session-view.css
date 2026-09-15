@@ -285,6 +285,29 @@
 .sv-turn-head .sv-msg-head {
   margin-bottom: 0;
 }
+/* Hides or shows the turn's interim work. Quiet like the time beside it, so the author line still reads first. */
+.sv-turn-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 2px;
+  padding: 1px 6px 1px 4px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  font-size: calc(var(--ui-fs) - 2.5px);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sv-turn-fold:hover {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+.sv-turn-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 /* Rewind stays quiet until the user returns to a message. Its menu spells out the scope because the
    difference between conversation history and files on disk is too important to hide behind an icon. */
@@ -1505,7 +1528,8 @@ select.sv-pill {
 }
 
 .sv-row-error {
-  margin-block: 10px;
+  /* Errors share the message text column, like command replies, instead of reaching into the icon gutter. */
+  margin: 10px 0 10px calc(var(--sv-gutter) + var(--sv-gutter-gap));
   padding: 7px 11px;
   border-left: 3px solid var(--red);
   background: color-mix(in oklch, var(--red) 8%, transparent);

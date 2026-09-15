@@ -27,12 +27,27 @@ export interface TurnHead {
   at?: number;
   /** Wall-clock time for the whole turn; only the last reply of a turn reports it, and only when done. */
   durationMs?: number;
+  /** Present when the turn has work besides its answer that the reader can hide. */
+  fold?: TurnFold;
 }
 
-/** One drawable entry: a conversation row, or a folded run of tool calls standing in for several. */
+/** A turn's interim work — reasoning, tool calls, replies before the last — and whether it is hidden. */
+export interface TurnFold {
+  /** The turn, named by the id of its first entry. */
+  id: string;
+  /** How many steps the fold covers; a run of tool calls counts each call. */
+  steps: number;
+  collapsed: boolean;
+}
+
+/**
+ * One drawable entry: a conversation row, a folded run of tool calls standing in for several, or the
+ * author line of a turn whose every entry is hidden.
+ */
 export type DisplayRow =
   | { kind: "row"; id: string; row: ChatRow; head?: TurnHead }
-  | { kind: "run"; id: string; calls: ToolRow[]; running: boolean; head?: TurnHead };
+  | { kind: "run"; id: string; calls: ToolRow[]; running: boolean; head?: TurnHead }
+  | { kind: "fold"; id: string; head: TurnHead };
 
 /**
  * Fewest consecutive calls worth folding.
@@ -102,6 +117,7 @@ export function groupToolRuns(rows: readonly ChatRow[], minRun = MIN_RUN): Displ
 /** Whether an entry is work the agent did in a turn, rather than a remark about the conversation itself. */
 function isAgentWork(entryRow: DisplayRow): boolean {
   if (entryRow.kind === "run") return true;
+  if (entryRow.kind === "fold") return false;
   return entryRow.row.kind === "assistant" || entryRow.row.kind === "reasoning" || entryRow.row.kind === "tool";
 }
 
@@ -141,6 +157,87 @@ export function markAgentTurns(entries: readonly DisplayRow[]): DisplayRow[] {
   }
   close();
   return out;
+}
+
+/** The tool call that asks the person something; its answer is part of the conversation, not interim work. */
+function isQuestion(entryRow: DisplayRow): boolean {
+  if (entryRow.kind !== "row") return false;
+  return entryRow.row.kind === "tool" && entryRow.row.name === "AskUserQuestion";
+}
+
+/** The result of folding: what the list draws, and which hidden entry belongs to which turn. */
+export interface FoldedTurns {
+  rows: DisplayRow[];
+  /** Every turn that has something to hide, in order. */
+  turns: TurnFold[];
+  /** Turn id for each entry the fold currently hides, so search can open the turn holding a match. */
+  hiddenIn: Map<string, string>;
+}
+
+/**
+ * Hide the interim work of collapsed turns, leaving each turn's answer.
+ *
+ * Runs after `markAgentTurns`, whose author lines mark where each turn begins. A turn's answer is its last
+ * reply with any text; everything else the agent did in the turn is interim. Errors, notices, commands,
+ * compaction and answered questions stay visible either way: they are not the agent working. When the
+ * first entry is hidden, the author line moves to the first entry left standing, or stands alone when
+ * the turn has nothing left to show.
+ */
+export function foldAgentTurns(
+  entries: readonly DisplayRow[],
+  isCollapsed: (turnId: string) => boolean,
+): FoldedTurns {
+  const rows: DisplayRow[] = [];
+  const turns: TurnFold[] = [];
+  const hiddenIn = new Map<string, string>();
+  let index = 0;
+  while (index < entries.length) {
+    const first = entries[index];
+    if (!first.head) {
+      rows.push(first);
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < entries.length && !entries[end].head && !isTurnStart(entries[end])) end += 1;
+    let answer = -1;
+    for (let at = end - 1; at >= index && answer < 0; at -= 1) {
+      const candidate = entries[at];
+      if (candidate.kind === "row" && candidate.row.kind === "assistant" && candidate.row.text.trim() !== "") answer = at;
+    }
+    const interim = (at: number) => at !== answer && isAgentWork(entries[at]) && !isQuestion(entries[at]);
+    let steps = 0;
+    for (let at = index; at < end; at += 1) {
+      const candidate = entries[at];
+      if (interim(at)) steps += candidate.kind === "run" ? candidate.calls.length : 1;
+    }
+    if (steps === 0) {
+      rows.push(...entries.slice(index, end));
+      index = end;
+      continue;
+    }
+    const fold: TurnFold = { id: first.id, steps, collapsed: isCollapsed(first.id) };
+    turns.push(fold);
+    const head: TurnHead = { ...first.head, fold };
+    if (!fold.collapsed) {
+      rows.push({ ...first, head }, ...entries.slice(index + 1, end));
+      index = end;
+      continue;
+    }
+    let headPlaced = false;
+    for (let at = index; at < end; at += 1) {
+      const candidate = entries[at];
+      if (interim(at)) {
+        hiddenIn.set(candidate.id, fold.id);
+        continue;
+      }
+      rows.push(headPlaced ? candidate : { ...candidate, head });
+      headPlaced = true;
+    }
+    if (!headPlaced) rows.push({ kind: "fold", id: `${fold.id}:fold`, head });
+    index = end;
+  }
+  return { rows, turns, hiddenIn };
 }
 
 /** How many times each tool was called, in the order the names first appear: `Read ×4 · Grep ×2`. */
@@ -188,6 +285,7 @@ export function estimateRowHeight(row: DisplayRow | undefined): number {
   if (!row) return 120;
   // The turn's author line rides on the first entry, so that entry is taller by the line's own height.
   const head = row.head ? 34 : 0;
+  if (row.kind === "fold") return head;
   if (row.kind === "run") return 34 + head;
   switch (row.row.kind) {
     case "tool":

@@ -13,17 +13,35 @@ it("finds literal matches across history, tool inputs and nested output, and wra
   ]} onLocate={onLocate} onClose={vi.fn()} />);
   const input = screen.getByRole("textbox");
   fireEvent.change(input, { target: { value: "[needle]" } });
-  expect(screen.getByRole("status").textContent).toBe("1/4");
-  expect(onLocate).toHaveBeenLastCalledWith(0, "[needle]");
-  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
   expect(screen.getByRole("status").textContent).toBe("4/4");
   expect(onLocate).toHaveBeenLastCalledWith(1, "[needle]");
   expect(screen.getByRole("status").title).toBe("nested [needle]");
   fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.getByRole("status").textContent).toBe("3/4");
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
   expect(screen.getByRole("status").textContent).toBe("1/4");
+  expect(onLocate).toHaveBeenLastCalledWith(0, "[needle]");
   fireEvent.change(input, { target: { value: "absent" } });
   expect(screen.getByRole("status").textContent).toBe("No results");
   expect(onLocate).toHaveBeenLastCalledWith(-1, "");
+});
+it("stays on the selected match while older history loads above it", () => {
+  const onLocate = vi.fn();
+  const recent = [
+    { kind: "row" as const, id: "a", row: { kind: "user" as const, id: "a", text: "needle one" } },
+    { kind: "row" as const, id: "b", row: { kind: "user" as const, id: "b", text: "needle two" } },
+  ];
+  const { rerender } = render(<ChatSearch entries={recent} onLocate={onLocate} onClose={vi.fn()} loadingHistory />);
+  const input = screen.getByRole("textbox");
+  fireEvent.change(input, { target: { value: "needle" } });
+  expect(screen.getByText("2/2")).toBeTruthy();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(onLocate).toHaveBeenLastCalledWith(0, "needle");
+  const older = { kind: "row" as const, id: "old", row: { kind: "user" as const, id: "old", text: "needle zero" } };
+  rerender(<ChatSearch entries={[older, ...recent]} onLocate={onLocate} onClose={vi.fn()} />);
+  expect(screen.getByRole("status").textContent).toBe("2/3");
+  expect(onLocate).toHaveBeenLastCalledWith(1, "needle");
 });
 it("closes with Escape without propagating an agent interrupt", () => {
   const parent = vi.fn(); const close = vi.fn();
@@ -51,6 +69,6 @@ it("searches deferred tool output and nested details without expanding cards", a
   vi.mocked(loadChatTool).mockResolvedValueOnce({ kind: "tool", id: "deferred", name: "Bash", input: {}, status: "completed", isError: false, output: "remote needle", children: [{ kind: "tool", id: "child", name: "Read", input: {}, status: "completed", isError: false, detailAvailable: true }] }).mockResolvedValueOnce({ kind: "tool", id: "child", name: "Read", input: {}, status: "completed", isError: false, output: "nested needle" });
   render(<ChatSearch entries={[{ kind: "row", id: "deferred", row: { kind: "tool", id: "deferred", name: "Bash", input: {}, status: "completed", isError: false, detailAvailable: true } }]} onLocate={vi.fn()} onClose={vi.fn()} />);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "needle" } });
-  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("1/2"));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("2/2"));
   expect(loadChatTool).toHaveBeenCalledTimes(2);
 });

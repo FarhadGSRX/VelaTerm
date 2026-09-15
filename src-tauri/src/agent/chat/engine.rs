@@ -633,6 +633,9 @@ pub struct ChatSnapshot {
     pub service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<String>,
+    /// A usage limit stopped this conversation and it continues on its own at this time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_continue: Option<super::auto_continue::Waiting>,
     /// The agent process behind this conversation, and when it started.
     ///
     /// A chat session has no PTY, so nothing else in the product knows there is a process at all: the
@@ -691,6 +694,12 @@ pub struct ClaudeExtras {
     /// The model named by the last assistant frame, which is the key into `modelUsage` at turn end.
     #[serde(skip)]
     pub usage_model: Option<String>,
+    /// Set when a subscription usage limit refused the running turn; taken when the turn ends.
+    #[serde(skip)]
+    pub usage_limit_hit: bool,
+    /// Codex account rate-limit buckets merged from `account/rateLimits/updated`, keyed by limit id.
+    #[serde(skip)]
+    pub codex_rate_limits: Value,
 }
 
 // ─────────────────────────── Sessions ───────────────────────────
@@ -2080,6 +2089,7 @@ impl ChatManager {
                 collaboration_modes: Vec::new(),
                 service_tier: None,
                 personality: None,
+                auto_continue: super::auto_continue::waiting(session_id),
                 pid: None,
                 started_at: None,
                 turn_started_at: None,
@@ -2156,6 +2166,7 @@ impl ChatManager {
             collaboration_modes,
             service_tier,
             personality,
+            auto_continue: super::auto_continue::waiting(session_id),
             pid: Some(proc.pid),
             started_at: Some(proc.started_at),
             turn_started_at,
@@ -2848,7 +2859,13 @@ fn handle_line(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, line: &s
     }
     auth::claude::observe(app, session_id, proc, line);
     if let Ok(value) = serde_json::from_str::<Value>(line) {
-        proc.extras.lock().unwrap().generation.claude(&value, now_ms());
+        let mut extras = proc.extras.lock().unwrap();
+        extras.generation.claude(&value, now_ms());
+        // Claude marks a turn refused by a quota, or by a short-term rate limit, with this error. Which of
+        // the two it was is decided at turn end from the rate-limit event.
+        if value["type"] == "assistant" && value["error"] == "rate_limit" && value["parent_tool_use_id"].is_null() {
+            extras.usage_limit_hit = true;
+        }
     }
     match protocol::parse_line(line) {
         Incoming::Init { session_id: agent_id, model } => {
@@ -3698,7 +3715,10 @@ fn handle_codex_notification(
             if subtype == "success" { auth::turn_succeeded(app, session_id, proc); }
             // Read before the turn ends, which is what clears the interrupt mark.
             let interrupted = proc.turn.lock().unwrap().interrupted;
-            if let Some(error) = params.pointer("/turn/error") { auth::require(app, session_id, proc, error); }
+            if let Some(error) = params.pointer("/turn/error") {
+                auth::require(app, session_id, proc, error);
+                if codex::is_usage_limit(error) { proc.extras.lock().unwrap().usage_limit_hit = true; }
+            }
             let failure = codex::turn_failure(proc, &params);
             handle_turn_end(app, session_id, proc, subtype, None);
             // The generic "ended with: failed" row is replaced in place by Codex's own reason — the
@@ -4294,6 +4314,7 @@ fn handle_turn_end(
         proc.timeline.lock().unwrap().finish_latest_turn(duration_ms);
     }
     crate::diagnostics::record("INFO","agent_turn_end",json!({"sessionId":session_id,"status":if interrupted{"cancelled"}else if subtype=="success"{"success"}else{"completed"},"durationMs":reported_duration_ms.or_else(||started_at.map(|started|completed_at.saturating_sub(started)))}));
+    report_auto_continue(app, session_id, proc, subtype, interrupted);
     // A turn stopped on purpose reports itself as failed. That is the interrupt working, not a fault.
     if subtype != "success" && !interrupted {
         proc.timeline.lock().unwrap().upsert(ChatRow::Error {
@@ -4321,6 +4342,49 @@ fn handle_turn_end(
         emit(app, session_id, json!({"type":"error","message":e}));
         emit(app, session_id, json!({"type":"turnCompleted"}));
         emit_state(app, session_id, AgentState::Waiting);
+    }
+}
+
+/// Tell automatic continuation how the turn ended, with the reset time when a usage limit refused it.
+fn report_auto_continue(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, subtype: &str, interrupted: bool) {
+    use super::auto_continue::{self, TurnOutcome};
+    let (hit, claude, codex) = {
+        let mut extras = proc.extras.lock().unwrap();
+        (std::mem::take(&mut extras.usage_limit_hit), extras.rate_limit.clone(), extras.codex_rate_limits.clone())
+    };
+    if interrupted {
+        return auto_continue::turn_ended(app, session_id, TurnOutcome::Other);
+    }
+    if !hit {
+        let outcome = if subtype == "success" { TurnOutcome::Succeeded } else { TurnOutcome::Other };
+        return auto_continue::turn_ended(app, session_id, outcome);
+    }
+    match proc.kind {
+        SessionKind::Claude => {
+            // A rate-limit error without a refused quota is a short-term limit the next message can retry.
+            let Some(reset) = auto_continue::claude_reset(claude.as_ref()) else {
+                return auto_continue::turn_ended(app, session_id, TurnOutcome::Other);
+            };
+            auto_continue::turn_ended(app, session_id, TurnOutcome::LimitReached(Some(reset)));
+        }
+        SessionKind::Codex => {
+            if let Some(reset) = auto_continue::codex_reset(&auto_continue::codex_windows(&codex), false) {
+                return auto_continue::turn_ended(app, session_id, TurnOutcome::LimitReached(Some(reset)));
+            }
+            if !auto_continue::enabled(app) {
+                return auto_continue::turn_ended(app, session_id, TurnOutcome::Other);
+            }
+            // The app-server did not report the exhausted window; ask the account directly, off this reader.
+            let (app, session_id) = (app.clone(), session_id.to_string());
+            std::thread::spawn(move || {
+                let usage = crate::agent::usage_store::refresh(&app, Some(crate::agent::usage_store::Provider::Codex), true);
+                let reset = usage.codex.data.as_ref().and_then(|data| {
+                    auto_continue::codex_reset(data.primary.iter().chain(data.secondary.iter()), true)
+                });
+                auto_continue::turn_ended(&app, &session_id, TurnOutcome::LimitReached(reset));
+            });
+        }
+        _ => auto_continue::turn_ended(app, session_id, TurnOutcome::Other),
     }
 }
 

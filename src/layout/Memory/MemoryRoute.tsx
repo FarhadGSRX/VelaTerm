@@ -10,6 +10,7 @@ import { MemoryIcon } from "./shared";
 import "./memory.css";
 import { KnowledgeVaultDialogs } from "../Notebook/VaultActions";
 import { NotebookSurface } from "../Notebook/NotebookSurface";
+import { KnowledgeBackLink } from "../Notebook/KnowledgeBack";
 
 export function MemoryRoute() {
   const location = useMemoryLocation();
@@ -31,7 +32,7 @@ function MemorySurface({ route }: { route: string }) {
   const notebook = page === "notebooks" || page === "notebook";
   return <section ref={ref} data-page={page} tabIndex={-1} className="memory-shell memory-tab-surface" role="tabpanel" aria-label={t(notebook ? "memory.title" : "memory.globalMemory")}>
       {!notebook && <header className="memory-header">
-        <div className="memory-brand"><MemoryIcon size={20} /><div><h2 id="memory-heading">{t("memory.globalMemory")}</h2></div></div>
+        <div className="memory-brand"><KnowledgeBackLink className="memory-toolbar-button" /><MemoryIcon size={20} /><div><h2 id="memory-heading">{t("memory.globalMemory")}</h2></div></div>
       {!compact && <nav className="memory-nav" aria-label={t("memory.title")}>
         <MemoryLink route="library" className={library ? "active" : ""}>{t("memory.entries")}</MemoryLink>
         <MemoryLink route="jobs" values={{ memoryJobPage: null }} className={["jobs", "job"].includes(page) ? "active" : ""}>{t("memory.jobs")}</MemoryLink>

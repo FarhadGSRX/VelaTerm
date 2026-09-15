@@ -591,9 +591,14 @@ function ShellPicker({ session }: { session: Session }) {
 }
 
 /** Locates an installation, fills the agent's global executable-path setting, and immediately flushes it to the
- *  backend. Returns whether a path already existed or was saved. Never overwrite a user-configured path. When
- *  `notify` is true, record agentPathSaved to show the installation-complete dialog; retry-start detection uses
- *  false because the user is already restarting and needs no additional dialog. */
+ *  backend. Returns whether a usable path already existed or was saved.
+ *
+ *  `notify` is true only while polling after one-click install: record agentPathSaved to show the
+ *  installation-complete dialog. That flow must not trust a configured path, because the card is open precisely
+ *  since that path failed; short-circuiting on it would declare the install finished within one poll, and
+ *  "Restart now" would kill the installer still running in the session shell. It waits for a complete
+ *  installation and replaces the failed path with it. Retry-start detection passes false and never overwrites a
+ *  user-configured path, since the user is already restarting and needs no additional dialog. */
 async function locateAndSaveAgentPath(
   kind: Session["kind"],
   sessionId: string,
@@ -601,15 +606,14 @@ async function locateAndSaveAgentPath(
 ): Promise<boolean> {
   const st = useTermStore.getState();
   const existing = st.agentDefaults[kind]?.path?.trim();
-  if (existing) {
-    if (notify) st.setRuntime(sessionId, { agentPathSaved: existing });
-    return true;
-  }
+  if (existing && !notify) return true;
   const located = await agentLocateBin(kind);
   if (!located) return false;
-  st.setAgentDefault(kind, { path: located });
-  // Flush before showing the dialog or restarting; spawn reads app_settings immediately and cannot see a debounced value.
-  await flushSettingsSync();
+  if (existing !== located) {
+    st.setAgentDefault(kind, { path: located });
+    // Flush before showing the dialog or restarting; spawn reads app_settings immediately and cannot see a debounced value.
+    await flushSettingsSync();
+  }
   if (notify) st.setRuntime(sessionId, { agentPathSaved: located });
   return true;
 }

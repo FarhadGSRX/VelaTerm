@@ -1,3 +1,33 @@
+## v0.2.2 — 2026-09-15
+
+- ⏳ Retomada automática após limites de uso, desativada por padrão nas configurações: quando o Claude ou o Codex para em um limite de 5 horas ou semanal, a sessão continua sozinha assim que o limite é redefinido. Acima da área de escrita aparece um aviso com o horário da redefinição e um botão "Cancelar"; a espera sobrevive ao reinício do aplicativo e termina ao enviar uma mensagem, reverter, limpar a sessão ou desligar a configuração.
+
+- 🪟 Windows: as instalações em um clique de OpenCode, Grok e Crush passam `--allow-scripts`, e o npm gera o executável; Cursor, OMP e Antigravity são procurados na pasta de instalação real em `%LOCALAPPDATA%`, e o OMP também respeita `PI_INSTALL_DIR`.
+
+- 🪟 Windows: arquivos ainda sendo baixados ou copiados não contam mais como instalados, o cartão de instalação espera a instalação terminar de fato antes de informar sucesso, e um caminho salvo desatualizado é substituído pelo recém-localizado.
+
+- 🧩 Visão de conversa: o raciocínio, as chamadas de ferramentas e as respostas intermediárias de um turno podem ser ocultados com "Ocultar passos", deixando só a resposta final; a barra de ferramentas oculta ou mostra todos os turnos de uma vez, e a busca expande um turno oculto para localizar uma ocorrência.
+
+- 🔐 O botão de permissões agora mostra o modo com que a sessão foi iniciada em vez de "Permissões atuais não confirmadas"; a linha duplicada de "ajuste de início" saiu, e uma sessão iniciada com as confirmações ignoradas volta a ficar destacada na barra de status.
+
+- 🔐 Uma sessão sem permissão própria segue o padrão global do seu tipo de agente nas duas visões, e editar uma sessão não transforma mais o valor herdado em uma escolha fixa da sessão.
+
+- ↩️ As páginas da base de conhecimento ganham um botão "Subir um nível": uma entrada volta para a sessão, depois para o projeto e para o início, e sessões arquivadas, notas e pastas sobem do mesmo jeito.
+
+- 🌱 Uma sessão filha abre na mesma visão da sessão pai: a partir de uma sessão na visão de conversa, a tarefa chega como primeira mensagem e as imagens como anexos; a partir de uma sessão no terminal, ela inicia no terminal com a tarefa passada como argumento.
+
+- 🎨 macOS: a janela e a faixa da barra de título assumem as cores do tema antes de a janela aparecer, e trocar de tema em execução as redesenha na hora.
+
+- 🗜️ As sessões do Claude mantêm no histórico de leitura os turnos anteriores a uma compactação, enquanto reverter continua descartando o ramo abandonado.
+
+- 🔎 A busca na conversa mantém a ocorrência selecionada no lugar enquanto carrega histórico mais antigo; Enter vai para a ocorrência anterior e Shift+Enter para a seguinte.
+
+- 🩹 Voltar para uma conversa parada no meio do histórico restaura a posição de leitura em vez de mostrar o painel em branco.
+
+- 🧭 As informações de diagnóstico do catálogo de modelos só aparecem ao abrir o menu de modelos com a tecla Option pressionada; as linhas de erro se alinham ao texto das mensagens e a base de conhecimento em inglês mostra "Archived Sessions".
+
+---
+
 ## v0.2.1 — 2026-09-14
 
 - 🔎 A página inicial da base de conhecimento ganha uma caixa de busca: uma consulta pesquisa ao mesmo tempo o conhecimento de sessão e as notas locais, agrupando os resultados por origem. As correspondências exatas vêm primeiro; a busca aproximada (abreviações, subsequências e erros de digitação) só entra quando não há nenhuma correspondência exata, e consultas em chinês continuam por subcadeia.

@@ -113,6 +113,7 @@ const ru: typeof en = {
 
   // Knowledge base: saved knowledge organized by project and session.
   "memory.hierarchy": "Проекты и сеансы",
+  "memory.up": "На уровень выше",
   "memory.manualGroup": "Создано вручную",
   "memory.legacyGroup": "Ранее объединённые записи",
   "memory.unknownProject": "Исходный проект неизвестен",
@@ -451,6 +452,8 @@ const ru: typeof en = {
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh
+  "settings.autoContinue": "Продолжать после сброса лимита", // Continue after limit resets
+  "settings.autoContinueHint": "Если Claude или Codex останавливается из-за 5-часового или недельного лимита использования, задача автоматически продолжится после сброса лимита.", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
   "settings.cleanImages": "Автоочистка вставленных изображений",
   "settings.cleanImagesHint":
     "Изображения, вставленные или перетащенные в терминал, сначала сохраняются во временные файлы (путь передаётся агенту). Если включено, временные файлы этого сеанса удаляются при выходе, а остатки старше 24 ч очищаются при запуске. Изображения внутри документов не затрагиваются.",
@@ -1567,8 +1570,6 @@ const ru: typeof en = {
   "permission.stateUnavailable": "Статус разрешений недоступен",
   "permission.currentUnknown": "Текущие разрешения не подтверждены",
   "permission.notRunning": "Не запущено",
-  "permission.launch": (mode: string) => "Настройка при запуске: " + mode,
-  "permission.unconfirmedHint": "Текущие разрешения ещё не подтверждены. Пользовательские аргументы или изменения внутри агента могут повлиять на применение настроек запуска.",
   "permission.applied": "Применено",
   "permission.nextTurn": "Применится к следующему сообщению",
   "permission.restart": "Применится после перезапуска этой сессии",
@@ -1701,6 +1702,10 @@ const ru: typeof en = {
   "chat.toolRun.count": (n: number) => `Вызовов инструментов: ${n}`,
   "chat.toolRun.tooltip": "Показать каждый вызов",
   "chat.backToEnd": "К последнему сообщению",
+  "chat.turnFold.hide": "Скрыть шаги",
+  "chat.turnFold.show": (n: number) => `Показать шаги (${n})`,
+  "chat.turnFold.hideAll": "Скрыть все шаги",
+  "chat.turnFold.showAll": "Показать все шаги",
   "chat.elicitation.heading": (server: string) => `${server} запрашивает данные`,
   "chat.elicitation.cancel": "Отмена",
   "chat.elicitation.decline": "Отклонить",
@@ -1757,6 +1762,12 @@ const ru: typeof en = {
   "chat.usage.rateLimited": (resets: string) => `Лимит использования исчерпан; сброс ${resets}`,
   "chat.usage.rateWarning": (pct: number, resets: string) =>
     `Лимит использования: израсходовано ${pct} %; сброс ${resets}`,
+  "chat.autoContinue.fiveHour": (time: string) => `Исчерпан 5-часовой лимит использования. Автоматическое продолжение задачи: ${time}.`, // 5-hour usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.weekly": (time: string) => `Исчерпан недельный лимит использования. Автоматическое продолжение задачи: ${time}.`, // Weekly usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.generic": (time: string) => `Лимит использования исчерпан. Автоматическое продолжение задачи: ${time}.`, // Usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.unknownReset": "Лимит использования исчерпан. Время сброса неизвестно, поэтому задача не продолжится автоматически.", // Usage limit reached. The reset time is unknown, so the task will not continue automatically.
+  "chat.autoContinue.repeated": "Лимит использования снова исчерпан. Задача больше не будет продолжаться автоматически.", // The usage limit was reached again. The task will no longer continue automatically.
+  "chat.autoContinue.failed": "Не удалось автоматически продолжить задачу. Отправьте сообщение, чтобы продолжить.", // The task could not continue automatically. Send a message to continue.
   "chat.mcp.codexScope": "Это изменит пользовательскую конфигурацию Codex и затронет другие беседы, использующие её. Продолжить?",
   "chat.mcp.tooltip": "Серверы MCP",
   "chat.mcp.loading": "Чтение списка серверов…",

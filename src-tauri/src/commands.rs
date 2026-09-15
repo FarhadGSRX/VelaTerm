@@ -189,6 +189,7 @@ pub fn pty_spawn(
         let args = repo::get_agent_args(&conn, &session_id)?;
         // Map permission mode to agent-specific flags and prepend them to custom arguments.
         let perm = repo::get_permission_mode(&conn, &session_id)?;
+        let perm = crate::agent::permission_catalog::effective(&conn, kind, perm.as_deref())?;
         let args =
             crate::agent::inject::merge_permission_flag(kind, perm.as_deref(), args.as_deref());
         (in_db, resume, fork, args, perm, created_at)
@@ -808,16 +809,18 @@ pub fn open_devtools(window: tauri::WebviewWindow) {
     }
 }
 
-/// Match native window chrome to the frontend's light/dark mode. Windows only.
+/// Match native window chrome to the frontend's light/dark mode.
 ///
-/// The app keeps the system title bar, and Windows paints it light until `set_theme` turns on DWM's
+/// Windows keeps the system title bar, and Windows paints it light until `set_theme` turns on DWM's
 /// immersive dark mode, leaving a white strip above a dark UI (issue #26 section 5). `mode` mirrors the
 /// frontend's `ThemeMode`: `dark`/`light` pin the chrome, anything else (`system`) restores follow-the-OS
 /// so a later OS change still reaches the title bar.
 ///
-/// Deliberately a no-op elsewhere. On macOS and Linux the window theme is an app-wide appearance override,
-/// so applying it would also repaint native menus and dialogs and flip the WebView's `prefers-color-scheme`
-/// — a behaviour change nobody asked for on platforms whose chrome already tracks the app correctly.
+/// macOS reserves a strip above the web content for the title bar and paints it with the window's web
+/// background, so the frame color carries the same choice: `apply_window_frame` rewrites that color together
+/// with the window background, which is also what lets a switch take effect without recreating the window.
+/// The resolved scheme is read from the window itself, which keeps `system` live without an app-wide
+/// appearance override.
 ///
 /// Remembering the value matters as much as applying it: windows opened later (remote/SSH) read it at build
 /// time so they never flash the wrong chrome. `set_theme` only posts a message to the event loop and touches
@@ -838,7 +841,19 @@ pub fn set_native_theme(app: AppHandle, mode: String) {
             let _ = win.set_theme(theme);
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        for (_, win) in app.webview_windows() {
+            let dark = match mode.as_str() {
+                "dark" => true,
+                "light" => false,
+                // Following the OS: ask the window which scheme it already renders with.
+                _ => matches!(win.theme(), Ok(tauri::Theme::Dark)),
+            };
+            crate::apply_window_frame(&win, dark);
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = (app, mode);
 }
 

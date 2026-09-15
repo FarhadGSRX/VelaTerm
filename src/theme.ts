@@ -213,10 +213,12 @@ export function effectiveAccent(
 
 /**
  * Match the native window chrome to the scheme. The app keeps the system title bar, and Windows paints it
- * light until DWM is told otherwise, so a dark UI carries a white strip above it. The mode goes over as-is
- * rather than the resolved scheme: `system` hands control back to the OS, which is what that mode means, and
- * pinning a value there would freeze the title bar the next time the OS scheme changed. The backend ignores
- * this on macOS and Linux, where the window theme is an app-wide override rather than title-bar tinting.
+ * light until DWM is told otherwise, so a dark UI carries a white strip above it. macOS paints the strip its
+ * title bar occupies with the window's web background, so the same choice arrives there as the window frame
+ * color. The mode goes
+ * over as-is rather than the resolved scheme: `system` hands control back to the OS, which is what that mode
+ * means, and pinning a value there would freeze the title bar the next time the OS scheme changed. Linux
+ * ignores this, where the window theme is an app-wide override rather than title-bar tinting.
  *
  * Only the desktop shell calls this. Remote/SSH windows are native windows too, but they run in browser
  * transport and cannot reach native commands; the backend applies the same value to every window it owns and

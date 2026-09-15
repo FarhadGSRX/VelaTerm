@@ -88,7 +88,7 @@ export function ControlChip<T extends string>({
   filterPlaceholder,
   defaultValue,
   defaultLabel = "Default",
-  footer,
+  advancedFooter,
 }: {
   glyph: ReactNode;
   label?: string;
@@ -114,9 +114,11 @@ export function ControlChip<T extends string>({
   /** Saved default, independent of the current conversation's selection. */
   defaultValue?: T;
   defaultLabel?: string;
-  footer?: ReactNode;
+  /** Diagnostic details under the list, revealed only when the menu is opened with Option held. */
+  advancedFooter?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
   const [query, setQuery] = useState("");
   // Whether this choice should outlast the conversation. It starts unticked every time the menu opens:
   // changing what answers you right now is the ordinary act, and changing what every future conversation
@@ -185,7 +187,10 @@ export function ControlChip<T extends string>({
         style={open || hover ? { background: "var(--bg-hover)" } : undefined}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          if (!open) setAdvanced(e.altKey);
+          setOpen(!open);
+        }}
       >
         <span className="sv-chip-glyph">{glyph}</span>
         {label ? <span className="sv-chip-label">{label}</span> : null}
@@ -290,7 +295,7 @@ export function ControlChip<T extends string>({
               </div>
             ))}
           </div>
-          {footer}
+          {advanced && advancedFooter}
           {keepLabel ? (
             <label
               style={{

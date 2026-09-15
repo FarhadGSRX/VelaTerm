@@ -270,6 +270,12 @@ pub(crate) fn is_executable_file(path: &Path) -> bool {
     if shim_dead {
         return false;
     }
+    // Unix installers download to a temporary file or set the permission bit afterwards, but Windows
+    // installers such as OMP's stream straight into the final `.exe`; a file still being written is not
+    // an installation yet, and restarting the session on it would kill the installer mid-download.
+    if being_written(path) {
+        return false;
+    }
     // Windows has no permission bit to read here; existing as a file is as far as this check goes.
     #[cfg(unix)]
     let runnable = {
@@ -317,12 +323,39 @@ fn shim_payload(path: &Path) -> Option<std::path::PathBuf> {
     payload
 }
 
+/// Whether another process currently holds the file open for writing, such as a download or copy in progress.
+///
+/// Opening for reading while denying write sharing fails with a sharing violation exactly when a writer
+/// already has the file open. A running executable holds no write handle, so an agent in use elsewhere still
+/// counts as installed. Any other failure is not treated as writing, leaving the decision to the other checks.
+#[cfg(windows)]
+fn being_written(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_DELETE: u32 = 0x4;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+        .open(path)
+    {
+        Ok(_) => false,
+        Err(e) => e.raw_os_error() == Some(ERROR_SHARING_VIOLATION),
+    }
+}
+
+/// Unix installers signal completion through the permission bit instead; see `is_executable_file`.
+#[cfg(not(windows))]
+fn being_written(_path: &Path) -> bool {
+    false
+}
+
 /// Whether a wrapper payload is present and, for `.exe` payloads, is a Windows executable.
 ///
 /// A half-finished install can leave the wrapper while its payload is missing, or leave a text
 /// placeholder where the real binary belongs; both fail later with an opaque cmd.exe path error.
 fn payload_live(path: &Path) -> bool {
-    if !path.is_file() {
+    if !path.is_file() || being_written(path) {
         return false;
     }
     if !path.to_string_lossy().to_ascii_lowercase().ends_with(".exe") {
@@ -592,6 +625,31 @@ mod tests {
         let script = dir.join("cli.js");
         std::fs::write(&script, "console.log('ok')\n").unwrap();
         assert!(payload_live(&script));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_still_being_written_is_not_executable() {
+        let dir = shim_dir("being-written");
+        let exe = dir.join("omp.exe");
+        // A download in progress keeps a write handle open on the final file.
+        let writer = std::fs::File::create(&exe).unwrap();
+        assert!(being_written(&exe));
+        assert!(!is_executable_file(&exe), "a half-written file is not an installation");
+        drop(writer);
+        assert!(is_executable_file(&exe));
+        // The test binary itself is running, which must not count as being written.
+        assert!(!being_written(&std::env::current_exe().unwrap()));
+        // A wrapper whose payload is still being copied is not usable yet either.
+        let wrapper = dir.join("opencode.cmd");
+        std::fs::write(&wrapper, "\"%dp0%\\payload.exe\"   %*\r\n").unwrap();
+        let payload = dir.join("payload.exe");
+        let mut copying = std::fs::File::create(&payload).unwrap();
+        std::io::Write::write_all(&mut copying, b"MZ\x90\x00").unwrap();
+        assert!(shim_payload_missing(&wrapper));
+        drop(copying);
+        assert!(!shim_payload_missing(&wrapper));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

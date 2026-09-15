@@ -103,6 +103,7 @@ const zhTW: typeof en = {
 
   // Knowledge base: saved knowledge organized by project and session.
   "memory.hierarchy": "專案與工作階段",
+  "memory.up": "返回上一層",
   "memory.manualGroup": "手動建立",
   "memory.legacyGroup": "歷史合併條目",
   "memory.unknownProject": "來源專案不明",
@@ -438,6 +439,8 @@ const zhTW: typeof en = {
   "settings.spawnConfirm": "派生前確認", // Confirm before spawn
   "settings.usageAuto": "額度自動刷新", // Usage auto-refresh
   "settings.usageRefresh": "額度刷新", // Usage refresh
+  "settings.autoContinue": "額度重設後自動繼續", // Continue after limit resets
+  "settings.autoContinueHint": "Claude 或 Codex 因 5 小時或每週用量上限中斷時，額度重設後自動繼續執行任務。", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
   "settings.cleanImages": "自動清理貼上的圖片",
   "settings.cleanImagesHint":
     "貼上或拖入終端的圖片會先存成暫存檔（把路徑傳給 agent）。開啟後：結束時刪除本次會話產生的這些暫存圖，啟動時清理超過 24 小時的殘留。文件內的圖片不受影響。",
@@ -1501,8 +1504,6 @@ const zhTW: typeof en = {
   "permission.stateUnavailable": "權限狀態無法取得",
   "permission.currentUnknown": "目前權限尚未確認",
   "permission.notRunning": "未執行",
-  "permission.launch": (mode: string) => "啟動設定：" + mode,
-  "permission.unconfirmedHint": "尚未確認目前的權限。自訂參數或智慧代理內部的變更可能影響啟動設定的實際效果。",
   "permission.applied": "已生效",
   "permission.nextTurn": "下一則訊息生效",
   "permission.restart": "重新啟動工作階段後生效",
@@ -1630,6 +1631,10 @@ const zhTW: typeof en = {
   "chat.toolRun.count": (n: number) => `${n} 個工具呼叫`,
   "chat.toolRun.tooltip": "逐一檢視",
   "chat.backToEnd": "回到最新訊息",
+  "chat.turnFold.hide": "隱藏過程",
+  "chat.turnFold.show": (n: number) => `顯示過程（${n} 步）`,
+  "chat.turnFold.hideAll": "隱藏全部過程",
+  "chat.turnFold.showAll": "顯示全部過程",
   "chat.elicitation.heading": (server: string) => `${server} 要求輸入`,
   "chat.elicitation.cancel": "取消",
   "chat.elicitation.decline": "拒絕",
@@ -1685,6 +1690,12 @@ const zhTW: typeof en = {
   "chat.usage.cost": (usd: string) => `本次會話費用：$${usd}`,
   "chat.usage.rateLimited": (resets: string) => `已達到用量上限，${resets} 重設`,
   "chat.usage.rateWarning": (pct: number, resets: string) => `用量上限：已用 ${pct}%，${resets} 重設`,
+  "chat.autoContinue.fiveHour": (time: string) => `已達到 5 小時用量上限，將於 ${time} 自動繼續任務。`, // 5-hour usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.weekly": (time: string) => `已達到每週用量上限，將於 ${time} 自動繼續任務。`, // Weekly usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.generic": (time: string) => `已達到用量上限，將於 ${time} 自動繼續任務。`, // Usage limit reached. The task will continue automatically at ${time}.
+  "chat.autoContinue.unknownReset": "已達到用量上限。無法取得重設時間，任務不會自動繼續。", // Usage limit reached. The reset time is unknown, so the task will not continue automatically.
+  "chat.autoContinue.repeated": "再次達到用量上限，任務不再自動繼續。", // The usage limit was reached again. The task will no longer continue automatically.
+  "chat.autoContinue.failed": "任務未能自動繼續，傳送訊息即可繼續。", // The task could not continue automatically. Send a message to continue.
   "chat.mcp.codexScope": "此操作將修改 Codex 使用者設定，影響使用該設定的其他工作階段。是否繼續？",
   "chat.mcp.tooltip": "MCP 伺服器",
   "chat.mcp.loading": "正在讀取伺服器清單…",

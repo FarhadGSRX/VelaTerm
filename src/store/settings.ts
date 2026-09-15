@@ -64,6 +64,15 @@ export function defaultEngineFor(
   return agentDefaults[kind]?.engine ?? "chat";
 }
 
+/** The permission a session launches with: its own choice, or the agent kind's global default when it has
+ * none. Mirrors the backend's `permission_catalog::effective`, so displays match what actually runs. */
+export function effectivePermissionMode(
+  session: { kind: SessionKind; permissionMode?: string | null },
+  agentDefaults: Record<string, AgentDefaultConfig>,
+): string | null {
+  return session.permissionMode?.trim() || agentDefaults[session.kind]?.permissionMode?.trim() || null;
+}
+
 /** Terminal renderer: DOM is the stable default; WebGL accelerates rendering but can exhaust GPU contexts. */
 export type TermRenderer = "dom" | "webgl";
 
@@ -155,6 +164,9 @@ export interface PersistedSettings {
   /** How often the backend refreshes that snapshot, in seconds. One poller serves every session and
    * client, so this is the real query rate against Claude, Codex, and Grok. */
   usageRefreshSec: number;
+  /** Whether a Claude or Codex conversation stopped by a five-hour or weekly usage limit continues on its own
+   * once the limit resets. The backend scheduler reads this key from the shared settings block. */
+  autoContinueAtUsageLimit: boolean;
   /** Image paste mode: upload writes a file path, while agent lets the agent read the clipboard and show
    * `[Image #x]`. Configurable only on local desktop clients; browser and remote clients always upload. */
   imagePasteMode: ImagePasteMode;
@@ -213,6 +225,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   saveWorkspaceOnQuit: true,
   usageAutoRefresh: true,
   usageRefreshSec: 300,
+  autoContinueAtUsageLimit: false,
   imagePasteMode: "upload",
   chatModel: "",
   chatModelByKind: {},

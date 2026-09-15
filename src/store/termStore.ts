@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { DEFAULT_CONVERSATION_FONT_SIZE, normalizeTextSize, normalizeTextLineHeight } from "../theme";
 import { t } from "../i18n";
 import { setBrowserUrl } from "../ipc/browser";
-import { chatClear, setSessionEngine } from "../ipc/chat";
+import { chatClear, chatSend, chatStart, setSessionEngine } from "../ipc/chat";
 import {
   createWorktree,
   getSessionCwd,
@@ -92,7 +92,7 @@ import type {
   SessionKind,
   SessionRuntime,
 } from "../types";
-import { effectiveStatus, matchesAgentState } from "../types";
+import { effectiveStatus, matchesAgentState, supportsChatEngine } from "../types";
 import {
   CLEAN_IMAGES_KEY,
   NOTIFY_KEY,
@@ -103,6 +103,7 @@ import {
   loadRecordSessions,
   loadSettings,
   loadSoundEnabled,
+  defaultEngineFor,
   saveSettings,
   visualOf,
   type AgentDefaultConfig,
@@ -1004,6 +1005,8 @@ interface TermStore {
   usageAutoRefresh: boolean;
   /** How often the backend refreshes that snapshot, in seconds. */
   usageRefreshSec: number;
+  /** Whether conversations stopped by a usage limit continue on their own once it resets. */
+  autoContinueAtUsageLimit: boolean;
   /** The backend's one account-usage copy, filled by `usage://changed` and read by the Info panel.
    * Null until the first read returns; sessions never query providers themselves. */
   usage: UsageSnapshot | null;
@@ -1401,6 +1404,8 @@ interface TermStore {
   setUsageAutoRefresh: (v: boolean) => void;
   /** Sets how often the backend refreshes the usage snapshot, in seconds. */
   setUsageRefreshSec: (v: number) => void;
+  /** Turns automatic continuation after a usage limit resets on or off. */
+  setAutoContinueAtUsageLimit: (v: boolean) => void;
   /** Stores a usage snapshot received from the backend. */
   setUsage: (snap: UsageSnapshot) => void;
   /** Sets the persisted terminal renderer for new terminals. */
@@ -1585,6 +1590,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     saveWorkspaceOnQuit: s.saveWorkspaceOnQuit,
     usageAutoRefresh: s.usageAutoRefresh,
     usageRefreshSec: s.usageRefreshSec,
+    autoContinueAtUsageLimit: s.autoContinueAtUsageLimit,
     imagePasteMode: s.imagePasteMode,
     chatModel: s.chatModel,
     chatModelByKind: s.chatModelByKind,
@@ -2316,9 +2322,17 @@ export const useTermStore = create<TermStore>((set, get) => ({
     }
     const spawnCwd =
       req.cwd?.trim() || liveParentCwd || parent.cwd || project?.rootPath || null;
+    // A child opens in the view of the session that asked for it. Only an agent with a conversation view
+    // has a meaningful view to pass on; a plain terminal or another agent's parent falls back to the child
+    // kind's default view from settings. A child without a conversation view leaves the field unset.
+    const engine = !supportsChatEngine(kind)
+      ? null
+      : supportsChatEngine(parent.kind)
+        ? parent.engine ?? "tui"
+        : defaultEngineFor(kind, get().agentDefaults);
     // Terminal-backed children read uploaded image paths, using the same path-mode convention as paste.
     let initialPrompt = req.prompt;
-    for (const image of req.images ?? []) {
+    for (const image of engine === "chat" ? [] : req.images ?? []) {
       const bytes = Uint8Array.from(atob(image.data), character => character.charCodeAt(0));
       const path = await uploadImage(bytes, image.mimeType.split("/")[1] || "png");
       initialPrompt += kind === "codex" ? `\nimage_path: ${path}` : `\n${path}`;
@@ -2350,8 +2364,18 @@ export const useTermStore = create<TermStore>((set, get) => ({
       worktreeBaseRef,
       agentArgs: finalArgs,
       permissionMode,
+      engine,
     });
     if (!created) return;
+
+    if (engine === "chat") {
+      // A conversation has no launch argument to carry the prompt, so it is sent as the first message.
+      // Model and effort come from the launch arguments above, which the chat engine reads on start.
+      get().openSession(created.id, { newTab: !get().singleTabMode });
+      await chatStart(created.id);
+      await chatSend(created.id, req.prompt, "queue", req.images);
+      return;
+    }
 
     // Store the prompt for `usePtySession` to inject as a positional launch argument, avoiding a timed later write.
     set((s) => ({
@@ -4506,6 +4530,10 @@ export const useTermStore = create<TermStore>((set, get) => ({
   // would silently ignore. Switching polling off is the `usageAutoRefresh` toggle, not a zero here.
   setUsageRefreshSec: (v) => {
     set({ usageRefreshSec: Math.max(30, Math.round(v)) });
+    persistAndApplyVisual(get);
+  },
+  setAutoContinueAtUsageLimit: (v) => {
+    set({ autoContinueAtUsageLimit: v });
     persistAndApplyVisual(get);
   },
   setUsage: (snap) => set({ usage: snap }),

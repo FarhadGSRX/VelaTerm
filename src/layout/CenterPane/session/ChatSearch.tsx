@@ -11,6 +11,10 @@ function texts(row: ChatRow): string[] {
   return [];
 }
 
+function entryRows(entry: DisplayRow): ChatRow[] {
+  return entry.kind === "run" ? entry.calls : entry.kind === "row" ? [entry.row] : [];
+}
+
 const searchDetails = new WeakMap<ChatRow, string[]>();
 async function completeTexts(row: ChatRow): Promise<string[]> {
   const cached = searchDetails.get(row);
@@ -34,7 +38,9 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
-  const [position, setPosition] = useState(0);
+  // The selected match is held by entry id and its order within that entry, so older pages loaded
+  // above it and live rows appended below it leave the reader on the same match.
+  const [selected, setSelected] = useState<{ id: string; ordinal: number; fromEnd: number } | null>(null);
   const highlightName = "chat-search-" + useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const input = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -42,7 +48,7 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   useEffect(() => {
-    const pending = entries.flatMap(entry => entry.kind === "run" ? entry.calls : [entry.row]).filter(row => row.kind === "tool" && row.detailAvailable && !searchDetails.has(row));
+    const pending = entries.flatMap(entryRows).filter(row => row.kind === "tool" && row.detailAvailable && !searchDetails.has(row));
     if (!pending.length) { setLoadingDetails(false); return; }
     let disposed = false;
     setLoadingDetails(true);
@@ -60,16 +66,29 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
     })();
     return () => { disposed = true; };
   }, [entries]);
-  const content = useMemo(() => entries.map(entry => (entry.kind === "run" ? entry.calls : [entry.row]).flatMap(row => searchDetails.get(row) ?? texts(row))), [entries, detailsVersion]);
+  const content = useMemo(() => entries.map(entry => entryRows(entry).flatMap(row => searchDetails.get(row) ?? texts(row))), [entries, detailsVersion]);
   const matches = useMemo(() => {
     if (!query) return [];
     const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
-    return content.flatMap((parts, index) => parts.flatMap(text => Array.from(text.matchAll(pattern), match => ({
-      index, text, start: match.index, length: match[0].length,
-    }))));
+    return content.flatMap((parts, index) => {
+      let ordinal = 0;
+      return parts.flatMap(text => Array.from(text.matchAll(pattern), match => ({
+        index, text, start: match.index, length: match[0].length, ordinal: ordinal++,
+      })));
+    });
   }, [content, query]);
-  const current = matches[Math.min(position, Math.max(0, matches.length - 1))];
+  // A new query starts from the most recent match; the fallback keeps the distance from the end when
+  // the selected entry itself was regrouped.
+  const at = useMemo(() => {
+    if (!matches.length) return -1;
+    if (!selected) return matches.length - 1;
+    const found = matches.findIndex(match => entries[match.index]?.id === selected.id && match.ordinal === selected.ordinal);
+    return found >= 0 ? found : Math.max(0, matches.length - 1 - selected.fromEnd);
+  }, [matches, entries, selected]);
+  const current = at >= 0 ? matches[at] : undefined;
+  const pin = (index: number) => ({ id: entries[matches[index].index]?.id ?? "", ordinal: matches[index].ordinal, fromEnd: matches.length - 1 - index });
   useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => { if (!selected && at >= 0) setSelected(pin(at)); });
   useEffect(() => {
     if (current) onLocate(current.index, query);
     else onLocate(-1, "");
@@ -96,8 +115,7 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
       }
       CSS.highlights.set(highlightName, new Highlight(...ranges));
       if (!located && current && activeRanges.length) {
-        const ordinal = matches.slice(0, Math.min(position, matches.length - 1)).filter(match => match.index === current.index).length;
-        const rect = activeRanges[Math.min(ordinal, activeRanges.length - 1)].getBoundingClientRect();
+        const rect = activeRanges[Math.min(current.ordinal, activeRanges.length - 1)].getBoundingClientRect();
         const viewport = root.getBoundingClientRect();
         if (rect.height > 0) {
           located = true;
@@ -112,20 +130,20 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
     });
     observer.observe(root, { childList: true, subtree: true, characterData: true });
     return () => { observer.disconnect(); cancelAnimationFrame(frame); CSS.highlights.delete(highlightName); };
-  }, [query, scrollRef, highlightName, current, entries, matches, position]);
-  const move = (delta: number) => setPosition(value => matches.length ? (Math.min(value, matches.length - 1) + delta + matches.length) % matches.length : 0);
+  }, [query, scrollRef, highlightName, current, entries]);
+  const move = (delta: number) => { if (at >= 0) setSelected(pin((at + delta + matches.length) % matches.length)); };
   return <div ref={panel} className="sv-search" role="search" onKeyDown={event => {
     event.stopPropagation();
     if (event.key === "Escape") { event.preventDefault(); onClose(); }
-    if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); move(event.shiftKey ? -1 : 1); }
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); move(event.shiftKey ? 1 : -1); }
   }}>
     <style>{`::highlight(${highlightName}) { background: #f5ce58; color: #171717; }`}</style>
     {(loadingHistory || loadingDetails) && <div role="status">{t("common.loading")}</div>}
     {historyError && <div role="alert">{historyError} <button className="vlx-btn" onClick={onRetryHistory}>{t("common.retry")}</button></div>}
     {detailsError && <div role="alert">{detailsError}</div>}
     <div className="sv-search-controls">
-      <input ref={input} className="vlx-input" aria-label={t("archive.searchTranscript")} placeholder={t("doc.searchPlaceholder")} value={query} onChange={event => { setQuery(event.target.value); setPosition(0); }} />
-      <span role="status" aria-label={current ? t("search.matchPosition", Math.min(position + 1, matches.length), matches.length) : undefined} title={current ? current.text.slice(Math.max(0, current.start - 70), current.start + current.length + 100) : undefined}>{query ? current ? `${Math.min(position + 1, matches.length)}/${matches.length}` : loadingHistory || loadingDetails || historyError || detailsError ? "" : t("doc.searchNoMatch") : ""}</span>
+      <input ref={input} className="vlx-input" aria-label={t("archive.searchTranscript")} placeholder={t("doc.searchPlaceholder")} value={query} onChange={event => { setQuery(event.target.value); setSelected(null); }} />
+      <span role="status" aria-label={current ? t("search.matchPosition", at + 1, matches.length) : undefined} title={current ? current.text.slice(Math.max(0, current.start - 70), current.start + current.length + 100) : undefined}>{query ? current ? `${at + 1}/${matches.length}` : loadingHistory || loadingDetails || historyError || detailsError ? "" : t("doc.searchNoMatch") : ""}</span>
       <button className="vlx-btn" disabled={!current} title={t("common.prev")} onClick={() => move(-1)}>↑</button>
       <button className="vlx-btn" disabled={!current} title={t("common.next")} onClick={() => move(1)}>↓</button>
       <button className="vlx-btn" title={t("common.close")} onClick={onClose}>✕</button>

@@ -391,6 +391,8 @@ export interface ChatSnapshot {
   /** Codex: the service tier and personality chosen for this conversation, when set. */
   serviceTier?: string;
   personality?: string;
+  /** A usage limit stopped this conversation, and it continues on its own at the time given. */
+  autoContinue?: ChatAutoContinue;
   auth?: ChatAuthState;
   /** Flattened `ChatExtras`; read them with `extrasOf`. */
   contextTokens?: number;
@@ -402,6 +404,17 @@ export interface ChatSnapshot {
   fastMode?: boolean;
   apiRetry?: ChatApiRetry;
 }
+
+/** A conversation waiting for its usage limit to reset before it continues on its own. */
+export interface ChatAutoContinue {
+  /** Unix seconds at which the continuation is sent. */
+  continueAt: number;
+  /** `five_hour`, `seven_day`, or a provider-specific weekly bucket; absent when the provider did not say. */
+  limitType?: string;
+}
+
+/** Why automatic continuation ended without sending anything. */
+export type ChatAutoContinueReason = "unknownReset" | "repeated" | "failed";
 
 /** The extras a snapshot carries, as one object. */
 export function extrasOf(snapshot: ChatSnapshot): ChatExtras {
@@ -460,6 +473,8 @@ export type ChatEvent =
   | { type: "exited"; code: number; stderr: string; released?: boolean }
   | { type: "error"; message: string }
   | { type: "extras"; extras: ChatExtras }
+  /** The wait for a usage limit to reset began, moved, or ended; `reason` says why it ended unsent. */
+  | { type: "autoContinue"; waiting: ChatAutoContinue | null; reason?: ChatAutoContinueReason | null }
   /** The agent reported its own model catalogue; `chatModels` now answers from it. */
   | { type: "models" }
   | { type: "notification"; text: string; priority: string; timeoutMs?: number | null };
@@ -566,6 +581,11 @@ export function chatSend(
   messageId?: string,
 ): Promise<"sent" | "queued" | "command"> {
   return invoke("chat_send", { sessionId, text, behavior, images, messageId });
+}
+
+/** Stop waiting for the usage limit to reset; the conversation will not continue on its own. */
+export function chatAutoContinueCancel(sessionId: string): Promise<void> {
+  return invoke("chat_auto_continue_cancel", { sessionId });
 }
 
 /** Add an existing queued message to the running turn. */

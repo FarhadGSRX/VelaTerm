@@ -38,8 +38,10 @@ afterEach(cleanup);
 
 it.each(PERMISSION_TOGGLE_KINDS)("%s prompts, retains the deferred notice, and clears it after restart", async kind => {
   useTermStore.setState({ sessions: [{ id: "s", kind, engine: "tui", name: kind, permissionMode: "default" } as Session] });
-  render(<PermissionSeg />);
-  fireEvent.click(await screen.findByText("Current permissions unconfirmed"));
+  const { container } = render(<PermissionSeg />);
+  // The launch mode names the button until the agent confirms a permission.
+  fireEvent.click(await screen.findByText("Always Ask"));
+  expect(container.querySelector(".seg.on")).toBeNull();
   const name = kind === "codex" ? "Full Access" : ["claude", "opencode"].includes(kind) ? "Bypass" : "Skip all permission confirmations";
   fireEvent.click(await screen.findByRole("button", { name }));
   expect(await screen.findByRole("button", { name: "Restart now" })).toBeTruthy();
@@ -48,20 +50,34 @@ it.each(PERMISSION_TOGGLE_KINDS)("%s prompts, retains the deferred notice, and c
   expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
   expect(screen.getByText(/Applies after restarting this session:/)).toBeTruthy();
   expect(restart).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByText("Current permissions unconfirmed"));
+  fireEvent.click(screen.getByText("Always Ask"));
   fireEvent.click(await screen.findByRole("button", { name }));
   fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
   await waitFor(() => expect(restart).toHaveBeenCalledWith("s"));
   await waitFor(() => expect(screen.queryByText(/Applies after restarting this session:/)).toBeNull());
+  expect(container.querySelector(".seg.on")).toBeTruthy();
 });
 
 it("does not ask to restart when the backend reports the choice is already in use", async () => {
   useTermStore.setState({ sessions: [{ id: "s", kind: "copilot", engine: "tui", permissionMode: "default" } as Session] });
   render(<PermissionSeg />);
-  fireEvent.click(await screen.findByText("Current permissions unconfirmed"));
-  // The legacy default is represented by null at rest; the backend normalizes it.
+  fireEvent.click(await screen.findByText("Always Ask"));
   update.mockImplementation(async () => {});
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "Ask each time (default)" })));
   expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
   expect(restart).not.toHaveBeenCalled();
+});
+
+it("shows an unset session under the agent default and stores asking explicitly", async () => {
+  useTermStore.setState({ agentDefaults: { cursor: { permissionMode: "skip" } },
+    sessions: [{ id: "s", kind: "cursor", engine: "tui", permissionMode: null } as Session] });
+  render(<PermissionSeg />);
+  fireEvent.click(await screen.findByText("Always Ask"));
+  const ask = screen.getByRole("button", { name: "Ask each time (default)" });
+  expect(screen.getByRole("button", { name: "Skip all permission confirmations" }).querySelector("svg")).toBeTruthy();
+  expect(ask.querySelector("svg")).toBeNull();
+  update.mockImplementation(async () => {});
+  await act(async () => fireEvent.click(ask));
+  // Null would fall back to the skipping default again, so asking has to be written out.
+  expect(update).toHaveBeenCalledWith("s", expect.objectContaining({ permissionMode: "default" }));
 });

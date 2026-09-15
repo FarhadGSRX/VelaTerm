@@ -102,6 +102,7 @@ const en = {
 
   // Knowledge base: saved knowledge organized by project and session.
   "memory.hierarchy": "Projects and sessions",
+  "memory.up": "Up one level",
   "memory.manualGroup": "Manually created",
   "memory.legacyGroup": "Previously merged entries",
   "memory.unknownProject": "Unknown source project",
@@ -206,7 +207,7 @@ const en = {
   "nb.welcome": "Your notebooks",
   "nb.welcomeText": "Write freely, connect ideas, and keep your notes in ordinary local files. Open an existing Markdown folder or bring your documents into a new notebook.",
   "memory.globalMemory": "Session Knowledge Base",
-  "memory.collections": "Collections",
+  "memory.collections": "Archived Sessions",
   "memory.collectionConversation": "Conversation",
   "memory.collectionEmptyEntries": "No knowledge entries from this conversation yet.",
   "memory.title": "Knowledge Base",
@@ -440,6 +441,8 @@ const en = {
   "settings.spawnConfirm": "Confirm before spawn",
   "settings.usageAuto": "Usage auto-refresh",
   "settings.usageRefresh": "Usage refresh",
+  "settings.autoContinue": "Continue after limit resets",
+  "settings.autoContinueHint": "When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.",
   "settings.cleanImages": "Auto-clean pasted images",
   "settings.cleanImagesHint":
     "Images pasted or dropped into the terminal are first saved as temp files (the path is sent to the agent). When on, this session's temp files are removed when the app exits, and leftovers older than 24h are cleared on startup. Images inside documents are never touched.",
@@ -1555,8 +1558,6 @@ const en = {
   "permission.stateUnavailable": "Permission state unavailable",
   "permission.currentUnknown": "Current permissions unconfirmed",
   "permission.notRunning": "Not running",
-  "permission.launch": (mode: string) => "Launch setting: " + mode,
-  "permission.unconfirmedHint": "Current permissions have not been confirmed. Launch settings may be affected by custom arguments or changes made inside the agent.",
   "permission.applied": "Applied",
   "permission.nextTurn": "Applies to the next message",
   "permission.restart": "Applies after restarting this session",
@@ -1685,6 +1686,10 @@ const en = {
   "chat.toolRun.count": (n: number) => `${n} tool calls`,
   "chat.toolRun.tooltip": "Show each call",
   "chat.backToEnd": "Back to the latest message",
+  "chat.turnFold.hide": "Hide steps",
+  "chat.turnFold.show": (n: number) => (n === 1 ? "Show 1 step" : `Show ${n} steps`),
+  "chat.turnFold.hideAll": "Hide all steps",
+  "chat.turnFold.showAll": "Show all steps",
   // ── An MCP server asking the person something, through the agent ──
   "chat.elicitation.heading": (server: string) => `${server} is asking for input`,
   "chat.elicitation.cancel": "Cancel",
@@ -1742,6 +1747,12 @@ const en = {
   "chat.usage.cost": (usd: string) => `Session cost: $${usd}`,
   "chat.usage.rateLimited": (resets: string) => `Rate limit reached; resets ${resets}`,
   "chat.usage.rateWarning": (pct: number, resets: string) => `Rate limit: ${pct}% used; resets ${resets}`,
+  "chat.autoContinue.fiveHour": (time: string) => `5-hour usage limit reached. The task will continue automatically at ${time}.`,
+  "chat.autoContinue.weekly": (time: string) => `Weekly usage limit reached. The task will continue automatically at ${time}.`,
+  "chat.autoContinue.generic": (time: string) => `Usage limit reached. The task will continue automatically at ${time}.`,
+  "chat.autoContinue.unknownReset": "Usage limit reached. The reset time is unknown, so the task will not continue automatically.",
+  "chat.autoContinue.repeated": "The usage limit was reached again. The task will no longer continue automatically.",
+  "chat.autoContinue.failed": "The task could not continue automatically. Send a message to continue.",
   // ── MCP servers and background tasks ──
   "chat.mcp.codexScope": "This changes your Codex user configuration and affects other conversations using it. Continue?",
   "chat.mcp.tooltip": "MCP servers",

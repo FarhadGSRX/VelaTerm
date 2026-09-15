@@ -88,6 +88,15 @@ fn error_class(info: Option<&Value>) -> Option<&'static str> {
     })
 }
 
+/// Whether a `TurnError` says a subscription usage limit refused the turn.
+pub(super) fn is_usage_limit(error: &Value) -> bool {
+    match error.get("codexErrorInfo") {
+        Some(Value::String(name)) => name == "usageLimitExceeded",
+        Some(Value::Object(map)) => map.contains_key("usageLimitExceeded"),
+        _ => false,
+    }
+}
+
 /// Why the turn that just completed failed, if Codex said.
 ///
 /// The `turn/completed` notification carries the error when the turn failed. When it does not, the
@@ -119,9 +128,18 @@ pub(super) fn handle_notification(
             if params.get("willRetry").and_then(Value::as_bool).unwrap_or(false) {
                 notice(proc, "retry", format!("Codex is retrying after an error: {message}"));
             } else {
+                if params.get("error").is_some_and(is_usage_limit) {
+                    proc.extras.lock().unwrap().usage_limit_hit = true;
+                }
                 // The turn that ends next carries this as its reason; drawing it now as well would show
                 // the same failure twice.
                 *proc.codex_turn_error.lock().unwrap() = Some(message);
+            }
+        }
+        "account/rateLimits/updated" => {
+            if let Some(update) = params.get("rateLimits") {
+                let mut extras = proc.extras.lock().unwrap();
+                crate::agent::chat::auto_continue::merge_codex_rate_limits(&mut extras.codex_rate_limits, update);
             }
         }
         "warning" | "guardianWarning" => {

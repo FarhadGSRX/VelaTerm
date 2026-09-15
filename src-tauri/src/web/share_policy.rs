@@ -288,6 +288,7 @@ fn app_command(cmd: &str) -> bool {
             | "chat_start"
             | "chat_send"
             | "chat_interrupt"
+            | "chat_auto_continue_cancel"
             | "chat_permission"
             | "chat_queue_steer"
             | "chat_queue_remove"

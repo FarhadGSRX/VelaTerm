@@ -795,6 +795,7 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             &req_str(args, "text")?,
         )?),
         "chat_interrupt" => to_value(core::chat_interrupt(app, &req_str(args, "sessionId")?)?),
+        "chat_auto_continue_cancel" => to_value(core::chat_auto_continue_cancel(app, &req_str(args, "sessionId")?)?),
         "chat_permission" => {
             let message = opt_str(args, "message");
             // Absent means "run what was proposed"; a form the user filled in arrives here instead.

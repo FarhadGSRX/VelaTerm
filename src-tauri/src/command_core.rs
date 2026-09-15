@@ -921,6 +921,7 @@ pub fn chat_clear(ctx: &AppCtx, session_id: &str) -> Result<Session, String> {
     };
 
     ctx.chat().stop(ctx, session_id)?;
+    crate::agent::chat::auto_continue::cancel(ctx, session_id);
     ctx.emit(TREE_CHANGED, ());
     Ok(fresh)
 }
@@ -978,6 +979,10 @@ pub fn chat_start(
     session_settings::persist(ctx, &session, &selection)?;
     let extra_args =
         session_settings::without_selection_args(session.kind, session.agent_args.as_deref());
+    let permission_mode = {
+        let conn = ctx.db().conn.lock().unwrap();
+        crate::agent::permission_catalog::effective(&conn, session.kind, session.permission_mode.as_deref())?
+    };
     ctx.chat().start(
         ctx,
         session_id,
@@ -987,7 +992,7 @@ pub fn chat_start(
         session.agent_session_id.as_deref(),
         selection.model.as_deref(),
         selection.effort.as_deref(),
-        session.permission_mode.as_deref(),
+        permission_mode.as_deref(),
         session.collaboration_mode.as_deref(),
         &crate::agent::inject::split_extra_args(Some(&extra_args)),
         fast_mode,
@@ -1147,6 +1152,8 @@ pub fn chat_send(
         return Err("security_audit_owns_conversation".into());
     }
     check_images(&images)?;
+    // A message sent while waiting for a usage limit to reset takes over from the automatic continuation.
+    crate::agent::chat::auto_continue::cancel(ctx, session_id);
     // Pasted calls can bypass completion and arrive before the startup catalogue. Resolve aliases on
     // the backend as well, so a first-message `$skill` in Claude is never sent as ordinary prose.
     let session = session_settings::session(ctx, session_id)?;
@@ -1622,7 +1629,15 @@ pub fn chat_rewind(
     if crate::security::session_active(session_id) {
         return Err("security_audit_owns_conversation".into());
     }
-    ctx.chat().rewind(ctx, session_id, row_id, scope)
+    let result = ctx.chat().rewind(ctx, session_id, row_id, scope)?;
+    crate::agent::chat::auto_continue::cancel(ctx, session_id);
+    Ok(result)
+}
+
+/// Stop waiting for a usage limit to reset; the conversation will not continue on its own.
+pub fn chat_auto_continue_cancel(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
+    crate::agent::chat::auto_continue::cancel(ctx, session_id);
+    Ok(())
 }
 
 /// A view started showing this conversation. Cancels a release a closed view asked for; starts nothing.

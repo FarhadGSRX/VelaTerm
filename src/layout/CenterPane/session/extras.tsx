@@ -1,19 +1,20 @@
 //! What Claude reports about its own run, drawn beside the composer controls.
 //!
 //! Each piece here is a small self-contained control: the context meter, the fast-mode switch, the MCP
-//! server list, the background-task list, and the two transient lines for a retry in progress and a
-//! notification. They read `ChatExtras` and call the chat commands; the pane only passes state through.
+//! server list, the background-task list, the two transient lines for a retry in progress and a
+//! notification, and the bar for a conversation waiting to continue after a usage limit. They read `ChatExtras` and call the chat commands; the pane only passes state through.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import Icons from "../../../components/Icons";
 import { SELECT_PANEL } from "../../../components/Select";
-import { useT } from "../../../i18n";
+import { dateLocale, useT } from "../../../i18n";
 import {
   chatMcpReconnect,
   chatMcpStatus,
   chatMcpToggle,
   type ChatApiRetry,
+  type ChatAutoContinue,
   type ChatBackgroundTask,
   type ChatExtras,
   type ChatMcpServer,
@@ -356,6 +357,28 @@ export function RetryLine({ retry }: { retry: ChatApiRetry }) {
     <div className="sv-retry">
       <Icons.restart size={12} />
       {t("chat.retry.line", retry.attempt, retry.maxRetries, seconds, retry.message)}
+    </div>
+  );
+}
+
+/** A conversation stopped by a usage limit, waiting to continue on its own, with a way to stop waiting. */
+export function AutoContinueBar({ waiting, onCancel }: { waiting: ChatAutoContinue; onCancel: () => void }) {
+  const t = useT();
+  const at = new Date(waiting.continueAt * 1000);
+  const locale = dateLocale();
+  const time = at.toDateString() === new Date().toDateString()
+    ? at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
+    : at.toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const text = waiting.limitType === "five_hour"
+    ? t("chat.autoContinue.fiveHour", time)
+    : waiting.limitType?.startsWith("seven_day")
+      ? t("chat.autoContinue.weekly", time)
+      : t("chat.autoContinue.generic", time);
+  return (
+    <div className="sv-notify sv-notify-high" role="status">
+      <Icons.restart size={12} />
+      <span className="sv-notify-text" title={at.toLocaleString(locale)}>{text}</span>
+      <button className="vlx-btn" onClick={onCancel}>{t("common.cancel")}</button>
     </div>
   );
 }

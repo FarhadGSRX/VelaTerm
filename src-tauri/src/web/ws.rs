@@ -699,6 +699,7 @@ fn web_pty_spawn(
         // Merge custom launch arguments with the agent-specific permission-mode flag, matching desktop behavior.
         let args = repo::get_agent_args(&conn, sid)?;
         let perm = repo::get_permission_mode(&conn, sid)?;
+        let perm = crate::agent::permission_catalog::effective(&conn, kind, perm.as_deref())?;
         let args =
             crate::agent::inject::merge_permission_flag(kind, perm.as_deref(), args.as_deref());
         (

@@ -35,11 +35,13 @@ fn state(configured: String, runtime: Option<(String, Option<String>)>, chat: bo
 }
 
 pub fn read(app: &AppCtx, session_id: &str) -> Result<PermissionState, String> {
-    let session = {
+    let (session, stored) = {
         let conn = app.db().conn.lock().unwrap();
-        repo::get_session(&conn, session_id)?.ok_or("Session not found")?
+        let session = repo::get_session(&conn, session_id)?.ok_or("Session not found")?;
+        let stored = permission_catalog::effective(&conn, session.kind, session.permission_mode.as_deref())?;
+        (session, stored)
     };
-    let configured = normalize(session.kind, session.permission_mode.as_deref())?;
+    let configured = normalize(session.kind, stored.as_deref())?;
     let chat = session.engine == "chat";
     let runtime = if chat {
         app.chat().permission_state(session_id)

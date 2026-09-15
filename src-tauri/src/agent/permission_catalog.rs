@@ -73,6 +73,28 @@ pub fn validate(kind: SessionKind, mode: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+/// The permission a session actually uses: its own choice, or the agent kind's global default when it has
+/// none. Every launch path and the permission state read through this, so terminal and conversation views
+/// never disagree about an unset value. Unreadable settings count as no default, which keeps asking.
+pub fn effective(
+    conn: &rusqlite::Connection,
+    kind: SessionKind,
+    stored: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(mode) = stored.map(str::trim).filter(|mode| !mode.is_empty()) {
+        return Ok(Some(mode.to_string()));
+    }
+    let settings: Value = repo::get_app_settings(conn)?
+        .get("vlx-settings")
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    Ok(settings["agentDefaults"][kind.as_str()]["permissionMode"]
+        .as_str()
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .map(str::to_string))
+}
+
 /// Patch only this agent's permission under the database lock, retaining paths, arguments, and other preferences.
 pub fn set_default(app: &AppCtx, agent: &str, mode: &str) -> Result<Value, String> {
     let kind = kind(agent)?;
@@ -286,5 +308,30 @@ mod tests {
         ))
         .unwrap();
         assert!(config.get("permission").is_none());
+    }
+
+    #[test]
+    fn unset_session_permissions_follow_the_agent_default() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::schema::SCHEMA).unwrap();
+        // Without any saved default an unset session stays unset, and the agent keeps asking.
+        assert_eq!(effective(&conn, SessionKind::Claude, None).unwrap(), None);
+        repo::set_app_settings(
+            &conn,
+            &std::collections::HashMap::from([("vlx-settings".into(), json!({"agentDefaults":{
+                "claude":{"permissionMode":"skip"}, "cursor":{"permissionMode":"skip"}, "codex":{"permissionMode":" "}
+            }}).to_string())]),
+        )
+        .unwrap();
+        for stored in [None, Some(""), Some("  ")] {
+            assert_eq!(effective(&conn, SessionKind::Claude, stored).unwrap().as_deref(), Some("skip"));
+        }
+        // An explicit choice wins, including an explicit "ask" on a checkbox-only agent.
+        assert_eq!(effective(&conn, SessionKind::Claude, Some("plan")).unwrap().as_deref(), Some("plan"));
+        assert_eq!(effective(&conn, SessionKind::Cursor, Some("default")).unwrap().as_deref(), Some("default"));
+        assert_eq!(effective(&conn, SessionKind::Cursor, None).unwrap().as_deref(), Some("skip"));
+        assert_eq!(effective(&conn, SessionKind::Codex, None).unwrap(), None);
+        assert_eq!(effective(&conn, SessionKind::Opencode, None).unwrap(), None);
+        assert_eq!(crate::agent::inject::permission_flag(SessionKind::Cursor, Some("default")), None);
     }
 }

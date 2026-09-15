@@ -114,6 +114,8 @@ const DIRECT_DESKTOP_CMDS = new Set([
   "probe_remote_fingerprint",
   "url_trust_fingerprint",
   "open_devtools",
+  // Native chrome tinting touches the window/appearance on every platform, so it must stay a native command.
+  "set_native_theme",
   "ssh_probe_host",
   "ssh_trust_host",
   "ssh_connect",

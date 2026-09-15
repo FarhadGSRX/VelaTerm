@@ -7,7 +7,7 @@
 import { useAgentPermissions, savePermissionDefault } from "../../hooks/useAgentPermissions";
 import { permissionLabelKey } from "../../components/AgentPermissionSelect";
 import { useSessionPermissionState, type SessionPermissionState } from "../../hooks/useSessionPermissionState";
-import { currentPermissionLabel, pendingPermissionLabel, PermissionStateDetails } from "../../components/PermissionStateDetails";
+import { currentPermissionLabel, effectivePermission, pendingPermissionLabel, PermissionStateDetails } from "../../components/PermissionStateDetails";
 import { useEffect, useRef, useState } from "react";
 import Icons from "../../components/Icons";
 import { SELECT_PANEL } from "../../components/Select";
@@ -23,6 +23,7 @@ import { openUpdateModal, useUpdateState } from "../../ipc/updater";
 import { webServerStatus, type WebServerStatus } from "../../ipc/webServer";
 import { env } from "../../platform";
 import { useTermStore } from "../../store/termStore";
+import { effectivePermissionMode } from "../../store/settings";
 import {
   countByAgentState,
   type SessionKind,
@@ -477,9 +478,11 @@ export function PermissionSeg() {
 
   // Show only for persisted agent sessions that support permission switching, not temporary drafts.
   const session = sessions.find((s) => s.id === activeSessionId);
-  const permissionCatalog = useAgentPermissions(session?.kind ?? "terminal", session?.permissionMode);
+  const agentDefaults = useTermStore((s) => s.agentDefaults);
+  const permissionMode = session ? effectivePermissionMode(session, agentDefaults) : null;
+  const permissionCatalog = useAgentPermissions(session?.kind ?? "terminal", permissionMode);
   const permissionState = useSessionPermissionState(session?.engine === "chat" ? undefined : session?.id,
-    `${session?.permissionMode}:${activeRunning}`);
+    `${permissionMode}:${activeRunning}`);
   const [keepPermission, setKeepPermission] = useState(false);
   const [permissionError, setPermissionError] = useState<string>();
   useEffect(() => {
@@ -489,7 +492,7 @@ export function PermissionSeg() {
   // Chat sessions expose the same runtime facts beside their composer.
   if (session.engine === "chat") return null;
 
-  const isSkip = ["skip", "bypassPermissions", "full-access"].includes(session.permissionMode ?? "");
+  const isSkip = ["skip", "bypassPermissions", "full-access"].includes(permissionMode ?? "");
   const catalogued = ["claude", "codex", "opencode"].includes(session.kind);
 
   const close = () => {
@@ -499,7 +502,7 @@ export function PermissionSeg() {
 
   // Persist only this session's permissionMode. Because update_session replaces the full record,
   // pass existing fields too or values such as the session name would be cleared.
-  const chooseMode = async (mode: string | null) => {
+  const chooseMode = async (mode: string) => {
     setPermissionError(undefined);
     await updateSession(session.id, {
       name: session.name,
@@ -512,7 +515,7 @@ export function PermissionSeg() {
     const saved = await invoke<SessionPermissionState>("session_permission_state", { sessionId: session.id });
     const needsRestart = saved.activation === "restart";
     if (needsRestart) setStep("restart");
-    if (keepPermission && mode) await savePermissionDefault(session.kind, mode);
+    if (keepPermission) await savePermissionDefault(session.kind, mode);
     if (!needsRestart) close();
   };
 
@@ -557,7 +560,7 @@ export function PermissionSeg() {
   return (
     <span
       ref={rootRef}
-      className={permissionState?.value?.current && ["skip", "bypassPermissions", "full-access"].includes(permissionState.value.current) ? "seg btn on" : "seg btn"}
+      className={["skip", "bypassPermissions", "full-access"].includes(effectivePermission(permissionState?.value) ?? "") ? "seg btn on" : "seg btn"}
       style={{
         position: "relative",
       }}
@@ -613,7 +616,7 @@ export function PermissionSeg() {
                 </label>}
                 {permissionCatalog?.error && <div role="alert">{permissionCatalog.error}</div>}
               </> : <>
-                {menuOption(!isSkip, false, t("statusbar.permOptAsk"), () => void chooseMode(null).catch(error => setPermissionError(String(error))))}
+                {menuOption(!isSkip, false, t("statusbar.permOptAsk"), () => void chooseMode("default").catch(error => setPermissionError(String(error))))}
                 {menuOption(isSkip, true, t("tree.permissionSkipLabel"), () => void chooseMode("skip").catch(error => setPermissionError(String(error))))}
               </>}
               <div

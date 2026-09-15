@@ -1,3 +1,33 @@
+## v0.2.2 — 2026-09-15
+
+- ⏳ Tự động tiếp tục sau giới hạn sử dụng, mặc định tắt trong cài đặt: khi Claude hoặc Codex dừng vì giới hạn 5 giờ hoặc hằng tuần, phiên sẽ tự tiếp tục sau khi giới hạn được đặt lại. Phía trên ô nhập hiện một dải thông báo kèm thời gian đặt lại và nút "Hủy"; trạng thái chờ được giữ qua lần khởi động lại ứng dụng và kết thúc khi bạn gửi tin nhắn, hoàn tác, xóa nội dung phiên hoặc tắt cài đặt.
+
+- 🪟 Windows: cài đặt một chạm cho OpenCode, Grok và Crush truyền `--allow-scripts` để npm tạo tệp thực thi; Cursor, OMP và Antigravity được tìm trong thư mục cài đặt thực tế dưới `%LOCALAPPDATA%`, và OMP cũng tôn trọng `PI_INSTALL_DIR`.
+
+- 🪟 Windows: tệp vẫn đang tải xuống hoặc sao chép không còn được coi là đã cài đặt, thẻ cài đặt đợi đến khi quá trình cài đặt thực sự kết thúc mới báo thành công, và đường dẫn đã lưu không còn hợp lệ được thay bằng đường dẫn vừa tìm thấy.
+
+- 🧩 Chế độ hội thoại: phần suy nghĩ, gọi công cụ và trả lời trung gian của một lượt có thể ẩn bằng "Ẩn các bước", chỉ giữ lại câu trả lời cuối; thanh công cụ ẩn hoặc hiện toàn bộ các lượt cùng lúc, và tìm kiếm tự mở rộng lượt bị ẩn để định vị kết quả.
+
+- 🔐 Nút quyền giờ hiển thị chế độ mà phiên được khởi chạy thay vì "Chưa xác nhận quyền hiện tại"; dòng "thiết lập khởi chạy" trùng lặp đã bị bỏ, và phiên khởi chạy với bước xác nhận bị bỏ qua được tô sáng lại trên thanh trạng thái.
+
+- 🔐 Phiên chưa đặt quyền riêng sẽ theo mặc định toàn cục của loại tác nhân trong cả hai chế độ xem, và việc sửa phiên không còn cố định giá trị kế thừa thành giá trị riêng của phiên.
+
+- ↩️ Các trang cơ sở tri thức có thêm nút "Lên một cấp": một mục quay về phiên chứa nó, rồi về dự án và trang chủ; phiên đã lưu trữ, ghi chú và thư mục cũng đi lên theo cách tương tự.
+
+- 🌱 Phiên con mở cùng chế độ xem với phiên cha: từ phiên ở chế độ hội thoại, tác vụ đến dưới dạng tin nhắn đầu tiên và hình ảnh thành tệp đính kèm; từ phiên ở terminal, phiên con khởi chạy trong terminal với tác vụ được truyền làm tham số khởi chạy.
+
+- 🎨 macOS: cửa sổ và dải thanh tiêu đề nhận màu theo chủ đề trước khi cửa sổ hiện ra, và đổi chủ đề khi đang chạy sẽ vẽ lại ngay.
+
+- 🗜️ Phiên Claude giữ lại trong lịch sử đọc những lượt trước lần nén; hoàn tác vẫn loại bỏ nhánh bị bỏ.
+
+- 🔎 Tìm kiếm trong hội thoại giữ nguyên kết quả đang chọn khi tải thêm lịch sử cũ hơn; Enter chuyển đến kết quả trước và Shift+Enter đến kết quả sau.
+
+- 🩹 Quay lại một hội thoại đang dừng giữa lịch sử sẽ khôi phục vị trí đọc thay vì để trống toàn bộ khung.
+
+- 🧭 Thông tin chẩn đoán danh mục mô hình chỉ hiện khi mở menu mô hình với phím Option được giữ; dòng lỗi thẳng hàng với văn bản tin nhắn, và cơ sở tri thức tiếng Anh hiển thị "Archived Sessions".
+
+---
+
 ## v0.2.1 — 2026-09-14
 
 - 🔎 Trang chủ của cơ sở tri thức có thêm ô tìm kiếm: một truy vấn tìm đồng thời tri thức phiên và ghi chú cục bộ, kết quả được nhóm theo nguồn. Kết quả khớp chính xác được ưu tiên; tìm gần đúng (viết tắt, dãy con và lỗi gõ) chỉ chạy khi không có kết quả khớp chính xác nào, còn truy vấn tiếng Trung vẫn tìm theo chuỗi con.

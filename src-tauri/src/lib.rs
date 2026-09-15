@@ -108,6 +108,85 @@ pub(crate) fn native_theme(app: &tauri::AppHandle) -> Option<tauri::Theme> {
         .and_then(|s| *s.0.lock().unwrap())
 }
 
+/// app_settings key holding the persisted theme mode, mirroring the frontend's `vlx-theme`.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+const THEME_SETTING_KEY: &str = "vlx-theme";
+
+/// Window frame color for each scheme, matching --bg-0 in vlinx.css. It fills the strip macOS reserves above
+/// the web content for the title bar, and the window background behind it.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+const FRAME_COLOR_DARK: (u8, u8, u8, u8) = (0x23, 0x26, 0x2b, 0xff);
+#[cfg(all(feature = "gui", target_os = "macos"))]
+const FRAME_COLOR_LIGHT: (u8, u8, u8, u8) = (0xff, 0xff, 0xff, 0xff);
+
+/// Give the window the frame color of the resolved scheme.
+///
+/// macOS 26 insets a window's web content below the title bar and paints that strip with the WKWebView's
+/// under-page background color. wry writes that color once at creation from `windows[].backgroundColor` and
+/// its runtime setter exists only behind the private-API transparency feature, so a pinned dark background
+/// keeps a dark strip above a light interface. Rewriting it through AppKit is what actually repaints the
+/// strip; the window background is given the same color so any surface without web content agrees.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+pub(crate) fn apply_window_frame(win: &tauri::WebviewWindow, dark: bool) {
+    let (red, green, blue, alpha) = if dark { FRAME_COLOR_DARK } else { FRAME_COLOR_LIGHT };
+    let _ = win.set_background_color(Some(tauri::window::Color(red, green, blue, alpha)));
+    let Ok(ns_window) = win.ns_window() else {
+        return;
+    };
+    // Runs on the main thread: both call sites are the setup hook and the `set_native_theme` command.
+    unsafe {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyObject, Bool};
+        let content: *mut AnyObject = msg_send![ns_window as *mut AnyObject, contentView];
+        if content.is_null() {
+            return;
+        }
+        let subviews: *mut AnyObject = msg_send![content, subviews];
+        if subviews.is_null() {
+            return;
+        }
+        let color: *mut AnyObject = msg_send![
+            objc2::class!(NSColor),
+            colorWithSRGBRed: red as f64 / 255.0,
+            green: green as f64 / 255.0,
+            blue: blue as f64 / 255.0,
+            alpha: alpha as f64 / 255.0
+        ];
+        let count: usize = msg_send![subviews, count];
+        for index in 0..count {
+            let view: *mut AnyObject = msg_send![subviews, objectAtIndex: index];
+            // Only WKWebView implements the setter, which keeps the walk away from unrelated subviews.
+            let responds: Bool = msg_send![view, respondsToSelector: objc2::sel!(setUnderPageBackgroundColor:)];
+            if responds.as_bool() {
+                let _: () = msg_send![view, setUnderPageBackgroundColor: &*color];
+            }
+        }
+    }
+}
+
+/// Resolve the frame color for the first painted frame: the persisted mode, or, while the interface
+/// follows the OS, the scheme the window already renders with. Read before the window is shown so the
+/// strip never opens in the wrong color; the resolution matches the frontend's `resolveTheme`.
+#[cfg(all(feature = "gui", target_os = "macos"))]
+fn startup_frame_is_dark(db: &Db, app: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    let mode = db
+        .conn
+        .lock()
+        .ok()
+        .and_then(|conn| db::repo::get_app_settings(&conn).ok())
+        .and_then(|settings| settings.get(THEME_SETTING_KEY).cloned());
+    match mode.as_deref() {
+        Some("dark") => true,
+        Some("light") => false,
+        _ => app
+            .get_webview_window("main")
+            .and_then(|win| win.theme().ok())
+            .map(|theme| theme == tauri::Theme::Dark)
+            .unwrap_or(false),
+    }
+}
+
 /// Brief `vela` CLI help invoked through a hidden shim argument so normal GUI startup stays quiet.
 pub fn print_vela_help() {
     println!("usage: vela <project-path>\n\nOpen a project in VelaTerm, or switch to it if it is already open.");
@@ -750,7 +829,18 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                     crate::diagnostic_warn!("startup sweep: removed {swept} stale pasted temp image(s)");
                 }
             }
+            // The main window is created hidden so it can be sized, centered, and given the frame color of
+            // the persisted scheme before its first painted frame. Showing it here also covers the other
+            // platforms, which previously appeared before setup ran.
+            #[cfg(target_os = "macos")]
+            let frame_is_dark = startup_frame_is_dark(&db, app.handle());
             app.manage(db);
+
+            if let Some(win) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                apply_window_frame(&win, frame_is_dark);
+                let _ = win.show();
+            }
 
             // Extract bundled terminal commands into data_dir/bin, which PTY sessions prepend to PATH.
             // Failure is nonfatal and only disables those commands.
@@ -850,6 +940,8 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             // and browser client. It only touches providers whose account material exists on this
             // machine, and honours the usage settings live.
             agent::usage_store::start(AppCtx::Tauri(app.handle().clone()));
+            // Sends the continuation prompt to conversations waiting for a usage limit to reset.
+            agent::chat::auto_continue::start(AppCtx::Tauri(app.handle().clone()));
             agent::remote_model_catalog::start(AppCtx::Tauri(app.handle().clone()));
 
             // Refresh the search index in the background so the first search only pays for what changed
@@ -1494,6 +1586,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
     // Same account-usage poller as the desktop entry point: headless serves browser and mobile clients,
     // which read the stored snapshot instead of querying providers themselves.
     agent::usage_store::start(ctx.clone());
+    agent::chat::auto_continue::start(ctx.clone());
     agent::remote_model_catalog::start(ctx.clone());
 
     // Same background index warm-up as the desktop entry point.

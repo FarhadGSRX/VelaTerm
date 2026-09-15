@@ -21,6 +21,8 @@ export interface FieldDef {
   type?: "text" | "checkbox";
   /** Value written when a checkbox is checked (default "1"), mapping binary semantics to a concrete string such as "skip". */
   checkedValue?: string;
+  /** Value written when a checkbox is unchecked (default ""). */
+  uncheckedValue?: string;
   /** Optional supporting text below a checkbox. */
   hint?: string;
   /** For text fields, restore `—`/`–` to `--` on submit so macOS Smart Punctuation cannot corrupt launch arguments. */
@@ -168,7 +170,7 @@ export function FormModal({
                       onChange={(e) =>
                         setValues((v) => ({
                           ...v,
-                          [f.key]: e.target.checked ? on : "",
+                          [f.key]: e.target.checked ? on : f.uncheckedValue ?? "",
                         }))
                       }
                     />

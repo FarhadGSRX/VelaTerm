@@ -49,6 +49,7 @@ const COMMANDS: &[&str] = &[
     "chat_auth_cancel",
     "chat_auth_submit",
     "chat_attachment",
+    "chat_auto_continue_cancel",
     "chat_background_tasks",
     "chat_clear",
     "chat_commands",

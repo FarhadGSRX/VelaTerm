@@ -7,6 +7,36 @@ v0.1.91 is the first public release; earlier version numbers were internal itera
 
 ---
 
+## v0.2.2 — 2026-09-15
+
+- ⏳ Auto-continue after usage limits, off by default in Settings: when Claude or Codex stops at a 5-hour or weekly limit, the session resumes on its own once the limit resets. A banner above the composer shows the reset time with a Cancel button, the wait survives an app restart, and sending a message, rolling back, clearing the session or turning the setting off ends it.
+
+- 🪟 Windows: one-click installs for OpenCode, Grok and Crush pass `--allow-scripts` so npm produces the executable, Cursor, OMP and Antigravity are found in their real install folders under `%LOCALAPPDATA%`, and OMP also honors `PI_INSTALL_DIR`.
+
+- 🪟 Windows: files still being downloaded or copied no longer count as installed, the install card waits for the install to finish before reporting success, and a stale saved path is replaced with the newly located one.
+
+- 🧩 Conversation view: a turn's thinking, tool calls and interim replies can be hidden with "Hide steps" to leave only the final reply, and the toolbar hides or shows every turn at once; search expands a hidden turn to locate a match.
+
+- 🔐 The permission button now shows the mode a session was started with instead of "Current permissions unconfirmed", the duplicate launch-setting line is gone, and a session started with permissions already skipped highlights in the status bar.
+
+- 🔐 A session without its own permission setting follows the global default for its agent type in both views, and editing a session no longer turns the inherited value into a fixed choice.
+
+- ↩️ Knowledge base pages gain an "Up one level" button: an entry goes back to its session, then its project, then the home page, and archived sessions, notes and folders walk up the same way.
+
+- 🌱 A child session opens in the same view as its parent: from a conversation-view session the task arrives as the first message with images as attachments, and from a terminal session it starts in the terminal with the task passed as a launch argument.
+
+- 🎨 macOS: the window and title bar strip take on the theme colors before the window appears, and switching themes while running redraws them immediately.
+
+- 🗜️ Claude sessions keep the turns from before a compaction in the reading history, while a rollback still drops the branch it abandons.
+
+- 🔎 Conversation search keeps the selected match in place while earlier history loads; Enter moves to the previous match and Shift+Enter to the next.
+
+- 🩹 Returning to a conversation parked in the middle of its history restores the reading position instead of showing a blank pane.
+
+- 🧭 Model catalog diagnostics appear only when the model menu is opened with Option held down; error lines align with the message text, and the English knowledge base shows "Archived Sessions".
+
+---
+
 ## v0.2.1 — 2026-09-14
 
 - 🔎 The knowledge base home page gains a search box: one query searches session knowledge and local notes together and groups the results by source. Exact matches come first; a fuzzy pass covering abbreviations, subsequences and typos runs only when nothing matches exactly, while Chinese queries stay substring-based.

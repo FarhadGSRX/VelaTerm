@@ -40,6 +40,7 @@ impl Db {
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
         migrate(&conn)?;
         conn.execute_batch(crate::agent::chat::submissions::SCHEMA).map_err(|e| e.to_string())?;
+        conn.execute_batch(crate::agent::chat::auto_continue::SCHEMA).map_err(|e| e.to_string())?;
         conn.execute_batch(crate::agent::plan_execute::SCHEMA).map_err(|e| e.to_string())?;
         conn.execute_batch(crate::agent::tell::SCHEMA).map_err(|e| e.to_string())?;
         crate::mobile_push::init(&conn)?;

@@ -915,8 +915,11 @@ pub(crate) fn read_pi_transcript(kind: SessionKind, id: &str) -> Result<String, 
 /// Chain nodes are the lines carrying both `uuid` and `parentUuid` (user, assistant, attachment, system).
 /// The leaf is the last of them, unless a later `last-prompt` marker with `rewound` moved it: that marker
 /// names the message the conversation now ends at, or nothing at all when the rewind removed the first
-/// message. Every other line — file-history snapshots, mode changes, the markers themselves — stays in
-/// place; the parsers already ignore them. Content without chain nodes is returned unchanged.
+/// message. A compaction restarts the chain in the file — its `parentUuid` is null and the message the
+/// conversation continued from is named by `logicalParentUuid` — and that link is followed, so the turns
+/// from before the summary stay on the branch instead of reading the compaction as the conversation start.
+/// Every other line — file-history snapshots, mode changes, the markers themselves — stays in place; the
+/// parsers already ignore them. Content without chain nodes is returned unchanged.
 pub(crate) fn claude_active_branch(content: &str) -> String {
     struct Node {
         uuid: String,
@@ -937,10 +940,18 @@ pub(crate) fn claude_active_branch(content: &str) -> String {
             continue;
         }
         let node = match (v.get("uuid").and_then(serde_json::Value::as_str), v.get("parentUuid")) {
-            (Some(uuid), Some(parent)) => Some(Node {
-                uuid: uuid.to_string(),
-                parent: parent.as_str().map(str::to_string),
-            }),
+            (Some(uuid), Some(parent)) => {
+                // A compaction boundary carries a null `parentUuid` so the file gets a new root; the
+                // message the conversation really continued from is in `logicalParentUuid`. Following
+                // that link keeps everything said before the summary on the branch.
+                let parent = parent
+                    .as_str()
+                    .or_else(|| v.get("logicalParentUuid").and_then(serde_json::Value::as_str));
+                Some(Node {
+                    uuid: uuid.to_string(),
+                    parent: parent.map(str::to_string),
+                })
+            }
             _ => None,
         };
         if let Some(node) = &node {
@@ -1263,6 +1274,42 @@ mod tests {
         assert_eq!(claude_active_branch(&content), content);
         assert_eq!(claude_active_branch(""), "");
         assert_eq!(claude_active_branch("not json"), "not json");
+    }
+
+    #[test]
+    fn claude_active_branch_keeps_turns_that_predate_a_compaction() {
+        // Each compaction restarts the chain on disk; the boundary names the message its conversation
+        // continued from, so everything before the summary stays on the branch.
+        let content = [
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"first"}}"#,
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":"one"}}"#,
+            r#"{"type":"system","subtype":"compact_boundary","uuid":"c1","parentUuid":null,"logicalParentUuid":"a1"}"#,
+            r#"{"type":"user","uuid":"u2","parentUuid":"c1","message":{"role":"user","content":"summary"}}"#,
+            r#"{"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"role":"assistant","content":"two"}}"#,
+            r#"{"type":"system","subtype":"compact_boundary","uuid":"c2","parentUuid":null,"logicalParentUuid":"a2"}"#,
+            r#"{"type":"user","uuid":"u3","parentUuid":"c2","message":{"role":"user","content":"summary two"}}"#,
+            r#"{"type":"assistant","uuid":"a3","parentUuid":"u3","message":{"role":"assistant","content":"three"}}"#,
+        ]
+        .join("\n");
+        assert_eq!(branch_texts(&content), vec!["first", "one", "summary", "two", "summary two", "three"]);
+    }
+
+    #[test]
+    fn claude_active_branch_still_drops_a_branch_a_compaction_abandoned() {
+        // A rewind past the compaction moves the leaf onto the pre-compaction turns; the compacted
+        // continuation hanging off the boundary is then the abandoned branch.
+        let content = [
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"first"}}"#,
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":"one"}}"#,
+            r#"{"type":"system","subtype":"compact_boundary","uuid":"c1","parentUuid":null,"logicalParentUuid":"a1"}"#,
+            r#"{"type":"user","uuid":"u2","parentUuid":"c1","message":{"role":"user","content":"summary"}}"#,
+            r#"{"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"role":"assistant","content":"two"}}"#,
+            r#"{"type":"last-prompt","leafUuid":"a1","rewound":true}"#,
+            r#"{"type":"user","uuid":"u3","parentUuid":"a1","message":{"role":"user","content":"third"}}"#,
+            r#"{"type":"assistant","uuid":"a3","parentUuid":"u3","message":{"role":"assistant","content":"three"}}"#,
+        ]
+        .join("\n");
+        assert_eq!(branch_texts(&content), vec!["first", "one", "third", "three"]);
     }
 
     #[test]

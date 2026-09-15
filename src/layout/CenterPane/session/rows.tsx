@@ -30,7 +30,7 @@ import { ChatImagePreview } from "./ChatImagePreview";
 import { Markdown } from "./markdown";
 import { parseAnsweredQuestions, type AnsweredQuestion } from "./questionForm";
 import { ToolBody, toolSummary } from "./toolCards";
-import { runSummaryText, type ToolRow } from "./toolRuns";
+import { runSummaryText, type ToolRow, type TurnFold } from "./toolRuns";
 import { copyAttributes, createMessageSelectionClipboardContent } from "./selectionCopy";
 
 /**
@@ -200,11 +200,14 @@ function MessageHead({
   icon,
   at,
   durationMs,
+  actions,
 }: {
   who: string;
   icon?: ReactNode;
   at?: string | number;
   durationMs?: number;
+  /** Controls placed at the end of the line. */
+  actions?: ReactNode;
 }) {
   const when = messageTime(at);
   return (
@@ -223,6 +226,7 @@ function MessageHead({
       {durationMs !== undefined && Number.isFinite(durationMs) ? (
         <span className="sv-msg-duration">· {formatTurnDuration(durationMs)}</span>
       ) : null}
+      {actions}
     </div>
   );
 }
@@ -239,15 +243,34 @@ export function TurnHead({
   icon,
   at,
   durationMs,
+  fold,
+  onToggleFold,
 }: {
   who: string;
   icon?: ReactNode;
   at?: number;
   durationMs?: number;
+  /** The turn's interim work, when it has any to hide. */
+  fold?: TurnFold;
+  onToggleFold?: (fold: TurnFold) => void;
 }) {
+  const t = useT();
+  const label = fold ? (fold.collapsed ? t("chat.turnFold.show", fold.steps) : t("chat.turnFold.hide")) : "";
+  const toggle = fold && onToggleFold ? (
+    <button
+      type="button"
+      className="sv-turn-fold"
+      title={label}
+      aria-expanded={!fold.collapsed}
+      onClick={() => onToggleFold(fold)}
+    >
+      <Icons.chevR size={11} className={fold.collapsed ? "sv-caret" : "sv-caret sv-caret-open"} />
+      {label}
+    </button>
+  ) : null;
   return (
     <div className="sv-turn-head">
-      <MessageHead who={who} icon={icon} at={at} durationMs={durationMs} />
+      <MessageHead who={who} icon={icon} at={at} durationMs={durationMs} actions={toggle} />
     </div>
   );
 }

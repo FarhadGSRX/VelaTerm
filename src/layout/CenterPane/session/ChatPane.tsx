@@ -13,7 +13,7 @@ import { useAgentPermissions, savePermissionDefault } from "../../../hooks/useAg
 import { useSessionPermissionState } from "../../../hooks/useSessionPermissionState";
 import { currentPermissionLabel, PermissionStateDetails } from "../../../components/PermissionStateDetails";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
+import { measureElement, observeElementOffset, useVirtualizer } from "@tanstack/react-virtual";
 
 import Icons from "../../../components/Icons";
 import { ComposerOptionsButton, useComposerOptions } from "./ComposerOptions";
@@ -22,6 +22,7 @@ import { ModelCatalogStatus } from "./ModelCatalogStatus";
 import { StatusIndicator } from "../../../components/StatusIndicator";
 import { useT, type I18nKey } from "../../../i18n";
 import {
+  chatAutoContinueCancel,
   chatInterrupt,
   chatModels,
   chatPermission,
@@ -51,6 +52,8 @@ import {
   chatCommands,
   chatStart,
   onChatEvent,
+  type ChatAutoContinue,
+  type ChatAutoContinueReason,
   type ChatEvent,
   type ChatCommand,
   type ChatExtras,
@@ -74,7 +77,7 @@ import { imageFromNativeClipboard, imagesFromClipboard, imagesFromDrop } from ".
 import { IS_MAC, IS_PLAIN_BROWSER } from "../../../hooks/shortcutRegistry";
 import { useMentionFiles } from "./fileMentions";
 import { ControlChip, LevelBar, type ChipOption } from "./controls";
-import { FastModeChip, McpChip, NotificationBar, RetryLine, TasksChip, UsageMeter } from "./extras";
+import { AutoContinueBar, FastModeChip, McpChip, NotificationBar, RetryLine, TasksChip, UsageMeter } from "./extras";
 import { AgentAccountMenu, AgentAuth } from "./AgentAuth";
 import { CodexResetCredits } from "./CodexResetCredits";
 import { useEngineSwitch } from "./engineSwitch";
@@ -86,6 +89,7 @@ import { usePermissionRestart } from "./permissionRestart";
 import { PermissionCard, type PermissionAnswer } from "./permissionCards";
 import { isMode, type Mode } from "./permissions";
 import { useTermStore } from "../../../store/termStore";
+import { effectivePermissionMode } from "../../../store/settings";
 import { effectiveStatus, supportsPermissionToggle, type Session } from "../../../types";
 import { kindIconEl } from "../../sessionViewers/sessionMeta";
 import { assistantLabel } from "../../sessionViewers/TranscriptViewer";
@@ -104,10 +108,12 @@ import {
 } from "./rows";
 import {
   estimateRowHeight,
+  foldAgentTurns,
   groupToolRuns,
   markAgentTurns,
   mountedStart,
   type DisplayRow,
+  type TurnFold,
 } from "./toolRuns";
 import "./session-view.css";
 import { onTransportReconnect } from "../../../ipc/transport";
@@ -143,6 +149,13 @@ const THINKING_OFF = "off" as const;
 /** A level, or the empty string standing for the level the model picks itself. */
 type EffortChoice = string;
 /** Native catalogues may advertise new effort or variant names without a frontend release. */
+/** What to tell the user when automatic continuation after a usage limit ends without sending anything. */
+const AUTO_CONTINUE_REASONS: Record<ChatAutoContinueReason, I18nKey> = {
+  unknownReset: "chat.autoContinue.unknownReset",
+  repeated: "chat.autoContinue.repeated",
+  failed: "chat.autoContinue.failed",
+};
+
 function isEffort(value: string): boolean {
   return value.trim().length > 0;
 }
@@ -292,7 +305,10 @@ export function ChatPane({
   const [catalogue, setCatalogue] = useState<ChatModel[]>([]);
   // "skip" is what a terminal-driven session stored for "stop asking me"; the agent's own word for it is
   // bypassPermissions, and that is what this control shows.
-  const [mode, setMode] = useState<Mode>(() => storedMode(session));
+  const [mode, setMode] = useState<Mode>(() => storedMode({
+    kind: session.kind,
+    permissionMode: effectivePermissionMode(session, useTermStore.getState().agentDefaults),
+  }));
   const [pendingPermissionMode, setPendingPermissionMode] = useState<PendingPermissionMode | null>(null);
   const permissionState = useSessionPermissionState(hidden ? undefined : session.id,
     `${session.permissionMode}:${mode}:${pendingPermissionMode?.current}:${pendingPermissionMode?.next}`);
@@ -316,6 +332,8 @@ export function ChatPane({
   const sessionWaiters = useRef<Array<() => void>>([]);
   /** A notification from the agent's loop, shown until dismissed or timed out. */
   const [notice, setNotice] = useState<{ text: string; priority: string } | null>(null);
+  /** A usage limit stopped the conversation and it continues on its own at the given time. */
+  const [autoContinue, setAutoContinue] = useState<ChatAutoContinue | null>(null);
   /** Bumped when the agent reports its own catalogue, so the model list is read again. */
   const [catalogueVersion, setCatalogueVersion] = useState(0);
   /** Backend-owned start of the logical turn currently in flight. */
@@ -371,6 +389,10 @@ export function ChatPane({
   const [dismissed, setDismissed] = useState<string | null>(null);
   /** Folded tool runs the reader has opened, by the id of the run's first call. */
   const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(() => new Set());
+  /** Whether agent turns hide their interim work unless the reader chose otherwise for a turn. */
+  const [foldAll, setFoldAll] = useState(false);
+  /** Per-turn choices that differ from `foldAll`, by turn id; the pane-wide control clears them. */
+  const [foldOverrides, setFoldOverrides] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   /** Whether the view is parked away from the end, which is the only time the "back to the end" button is worth showing. */
   const [away, setAway] = useState(false);
   const [pendingRewind, setPendingRewind] = useState<{
@@ -396,6 +418,12 @@ export function ChatPane({
   // Whether the reader is following the end of the conversation. Scrolling up parks the view, so an
   // arriving message does not pull the text out from under someone reading back.
   const pinnedRef = useRef(true);
+  // Where the reader last was while the list could be seen. A hidden pane has no layout box, and the
+  // WebView can bring the scroller back at offset 0 without a scroll event, so the position is
+  // kept here and put back when the pane is shown again.
+  const readerTop = useRef(0);
+  /** Tells the virtualizer the scroller's real offset; set while it observes the scroller. */
+  const syncVirtualOffset = useRef<(() => void) | null>(null);
 
   /** Add or replace rows by id. The engine addresses rows this way so a message can be revised as it lands. */
   const applyRows = useCallback((incoming: ChatRow[]) => {
@@ -563,6 +591,10 @@ export function ChatPane({
           if (ms > 0) window.setTimeout(() => setNotice((n) => (n?.text === event.text ? null : n)), ms);
           break;
         }
+        case "autoContinue":
+          setAutoContinue(event.waiting);
+          if (event.reason) setNotice({ text: t(AUTO_CONTINUE_REASONS[event.reason]), priority: "high" });
+          break;
         default:
           break;
       }
@@ -632,6 +664,7 @@ export function ChatPane({
           setServiceTier(snapshot.serviceTier ?? "");
           setPersonality(snapshot.personality ?? "");
         }
+        setAutoContinue(snapshot.autoContinue ?? null);
         // Only while a process is actually behind the conversation: a snapshot taken after one exited
         // still names it, and reporting that as running would light the session up in every sidebar.
         if (snapshot.running && snapshot.pid !== undefined) {
@@ -825,10 +858,18 @@ export function ChatPane({
   // Reasoning rows with no text are dropped here. The agent may report that it thought without disclosing
   // what it thought: the block arrives carrying only a signature, and its text stays empty for the whole
   // turn. A heading that opens onto nothing is worse than no heading, so such a row is not drawn at all.
-  const display = useMemo(
+  const turnEntries = useMemo(
     () => markAgentTurns(groupToolRuns(rows.filter((r) => r.kind !== "reasoning" || r.text.trim() !== ""))),
     [rows],
   );
+  // Turns the reader collapsed keep only their answer. Search still reads `turnEntries`, so a match inside
+  // hidden work is found and its turn opened.
+  const folded = useMemo(
+    () => foldAgentTurns(turnEntries, (id) => foldOverrides.get(id) ?? foldAll),
+    [turnEntries, foldOverrides, foldAll],
+  );
+  const display = folded.rows;
+  const allTurnsCollapsed = folded.turns.length > 0 && folded.turns.every((turn) => turn.collapsed);
   // Everything before this index is virtualized; the tail after it stays really mounted, because those
   // are the rows still growing as text arrives, and a row that changes height while a virtualizer is
   // measuring it is how a view ends up jumping under the reader.
@@ -855,6 +896,23 @@ export function ChatPane({
       const index = instance.indexFromElement(el);
       const key = instance.options.getItemKey(index);
       return instance.itemSizeCache.get(key) ?? estimateRowHeight(virtualRows[index]);
+    },
+    // The virtualizer learns the offset only from scroll events. A scroller without layout reads as 0, and
+    // one coming back from display:none may change offset without any event; the rows would then be drawn
+    // around a position the reader is not at, leaving the view blank until the next scroll. Hidden reads
+    // are dropped, and showing the pane reports the real offset through `syncVirtualOffset`.
+    observeElementOffset: (instance, notify) => {
+      const element = instance.scrollElement;
+      if (!element) return;
+      const stop = observeElementOffset(instance, (offset, isScrolling) => {
+        if (element.clientHeight > 0) notify(offset, isScrolling);
+      });
+      const sync = () => notify(element.scrollTop, false);
+      syncVirtualOffset.current = sync;
+      return () => {
+        stop?.();
+        if (syncVirtualOffset.current === sync) syncVirtualOffset.current = null;
+      };
     },
     overscan: OVERSCAN,
   });
@@ -884,19 +942,40 @@ export function ChatPane({
     }
   }, [rows, virtualRows, virtualizer]);
 
+  /** Scroll a drawn entry to the middle of the view; false when the entry is not in the list. */
+  const scrollToEntry = useCallback((id: string) => {
+    const index = display.findIndex(entry => entry.id === id);
+    if (index < 0) return false;
+    if (index < split) virtualizer.scrollToIndex(index, { align: "center" });
+    else scrollRef.current?.querySelectorAll<HTMLElement>(".sv-item[data-search-id]").forEach(element => {
+      const root = scrollRef.current;
+      if (root && element.dataset.searchId === id) root.scrollTop += element.getBoundingClientRect().top - root.getBoundingClientRect().top - root.clientHeight / 2;
+    });
+    return true;
+  }, [display, split, virtualizer]);
+  /** A search match inside a collapsed turn, waiting for the opened turn to be drawn. */
+  const pendingLocate = useRef<string | null>(null);
+
   const locateSearch = useCallback((index: number) => {
-    const entry = display[index];
+    const entry = turnEntries[index];
     setSearchTarget(entry?.id ?? null);
     if (!entry) return;
     pinnedRef.current = false;
     setAway(true);
     if (entry.kind === "run") setOpenRuns(previous => previous.has(entry.id) ? previous : new Set([...previous, entry.id]));
-    if (index < split) virtualizer.scrollToIndex(index, { align: "center" });
-    else scrollRef.current?.querySelectorAll<HTMLElement>(".sv-item[data-search-id]").forEach(element => {
-      const root = scrollRef.current;
-      if (root && element.dataset.searchId === entry.id) root.scrollTop += element.getBoundingClientRect().top - root.getBoundingClientRect().top - root.clientHeight / 2;
-    });
-  }, [display, split, virtualizer]);
+    const turn = folded.hiddenIn.get(entry.id);
+    if (turn) {
+      pendingLocate.current = entry.id;
+      setFoldOverrides(previous => new Map(previous).set(turn, false));
+      return;
+    }
+    pendingLocate.current = null;
+    scrollToEntry(entry.id);
+  }, [turnEntries, folded, scrollToEntry]);
+  useEffect(() => {
+    const id = pendingLocate.current;
+    if (id && scrollToEntry(id)) pendingLocate.current = null;
+  }, [scrollToEntry]);
 
   // Measuring a row above the viewport moves everything below it. While the reader is parked mid-history
   // that would drag the text they are reading, so the scroll position is corrected to absorb the change;
@@ -926,6 +1005,29 @@ export function ChatPane({
     });
   }, []);
 
+  /** Hide or show one turn's interim work. */
+  const toggleTurn = useCallback((fold: TurnFold) => {
+    setFoldOverrides(previous => new Map(previous).set(fold.id, !fold.collapsed));
+  }, []);
+
+  /** Hide or show the interim work of every turn, keeping the reader's place when parked mid-history. */
+  const toggleAllTurns = () => {
+    const next = !allTurnsCollapsed;
+    const scroll = scrollRef.current;
+    if (scroll && !pinnedRef.current) {
+      const kept = new Set(foldAgentTurns(turnEntries, () => next).rows.map(entry => entry.id));
+      const viewport = scroll.getBoundingClientRect();
+      const anchor = Array.from(scroll.querySelectorAll<HTMLElement>(".sv-item[data-search-id]"))
+        .find(element => kept.has(element.dataset.searchId!) && element.getBoundingClientRect().bottom > viewport.top);
+      prependScroll.current = {
+        height: scroll.scrollHeight, top: scroll.scrollTop,
+        anchor: anchor ? { id: anchor.dataset.searchId!, offset: anchor.getBoundingClientRect().top - viewport.top } : undefined,
+      };
+    }
+    setFoldAll(next);
+    setFoldOverrides(new Map());
+  };
+
   /** Put the view back at the end of the conversation and follow it again. */
   const toEnd = useCallback(() => {
     pinnedRef.current = true;
@@ -954,7 +1056,11 @@ export function ChatPane({
     const schedule = () => {
       if (frame === undefined) frame = requestAnimationFrame(follow);
     };
+    // Coming back from display:none: put a parked reader back where they were, then give the virtualizer
+    // the offset the scroller really has, which no scroll event may have reported.
+    if (!pinnedRef.current && el.scrollTop !== readerTop.current) el.scrollTop = readerTop.current;
     follow();
+    syncVirtualOffset.current?.();
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
     observer?.observe(el);
     const observed = new Set<Element>();
@@ -1690,6 +1796,15 @@ export function ChatPane({
             <button title={t("term.searchMenu")} onClick={() => useTermStore.getState().openSearch()}>
               <Icons.search size={14} />
             </button>
+            <button
+              title={t(allTurnsCollapsed ? "chat.turnFold.showAll" : "chat.turnFold.hideAll")}
+              aria-label={t(allTurnsCollapsed ? "chat.turnFold.showAll" : "chat.turnFold.hideAll")}
+              aria-pressed={allTurnsCollapsed}
+              disabled={folded.turns.length === 0}
+              onClick={toggleAllTurns}
+            >
+              {allTurnsCollapsed ? <Icons.expand size={14} /> : <Icons.collapse size={14} />}
+            </button>
             {/* The same control the terminal view carries, in the same place, pointing the other way. */}
             <ConversationViewHint enabled={!mobile && !isShareSurface && focused && !hidden} onSwitch={() => switchTo("tui")} />
             <button title={t("term.splitRight")} onClick={() => paneId && onSplit(paneId, session.id, "horizontal")}>
@@ -1709,7 +1824,7 @@ export function ChatPane({
         </div>
 
         <div className="sv" style={{ position: "relative", flex: 1, minHeight: 0 }}>
-          {searchOpen && focused && !hidden && <ChatSearch key={session.id} entries={display} scrollRef={scrollRef} onLocate={locateSearch} onClose={closeSearch}
+          {searchOpen && focused && !hidden && <ChatSearch key={session.id} entries={turnEntries} scrollRef={scrollRef} onLocate={locateSearch} onClose={closeSearch}
             loadingHistory={hasMore && !historyError} historyError={historyError} onRetryHistory={() => void loadHistory()} />}
           <div className="sv-scroll-wrap">
             <div
@@ -1717,6 +1832,10 @@ export function ChatPane({
               ref={scrollRef}
               onScroll={(e) => {
                 const el = e.currentTarget;
+                // An event that arrives after the pane was hidden reads a scroller with no layout: offset,
+                // height and viewport are all 0, which would look like a reader at the end.
+                if (el.clientHeight === 0) return;
+                readerTop.current = el.scrollTop;
                 // Browser anchoring and viewport resizing also emit scroll events. A layout
                 // change must not turn off following before the resize observer catches up.
                 const geometry = scrollGeometry.current;
@@ -1772,6 +1891,7 @@ export function ChatPane({
                           cwd={cwd}
                           openRuns={openRuns}
                           onToggleRun={toggleRun}
+                          onToggleFold={toggleTurn}
                           onRewind={askRewind}
                     rewindDisabledReason={rewindDisabledReason}
                           rewindScopes={rewindScopes}
@@ -1793,6 +1913,7 @@ export function ChatPane({
                     cwd={cwd}
                     openRuns={openRuns}
                     onToggleRun={toggleRun}
+                    onToggleFold={toggleTurn}
                     onRewind={askRewind}
                     rewindDisabledReason={rewindDisabledReason}
                     rewindScopes={rewindScopes}
@@ -1831,6 +1952,12 @@ export function ChatPane({
             )}
           </div>
 
+          {autoContinue && !readOnly && (
+            <AutoContinueBar
+              waiting={autoContinue}
+              onCancel={() => void chatAutoContinueCancel(session.id).then(() => setAutoContinue(null), (err) => setError(String(err)))}
+            />
+          )}
           {notice && (
             <NotificationBar text={notice.text} priority={notice.priority} onClose={() => setNotice(null)} />
           )}
@@ -2099,7 +2226,7 @@ export function ChatPane({
                       options={modelOptions}
                       defaultValue={defaultModel || undefined}
                       defaultLabel={t("chat.savedModelDefault")}
-                      footer={session.kind === "claude" ? <ModelCatalogStatus onChanged={() => setCatalogueVersion(v => v + 1)} /> : undefined}
+                      advancedFooter={session.kind === "claude" ? <ModelCatalogStatus onChanged={() => setCatalogueVersion(v => v + 1)} /> : undefined}
                       onPick={pickModel}
                       keepLabel={t("chat.keepChoice")}
                       onKeepCurrent={() => rememberPair(model ?? "", effort)}
@@ -2263,6 +2390,7 @@ const Entry = memo(function Entry({
   cwd,
   openRuns,
   onToggleRun,
+  onToggleFold,
   onRewind,
   rewindDisabledReason,
   rewindScopes,
@@ -2275,6 +2403,7 @@ const Entry = memo(function Entry({
   cwd?: string;
   openRuns: ReadonlySet<string>;
   onToggleRun: (id: string) => void;
+  onToggleFold?: (fold: TurnFold) => void;
   onRewind?: (rowId: string, scope: ChatRewindScope, replacement?: MessageReplacement) => void;
   rewindDisabledReason?: string;
   rewindScopes: ChatRewindScope[];
@@ -2289,8 +2418,11 @@ const Entry = memo(function Entry({
       icon={icon}
       at={entry.head.at}
       durationMs={entry.head.durationMs}
+      fold={entry.head.fold}
+      onToggleFold={onToggleFold}
     />
   ) : null;
+  if (entry.kind === "fold") return head;
   if (entry.kind === "run") {
     return (
       <>

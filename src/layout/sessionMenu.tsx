@@ -35,7 +35,7 @@ import {
   prefetchGitBranchInfo,
 } from "../hooks/useGitBranch";
 import { type SelNode, useTermStore } from "../store/termStore";
-import { defaultEngineFor } from "../store/settings";
+import { defaultEngineFor, effectivePermissionMode } from "../store/settings";
 import {
   isVirtualProject,
   projectRoot,
@@ -1027,8 +1027,8 @@ export function useSessionMenu(): SessionMenu {
               cwd: s?.cwd ?? "",
               initCmd: s?.initCmd ?? "",
               agentArgs: s?.agentArgs ?? "",
-              // Preserve the full permission mode when editing unrelated session fields.
-              permissionMode: s?.permissionMode ?? "",
+              // Show the permission the session launches with, including one inherited from the agent default.
+              permissionMode: s ? effectivePermissionMode(s, useTermStore.getState().agentDefaults) ?? "" : "",
             },
           });
         },
@@ -1174,8 +1174,13 @@ export function useSessionMenu(): SessionMenu {
         initCmd: values.initCmd.trim() || null,
         // agentArgs appears only for agent sessions; undefined non-agent values become null.
         agentArgs: values.agentArgs?.trim() || null,
-        // permissionMode appears only for supported agents; unchecked/hidden maps to null.
-        permissionMode: values.permissionMode || null,
+        // permissionMode appears only for supported agents; hidden maps to null. A session that was following
+        // the agent default keeps following it unless the user picked something else.
+        permissionMode:
+          !sessions.find((x) => x.id === dialog.id)?.permissionMode &&
+          values.permissionMode === dialog.initial.permissionMode
+            ? null
+            : values.permissionMode || null,
       });
     }
     setDialog(null);
@@ -1517,6 +1522,8 @@ const sessionFields = (
             label: t("tree.permissionSkipLabel"),
             type: "checkbox" as const,
             checkedValue: "skip",
+            // Unchecking is an explicit choice to ask, so it must not fall back to a skipping default.
+            uncheckedValue: "default",
             hint: t("tree.permissionSkipHint"),
           }),
         },

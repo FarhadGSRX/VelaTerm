@@ -11,6 +11,7 @@ import { NotebookError, notebookError, notebookRoute, openVaultFile, useNotebook
 import { KnowledgeHome } from "./KnowledgeHome";
 import { knowledgeSelection } from "./KnowledgeTreeRow";
 import { ImportRecords } from "./ImportRecords";
+import { KnowledgeBackLink } from "./KnowledgeBack";
 import { useNotebookImports, type NotebookImportOutcome } from "./importManager";
 import "./notebook.css";
 
@@ -72,7 +73,7 @@ function NotebookWorkspace({id,action,overview,onVaultsChanged}:{id:string;actio
   </div>;
   return <div className="nb-workspace">
     <main className="nb-main">
-      <div className="nb-workspace-bar"><nav><MemoryLink route={notebookRoute(id)} values={{memoryPath:null,memoryFolder:null}}>{data.vault.name}</MemoryLink>{folder&&<><span>/</span><span>{folder}</span></>}</nav><div className="nb-search"><Icons.search/><input ref={searchInput} aria-label={t("nb.search")} placeholder={t("nb.search")} value={input} onKeyDown={keys.onKeyDown} onChange={e=>setInput(e.target.value)}/></div></div>
+      <div className="nb-workspace-bar"><nav><KnowledgeBackLink className="nb-icon-button"/><MemoryLink route={notebookRoute(id)} values={{memoryPath:null,memoryFolder:null}}>{data.vault.name}</MemoryLink>{folder&&<><span>/</span><span>{folder}</span></>}</nav><div className="nb-search"><Icons.search/><input ref={searchInput} aria-label={t("nb.search")} placeholder={t("nb.search")} value={input} onKeyDown={keys.onKeyDown} onChange={e=>setInput(e.target.value)}/></div></div>
       <nav className="nb-workspace-tools" aria-label={t("nb.vaults")}>
         <div className="nb-workspace-views">
           <MemoryLink route={notebookRoute(id)} values={knowledgeSelection} className={!folder&&!filter?"active":""}>{t("nb.recent")}</MemoryLink>

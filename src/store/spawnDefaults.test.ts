@@ -17,6 +17,11 @@ vi.mock("../ipc/tree", () => ({
   listTree: vi.fn().mockResolvedValue({ projects: [], groups: [], sessions: [] }),
   setCollapsed: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../ipc/chat", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/chat")>()),
+  chatStart: vi.fn().mockResolvedValue(undefined),
+  chatSend: vi.fn().mockResolvedValue("sent"),
+}));
 vi.mock("../notify", () => ({
   notify: vi.fn(),
   getNotifyPermission: vi.fn().mockResolvedValue("granted"),
@@ -26,6 +31,7 @@ vi.mock("../notify", () => ({
 }));
 
 import { useTermStore } from "./termStore";
+import { chatSend, chatStart } from "../ipc/chat";
 import type { Project, Session } from "../types";
 
 const project: Project = {
@@ -121,5 +127,55 @@ describe("spawned children inherit the agent kind's global defaults", () => {
       .executeSpawn({ parentSessionId: "parent", prompt: "t" } as never);
 
     expect(calls[0].agentArgs).toBeNull();
+  });
+});
+
+describe("spawned children open in the view of the session that asked", () => {
+  const spawnFrom = async (from: Session, request: Record<string, unknown> = {}) => {
+    useTermStore.setState({ sessions: [from] });
+    const calls = captureAddSession();
+    await useTermStore
+      .getState()
+      .executeSpawn({ parentSessionId: "parent", prompt: "fix the login bug", ...request } as never);
+    return calls[0];
+  };
+
+  beforeEach(() => {
+    vi.mocked(chatStart).mockClear();
+    vi.mocked(chatSend).mockClear();
+    useTermStore.setState({ projects: [project], agentDefaults: {}, pendingPrompts: {} });
+  });
+
+  it("follows a parent in the conversation view and sends the task as the first message", async () => {
+    const child = await spawnFrom({ ...parent("claude"), engine: "chat" });
+
+    expect(child.engine).toBe("chat");
+    expect(chatStart).toHaveBeenCalledWith("child1");
+    expect(chatSend).toHaveBeenCalledWith("child1", "fix the login bug", "queue", undefined);
+    // The prompt must not also wait for a terminal launch that never happens.
+    expect(useTermStore.getState().pendingPrompts).toEqual({});
+  });
+
+  it("follows a parent in the terminal view even when settings prefer the conversation view", async () => {
+    useTermStore.setState({ agentDefaults: { claude: { engine: "chat" } } });
+    const child = await spawnFrom({ ...parent("claude"), engine: "tui" });
+
+    expect(child.engine).toBe("tui");
+    expect(chatSend).not.toHaveBeenCalled();
+    expect(useTermStore.getState().pendingPrompts).toEqual({ child1: "fix the login bug" });
+  });
+
+  it("falls back to the child kind's default view when the parent has no conversation view", async () => {
+    useTermStore.setState({ agentDefaults: { codex: { engine: "tui" } } });
+    expect((await spawnFrom(parent("terminal"), { kind: "codex" })).engine).toBe("tui");
+    // With nothing configured, the default view is the conversation view.
+    expect((await spawnFrom(parent("kimi"), { kind: "claude" })).engine).toBe("chat");
+  });
+
+  it("leaves the view unset for a child kind without a conversation view", async () => {
+    const child = await spawnFrom({ ...parent("claude"), engine: "chat" }, { kind: "kiro" });
+
+    expect(child.engine).toBeNull();
+    expect(chatSend).not.toHaveBeenCalled();
   });
 });

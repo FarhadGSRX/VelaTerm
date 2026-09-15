@@ -1,3 +1,33 @@
+## v0.2.2 — 2026-09-15
+
+- ⏳ Reprise automatique après une limite d’utilisation, désactivée par défaut dans les paramètres : lorsque Claude ou Codex s’arrête sur une limite de 5 heures ou hebdomadaire, la session reprend d’elle-même une fois la limite réinitialisée. Un bandeau au-dessus de la zone de saisie affiche l’heure de réinitialisation avec un bouton « Annuler » ; l’attente survit au redémarrage de l’application et se termine dès que vous envoyez un message, revenez en arrière, videz la session ou désactivez le réglage.
+
+- 🪟 Windows : les installations en un clic d’OpenCode, Grok et Crush passent `--allow-scripts`, ce qui permet à npm de générer l’exécutable ; Cursor, OMP et Antigravity sont recherchés dans leur véritable dossier d’installation sous `%LOCALAPPDATA%`, et OMP respecte aussi `PI_INSTALL_DIR`.
+
+- 🪟 Windows : les fichiers encore en cours de téléchargement ou de copie ne sont plus considérés comme installés, la carte d’installation attend la fin réelle de l’installation avant d’annoncer le succès, et un ancien chemin enregistré est remplacé par celui qui vient d’être localisé.
+
+- 🧩 Vue conversation : la réflexion, les appels d’outils et les réponses intermédiaires d’un tour peuvent être masqués avec « Masquer les étapes » pour ne garder que la réponse finale ; la barre d’outils masque ou affiche tous les tours d’un coup, et la recherche déploie un tour masqué pour localiser une correspondance.
+
+- 🔐 Le bouton des autorisations affiche désormais le mode avec lequel la session a été lancée au lieu de « Autorisations actuelles non confirmées » ; la ligne « réglage de lancement » en double a disparu, et une session lancée en ignorant les confirmations est de nouveau mise en évidence dans la barre d’état.
+
+- 🔐 Une session sans autorisation propre suit la valeur par défaut globale de son type d’agent dans les deux vues, et modifier une session ne fige plus la valeur héritée comme choix propre à la session.
+
+- ↩️ Les pages de la base de connaissances gagnent un bouton « Remonter d’un niveau » : une entrée revient à sa session, puis à son projet, puis à l’accueil, et les sessions archivées, les notes et les dossiers remontent de la même façon.
+
+- 🌱 Une session enfant s’ouvre dans la même vue que sa session parente : depuis une session en vue conversation, la tâche arrive comme premier message et les images comme pièces jointes ; depuis une session en terminal, elle démarre dans le terminal avec la tâche passée en argument de lancement.
+
+- 🎨 macOS : la fenêtre et la bande de la barre de titre prennent les couleurs du thème avant l’apparition de la fenêtre, et changer de thème en cours d’exécution les redessine immédiatement.
+
+- 🗜️ Les sessions Claude conservent dans l’historique de lecture les tours antérieurs à une compaction, tandis qu’un retour en arrière supprime toujours la branche abandonnée.
+
+- 🔎 La recherche dans la conversation garde la correspondance sélectionnée en place pendant le chargement de l’historique plus ancien ; Entrée passe à la correspondance précédente et Maj+Entrée à la suivante.
+
+- 🩹 Revenir à une conversation laissée au milieu de son historique restaure la position de lecture au lieu d’afficher un panneau vide.
+
+- 🧭 Les informations de diagnostic du catalogue de modèles n’apparaissent qu’en ouvrant le menu des modèles avec la touche Option enfoncée ; les lignes d’erreur s’alignent sur le texte des messages, et la base de connaissances en anglais affiche « Archived Sessions ».
+
+---
+
 ## v0.2.1 — 2026-09-14
 
 - 🔎 La page d’accueil de la base de connaissances gagne un champ de recherche : une requête explore à la fois les connaissances de session et les notes locales, et regroupe les résultats par source. Les correspondances exactes passent en premier ; une recherche approximative (abréviations, sous-séquences et fautes de frappe) ne s’active que s’il n’y a aucune correspondance exacte, et les requêtes en chinois restent en sous-chaîne.
