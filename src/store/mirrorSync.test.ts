@@ -154,6 +154,7 @@ function seedSnapshotSource(tab: string) {
       {
         id: "main",
         name: "main",
+        kind: "sessions",
         treeFilter: "",
         statusFilter: null,
         statusFilterIds: null,

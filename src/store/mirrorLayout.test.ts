@@ -53,6 +53,7 @@ function view(id: string, over: Partial<SidebarTreeView> = {}): SidebarTreeView 
   return {
     id,
     name: id,
+    kind: "sessions",
     treeFilter: "",
     statusFilter: null,
     statusFilterIds: null,

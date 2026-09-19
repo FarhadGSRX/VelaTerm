@@ -57,7 +57,11 @@ export function useKeyboardShortcuts() {
       // Plain next/previous over the visible `openTabs` order, not most-recently-used; `liveTabs` is a
       // background pool and never part of the cycle. usePtySession blocks the combo from xterm so the
       // shell does not also receive HT/CBT.
-      if (e.key === "Tab") {
+      // The modifier is tested here rather than at the top: upstream removed the early `if (!mod) return`
+      // and pushed the check down into each branch, so an unguarded Tab would swallow the plain Tab the
+      // shell needs for completion. Deliberately NOT hasMod, which is platform-exclusive (Cmd xor Ctrl):
+      // tab cycling accepts either modifier on every platform, the way a browser's Ctrl+Tab does.
+      if ((e.metaKey || e.ctrlKey) && e.key === "Tab") {
         const { openTabs, activeTabId, setActiveTab } = useTermStore.getState();
         if (openTabs.length > 1) {
           e.preventDefault();

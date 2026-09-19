@@ -327,6 +327,9 @@ function sidebarView(v: unknown): SidebarTreeView | null {
     id,
     // The pane header needs some label; the ID is at least stable and identical on both sides.
     name: name || id,
+    // An absent or unrecognised kind renders the session tree: that is what every client published
+    // before the file-tree kind existed, so it is both the compatible reading and the harmless one.
+    kind: v.kind === "files" ? "files" : "sessions",
     treeFilter: typeof v.treeFilter === "string" ? v.treeFilter.slice(0, 500) : "",
     statusFilter,
     statusFilterIds: statusFilter ? statusFilterIds : null,

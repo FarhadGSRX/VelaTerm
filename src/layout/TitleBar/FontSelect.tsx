@@ -77,12 +77,28 @@ export function isKnownFontSelection(value: string | null, catalog: FontCatalog 
   return matched;
 }
 
-/** Only enumerated families are suggested. Preserve saved/custom names even when enumeration fails. */
-export function FontSelect({ value, onChange, label, fonts }: {
+/** Proportional presets, offered for the interface font only — xterm draws on a fixed-cell grid, so a
+ * variable-width terminal face would break alignment. Values are full CSS stacks: fontStack() passes any
+ * comma-bearing value through verbatim, which is what makes a non-monospace interface font work at all.
+ * Every stack ends in a generic family, so isKnownFontSelection never flags one as unconfirmed. */
+const UI_FONTS: { label: string; stack: string }[] = [
+  { label: "System UI", stack: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
+  { label: "Inter", stack: "Inter, system-ui, sans-serif" },
+  { label: "Segoe UI", stack: '"Segoe UI", system-ui, sans-serif' },
+  { label: "Helvetica Neue", stack: '"Helvetica Neue", Helvetica, Arial, sans-serif' },
+  { label: "Roboto", stack: "Roboto, system-ui, sans-serif" },
+  { label: "Noto Sans", stack: '"Noto Sans", system-ui, sans-serif' },
+];
+
+/** Only enumerated families are suggested. Preserve saved/custom names even when enumeration fails.
+ * `proportional` adds the UI-font presets above the catalog; leave it off for the terminal. */
+export function FontSelect({ value, onChange, label, fonts, proportional = false }: {
   value: string | null;
   onChange: (value: string | null) => void;
   label: string;
   fonts: FontCatalogState;
+  /** Also offer the proportional UI-font presets, grouped above the enumerated families. */
+  proportional?: boolean;
 }) {
   const t = useT();
   const [editing, setEditing] = useState(false);
@@ -90,12 +106,16 @@ export function FontSelect({ value, onChange, label, fonts }: {
   const committed = useRef(false);
   const { catalog, loading } = fonts;
   const families = catalog?.families ?? [];
-  const listed = value != null && families.includes(value);
+  const uiPreset = proportional ? UI_FONTS.find((f) => f.stack === value) : undefined;
+  const listed = value != null && (uiPreset != null || families.includes(value));
   const CUSTOM = "\u0000custom";
   const options = [
     { value: "", label: t("settings.fontDefault") },
     { value: CUSTOM, label: t("settings.fontCustom") },
     ...(value != null && !listed ? [{ value, label: value, separatorBefore: true }] : []),
+    // Presets lead when offered. Each is stored as a whole CSS stack but listed by its short label, which
+    // Select echoes on the trigger because it renders the option matching the current value.
+    ...(proportional ? UI_FONTS.map((f, index) => ({ value: f.stack, label: f.label, separatorBefore: index === 0 })) : []),
     ...families.map((family, index) => ({ value: family, label: family, separatorBefore: index === 0 })),
   ];
   const finish = (save: boolean) => {
