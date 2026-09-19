@@ -442,6 +442,7 @@ const zhTW: typeof en = {
   "settings.maxLiveTabsHint":
     "單一分頁模式下可在背景保持執行的工作階段數量。超過上限時會關閉閒置最久的工作階段；正在執行、等待確認或有未讀通知者則會保留。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "預設 Shell", // Default shell
+  "settings.agentShell": "代理 Shell", // Agent shell
   "settings.spawnConfirm": "派生前確認", // Confirm before spawn
   "settings.usageAuto": "額度自動刷新", // Usage auto-refresh
   "settings.spawnConfirmHint":

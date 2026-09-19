@@ -445,6 +445,7 @@ const ja: typeof en = {
   "settings.maxLiveTabsHint":
     "単一タブモードでバックグラウンド実行を維持するセッション数です。上限を超えると最も古いアイドル状態のセッションが閉じられます。作業中・確認待ち・未読通知のあるセッションは保持されます。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "既定のシェル", // Default shell
+  "settings.agentShell": "エージェントのシェル", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.spawnConfirmHint":

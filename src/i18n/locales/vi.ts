@@ -445,6 +445,7 @@ const vi: typeof en = {
   "settings.maxLiveTabsHint":
     "Số phiên tiếp tục chạy nền ở chế độ một thẻ. Vượt giới hạn, phiên rảnh lâu nhất sẽ bị đóng; những phiên đang chạy, đang chờ xác nhận hoặc có thông báo chưa đọc thì được giữ lại.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell mặc định",
+  "settings.agentShell": "Shell tác nhân",
   "settings.spawnConfirm": "Xác nhận trước khi tạo phiên",
   "settings.usageAuto": "Tự động làm mới mức sử dụng",
   "settings.spawnConfirmHint":

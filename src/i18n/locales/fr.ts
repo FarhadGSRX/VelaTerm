@@ -446,6 +446,7 @@ const fr: typeof en = {
   "settings.maxLiveTabsHint":
     "Nombre de sessions maintenues en arrière-plan en mode onglet unique. Au-delà de la limite, la session inactive la plus ancienne est fermée ; celles qui travaillent, attendent une confirmation ou ont une notification non lue sont conservées.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell par défaut", // Default shell
+  "settings.agentShell": "Shell de l'agent", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.spawnConfirmHint":
