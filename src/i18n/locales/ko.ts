@@ -434,13 +434,21 @@ const ko: typeof en = {
   "settings.navTree": "표준", // Tree
   "settings.navCompact": "조밀", // Compact
   "settings.tabs": "탭", // Tabs
+  "settings.tabsHint":
+    "'단일'은 여는 세션마다 같은 탭을 재사용하고 나머지는 백그라운드에서 계속 실행합니다. '다중'은 각 세션에 고유한 탭을 부여합니다.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "상태 필터 동적 추가",
+  "settings.dynamicStatusFilterHint":
+    "상태 필터는 적용한 시점에 일치했던 세션을 유지합니다. 켜면 이후에 일치하기 시작한 세션도 추가됩니다. 상태가 바뀌어도 세션이 목록에서 제거되지는 않습니다.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "단일", // Single
   "settings.tabMulti": "다중", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "단일 탭 모드에서 백그라운드로 계속 실행할 세션 수입니다. 한도를 넘으면 가장 오래된 유휴 세션이 닫히며, 작업 중이거나 확인 대기 중이거나 읽지 않은 알림이 있는 세션은 유지됩니다.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "기본 셸", // Default shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
+  "settings.spawnConfirmHint":
+    "직접 여는 탭이 아니라 에이전트가 vspawn으로 파생시키는 세션에 적용됩니다. 켜면 세션이 시작되기 전에 프롬프트를 검토하고 편집할 수 있습니다.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.autoContinue": "한도 초기화 후 자동으로 계속", // Continue after limit resets
   "settings.autoContinueHint": "Claude 또는 Codex가 5시간 또는 주간 사용 한도로 중단되면 한도가 초기화된 후 작업을 자동으로 계속합니다.", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
@@ -670,6 +678,7 @@ const ko: typeof en = {
   "settings.scSearch": "터미널에서 찾기", // Find in terminal
   "settings.scGlobalSearch": "모든 세션 검색", // Search all sessions
   "settings.scSaveDoc": "문서 저장", // Save document
+  "settings.scFocusSidebar": "사이드바로 포커스", // Focus sidebar
   "settings.scRecording": "키를 누르세요…", // Press keys…
   "settings.scHint": "단축키를 클릭한 다음 새 조합을 누르세요(Cmd/Ctrl 필요).", // hint
   "settings.scReset": "기본값 복원", // Restore defaults
@@ -874,6 +883,7 @@ const ko: typeof en = {
     `“${name}” 보기를 삭제하시겠습니까? 저장된 검색 및 필터만 제거되며 프로젝트와 세션에는 영향을 주지 않습니다.`,
   "tree.viewSplitRight": "트리 보기를 오른쪽으로 분할",
   "tree.viewSplitDown": "트리 보기를 아래로 분할",
+  "tree.viewKind": "이 보기에 표시할 내용 변경",  // Change what this view shows
   "tree.viewAdd": "현재 트리 보기를 새 탭으로 복사",
   "tree.viewCount": (n) => `트리 보기 ${n}개`,
   "mark.menu": "표시", // Mark
@@ -1075,6 +1085,8 @@ const ko: typeof en = {
   "tab.killBgTab": "이 백그라운드 탭 종료 (프로세스도 종료됩니다)", // Kill this background tab…
   "tab.newBrowserTab": "새 탭", // New Tab
   "tab.refreshFile": "파일 새로고침", // Refresh File
+  "tab.stick": "분할 화면에 고정", // Keep Visible in Split
+  "tab.unstick": "고정 해제", // Stop Keeping Visible
   "tab.closeOthers": "다른 탭 닫기", // Close Other Tabs
   "tab.closeRight": "오른쪽 탭 닫기", // Close Tabs to the Right
   "tab.closeAll": "모든 탭 닫기", // Close All Tabs
@@ -1230,6 +1242,10 @@ const ko: typeof en = {
   "files.nameLabel": "이름", // Name
   "files.newTooltip": "새 파일 또는 폴더", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "즐겨찾기에 추가", // Add to Favorites
+  "files.unfavorite": "즐겨찾기에서 제거", // Remove from Favorites
+  "files.favorites": "즐겨찾기", // Favorites
+  "files.collapseAll": "모두 접기", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

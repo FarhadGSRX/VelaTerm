@@ -435,13 +435,21 @@ const ptBR: typeof en = {
   "settings.navTree": "Árvore", // Tree
   "settings.navCompact": "Compacta", // Compact
   "settings.tabs": "Abas", // Tabs
+  "settings.tabsHint":
+    "“Única” reutiliza a mesma aba para cada sessão que você abre e mantém as demais rodando em segundo plano. “Múltipla” dá a cada sessão sua própria aba.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "Inclusão dinâmica no filtro de status",
+  "settings.dynamicStatusFilterHint":
+    "Um filtro de status mantém as sessões que correspondiam quando você o aplicou. Ativado, também acrescenta as que passarem a corresponder depois. As sessões nunca são removidas quando o status muda.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "Única", // Single
   "settings.tabMulti": "Múltiplas", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "Quantas sessões continuam rodando em segundo plano no modo de aba única. Acima do limite, a sessão ociosa mais antiga é fechada; as que estão trabalhando, aguardando confirmação ou com notificação não lida são mantidas.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell padrão", // Default shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
+  "settings.spawnConfirmHint":
+    "Vale para sessões que um agente deriva com vspawn, não para abas que você abre. Ativado, você pode revisar e editar o prompt antes de a sessão iniciar.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.autoContinue": "Continuar após a redefinição", // Continue after limit resets
   "settings.autoContinueHint": "Quando um limite de uso de 5 horas ou semanal interrompe o Claude ou o Codex, a tarefa continua automaticamente após a redefinição do limite.", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
@@ -672,6 +680,7 @@ const ptBR: typeof en = {
   "settings.scSearch": "Buscar no terminal", // Find in terminal
   "settings.scGlobalSearch": "Buscar em todas as sessões", // Search all sessions
   "settings.scSaveDoc": "Salvar documento", // Save document
+  "settings.scFocusSidebar": "Focar barra lateral", // Focus sidebar
   "settings.scRecording": "Pressione as teclas…", // Press keys…
   "settings.scHint":
     "Clique em um atalho e pressione uma nova combinação (Cmd/Ctrl obrigatório).", // hint
@@ -879,6 +888,7 @@ const ptBR: typeof en = {
     `Excluir “${name}”? A busca e os filtros salvos serão removidos; projetos e sessões não serão afetados.`,
   "tree.viewSplitRight": "Dividir a visualização em árvore à direita",
   "tree.viewSplitDown": "Dividir a visualização em árvore abaixo",
+  "tree.viewKind": "Alterar o que esta visualização mostra",  // Change what this view shows
   "tree.viewAdd": "Copiar a visualização atual para uma nova aba",
   "tree.viewCount": (n) => `${n} visualizaç${n === 1 ? "ão" : "ões"} em árvore`,
   "mark.menu": "Marca", // Mark
@@ -1091,6 +1101,8 @@ const ptBR: typeof en = {
     "Encerrar esta aba em segundo plano (seus processos serão encerrados)", // Kill this background tab…
   "tab.newBrowserTab": "Nova aba", // New Tab
   "tab.refreshFile": "Recarregar arquivo", // Refresh File
+  "tab.stick": "Manter visível na divisão", // Keep Visible in Split
+  "tab.unstick": "Parar de manter visível", // Stop Keeping Visible
   "tab.closeOthers": "Fechar outras abas", // Close Other Tabs
   "tab.closeRight": "Fechar abas à direita", // Close Tabs to the Right
   "tab.closeAll": "Fechar todas as abas", // Close All Tabs
@@ -1250,6 +1262,10 @@ const ptBR: typeof en = {
   "files.nameLabel": "Nome", // Name
   "files.newTooltip": "Novo arquivo ou pasta", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Adicionar aos favoritos", // Add to Favorites
+  "files.unfavorite": "Remover dos favoritos", // Remove from Favorites
+  "files.favorites": "Favoritos", // Favorites
+  "files.collapseAll": "Recolher tudo", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

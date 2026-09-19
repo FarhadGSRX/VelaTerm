@@ -2,8 +2,10 @@
 //! migration from the retired app-wide setting. Every chat-capable agent shares the conversation fallback;
 //! saved per-agent choices can still override it.
 
-import { beforeEach, describe, expect, it } from "vitest";
-import { SETTINGS_KEY, defaultEngineFor, loadSettings } from "./settings";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTINGS_KEY, defaultEngineFor, loadSettings, saveSettings } from "./settings";
+
+vi.mock("../ipc/settingsSync", () => ({ pushSetting: vi.fn() }));
 
 describe("terminal renderer migration", () => {
   beforeEach(() => localStorage.clear());
@@ -134,5 +136,41 @@ describe("legacy defaultSessionEngine migration", () => {
     loadSettings();
     localStorage.clear();
     expect(loadSettings().agentDefaults).toEqual({});
+  });
+});
+
+// fg: the persisted settings-modal section must round-trip and fall back for blobs written before it existed,
+// and image paste defaults to the agent-native path rather than upload.
+beforeEach(() => {
+  localStorage.clear();
+});
+
+describe("settingsTab persistence", () => {
+  it("defaults to appearance with nothing stored", () => {
+    expect(loadSettings().settingsTab).toBe("appearance");
+  });
+
+  it("falls back to appearance for a blob written before the field existed", () => {
+    // A real pre-upgrade payload: valid settings, no settingsTab key.
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ accent: "blue", inspectorTab: "git" }));
+    const s = loadSettings();
+    expect(s.settingsTab).toBe("appearance");
+    expect(s.accent).toBe("blue"); // merge must not clobber what was stored
+  });
+
+  it("round-trips a chosen section", () => {
+    saveSettings({ ...loadSettings(), settingsTab: "behavior" });
+    expect(loadSettings().settingsTab).toBe("behavior");
+  });
+});
+
+describe("image paste default", () => {
+  it("defaults to native", () => {
+    expect(loadSettings().imagePasteMode).toBe("agent");
+  });
+
+  it("still honours an explicit stored upload preference", () => {
+    saveSettings({ ...loadSettings(), imagePasteMode: "upload" });
+    expect(loadSettings().imagePasteMode).toBe("upload");
   });
 });

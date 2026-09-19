@@ -430,13 +430,21 @@ const zhCN: typeof en = {
   "settings.navTree": "标准",
   "settings.navCompact": "紧凑",
   "settings.tabs": "标签页",
+  "settings.tabsHint":
+    "“单标签”会为你打开的每个会话复用同一个标签页，其余会话在后台继续运行。“多标签”则为每个会话单独开一个标签页。",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "状态筛选动态增加",
+  "settings.dynamicStatusFilterHint":
+    "状态筛选会保留应用筛选那一刻匹配的会话。开启后，之后开始匹配的会话也会被加入。会话状态变化时不会被移出列表。",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "单标签",
   "settings.tabMulti": "多标签",
   "settings.maxLiveTabs": "后台保活上限",
+  "settings.maxLiveTabsHint":
+    "单标签模式下可在后台保持运行的会话数量。超过上限时会关闭最久未活动的空闲会话；正在工作、等待确认或有未读通知的会话会被保留。",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "默认 Shell",
   "settings.spawnConfirm": "派生前确认",
   "settings.usageAuto": "额度自动刷新",
+  "settings.spawnConfirmHint":
+    "适用于代理通过 vspawn 派生的会话，而不是你自己打开的标签页。开启后，可在会话启动前查看并修改提示词。",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "额度刷新",
   "settings.autoContinue": "额度重置后自动继续",
   "settings.autoContinueHint": "Claude 或 Codex 因 5 小时或每周用量上限中断时，额度重置后自动继续执行任务。",
@@ -659,6 +667,7 @@ const zhCN: typeof en = {
   "settings.scSearch": "在终端内搜索",
   "settings.scGlobalSearch": "搜索所有会话",
   "settings.scSaveDoc": "保存文档",
+  "settings.scFocusSidebar": "聚焦侧边栏",
   "settings.scRecording": "请按下组合键…",
   "settings.scHint": "点一下某个快捷键，再按下新的组合键（需含 Cmd/Ctrl）。",
   "settings.scReset": "恢复默认",
@@ -861,6 +870,7 @@ const zhCN: typeof en = {
     `确定删除“${name}”吗？它保存的搜索与筛选条件会被移除，项目和会话不会受影响。`,
   "tree.viewSplitRight": "向右切分树分身",
   "tree.viewSplitDown": "向下切分树分身",
+  "tree.viewKind": "更改此分身显示的内容",  // Change what this view shows
   "tree.viewAdd": "复制当前树分身到新标签页",
   "tree.viewCount": (n) => `${n} 个树分身`,
   "mark.menu": "标记",
@@ -1057,6 +1067,8 @@ const zhCN: typeof en = {
   "tab.killBgTab": "结束该后台标签（进程随之结束）",
   "tab.newBrowserTab": "新标签页",
   "tab.refreshFile": "刷新文件",
+  "tab.stick": "在分屏中保持显示",
+  "tab.unstick": "取消保持显示",
   "tab.closeOthers": "关闭其他标签",
   "tab.closeRight": "关闭右侧标签",
   "tab.closeAll": "关闭所有标签",
@@ -1204,6 +1216,10 @@ const zhCN: typeof en = {
   "files.nameLabel": "名称", // Name
   "files.newTooltip": "新建文件或文件夹", // New file or folder
   "files.openInTerminal": "在终端中打开", // Open in Terminal
+  "files.favorite": "添加到收藏",
+  "files.unfavorite": "从收藏中移除",
+  "files.favorites": "收藏",
+  "files.collapseAll": "全部折叠",
   "files.revealInFinder": "在文件管理器中显示", // Show in File Manager
   "files.copyPath": "复制路径", // Copy Path
   "files.copyRelPath": "复制相对路径", // Copy Relative Path

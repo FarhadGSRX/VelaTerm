@@ -34,6 +34,7 @@ import type {
   DividerStyle,
   NavLayout,
   PaneStyle,
+  SettingsTab,
 } from "../../theme";
 import { Field, Seg, SectionTitle } from "./settingsParts";
 import {
@@ -247,7 +248,7 @@ function AccentPicker({
 }
 
 
-type Cat = "appearance" | "terminal" | "conversation" | "behavior" | "advanced" | "agents" | "shortcuts" | "general";
+type Cat = SettingsTab;
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const fonts = useFontCatalog();
@@ -303,7 +304,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setChatFontSize = useTermStore((s) => s.setChatFontSize);
   const setChatLineHeight = useTermStore((s) => s.setChatLineHeight);
 
-  const [cat, setCat] = useState<Cat>("appearance");
+  // Section navigation stays local so switching is instant and does not round-trip through settings
+  // persistence; the store copy is only the seed on open and the sink on change, which is what makes
+  // Settings reopen on the section last viewed instead of always Appearance.
+  const savedTab = useTermStore((s) => s.settingsTab);
+  const setSettingsTab = useTermStore((s) => s.setSettingsTab);
+  const [cat, setCatLocal] = useState<Cat>(savedTab);
+  const setCat = (v: Cat) => {
+    setCatLocal(v);
+    setSettingsTab(v);
+  };
   const [skillOn, setSkillOn] = useState<boolean | null>(null);
   const [cliStatus, setCliStatus] = useState<VelaCommandStatus | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
@@ -488,7 +498,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   />
                 </Field>
                 <Field label={t("settings.uiFont")}>
-                  <FontSelect fonts={fonts} value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} />
+                  <FontSelect fonts={fonts} value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} proportional />
                 </Field>
                 <Field label={t("settings.uiFontSize")}>
                   <FontSizeStepper
@@ -613,7 +623,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                 <div>
                   <SectionTitle>{t("settings.catBehavior")}</SectionTitle>
-                  <Field label={t("settings.tabs")}>
+                  <Field label={t("settings.tabs")} hint={t("settings.tabsHint")}>
                     <Seg<"single" | "multi">
                       value={singleTabMode ? "single" : "multi"}
                       options={[
@@ -623,7 +633,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                       onChange={(v) => setSingleTabMode(v === "single")}
                     />
                   </Field>
-                  <Field label={t("settings.dynamicStatusFilter")}>
+                  <Field label={t("settings.dynamicStatusFilter")} hint={t("settings.dynamicStatusFilterHint")}>
                     <Seg<"on" | "off">
                       value={dynamicStatusFilter ? "on" : "off"}
                       options={[
@@ -634,7 +644,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     />
                   </Field>
                   {singleTabMode && (
-                    <Field label={t("settings.maxLiveTabs")}>
+                    <Field label={t("settings.maxLiveTabs")} hint={t("settings.maxLiveTabsHint")}>
                       <Seg<string>
                         value={String(maxLiveTabs)}
                         options={[
@@ -647,7 +657,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                       />
                     </Field>
                   )}
-                  <Field label={t("settings.spawnConfirm")}>
+                  <Field label={t("settings.spawnConfirm")} hint={t("settings.spawnConfirmHint")}>
                     <Seg<"on" | "off">
                       value={spawnConfirm ? "on" : "off"}
                       options={[

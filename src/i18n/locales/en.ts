@@ -433,13 +433,21 @@ const en = {
   "settings.navTree": "Tree",
   "settings.navCompact": "Compact",
   "settings.tabs": "Tabs",
+  "settings.tabsHint":
+    "Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.",
   "settings.dynamicStatusFilter": "Dynamic status filter additions",
+  "settings.dynamicStatusFilterHint":
+    "A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.",
   "settings.tabSingle": "Single",
   "settings.tabMulti": "Multi",
   "settings.maxLiveTabs": "Background limit",
+  "settings.maxLiveTabsHint":
+    "How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.",
   "settings.defaultShell": "Default shell",
   "settings.spawnConfirm": "Confirm before spawn",
   "settings.usageAuto": "Usage auto-refresh",
+  "settings.spawnConfirmHint":
+    "Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.",
   "settings.usageRefresh": "Usage refresh",
   "settings.autoContinue": "Continue after limit resets",
   "settings.autoContinueHint": "When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.",
@@ -671,6 +679,7 @@ const en = {
   "settings.scSearch": "Find in terminal",
   "settings.scGlobalSearch": "Search all sessions",
   "settings.scSaveDoc": "Save document",
+  "settings.scFocusSidebar": "Focus sidebar",
   "settings.scRecording": "Press keys…",
   "settings.scHint":
     "Click a shortcut, then press a new combination (Cmd/Ctrl required).",
@@ -877,6 +886,7 @@ const en = {
     `Delete “${name}”? Its saved search and filters will be removed; projects and sessions are unaffected.`,
   "tree.viewSplitRight": "Split tree view right",
   "tree.viewSplitDown": "Split tree view down",
+  "tree.viewKind": "Change what this view shows",
   "tree.viewAdd": "Copy current tree view to a new tab",
   "tree.viewCount": (n: number) =>
     n === 1 ? "1 tree view" : `${n} tree views`,
@@ -1087,6 +1097,8 @@ const en = {
   "tab.killBgTab": "Kill this background tab (its processes will end)",
   "tab.newBrowserTab": "New Tab",
   "tab.refreshFile": "Refresh File",
+  "tab.stick": "Keep Visible in Split",
+  "tab.unstick": "Stop Keeping Visible",
   "tab.closeOthers": "Close Other Tabs",
   "tab.closeRight": "Close Tabs to the Right",
   "tab.closeAll": "Close All Tabs",
@@ -1257,6 +1269,10 @@ const en = {
   "files.nameLabel": "Name",
   "files.newTooltip": "New file or folder",
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Add to Favorites",
+  "files.unfavorite": "Remove from Favorites",
+  "files.favorites": "Favorites",
+  "files.collapseAll": "Collapse All",
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

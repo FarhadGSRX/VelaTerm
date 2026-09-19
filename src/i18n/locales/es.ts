@@ -435,13 +435,21 @@ const es: typeof en = {
   "settings.navTree": "Árbol", // Tree
   "settings.navCompact": "Compacta", // Compact
   "settings.tabs": "Pestañas", // Tabs
+  "settings.tabsHint":
+    "«Única» reutiliza la misma pestaña para cada sesión que abres y mantiene las demás en segundo plano. «Múltiple» da a cada sesión su propia pestaña.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "Incorporación dinámica al filtro de estado",
+  "settings.dynamicStatusFilterHint":
+    "Un filtro de estado conserva las sesiones que coincidían al aplicarlo. Al activarlo, también se añaden las que empiecen a coincidir después. Las sesiones nunca se quitan al cambiar de estado.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "Única", // Single
   "settings.tabMulti": "Múltiples", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "Cuántas sesiones siguen ejecutándose en segundo plano en modo de pestaña única. Superado el límite se cierra la sesión inactiva más antigua; se conservan las que trabajan, esperan confirmación o tienen una notificación sin leer.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell predeterminada", // Default shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
+  "settings.spawnConfirmHint":
+    "Se aplica a las sesiones que un agente deriva con vspawn, no a las pestañas que abres tú. Activado, puedes revisar y editar el prompt antes de que la sesión arranque.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.autoContinue": "Continuar tras el restablecimiento", // Continue after limit resets
   "settings.autoContinueHint": "Cuando un límite de uso de 5 horas o semanal detiene a Claude o Codex, la tarea continúa automáticamente después de que se restablezca el límite.", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
@@ -672,6 +680,7 @@ const es: typeof en = {
   "settings.scSearch": "Buscar en la terminal", // Find in terminal
   "settings.scGlobalSearch": "Buscar en todas las sesiones", // Search all sessions
   "settings.scSaveDoc": "Guardar documento", // Save document
+  "settings.scFocusSidebar": "Enfocar barra lateral", // Focus sidebar
   "settings.scRecording": "Pulsa las teclas…", // Press keys…
   "settings.scHint":
     "Haz clic en un atajo y pulsa una nueva combinación (se requiere Cmd/Ctrl).", // hint
@@ -882,6 +891,7 @@ const es: typeof en = {
     `¿Eliminar “${name}”? Se quitarán su búsqueda y filtros guardados; los proyectos y las sesiones no se verán afectados.`,
   "tree.viewSplitRight": "Dividir la vista de árbol a la derecha",
   "tree.viewSplitDown": "Dividir la vista de árbol hacia abajo",
+  "tree.viewKind": "Cambiar lo que muestra esta vista",  // Change what this view shows
   "tree.viewAdd": "Copiar la vista de árbol actual a una pestaña nueva",
   "tree.viewCount": (n) => `${n} vista${n === 1 ? "" : "s"} de árbol`,
   "mark.menu": "Marca", // Mark
@@ -1093,6 +1103,8 @@ const es: typeof en = {
     "Terminar esta pestaña en segundo plano (sus procesos finalizarán)", // Kill this background tab…
   "tab.newBrowserTab": "Nueva pestaña", // New Tab
   "tab.refreshFile": "Recargar archivo", // Refresh File
+  "tab.stick": "Mantener visible en división", // Keep Visible in Split
+  "tab.unstick": "Dejar de mantener visible", // Stop Keeping Visible
   "tab.closeOthers": "Cerrar otras pestañas", // Close Other Tabs
   "tab.closeRight": "Cerrar pestañas a la derecha", // Close Tabs to the Right
   "tab.closeAll": "Cerrar todas las pestañas", // Close All Tabs
@@ -1252,6 +1264,10 @@ const es: typeof en = {
   "files.nameLabel": "Nombre", // Name
   "files.newTooltip": "Nuevo archivo o carpeta", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Añadir a favoritos", // Add to Favorites
+  "files.unfavorite": "Quitar de favoritos", // Remove from Favorites
+  "files.favorites": "Favoritos", // Favorites
+  "files.collapseAll": "Contraer todo", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

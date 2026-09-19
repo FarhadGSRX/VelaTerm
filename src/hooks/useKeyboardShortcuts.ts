@@ -1,5 +1,7 @@
 //! Global keyboard shortcuts.
 //! - Cmd/Ctrl+1–9 focuses the numbered open tab and is fixed to tab positions.
+//! - Cmd/Ctrl+Tab cycles open tabs (Shift reverses) and is fixed because shortcutRegistry combos
+//!   encode only single letters, so Tab is not expressible as a remappable ShortcutAction.
 //! - Cmd/Ctrl++/-/0 changes or resets terminal font size and is fixed to those semantics.
 //! - Settings may remap temporary-terminal creation, desktop browser tabs, pane/tab closure, both
 //!   split directions, terminal/global search, and document save. Defaults live in shortcutRegistry
@@ -51,7 +53,23 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // ── Fixed shortcut 2: Cmd++/-/0 changes or resets terminal font size ──
+      // ── Fixed shortcut 2: Cmd+Tab cycles open tabs, Shift reverses, both directions wrap ──
+      // Plain next/previous over the visible `openTabs` order, not most-recently-used; `liveTabs` is a
+      // background pool and never part of the cycle. usePtySession blocks the combo from xterm so the
+      // shell does not also receive HT/CBT.
+      if (e.key === "Tab") {
+        const { openTabs, activeTabId, setActiveTab } = useTermStore.getState();
+        if (openTabs.length > 1) {
+          e.preventDefault();
+          // Clamp an unknown active tab to 0 so either direction still lands in range.
+          const from = Math.max(0, openTabs.indexOf(activeTabId ?? ""));
+          const step = e.shiftKey ? -1 : 1;
+          setActiveTab(openTabs[(from + step + openTabs.length) % openTabs.length]);
+        }
+        return;
+      }
+
+      // ── Fixed shortcut 3: Cmd++/-/0 changes or resets terminal font size ──
       // Apply only to active session tabs; document/browser tabs retain their own handling.
       if (hasMod(e)) {
         const isPlus = e.key === "+" || e.key === "=" || e.code === "Equal";
@@ -145,6 +163,22 @@ export function useKeyboardShortcuts() {
           e.preventDefault();
           void splitNew("horizontal", "shortcut");
         }
+        return;
+      }
+
+      // Move keyboard focus into the session tree, expanding the sidebar first when it is collapsed.
+      // The tree owns its own arrow-key navigation once focused (see ProjectTree).
+      if (matchCombo(e, sc("focusSidebar"))) {
+        e.preventDefault();
+        const { leftCollapsed, toggleLeft } = useTermStore.getState();
+        if (leftCollapsed) toggleLeft();
+        // Focus after the expand renders; the element does not exist yet on a collapsed sidebar.
+        requestAnimationFrame(() => {
+          const tree =
+            document.querySelector<HTMLElement>('[data-session-tree="primary"]') ??
+            document.querySelector<HTMLElement>("[data-session-tree]");
+          tree?.focus();
+        });
         return;
       }
 
