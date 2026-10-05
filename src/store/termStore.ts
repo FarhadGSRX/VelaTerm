@@ -318,14 +318,6 @@ function loadViewKind(candidate: unknown): SidebarViewKind {
   return candidate === "files" ? "files" : "sessions";
 }
 
-/**
- * Restore a view kind from untrusted storage. Anything that is not a known kind — a missing field in a V1/V2
- * payload, a hand-edited value, a kind written by a newer build — falls back to the session tree.
- */
-function loadViewKind(candidate: unknown): SidebarViewKind {
-  return candidate === "files" ? "files" : "sessions";
-}
-
 function loadStatusFilter(candidate: unknown): AgentState[] | null {
   if (!Array.isArray(candidate)) return null;
   const selected = AGENT_STATES.filter((state) => candidate.includes(state));

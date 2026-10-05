@@ -177,6 +177,9 @@ describe("composer inline chips", () => {
     useTermStore.setState({ composerInlineChips: [] });
     useTermStore.getState().hydrateSettingsFromCache();
     expect(useTermStore.getState().composerInlineChips).toEqual(["permission", "model", "mcp"]);
+  });
+});
+
 // fg: the persisted settings-modal section must round-trip and fall back for blobs written before it existed,
 // and image paste defaults to the agent-native path rather than upload.
 beforeEach(() => {

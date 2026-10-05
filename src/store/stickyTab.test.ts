@@ -132,6 +132,7 @@ describe("the sticky slot under mirror mode", () => {
       sidebarTreeTabs: [],
       primarySidebarTreeViewId: "main",
       activeSidebarTreeViewId: "main",
+      taskTabs: {},
     };
     const round = sanitizeMirrorLayout(JSON.parse(JSON.stringify(buildMirrorLayout(source))));
     expect(round?.center.stickyTabId).toBe("doc-1");
@@ -162,6 +163,7 @@ describe("the sticky slot under mirror mode", () => {
       sidebarTreeTabs: [],
       primarySidebarTreeViewId: "main",
       activeSidebarTreeViewId: "main",
+      taskTabs: {},
     };
     // Strip the fields the way a stock v0.1.102 client would never have sent them at all.
     const wire = JSON.parse(JSON.stringify(buildMirrorLayout(source)));

@@ -47,6 +47,7 @@ describe("mobile status chips", () => {
       sidebarTreeViews: [{
         id: "main",
         name: "Main",
+        kind: "sessions",
         treeFilter: "",
         statusFilter: null,
         statusFilterIds: null,
