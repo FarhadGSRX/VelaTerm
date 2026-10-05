@@ -168,6 +168,7 @@ function snapshotSource(tab: string): Parameters<typeof buildMirrorLayout>[0] {
       {
         id: "main",
         name: "main",
+        kind: "sessions",
         treeFilter: "",
         statusFilter: null,
         statusFilterIds: null,

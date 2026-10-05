@@ -146,6 +146,9 @@ describe("following a peer's layout", () => {
         openTabs: ["t1"],
         liveTabs: ["t1"],
         pinnedTabs: [],
+        // What sanitizeMirrorLayout yields for a peer with no sticky region of its own.
+        stickyTabId: null,
+        stickySize: 35,
         activeTabId: "t1",
         lastActiveSessionTabId: "t1",
         activeSessionId: SID,

@@ -84,3 +84,38 @@ it("refreshes after focus, ignores stale responses and clears stale data on fail
   await act(async () => { window.dispatchEvent(new Event("focus")); });
   expect(result.current).toEqual({ catalog: null, loading: false });
 });
+
+// fg: the interface font may be proportional; the terminal font may not. The presets exist because the catalog
+// lists installed families only — it cannot offer a generic stack such as system-ui — and nothing else told the
+// user a proportional face was allowed. These lock the two call sites apart.
+it("offers the proportional presets only when asked, above the catalog", () => {
+  render(<FontSelect value={null} onChange={vi.fn()} label="Interface font" fonts={{ catalog, loading: false }} proportional />);
+  fireEvent.click(screen.getByRole("combobox"));
+  expect(screen.getByRole("option", { name: "System UI" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Inter" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "JetBrains Mono" })).toBeTruthy();
+  // The rule Select draws for `separatorBefore` is what tells the preset group from the catalog.
+  expect((screen.getByRole("option", { name: "System UI" }) as HTMLElement).style.borderTop).toBeTruthy();
+  cleanup();
+  render(<FontSelect value={null} onChange={vi.fn()} label="Terminal font" fonts={{ catalog, loading: false }} />);
+  fireEvent.click(screen.getByRole("combobox"));
+  expect(screen.queryByRole("option", { name: "System UI" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "Inter" })).toBeNull();
+});
+
+it("stores a preset as its full CSS stack and reads it back as that row, not as a custom entry", () => {
+  const onChange = vi.fn();
+  const props = { onChange, label: "Interface font", fonts: { catalog, loading: false }, proportional: true };
+  const { rerender } = render(<FontSelect value={null} {...props} />);
+  fireEvent.click(screen.getByRole("combobox"));
+  fireEvent.click(screen.getByRole("option", { name: "Inter" }));
+  expect(onChange).toHaveBeenCalledWith("Inter, system-ui, sans-serif");
+
+  rerender(<FontSelect value="Inter, system-ui, sans-serif" {...props} />);
+  expect(screen.getByRole("combobox").textContent).toContain("Inter");
+  // Every preset stack ends in a generic family, so none reads as unconfirmed.
+  expect(screen.queryByRole("status")).toBeNull();
+  fireEvent.click(screen.getByRole("combobox"));
+  expect(screen.getByRole("option", { name: "Inter" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).not.toContain("Inter, system-ui, sans-serif");
+});

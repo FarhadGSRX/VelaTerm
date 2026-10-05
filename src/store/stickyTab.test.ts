@@ -128,6 +128,10 @@ describe("the sticky slot under mirror mode", () => {
       leftCollapsed: false,
       rightCollapsed: false,
       inspectorTab: "files" as const,
+      sidebarTreeViews: [],
+      sidebarTreeTabs: [],
+      primarySidebarTreeViewId: "main",
+      activeSidebarTreeViewId: "main",
     };
     const round = sanitizeMirrorLayout(JSON.parse(JSON.stringify(buildMirrorLayout(source))));
     expect(round?.center.stickyTabId).toBe("doc-1");
@@ -154,6 +158,10 @@ describe("the sticky slot under mirror mode", () => {
       leftCollapsed: false,
       rightCollapsed: false,
       inspectorTab: "files" as const,
+      sidebarTreeViews: [],
+      sidebarTreeTabs: [],
+      primarySidebarTreeViewId: "main",
+      activeSidebarTreeViewId: "main",
     };
     // Strip the fields the way a stock v0.1.102 client would never have sent them at all.
     const wire = JSON.parse(JSON.stringify(buildMirrorLayout(source)));
@@ -167,9 +175,9 @@ describe("the sticky slot under mirror mode", () => {
   });
 
   it("refuses a sticky tab the snapshot does not carry as open", async () => {
-    const { sanitizeMirrorLayout } = await import("./mirrorLayout");
+    const { sanitizeMirrorLayout, MIRROR_LAYOUT_VERSION } = await import("./mirrorLayout");
     const round = sanitizeMirrorLayout({
-      v: 1,
+      v: MIRROR_LAYOUT_VERSION,
       center: { openTabs: ["main"], stickyTabId: "ghost-tab", paneTrees: {} },
       left: {},
       right: {},
@@ -178,9 +186,9 @@ describe("the sticky slot under mirror mode", () => {
   });
 
   it("clamps a peer's out-of-range width instead of trusting it", async () => {
-    const { sanitizeMirrorLayout } = await import("./mirrorLayout");
+    const { sanitizeMirrorLayout, MIRROR_LAYOUT_VERSION } = await import("./mirrorLayout");
     const wide = sanitizeMirrorLayout({
-      v: 1,
+      v: MIRROR_LAYOUT_VERSION,
       center: { openTabs: [], stickySize: 300, paneTrees: {} },
       left: {},
       right: {},
