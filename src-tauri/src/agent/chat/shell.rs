@@ -326,7 +326,7 @@ fn shell_args(shell: &str, command: &str) -> Vec<String> {
 /// rather than an executable and is refused for agent sessions there as well.
 fn session_shell(app: &AppCtx, kind: SessionKind, persisted: Option<&str>) -> String {
     let data_dir = app.data_dir().ok();
-    let (shell, _) = crate::pty::manager::resolve_shell(kind, persisted.map(str::to_string), data_dir.as_deref());
+    let (shell, _) = crate::pty::manager::resolve_shell(app, kind, persisted.map(str::to_string), data_dir.as_deref());
     if shell.starts_with(crate::pty::manager::WSL_SHELL_PREFIX) {
         return crate::pty::manager::default_shell(kind, data_dir.as_deref());
     }
