@@ -222,6 +222,7 @@ describe("membership updates for the sidebar status filter", () => {
       sidebarTreeViews: [{
         id: "main",
         name: "Main",
+        kind: "sessions",
         treeFilter: "",
         statusFilter: ["working"],
         statusFilterIds: { [staleId]: true },

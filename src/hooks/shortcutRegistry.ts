@@ -24,7 +24,8 @@ export type ShortcutAction =
   | "splitDown"
   | "search"
   | "globalSearch"
-  | "saveDoc";
+  | "saveDoc"
+  | "focusSidebar";
 
 /** Action order for the settings UI (newBrowserTab only shown on desktop, gated by isTauri). */
 export const SHORTCUT_ACTIONS: ShortcutAction[] = [
@@ -38,6 +39,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   "search",
   "globalSearch",
   "saveDoc",
+  "focusSidebar",
 ];
 
 /** Whether the current platform is macOS (for default keymaps and display symbol selection). */
@@ -75,6 +77,8 @@ export function hasMod(e: KeyboardEvent): boolean {
  *   reserved key (Ctrl+D=EOF, Ctrl+W=delete-word...), Ctrl+Shift is swallowed by IMEs, Alt is
  *   terminal Meta. Ctrl+Alt avoids conflicts with browser tab commands.
  *   Split: D=right / E=up-down. Global search: G (global) vs inline search F.
+ *   Focus sidebar: Cmd+Shift+E on macOS follows the editor convention for an explorer pane; on
+ *   Windows/Linux that chord is unavailable under the Ctrl+Alt rule, so it is Ctrl+Alt+S.
  *   Save remains bare Ctrl+S (intercepted only on doc tabs; reserved as XOFF in terminals).
  *   When the terminal is focused, these Ctrl+Alt combos are intercepted by usePtySession's
  *   customKeyEventHandler to prevent xterm from treating them as Meta (see APP_ALT_KEYS).
@@ -94,6 +98,7 @@ export const DEFAULT_BINDINGS: Record<ShortcutAction, string> =
         search: "mod+f",
         globalSearch: "mod+shift+f",
         saveDoc: "mod+s",
+        focusSidebar: "mod+shift+e",
       }
     : {
         openProject: "mod+alt+o",
@@ -106,6 +111,7 @@ export const DEFAULT_BINDINGS: Record<ShortcutAction, string> =
         search: "mod+alt+f",
         globalSearch: "mod+alt+g",
         saveDoc: "mod+s",
+        focusSidebar: "mod+alt+s",
       };
 
 interface ParsedCombo {

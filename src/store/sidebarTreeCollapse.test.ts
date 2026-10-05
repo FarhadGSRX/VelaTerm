@@ -54,6 +54,7 @@ beforeEach(() => {
     sidebarTreeViews: [{
       id: "main",
       name: "Main",
+      kind: "sessions",
       treeFilter: "",
       statusFilter: null,
       statusFilterIds: null,
