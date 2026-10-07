@@ -152,6 +152,7 @@ pub fn client_event(source: &str, args: &Value) -> Result<Value, String> {
         Some("pty_output") => "client_pty_output",
         Some("ws_state") => "client_ws_state",
         Some("pty_spawn") => "client_pty_spawn",
+        Some("input_latency") => "client_input_latency",
         _ => return Ok(json!(false)),
     };
     let Ok(mut rates) = RATES.get_or_init(|| Mutex::new(HashMap::new())).lock() else {
@@ -190,6 +191,14 @@ pub fn client_event(source: &str, args: &Value) -> Result<Value, String> {
                     | "attached"
                     | "retryCount"
                     | "generation"
+                    | "keyKind"
+                    | "composing"
+                    | "queueMs"
+                    | "keyToTextMs"
+                    | "renderMs"
+                    | "totalMs"
+                    | "thresholdMs"
+                    | "domNodes"
             )
         })
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -265,6 +274,11 @@ pub fn safe_fields(data: &Value) -> Value {
                 | "line"
                 | "blockedMs"
                 | "subscribers"
+                | "keyToTextMs"
+                | "renderMs"
+                | "totalMs"
+                | "thresholdMs"
+                | "domNodes"
         );
         if numeric && (value.is_u64() || value.is_i64() || value.is_null()) {
             out.insert(key.clone(), value.clone());
@@ -272,7 +286,7 @@ pub fn safe_fields(data: &Value) -> Value {
         }
         if matches!(
             key.as_str(),
-            "attached" | "truncated" | "initialized" | "success"
+            "attached" | "truncated" | "initialized" | "success" | "composing"
         ) && value.is_boolean()
         {
             out.insert(key.clone(), value.clone());
@@ -418,6 +432,7 @@ pub fn safe_fields(data: &Value) -> Value {
                     && s.split('.').all(|part| part.parse::<u32>().is_ok())
             }
             "direction" => matches!(s, "horizontal" | "vertical"),
+            "keyKind" => matches!(s, "letter" | "digit" | "space" | "symbol" | "composition" | "other"),
             "source" => matches!(
                 s,
                 "shortcut"
@@ -1096,6 +1111,14 @@ mod tests {
             safe_fields(&json!({"bytes":65536,"subscribers":3,"durationMs":180})),
             json!({"bytes":65536,"subscribers":3,"durationMs":180})
         );
+        // Composer input latency samples carry timings and a key category, never the typed text.
+        assert_eq!(
+            safe_fields(&json!({"sessionId":&sid,"keyKind":"symbol","composing":false,"queueMs":4,
+                "keyToTextMs":180,"renderMs":3,"totalMs":183,"thresholdMs":50,"domNodes":2100,"data":"~"})),
+            json!({"sessionId":&sid,"keyKind":"symbol","composing":false,"queueMs":4,
+                "keyToTextMs":180,"renderMs":3,"totalMs":183,"thresholdMs":50,"domNodes":2100})
+        );
+        assert_eq!(safe_fields(&json!({"keyKind":"password"})), json!({}));
         assert_eq!(
             safe_fields(&json!({"file":"src/pty/manager.rs","line":1466})),
             json!({"file":"src/pty/manager.rs","line":1466})
@@ -1117,6 +1140,12 @@ mod tests {
             .as_object()
             .unwrap()
             .is_empty());
+    }
+    #[test]
+    fn client_input_latency_events_are_accepted() {
+        let accepted = client_event("input-latency-test", &json!({"event":"input_latency","keyKind":"symbol","totalMs":120}));
+        assert_eq!(accepted, Ok(json!(true)));
+        assert_eq!(client_event("input-latency-test", &json!({"event":"keystrokes"})), Ok(json!(false)));
     }
     #[test]
     fn levels_are_consistent() {

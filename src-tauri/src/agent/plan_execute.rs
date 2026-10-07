@@ -264,7 +264,7 @@ pub fn defaults(app: &AppCtx, parent_id: &str, config: &Config) -> Result<Value,
     let mut review = config.review.clone();
     if review.agent.is_none() { review.agent = plan.agent; }
     let review = if config.review_enabled == Some(false) { review } else { normalize(app, &review, &parent)? };
-    Ok(json!(Config { plan, exec, review, review_enabled:Some(config.review_enabled.unwrap_or(true)), ..config.clone() }))
+    Ok(json!(Config { plan, exec, review, review_enabled:Some(config.review_enabled.unwrap_or(false)), ..config.clone() }))
 }
 
 /// Stable role identities close the creation window before the workflow result is committed.
@@ -356,8 +356,8 @@ pub fn start(app: &AppCtx, request: &super::server::SpawnRequest) -> Result<Valu
         let exec = normalize(app, &exec, &parent)?;
         let mut review = requested.review.clone();
         if review.agent.is_none() { review.agent = plan.agent; }
-        let review = if requested.review_enabled == Some(false) { review } else { normalize(app, &review, &parent)? };
-        Config { plan, exec, review, review_enabled:Some(requested.review_enabled.unwrap_or(true)), ..requested.clone() }
+        let review = if requested.review_enabled != Some(true) { review } else { normalize(app, &review, &parent)? };
+        Config { plan, exec, review, review_enabled:Some(requested.review_enabled.unwrap_or(false)), ..requested.clone() }
     };
     validate_config(&config)?;
     super::spawn_requests::save_workflow_config(&app.db().conn.lock().unwrap(), &id, &config)?;

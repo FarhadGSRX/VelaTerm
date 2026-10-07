@@ -154,7 +154,7 @@ const SPAWN_USAGE: &str =
     --plan-execute    create planning, execution and optional independent review chat sessions\n\
     --split-tasks     let the planner propose multiple tasks for user confirmation (requires --plan-execute)\n\
     --worktree-mode <none|shared|each>   directory mode for all workflow roles; overrides --worktree (requires --plan-execute)\n\
-    --review / --no-review   enable independent review (default) or disable it (requires --plan-execute)\n\
+    --review / --no-review   enable independent review or disable it (default) (requires --plan-execute)\n\
     --plan-agent / --exec-agent / --review-agent <agent>   agent for each role\n\
     --plan-model / --exec-model / --review-model <model>   model for each role\n\
     --plan-effort / --exec-effort / --review-effort <level> reasoning effort for each role\n\
@@ -359,7 +359,7 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
         return SpawnParse::Err("vspawn: role options, review options, --split-tasks and --worktree-mode require --plan-execute".into());
     }
     if workflow {
-        flow_config.review_enabled = Some(flow_config.review_enabled.unwrap_or(true));
+        flow_config.review_enabled = Some(flow_config.review_enabled.unwrap_or(false));
         if let Some(mode) = flow_config.worktree_mode {
             worktree = mode != super::plan_execute::WorktreeMode::None;
         }
@@ -1615,7 +1615,7 @@ mod tests {
     #[test]
     fn spawn_optional_review_switch_and_role_options_are_workflow_only() {
         let SpawnParse::Ok(defaults) = parse_spawn_args(&args(&["--plan-execute","Task"])) else { panic!("valid workflow") };
-        assert_eq!(defaults.plan_execute.unwrap().review_enabled,Some(true));
+        assert_eq!(defaults.plan_execute.unwrap().review_enabled,Some(false));
         let SpawnParse::Ok(disabled) = parse_spawn_args(&args(&["--plan-execute","--no-review","Task"])) else { panic!("valid workflow") };
         assert_eq!(disabled.plan_execute.unwrap().review_enabled,Some(false));
         let SpawnParse::Ok(selected) = parse_spawn_args(&args(&["--plan-execute","--no-review","--review","--review-agent=codex","--review-model","reviewer","--review-effort=xhigh","Task"])) else { panic!("valid workflow") };

@@ -6,7 +6,8 @@
   gap: 2px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-term);
+  /* No background of its own: the pane already paints --bg-term, and an opaque fill here would cover
+     the focused pane's left accent line (flush mode draws it as an inset shadow on .pane). */
   font-size: 12px;
   flex-shrink: 0;
 }

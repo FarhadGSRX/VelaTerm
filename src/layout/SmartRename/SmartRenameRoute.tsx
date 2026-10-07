@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import AgentSelect from "../../components/AgentSelect";
 import { FieldStack } from "../../components/Field";
 import { FormModal } from "../../components/FormModal";
 import { LaunchLoadState, ModelEffortFields } from "../../components/LaunchFields";
 import { useT, type I18nKey } from "../../i18n";
-import { renameSessionWithAgent, sessionTitleOptions } from "../../ipc/tree";
+import { cancelSessionTitle, renameSessionWithAgent, sessionTitleOptions } from "../../ipc/tree";
+import { genId } from "../../genId";
+import { useTermStore } from "../../store/termStore";
 import type { SessionKind } from "../../types";
 import { navigateSmartRename, readSmartRenameRoute, useSmartRenameRoute, writeSmartRenameSelection, type SmartRenameRoute as Route } from "./navigation";
 
@@ -29,7 +31,15 @@ function AgentChoice({ route }: { route: Route }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof sessionTitleOptions>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
+  const active = useRef<{ id: string; promise: Promise<unknown>; cancelling: boolean } | null>(null);
   const close = () => navigateSmartRename(null);
+  useEffect(() => () => {
+    const task = active.current;
+    if (task && !task.cancelling) {
+      task.cancelling = true;
+      void cancelSessionTitle(route.sessionId, task.id).catch(() => {});
+    }
+  }, [route.sessionId]);
   useEffect(() => {
     let live = true;
     setData(null); setError(null);
@@ -44,28 +54,60 @@ function AgentChoice({ route }: { route: Route }) {
     fields={[{ key: "loading", label: "", required: true, render: () =>
       <LaunchLoadState state={error ? "error" : "loading"} error={error} retry={() => setRevision(value => value + 1)} /> }]} />;
   const agent = route.agent ?? data.agent;
-  const defaults = data.agents.find(option => option.id === agent);
+  // An agent's last model and effort chosen here win over the session's own; without one, use the session's.
+  const choiceFor = (id: string) => {
+    const option = data.agents.find(item => item.id === id);
+    const saved = useTermStore.getState().sessionTitlePrefs[id as SessionKind];
+    return { model: saved?.model ?? option?.model ?? "", effort: saved?.effort ?? option?.effort ?? "" };
+  };
+  // Only a value that differs from what the dialog would open on counts as a choice, so tabbing through
+  // the fields does not pin the session's current model.
+  const remember = (id: string, field: "model" | "effort", value: string) => {
+    if (id && value !== choiceFor(id)[field]) useTermStore.getState().setSessionTitlePrefs(id as SessionKind, { [field]: value });
+  };
+  const defaults = choiceFor(agent);
   return <FormModal key={JSON.stringify([route.sessionId, route.agent, route.model, route.effort])} title={t("sessionTitle.rename")}
     description={t("sessionTitle.confirmHint")} submitLabel={t("common.rename")} submittingLabel={t("sessionTitle.generating")}
-    initial={{ agent, model: route.model ?? defaults?.model ?? "", effort: route.effort ?? defaults?.effort ?? "" }}
+    initial={{ agent, model: route.model ?? defaults.model, effort: route.effort ?? defaults.effort }}
     fields={[{ key: "agent", label: t("orch.agentLabel"), required: true, render: (value, _change, context) =>
       <AgentSelect value={value as SessionKind | ""} disabled={context.disabled} onChange={next => {
-        const selected = data.agents.find(option => option.id === next);
-        context.changeValues({ agent: next, model: selected?.model ?? "", effort: selected?.effort ?? "" });
+        context.changeValues({ agent: next, ...choiceFor(next) });
       }} options={data.agents} placeholder={t("orch.agentLabel")} /> },
       { key: "model", label: "", render: (_value, _change, { values, changeValues, disabled }) => {
         const spec = data.agents.find(option => option.id === values.agent && option.available);
         return spec ? <FieldStack><ModelEffortFields spec={spec} model={values.model} effort={values.effort}
           disabled={disabled} context={{ parentSessionId: route.sessionId, inheritArgs: true }}
-          onChange={(model, effort) => changeValues({ model, effort })} /></FieldStack> : null;
+          onChange={(model, effort) => changeValues({ model, effort })}
+          onModelCommit={model => remember(values.agent, "model", model)}
+          onEffortCommit={effort => remember(values.agent, "effort", effort)} /></FieldStack> : null;
       }}, { key: "effort", label: "", type: "hidden" }]}
     validate={values => !data.agents.some(option => option.available) ? t("sessionTitle.noAgent")
       : values.agent && !data.agents.some(option => option.id === values.agent && option.available)
         ? t("sessionTitle.agentUnavailable") : null}
     onValuesChange={writeSmartRenameSelection}
     formatSubmitError={cause => t(titleErrorKey(cause))} onCancel={close}
+    onCancelSubmit={async () => {
+      const task = active.current;
+      if (!task) return;
+      task.cancelling = true;
+      try {
+        await cancelSessionTitle(route.sessionId, task.id);
+      } catch (cause) {
+        task.cancelling = false;
+        throw cause;
+      }
+      // Wait for process cleanup and the session claim to be released before allowing a retry.
+      await task.promise.catch(() => {});
+    }}
     onSubmit={async values => {
-      await renameSessionWithAgent(route.sessionId, values.agent as SessionKind, values.model, values.effort);
-      if (readSmartRenameRoute()?.sessionId === route.sessionId) navigateSmartRename(null, true);
+      const id = genId();
+      const task = { id, promise: renameSessionWithAgent(route.sessionId, values.agent as SessionKind, values.model, values.effort, id), cancelling: false };
+      active.current = task;
+      try {
+        await task.promise;
+        if (!task.cancelling && active.current === task && readSmartRenameRoute()?.sessionId === route.sessionId) navigateSmartRename(null, true);
+      } finally {
+        if (active.current === task) active.current = null;
+      }
     }} />;
 }

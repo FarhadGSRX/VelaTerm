@@ -23,9 +23,9 @@ export function StatusDot({
 }) {
   return (
     <span
-      // Use a breathing animation for working/awaiting-action states so active work and user waits are recognizable at a glance.
+      // Use a breathing animation for working, awaiting-action, and background-task states so active work and user waits are recognizable at a glance.
       className={
-        status === "working" || status === "asking" ? "vlx-status-pulse" : undefined
+        status === "working" || status === "asking" || status === "background" ? "vlx-status-pulse" : undefined
       }
       style={{
         width: size,

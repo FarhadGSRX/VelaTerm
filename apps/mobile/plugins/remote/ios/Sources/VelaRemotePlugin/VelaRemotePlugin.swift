@@ -194,9 +194,13 @@ public class VelaRemotePlugin: CAPPlugin, CAPBridgedPlugin, SFSafariViewControll
             }
         }
     }
-    private var accountAttempt: [String: String]?
-    private weak var accountBrowser: SFSafariViewController?
+    @MainActor private var accountAttempt: [String: String]?
+    @MainActor private weak var accountBrowser: SFSafariViewController?
     @MainActor private var accountBrowserClosed = false
+    @MainActor private var accountPollingTask: Task<Void, Never>?
+    @MainActor private var accountPollingCode: String?
+    @MainActor private var accountLoginFailure: AccountFailure?
+    @MainActor private var accountApprovedCode: String?
     private func accountRequest(_ path: String, token: String? = nil, body: [String: Any]? = nil) async throws -> Any {
         var request = URLRequest(url: URL(string: "https://velaterm.com" + path)!)
         request.timeoutInterval = 40
@@ -224,15 +228,88 @@ public class VelaRemotePlugin: CAPPlugin, CAPBridgedPlugin, SFSafariViewControll
     @MainActor public func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
         if controller === accountBrowser { accountBrowserClosed = true }
     }
+    @MainActor private func failAccountLogin(_ error: AccountFailure) throws {
+        try vault.update { $0.removeValue(forKey: "accountAttempt") }
+        accountAttempt = nil
+        accountLoginFailure = error
+    }
+    @MainActor func cancelAccountLogin() {
+        accountPollingTask?.cancel(); accountPollingTask = nil; accountPollingCode = nil
+        accountAttempt = nil; accountLoginFailure = nil; accountApprovedCode = nil
+    }
+    @MainActor private func pollAccountLogin() async throws -> Bool {
+        guard let attempt = accountAttempt else {
+            if let error = accountLoginFailure { throw error }
+            // Native polling can finish while the WebView is suspended behind Safari.
+            if let token = try vault.read()["accountToken"] as? String,
+                let status = try await accountRequest("/api/device-link/host/status", token: token) as? [String: Any],
+                status["linked"] as? Bool == true { return true }
+            throw AccountFailure(code: "ACCOUNT_LOGIN_EXPIRED", message: MobileText.get("mobile.native.loginRestart"))
+        }
+        guard let code = attempt["code"], let poll = attempt["pollToken"], code.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else {
+            throw AccountFailure(code: "ACCOUNT_LOGIN_EXPIRED", message: MobileText.get("mobile.native.loginRestart"))
+        }
+        do {
+            var result = try await accountRequest("/api/device-link/\(code)/poll", token: poll, body: [:])
+            guard accountAttempt?["code"] == code else { return accountApprovedCode == code }
+            if result is NSNull && accountBrowserClosed {
+                // A close must not discard approval that raced with the first response.
+                result = try await accountRequest("/api/device-link/\(code)/poll", token: poll, body: [:])
+                guard accountAttempt?["code"] == code else { return accountApprovedCode == code }
+            }
+            if let value = result as? [String: Any], let credential = value["token"] as? String {
+                try vault.update { $0["accountToken"] = credential; $0.removeValue(forKey: "accountAttempt") }
+                accountAttempt = nil
+                accountApprovedCode = code
+                accountLoginFailure = nil
+                accountBrowserClosed = false
+                accountBrowser?.dismiss(animated: true)
+                return true
+            }
+            if accountBrowserClosed {
+                let error = AccountFailure(code: "ACCOUNT_LOGIN_CANCELLED", message: MobileText.get("mobile.native.loginRestart"))
+                try failAccountLogin(error)
+                throw error
+            }
+            return false
+        } catch {
+            // Responses from a replaced attempt must not alter the current login.
+            if (error as? AccountFailure)?.code != "ACCOUNT_LOGIN_CANCELLED", accountAttempt?["code"] != code { return accountApprovedCode == code }
+            throw error
+        }
+    }
+    @MainActor private func maintainAccountLogin() {
+        guard bridge != nil, let code = accountAttempt?["code"], accountPollingCode != code else { return }
+        accountPollingTask?.cancel()
+        accountPollingCode = code
+        accountPollingTask = Task { [weak self] in
+            defer {
+                if self?.accountPollingCode == code { self?.accountPollingTask = nil; self?.accountPollingCode = nil }
+            }
+            // Full-screen Safari removes the underlying WebView, suspending its timers.
+            while !Task.isCancelled {
+                guard let self, self.accountAttempt?["code"] == code else { return }
+                do { if try await self.pollAccountLogin() { return } }
+                catch let error as AccountFailure {
+                    guard self.accountAttempt?["code"] == code else { return }
+                    do { try self.failAccountLogin(error); return } catch { }
+                } catch { }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
+    }
     @objc func account(_ call: CAPPluginCall) {
         let action = call.getString("action") ?? "status"
-        Task {
+        Task { @MainActor in
             do {
                 let saved = try vault.read()
                 let token = saved["accountToken"] as? String
                 if accountAttempt == nil { accountAttempt = saved["accountAttempt"] as? [String:String] }
+                if accountAttempt != nil { maintainAccountLogin() }
                 switch action {
                 case "login":
+                    cancelAccountLogin()
+                    try vault.update { $0.removeValue(forKey: "accountAttempt") }
                     let key = Curve25519.KeyAgreement.PrivateKey()
                     let name = await MainActor.run { UIDevice.current.name }
                     guard let attempt = try await accountRequest("/api/device-link", body:["name":name,"publicKey":key.publicKey.rawRepresentation.base64EncodedString()]) as? [String:String],
@@ -242,27 +319,10 @@ public class VelaRemotePlugin: CAPPlugin, CAPBridgedPlugin, SFSafariViewControll
                     try vault.update { $0["accountAttempt"] = attempt }
                     do { try await MainActor.run {try accountPage(url)} }
                     catch { accountAttempt = nil; try vault.update { $0.removeValue(forKey:"accountAttempt") }; throw error }
+                    maintainAccountLogin()
                     call.resolve(["linked":false])
                 case "poll":
-                    guard let attempt = accountAttempt, let code = attempt["code"], let poll = attempt["pollToken"], code.range(of:"^[A-Za-z0-9_-]{43}$",options:.regularExpression) != nil else {throw AccountFailure(code:"ACCOUNT_LOGIN_EXPIRED",message:MobileText.get("mobile.native.loginRestart"))}
-                    var result = try await accountRequest("/api/device-link/\(code)/poll", token:poll, body:[:])
-                    let browserClosed = await MainActor.run { accountBrowserClosed }
-                    if result is NSNull && browserClosed {
-                        // The first response may predate Done; confirm once more after observing the close.
-                        result = try await accountRequest("/api/device-link/\(code)/poll", token:poll, body:[:])
-                    }
-                    if let value = result as? [String:Any], let credential = value["token"] as? String {
-                        try vault.update {$0["accountToken"] = credential; $0.removeValue(forKey:"accountAttempt")}
-                        accountAttempt = nil
-                        await MainActor.run {accountBrowserClosed = false; accountBrowser?.dismiss(animated:true)}
-                        call.resolve(["linked":true])
-                    } else if browserClosed {
-                        // Check approval first: closing the browser must not discard an approved device.
-                        try vault.update { $0.removeValue(forKey:"accountAttempt") }
-                        accountAttempt = nil
-                        await MainActor.run { accountBrowserClosed = false }
-                        throw AccountFailure(code:"ACCOUNT_LOGIN_CANCELLED",message:MobileText.get("mobile.native.loginRestart"))
-                    } else {call.resolve(["linked":false])}
+                    call.resolve(["linked": try await pollAccountLogin()])
                 case "status":
                     guard let token else {call.resolve(["linked":false,"pending":accountAttempt != nil]);return}
                     let value = try await accountRequest("/api/device-link/host/status",token:token)
@@ -280,7 +340,7 @@ public class VelaRemotePlugin: CAPPlugin, CAPBridgedPlugin, SFSafariViewControll
                         _ = try await accountRequest("/api/device-link/host/logout",token:token,body:[:])
                     }
                     try vault.update {$0.removeValue(forKey:"accountToken"); $0.removeValue(forKey:"accountAttempt")}
-                    accountAttempt = nil
+                    cancelAccountLogin()
                     await MainActor.run { accountBrowserClosed = false }
                     call.resolve()
                 case "open":
@@ -302,8 +362,7 @@ public class VelaRemotePlugin: CAPPlugin, CAPBridgedPlugin, SFSafariViewControll
                 }
             } catch let error as AccountFailure {
                 if error.code == "ACCOUNT_LOGIN_EXPIRED" {
-                    accountAttempt = nil
-                    do { try vault.update { $0.removeValue(forKey:"accountAttempt") } }
+                    do { try failAccountLogin(error) }
                     catch { call.reject(error.localizedDescription,"ACCOUNT_ERROR"); return }
                 }
                 call.reject(error.localizedDescription,error.code)

@@ -58,3 +58,14 @@ it("opens the log and keeps it open with the outcome after the command ends", as
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+it("shows a log's colours instead of raw escape codes", async () => {
+  vi.mocked(runLogTail).mockResolvedValueOnce({ text: "\x1b[1;32m✓ ok\x1b[0m\nplain", running: false, exitCode: 0 });
+  render(<RunStrip sessionId="s" />);
+  publish([{ label: "build", command: "make", startedAt: Date.now() }]);
+  fireEvent.click(screen.getByText("Log"));
+  const ok = await screen.findByText("✓ ok", { exact: false });
+  expect(ok.tagName).toBe("SPAN");
+  expect(ok.style.color).toBe("var(--green)");
+  expect(document.querySelector(".run-log-text")?.textContent).toBe("✓ ok\nplain");
+});

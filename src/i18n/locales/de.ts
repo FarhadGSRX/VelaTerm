@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const de: typeof en = {
+  "panel.averageOutput": "mittlere Ausgaberate",
+  "panel.averageOutputHint": "Geschätzte Anzahl der pro Sekunde ausgegebenen Tokens, berechnet aus der gemessenen Antwortzeit und einschließlich gemeldeter Reasoning-Tokens. Werkzeugausführung und Wartezeiten auf Benutzereingaben werden nicht berücksichtigt. Wenn sich Verbrauch und Zeitmessung nicht zuverlässig zuordnen lassen, wird kein Wert angezeigt. Dies ist nicht die reine Dekodiergeschwindigkeit des Modells.",
   "tree.newPlanExecuteSession": "Neue Planungs-/Ausführungssitzung…",
   "launch.splitTasks": "Automatisch in mehrere Aufgaben aufteilen",
   "launch.splitTasksHint": "Die Planung schlägt unabhängige Aufgaben vor. Prüfen Sie vor dem Start die Anweisungen, Agenten, Modelle und den Denkaufwand.",
@@ -633,6 +635,10 @@ const de: typeof en = {
   "settings.redrawOnReveal": "Beim Tabwechsel neu zeichnen", // Redraw on tab switch
   "settings.catAdvanced": "Erweitert", // Advanced
   "settings.outputScheduler": "Vordergrund-Ausgabe priorisieren", // Foreground-priority output
+  "settings.inputLatencyLog": "Eingabeverzögerung protokollieren", // Input latency log
+  "settings.inputLatencyThreshold": "Schwellenwert", // Logging threshold
+  "settings.inputLatencyLogHint":
+    "Standardmäßig aus. Wenn aktiviert, werden Tastenanschläge in der Gesprächsansicht, deren Text später als der Schwellenwert erscheint, im Diagnoseprotokoll erfasst. Gespeichert werden nur Zeitwerte, nie der eingegebene Text.", // Input latency log hint
   "settings.recordSessions": "Sitzungsprotokolle aufzeichnen", // Record session logs
   "settings.recordSessionsHint":
     "Standardmäßig aus. Wenn aktiviert, wird die Terminalausgabe in einer Protokolldatei für Archiv-Wiedergabe und Suche gespeichert. Einfache Terminalsitzungen werden nie aufgezeichnet; Agent-Sitzungen lesen stattdessen ihr eigenes Transkript.", // Record session logs hint
@@ -1830,6 +1836,8 @@ const de: typeof en = {
   "chat.catalogFailed": "Aktualisierung fehlgeschlagen. Der bisherige Katalog bleibt verfügbar.",
   "chat.catalogRefresh": "Aktualisieren",
   "chat.modelsCliOutdated": "Diese Version von Claude Code kann ihre Modelle nicht auflisten. Aktualisieren Sie Claude Code, um alle verfügbaren Modelle zu sehen.",
+  "chat.modelsLoadFailed": "Die Modellliste konnte nicht geladen werden.",
+  "chat.modelsEmpty": "Keine Modelle verfügbar.",
   "chat.modelDefault": "Standardmodell",
   "chat.mode.default": "Immer fragen",
   "chat.mode.agentDefault": "Agent-Standard",

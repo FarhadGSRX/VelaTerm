@@ -26,7 +26,7 @@ import { pushSetting } from "../../ipc/settingsSync";
 import { installVelaSkills } from "../../ipc/velaSkills";
 import { env, platform } from "../../platform";
 import type { VelaCommandStatus } from "../../platform/types";
-import { COMPOSER_CHIP_IDS, type ComposerChipId } from "../../store/settings";
+import { COMPOSER_CHIP_IDS, INPUT_LATENCY_THRESHOLDS, type ComposerChipId } from "../../store/settings";
 import { useTermStore, type TermRenderer } from "../../store/termStore";
 import { DEFAULT_CONVERSATION_FONT_SIZE, DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_LINE_HEIGHT } from "../../theme";
 import type {
@@ -322,6 +322,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setRedrawOnReveal = useTermStore((s) => s.setRedrawOnReveal);
   const outputScheduler = useTermStore((s) => s.outputScheduler);
   const setOutputScheduler = useTermStore((s) => s.setOutputScheduler);
+  const inputLatencyLog = useTermStore((s) => s.inputLatencyLog);
+  const setInputLatencyLog = useTermStore((s) => s.setInputLatencyLog);
+  const inputLatencyThresholdMs = useTermStore((s) => s.inputLatencyThresholdMs);
+  const setInputLatencyThresholdMs = useTermStore((s) => s.setInputLatencyThresholdMs);
   const dynamicStatusFilter = useTermStore((s) => s.dynamicStatusFilter);
   const setDynamicStatusFilter = useTermStore((s) => s.setDynamicStatusFilter);
   const recordSessions = useTermStore((s) => s.recordSessions);
@@ -656,6 +660,35 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   }}
                 >
                   {t("settings.recordSessionsHint")}
+                </div>
+                <Field label={t("settings.inputLatencyLog")}>
+                  <Seg<"on" | "off">
+                    value={inputLatencyLog ? "on" : "off"}
+                    options={[
+                      ["on", t("common.on")],
+                      ["off", t("common.off")],
+                    ]}
+                    onChange={(v) => setInputLatencyLog(v === "on")}
+                  />
+                </Field>
+                {inputLatencyLog && (
+                  <Field label={t("settings.inputLatencyThreshold")}>
+                    <Seg<string>
+                      value={String(inputLatencyThresholdMs)}
+                      options={INPUT_LATENCY_THRESHOLDS.map((ms) => [String(ms), `${ms} ms`] as [string, string])}
+                      onChange={(v) => setInputLatencyThresholdMs(Number(v))}
+                    />
+                  </Field>
+                )}
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    lineHeight: 1.5,
+                    color: "var(--text-dim)",
+                  }}
+                >
+                  {t("settings.inputLatencyLogHint")}
                 </div>
               </>
             )}

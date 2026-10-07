@@ -429,12 +429,17 @@ export function ProjectTree(h: TreeHandlers) {
       subMemo.set(s.id, vis);
       return vis;
     };
+    // A group created while a status filter is active joins the snapshot so it stays visible even though it is empty.
+    const keptGroup = (g: Group) =>
+      statusFiltering && !!statusFilterIds && g.id in statusFilterIds &&
+      (!filter || g.name.toLowerCase().includes(filter));
     const memo = new Map<string, boolean>();
     const groupVisible = (g: Group): boolean => {
       const cached = memo.get(g.id);
       if (cached !== undefined) return cached;
       const vis =
         nodeSelfMatch(g.name, g.mark) ||
+        keptGroup(g) ||
         sessions.some(
           (s) => !s.parentSessionId && s.groupId === g.id && subtreeVisible(s),
         ) ||

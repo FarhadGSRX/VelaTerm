@@ -141,8 +141,8 @@ fn defaults(app: &AppCtx, config: &Config, parent: Option<&Session>) -> Result<C
     };
     let plan = role(&config.plan, SessionKind::Claude)?;
     let exec = role(&config.exec, plan.agent.unwrap())?;
-    let review = if config.review_enabled == Some(false) && config.review.agent.is_some_and(|a| !supported(a)) { config.review.clone() } else { role(&config.review,plan.agent.unwrap())? };
-    Ok(Config { plan, exec, review, review_enabled:Some(config.review_enabled.unwrap_or(true)), ..config.clone() })
+    let review = if config.review_enabled != Some(true) && config.review.agent.is_some_and(|a| !supported(a)) { config.review.clone() } else { role(&config.review,plan.agent.unwrap())? };
+    Ok(Config { plan, exec, review, review_enabled:Some(config.review_enabled.unwrap_or(false)), ..config.clone() })
 }
 
 pub fn prepare(app: &AppCtx, context: &Context) -> Result<Value, String> {

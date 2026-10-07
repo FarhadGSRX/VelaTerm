@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const ja: typeof en = {
+  "panel.averageOutput": "平均出力速度",
+  "panel.averageOutputHint": "計測した応答時間から推定した、1秒あたりの出力トークン数です。報告された推論トークンを含み、ツールの実行時間とユーザーを待つ時間は除外します。使用量と計測時間を正しく対応付けられない場合は表示しません。モデル自体のデコード速度ではありません。",
   "tree.newPlanExecuteSession": "計画・実行セッションを新規作成…",
   "launch.splitTasks": "複数のタスクに自動分割",
   "launch.splitTasksHint": "計画セッションが独立したタスクを提案します。実行前に、各タスクの指示、エージェント、モデル、推論の強度を確認できます。",
@@ -632,6 +634,10 @@ const ja: typeof en = {
   "settings.redrawOnReveal": "タブ復帰時に再描画", // Redraw on tab switch
   "settings.catAdvanced": "詳細設定", // Advanced
   "settings.outputScheduler": "フォアグラウンド優先出力", // Foreground-priority output
+  "settings.inputLatencyLog": "入力遅延の記録", // Input latency log
+  "settings.inputLatencyThreshold": "記録のしきい値", // Logging threshold
+  "settings.inputLatencyLogHint":
+    "既定はオフ。オンにすると、会話ビューでキーを押してから文字が表示されるまでの時間がしきい値を超えた場合に、診断ログに記録します。記録するのは時間のみで、入力内容は記録しません。", // Input latency log hint
   "settings.recordSessions": "セッションログを記録", // Record session logs
   "settings.recordSessionsHint":
     "既定はオフ。オンにするとターミナル出力をログファイルに保存し、アーカイブ再生と検索に使います。通常のターミナルセッションは記録しません。エージェントセッションは独自の会話記録を読み込みます。", // Record session logs hint
@@ -1826,6 +1832,8 @@ const ja: typeof en = {
   "chat.catalogFailed": "更新に失敗しました。既存の一覧は引き続き使用できます。",
   "chat.catalogRefresh": "更新",
   "chat.modelsCliOutdated": "このバージョンの Claude Code はモデル一覧を提供できません。Claude Code を更新すると、利用可能なすべてのモデルが表示されます。",
+  "chat.modelsLoadFailed": "モデル一覧を読み込めませんでした。",
+  "chat.modelsEmpty": "利用可能なモデルがありません。",
   "chat.modelDefault": "既定のモデル",
   "chat.mode.default": "毎回確認",
   "chat.mode.agentDefault": "エージェント既定",

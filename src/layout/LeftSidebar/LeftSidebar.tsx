@@ -50,7 +50,7 @@ import { projectDialogUrl } from "../../remote/dialogNavigation";
 import { newGroupDialogUrl } from "./groupNavigation";
 
 /** Status filters: working (pulsing green), attention (pulsing yellow), replied (magenta), and replied with
- * background work still running (cyan). */
+ * background work still running (pulsing cyan). */
 const STATUS_FILTERS: {
   st: AgentState;
   color: string;
@@ -60,7 +60,7 @@ const STATUS_FILTERS: {
   { st: "working", color: "var(--status-working)", pulse: true, labelKey: "tree.filterWorking" },
   { st: "asking", color: "var(--status-asking)", pulse: true, labelKey: "tree.filterAsking" },
   { st: "waiting", color: "var(--status-waiting)", pulse: false, labelKey: "tree.filterWaiting" },
-  { st: "background", color: "var(--status-background)", pulse: false, labelKey: "tree.filterBackground" },
+  { st: "background", color: "var(--status-background)", pulse: true, labelKey: "tree.filterBackground" },
 ];
 
 /** Isolated filter button/dropdown subscribing to high-frequency runtime/notification changes. Agent updates

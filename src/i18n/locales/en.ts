@@ -2,6 +2,8 @@
 //! Add new text here first, then translate it in every other dictionary; type constraints prevent omissions.
 
 const en = {
+  "panel.averageOutput": "average output",
+  "panel.averageOutputHint": "Estimated output tokens per second over measured response time, including reported reasoning. Excludes tool execution and user waits. Unavailable when usage and timing cannot be matched reliably. This is not pure model decoding speed.",
   "tree.newPlanExecuteSession": "New Plan/Execute Session…",
   "launch.splitTasks": "Automatically split into multiple tasks",
   "launch.splitTasksHint": "The planner proposes independent tasks. Review their instructions, agents, models and reasoning effort before execution starts.",
@@ -633,6 +635,10 @@ const en = {
   "settings.redrawOnReveal": "Redraw on tab switch",
   "settings.catAdvanced": "Advanced",
   "settings.outputScheduler": "Foreground-priority output",
+  "settings.inputLatencyLog": "Input latency log",
+  "settings.inputLatencyThreshold": "Logging threshold",
+  "settings.inputLatencyLogHint":
+    "Off by default. When on, keystrokes in the conversation view whose text appears later than the threshold are written to the diagnostic log. Only timings are saved, never what you type.",
   "settings.recordSessions": "Record session logs",
   "settings.recordSessionsHint":
     "Off by default. When on, terminal output is saved to a log file for archive replay and search. Plain terminal sessions are never recorded; agent sessions read their own transcript instead.",
@@ -1831,6 +1837,8 @@ const en = {
   "chat.catalogFailed": "Update failed. The previous catalog is still available.",
   "chat.catalogRefresh": "Refresh",
   "chat.modelsCliOutdated": "This version of Claude Code cannot list its models. Update Claude Code to see all available models.",
+  "chat.modelsLoadFailed": "Could not load models.",
+  "chat.modelsEmpty": "No models are available.",
   "chat.modelDefault": "Default model",
   "chat.mode.default": "Always Ask",
   "chat.mode.agentDefault": "Agent Default",

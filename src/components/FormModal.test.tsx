@@ -63,4 +63,34 @@ describe("FormModal submission", () => {
     fireEvent.change(input, { target: { value: "Notes" } });
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("allows an opted-in cancellation once and closes only after it succeeds", async () => {
+    let finish!: () => void;
+    const onCancelSubmit = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const onCancel = vi.fn();
+    render(<FormModal title="Rename" fields={fields} initial={{ name: "Research" }}
+      onSubmit={() => new Promise(() => {})} onCancel={onCancel} onCancelSubmit={onCancelSubmit} />);
+    fireEvent.click(screen.getByRole("button", { name: "common.confirm" }));
+    const cancel = screen.getByRole("button", { name: "common.cancel" }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(false);
+    fireEvent.click(cancel);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onCancelSubmit).toHaveBeenCalledTimes(1);
+    expect(cancel.disabled).toBe(true);
+    expect(onCancel).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the dialog open and allows retry when cancellation fails", async () => {
+    const onCancel = vi.fn();
+    const onCancelSubmit = vi.fn().mockRejectedValue(new Error("Connection lost"));
+    render(<FormModal title="Rename" fields={fields} initial={{ name: "Research" }}
+      onSubmit={() => new Promise(() => {})} onCancel={onCancel} onCancelSubmit={onCancelSubmit} />);
+    fireEvent.click(screen.getByRole("button", { name: "common.confirm" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect((await screen.findByRole("alert")).textContent).toBe("Connection lost");
+    await waitFor(() => expect(screen.getByRole("button", { name: "common.cancel" })).toHaveProperty("disabled", false));
+    expect(onCancel).not.toHaveBeenCalled();
+  });
 });

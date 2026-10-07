@@ -488,7 +488,10 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
         "session_title_options" => to_value(crate::agent::session_title::options(app, &req_str(args, "sessionId")?)?),
         "rename_session_with_agent" => to_value(crate::agent::session_title::rename(app, &req_str(args, "sessionId")?,
             opt_str(args, "agent").map(|kind| serde_json::from_value::<SessionKind>(Value::String(kind))
-                .map_err(|e| e.to_string())).transpose()?, opt_str(args, "model").as_deref(), opt_str(args, "effort").as_deref())?),
+                .map_err(|e| e.to_string())).transpose()?, opt_str(args, "model").as_deref(), opt_str(args, "effort").as_deref(),
+            opt_str(args, "operationId").as_deref(), source)?),
+        "cancel_session_title" => to_value(crate::agent::session_title::cancel(app, &req_str(args, "sessionId")?,
+            &req_str(args, "operationId")?, source)?),
         "rename_node" => {
             core::rename_node(
                 app,

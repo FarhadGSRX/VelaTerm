@@ -1,8 +1,21 @@
+## v0.2.9 — 2026-10-07
+
+- ✨ Tính năng đổi tên bằng AI ghi nhớ mô hình và mức độ suy luận đã chọn cho từng tác nhân.
+- ⛔ Có thể hủy tạo tiêu đề bằng AI bằng Cancel, Esc hoặc nhấp bên ngoài hộp thoại, rồi thử tạo lại sau đó.
+- 🧭 Quy trình Plan/Execute mới mặc định tắt vai trò Review độc lập và cho phép bật trong hộp thoại khởi chạy hoặc bằng `--review` khi cần.
+- 🤖 Bộ chọn mô hình Chat hiển thị trạng thái đang tải, lỗi và danh sách trống cùng Retry; các lựa chọn mô hình Codex phù hợp với tài khoản và cấu hình của phiên hiện tại.
+- 📊 Bảng Info hiển thị tốc độ đầu ra trung bình ước tính, bao gồm token suy luận được báo cáo, hoặc dấu gạch ngang khi không thể ước tính.
+- 🩺 Cài đặt nâng cao cung cấp tùy chọn chẩn đoán độ trễ nhập liệu với ngưỡng có thể điều chỉnh, không ghi lại văn bản đã nhập.
+- ✂️ Công cụ chụp màn hình thử nghiệm có nút trên thanh tiêu đề ở các nền tảng máy tính Tauri được hỗ trợ, kể cả khi phím tắt bị tắt.
+- 🌬️ Các chỉ báo màu lục lam cho tác vụ nền dùng cùng hiệu ứng sáng tối nhịp nhàng trong cây phiên, bộ lọc trạng thái và thanh trạng thái.
+- 📁 Nhóm được tạo khi bộ lọc trạng thái đang bật vẫn hiển thị cho đến khi làm mới trạng thái hoặc đổi bộ lọc, miễn là cũng khớp với tìm kiếm theo tên.
+- 🎨 Nhật ký lệnh chạy nền hiển thị màu sắc, kiểu chữ và dòng tiến độ cuối cùng; thanh thực thi không còn che chỉ báo tiêu điểm của khung.
+
 ## v0.2.8 — 2026-10-06
 
 - 🪟 Windows: khi quay lại cửa sổ, tiêu điểm bàn phím được giữ nguyên nếu đã nằm trong trang.
 
-- 🛡️ Windows: phần mềm diệt virus Huorong không còn nhận diện VelaTerm và vela-server là `Trojan/MSIL.ShellLoader.q`.
+- 🛡️ Windows: phần mềm diệt virus Huorong không còn nhận diện VelaTerm và vela-server là `Trojan/MSIL.ShellLoader.q`. Đây là một cảnh báo nhầm: để chạy lệnh shell từ chế độ hội thoại, VelaTerm tạo mỗi tiến trình ở trạng thái tạm dừng rồi mới cho chạy tiếp, đây cũng là chuỗi lệnh gọi mà phần mềm độc hại dùng để chèn mã. Giờ đây các tiến trình được khởi chạy theo cách thông thường và đoạn mã gây ra cảnh báo nhầm đã được gỡ bỏ.
 
 - 🔕 Windows: khi tạo phiên mới và làm mới danh sách mô hình, VelaTerm không còn chạy PowerShell ở chế độ nền; trạng thái phiên Cursor nay được xác định dựa trên đầu ra của terminal nên có thể kém chính xác hơn một chút.
 

@@ -1,6 +1,6 @@
 //! Vlinx-style session status indicator shared by the left project tree and center tabs for consistent icons.
 //! Color semantics: ready (running) = blue; working = breathing green; awaiting action (asking) = breathing yellow;
-//! replied (waiting) = magenta; replied with background work still running (background) = cyan; idle = no indicator.
+//! replied (waiting) = magenta; replied with background work still running (background) = breathing cyan; idle = no indicator.
 //! Unread notifications take precedence as a rippling magenta dot and clear when the session opens.
 
 import { t } from "../i18n";
@@ -24,7 +24,7 @@ export function StatusIndicator({
     return <span className="status-dot st-waiting" title={status} />;
   }
   if (status === "background") {
-    return <span className="status-dot st-background" title={t("status.background")} />;
+    return <span className="status-dot st-background vlx-status-pulse" title={t("status.background")} />;
   }
   if (status === "error") {
     return (

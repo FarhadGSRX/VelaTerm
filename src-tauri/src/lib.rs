@@ -640,7 +640,14 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                 window_layout::apply(&win);
             }
 
-            // DevTools open only on demand from the development title-bar action.
+            // DevTools open on demand from the development title-bar action, or at startup when
+            // VLX_DEV_DEVTOOLS=1 is set for a development build (used for profiling sessions).
+            #[cfg(debug_assertions)]
+            if std::env::var("VLX_DEV_DEVTOOLS").is_ok_and(|v| v == "1") {
+                if let Some(win) = app.get_webview_window("main") {
+                    win.open_devtools();
+                }
+            }
 
             // Replace the macOS default menu without native close_window so Cmd+W reaches the WebView's
             // split/tab close handler. Preserve essential copy/paste/quit/minimize/fullscreen actions.

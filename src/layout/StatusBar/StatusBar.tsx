@@ -55,8 +55,8 @@ function kindLabel(kind: SessionKind): string {
 
 /**
  * Agent-state aggregate on the right. Clicking a state replaces the primary sidebar's current status
- * selection; clicking the sole active state again clears it. Working and waiting icons use the same
- * pulse animation as sidebar status dots. Labels reuse the `tree.filter*` keys so wording stays
+ * selection; clicking the sole active state again clears it. Working, asking, and background icons use the
+ * same pulse animation as sidebar status dots. Labels reuse the `tree.filter*` keys so wording stays
  * synchronized across both controls.
  */
 const STATUS_SEGS = [
@@ -84,7 +84,7 @@ const STATUS_SEGS = [
   {
     st: "background",
     icon: Icons.layers,
-    pulse: false,
+    pulse: true,
     color: "var(--status-background)",
     labelKey: "tree.filterBackground",
   },

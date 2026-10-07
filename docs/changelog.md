@@ -1,17 +1,30 @@
 # Changelog
 
-> Created: 2026-07-09 16:10 · Updated: 2026-10-06
+> Created: 2026-07-09 16:10 · Updated: 2026-10-07
 
 All notable changes to VelaTerm are documented here, newest first.
 v0.1.91 is the first public release; earlier version numbers were internal iterations and are not covered.
 
 ---
 
+## v0.2.9 — 2026-10-07
+
+- ✨ Rename with AI remembers your selected model and reasoning effort for each agent.
+- ⛔ AI title generation can be cancelled with Cancel, Esc, or a click outside the dialog, and you can try again afterwards.
+- 🧭 New Plan/Execute workflows have independent Review turned off by default; enable it in the launch dialog or with `--review` when needed.
+- 🤖 The Chat model selector shows loading, error, and empty states with Retry, and Codex model choices reflect the current session's account and configuration.
+- 📊 The Info panel shows an estimate of average output speed, including reported reasoning tokens, and displays a dash when the estimate is unavailable.
+- 🩺 Advanced settings offer optional input latency diagnostics with an adjustable threshold, without recording the text you type.
+- ✂️ The experimental screenshot tool has a title bar button on supported Tauri desktop platforms, even when its keyboard shortcut is disabled.
+- 🌬️ Cyan background-task indicators use a consistent breathing animation in the session tree, status filters, and status bar.
+- 📁 Groups created while a status filter is active remain visible until you refresh the status or change the filter, provided they match any name search.
+- 🎨 Background command logs display colors and text styles with the final progress line, and the run strip leaves the pane's focus indicator visible.
+
 ## v0.2.8 — 2026-10-06
 
 - 🪟 Windows: returning to the window leaves keyboard focus where it is when it is already inside the page.
 
-- 🛡️ Windows: Huorong antivirus no longer flags VelaTerm and vela-server as `Trojan/MSIL.ShellLoader.q`.
+- 🛡️ Windows: Huorong antivirus no longer flags VelaTerm and vela-server as `Trojan/MSIL.ShellLoader.q`. This was a false positive: to run shell commands from the conversation view, VelaTerm created each process in a suspended state and then resumed it, a sequence of calls that malware also uses to inject code. Processes are now started normally, and the code that triggered the detection has been removed.
 
 - 🔕 Windows: new sessions and model list refreshes no longer run PowerShell in the background, and Cursor session status is now detected from terminal output, which can be less precise.
 

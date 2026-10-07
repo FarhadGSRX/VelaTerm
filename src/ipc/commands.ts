@@ -360,6 +360,7 @@ export interface AgentTurnStats {
   contextTokens: number | null;
   contextLimit: number | null;
   contextPercent: number | null;
+  /** Estimated output throughput over measured response time, including reported reasoning. */
   generationTokensPerSecond: number | null;
 }
 

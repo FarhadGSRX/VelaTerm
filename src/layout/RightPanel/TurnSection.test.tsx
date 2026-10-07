@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { TurnSection, TurnStatsView } from "./TurnSection";
 import { agentTurnStats, type AgentTurnStats } from "../../ipc/commands";
 import type { Session } from "../../types";
+import { setLang } from "../../i18n";
 vi.mock("../../ipc/commands", () => ({ agentTurnStats: vi.fn() }));
 const stats: AgentTurnStats = {
   model: "gpt-5.2-codex", tokens: 1600, inputTokens: 12000, totalTokens: 13600, cachedTokens: 10560,
@@ -10,7 +11,7 @@ const stats: AgentTurnStats = {
   contextTokens: 73000, contextLimit: 258400, contextPercent: 28.25, generationTokensPerSecond: 32,
 };
 const session = (id: string, agentSessionId: string | null = "native") => ({ id, kind: "codex", agentSessionId } as Session);
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => { cleanup(); setLang("en"); vi.resetAllMocks(); });
 describe("This turn", () => {
   it("separates context, turn totals, cached input and session usage", () => {
     render(<TurnStatsView stats={stats} />);
@@ -21,6 +22,8 @@ describe("This turn", () => {
     expect(within(panel).getByText("320k")).toBeTruthy();
     expect(within(panel).getByText("88.0%")).toBeTruthy();
     expect(within(panel).getByText("32.0 tok/s")).toBeTruthy();
+    expect(within(panel).getByText("average output").closest(".turn-metric")?.getAttribute("title"))
+      .toContain("not pure model decoding speed");
     expect(within(panel).getByText("0")).toBeTruthy();
   });
   it("shows absent metrics as unknown and caps only the visual context meter", () => {
@@ -38,6 +41,13 @@ describe("This turn", () => {
     const panel = screen.getByRole("region", { name: "This turn" });
     expect(within(panel).queryByRole("progressbar")).toBeNull();
     expect(within(panel).getByText("73.0k / —")).toBeTruthy();
+  });
+  it("updates the output-rate label and explanation when the language changes", async () => {
+    render(<TurnStatsView stats={stats} />);
+    act(() => setLang("zh-CN"));
+    const label = await screen.findByText("平均输出速度");
+    expect(label.closest(".turn-metric")?.getAttribute("title")).toContain("并非模型的纯解码速度");
+    expect(screen.getByText("32.0 tok/s")).toBeTruthy();
   });
   it("rejects a late response from a previously selected session", async () => {
     let resolveOld!: (value: AgentTurnStats) => void;

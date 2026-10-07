@@ -9,6 +9,8 @@ import { sharingText } from "../../sharing/copy";
 import { getBackendVersion } from "../../ipc/commands";
 import { apiUrl, isShareSurface } from "../../ipc/shareBase";
 import { invoke, isTauri } from "../../ipc/transport";
+import { recordRequestError } from "../../ipc/reqLog";
+import { screenshotShortcutGet, screenshotStart } from "../../ipc/screenshot";
 import { webServerStatus, type WebServerStatus } from "../../ipc/webServer";
 import { env, platform } from "../../platform";
 import { useTermStore } from "../../store/termStore";
@@ -124,6 +126,7 @@ export function TitleBar() {
   // Account link state lights the account icon. The relay is authoritative; query it once here and
   // refresh when the account panel reports a link change in this window.
   const [accountLinked, setAccountLinked] = useState(false);
+  const [screenshotSupported, setScreenshotSupported] = useState(false);
   // Frontend/backend versions for the mismatch banner; null when equal or not yet checked.
   const [versionMismatch, setVersionMismatch] = useState<{
     frontend: string;
@@ -165,6 +168,19 @@ export function TitleBar() {
         if (!alive) return;
         setRemoteRunning(s.running);
         setRemotePort(s.port);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!env.isTauri) return;
+    let alive = true;
+    void screenshotShortcutGet()
+      .then((status) => {
+        if (alive) setScreenshotSupported(status.supported);
       })
       .catch(() => {});
     return () => {
@@ -493,6 +509,20 @@ export function TitleBar() {
           }}
         >
           <Icons.code size={15} />
+        </button>
+      )}
+
+      {screenshotSupported && (
+        <button
+          type="button"
+          className="tb-btn"
+          title={t("settings.scScreenshot")}
+          aria-label={t("settings.scScreenshot")}
+          onClick={() => {
+            void screenshotStart().catch((error) => recordRequestError("screenshot_start", error));
+          }}
+        >
+          <Icons.scissors size={15} />
         </button>
       )}
 

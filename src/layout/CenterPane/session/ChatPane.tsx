@@ -24,12 +24,12 @@ import { ComposerToolbar } from "./ComposerToolbar";
 import { setComposerHeight, startComposerResize, useComposerHeight } from "./composerHeight";
 import type { ComposerChip } from "./composerLayout";
 import { ModelCatalogStatus } from "./ModelCatalogStatus";
+import { useChatModels } from "./useChatModels";
 import { StatusIndicator } from "../../../components/StatusIndicator";
 import { useT, type I18nKey } from "../../../i18n";
 import {
   chatAutoContinueCancel,
   chatInterrupt,
-  chatModels,
   chatPermission,
   chatQueueRemove,
   chatQueueSteer,
@@ -68,7 +68,6 @@ import {
   type ChatExtras,
   type ChatCollaborationMode,
   type ChatConfigKey,
-  type ChatModel,
   type ChatPermission,
   type PendingPermissionMode,
   type ChatRewindPreview,
@@ -80,6 +79,7 @@ import {
 } from "../../../ipc/chat";
 import { attachImages, restoreAttachment, MAX_IMAGE_BYTES, MAX_IMAGES, type Attachment } from "./attachments";
 import { attachChatInputGuard } from "./inputGuard";
+import { attachInputLatencyLog } from "./inputLatency";
 import { buildSuggestions, findFileMention, mentionDir, type Suggestion } from "./completion";
 import { env } from "../../../platform/env";
 import { imageFromNativeClipboard, imagesFromClipboard, imagesFromDrop } from "../../../terminal/imageInput";
@@ -244,6 +244,7 @@ export function ChatPane({
   const paneStyle = useTermStore((s) => s.paneStyle);
   const shortcutOverrides = useTermStore((s) => s.shortcutOverrides);
   const composerInlineChips = useTermStore((s) => s.composerInlineChips);
+  const inputLatencyLog = useTermStore((s) => s.inputLatencyLog);
   const composerHeight = useComposerHeight();
   const status = useTermStore((s) => effectiveStatus(s.runtimes[session.id]));
   const searchOpen = useTermStore((s) => s.searchOpen);
@@ -310,9 +311,6 @@ export function ChatPane({
     s.chatEffortByModel[effortKey(session.kind, model ?? "")] ??
     (session.kind === "claude" ? s.chatEffortByModel[model ?? ""] : "") ?? "",
   );
-  // The models this machine can switch to. Read from the backend rather than hardcoded here: the list
-  // depends on the installed CLI version and on what the user configured, neither of which the view knows.
-  const [catalogue, setCatalogue] = useState<ChatModel[]>([]);
   // "skip" is what a terminal-driven session stored for "stop asking me"; the agent's own word for it is
   // bypassPermissions, and that is what this control shows.
   const [mode, setMode] = useState<string>(() => storedMode({
@@ -348,6 +346,7 @@ export function ChatPane({
   const [autoContinue, setAutoContinue] = useState<ChatAutoContinue | null>(null);
   /** Bumped when the agent reports its own catalogue, so the model list is read again. */
   const [catalogueVersion, setCatalogueVersion] = useState(0);
+  const { models: catalogue, loading: modelsLoading, failed: modelsFailed, retry: retryModels } = useChatModels(session.id, catalogueVersion);
   /** Backend-owned start of the logical turn currently in flight. */
   const [actionFeedback, setActionFeedback] = useState("");
   const [sending, setSending] = useState(false);
@@ -426,6 +425,10 @@ export function ChatPane({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollGeometry = useRef({ height: 0, viewport: 0 });
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    if (!inputLatencyLog) return;
+    return attachInputLatencyLog(() => inputRef.current, session.id);
+  }, [inputLatencyLog, session.id]);
   // Where the caret belongs once a chosen suggestion has been rendered into the textarea.
   const placeCaret = useRef<number | null>(null);
   // Whether the reader is following the end of the conversation. Scrolling up parks the view, so an
@@ -518,6 +521,7 @@ export function ChatPane({
           setConfigKeys(event.keys);
           break;
         case "session":
+          setCatalogueVersion(v => v + 1);
           sessionWaiters.current.splice(0).forEach((resolve) => resolve());
           if (event.model) setModel(event.model);
           if (event.effort && isEffort(event.effort)) setEffort(event.effort);
@@ -875,20 +879,6 @@ export function ChatPane({
       void chatDetach(session.id).catch(() => {});
     };
   }, [session.id]);
-
-  // Read the installed agent's model catalogue once per pane. Discovery may spawn a short-lived CLI, so
-  // it stays out of the snapshot path; failure is silent because an empty list simply hides the chip.
-  useEffect(() => {
-    let disposed = false;
-    void chatModels(session.id)
-      .then((list) => {
-        if (!disposed) setCatalogue(list);
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-    };
-  }, [session.id, catalogueVersion]);
 
   // What the list draws, rather than what the engine sent: a burst of tool calls becomes one folded row,
   // so a turn that read a dozen files does not bury the answer that came out of it. The first entry of
@@ -1959,20 +1949,26 @@ export function ChatPane({
   // Every chip that exists for this session, in the toolbar's traditional order. The toolbar applies the
   // user's inline preference on top and never renders a chip the pane did not offer.
   const composerChips: ComposerChip[] = [];
-  if (catalogue.length > 0) composerChips.push({ id: "model", node: (
+  composerChips.push({ id: "model", node: (
     <ControlChip
       glyph={kindIconEl(session.kind, 14)}
       label={modelLabel}
       title={session.kind === "antigravity" ? t("chat.antigravity.settingsHint") : t("chat.modelTooltip")}
       disabled={session.kind === "antigravity" && busy}
       value={model ?? ""}
-      options={modelOptions}
+      options={modelsFailed || catalogue.length === 0 ? [] : modelOptions}
       defaultValue={defaultModel || undefined}
       defaultLabel={t("chat.savedModelDefault")}
-      footer={session.kind === "claude" && extras.listModelsUnsupported ? <div className="sv-model-cli-outdated" role="note">{t("chat.modelsCliOutdated")}</div> : undefined}
+      footer={<>
+        {(modelsLoading || modelsFailed || catalogue.length === 0) && <div className="sv-model-catalog-status">
+          <div role="status">{t(modelsLoading ? "common.loading" : modelsFailed ? "chat.modelsLoadFailed" : "chat.modelsEmpty")}</div>
+          {!modelsLoading && <button type="button" className="sv-model-catalog-refresh" onClick={retryModels}>{t("common.retry")}</button>}
+        </div>}
+        {session.kind === "claude" && extras.listModelsUnsupported && <div className="sv-model-cli-outdated" role="note">{t("chat.modelsCliOutdated")}</div>}
+      </>}
       advancedFooter={session.kind === "claude" ? <ModelCatalogStatus onChanged={() => setCatalogueVersion(v => v + 1)} /> : undefined}
       onPick={pickModel}
-      keepLabel={t("chat.keepChoice")}
+      keepLabel={modelsFailed || catalogue.length === 0 ? undefined : t("chat.keepChoice")}
       onKeepCurrent={() => rememberPair(model ?? "", effort)}
       menuWidth={300}
       filterPlaceholder={t("chat.filterPlaceholder")}

@@ -111,6 +111,7 @@ import {
   loadRecordSessions,
   loadSettings,
   loadSoundEnabled,
+  normalizeInputLatencyThreshold,
   sanitizeComposerInlineChips,
   saveSettings,
   visualOf,
@@ -118,6 +119,7 @@ import {
   type ComposerChipId,
   type ImagePasteMode,
   type MemoryPrefs,
+  type SessionTitlePrefs,
   type PersistedSettings,
   type PlanExecuteRolePrefs,
   type ReferSummaryConfig,
@@ -1061,6 +1063,9 @@ interface TermStore {
   redrawOnReveal: boolean;
   /** Foreground-priority output scheduling; background terminals are coalesced and throttled. */
   outputScheduler: boolean;
+  /** Log composer keystrokes slower than `inputLatencyThresholdMs` to the diagnostic log. */
+  inputLatencyLog: boolean;
+  inputLatencyThresholdMs: number;
   /** Automatically append newly matching sessions to active sidebar status filters. */
   dynamicStatusFilter: boolean;
   /** Configurable limit for background live tabs. */
@@ -1114,6 +1119,8 @@ interface TermStore {
   planExecutePrefs: { plan: PlanExecuteRolePrefs; exec: PlanExecuteRolePrefs; review?: PlanExecuteRolePrefs };
   /** Last agent, model and effort chosen for knowledge-base compilation. */
   memoryPrefs: MemoryPrefs;
+  /** Last model and effort chosen per agent in the AI rename dialog. */
+  sessionTitlePrefs: SessionTitlePrefs;
   /** Optional global pre-summary selection for `vrefer --ask`. */
   referSummary: ReferSummaryConfig;
   /** Whether the Info panel's Resources section shows the whole-machine group. */
@@ -1511,6 +1518,8 @@ interface TermStore {
   ) => void;
   /** Remember the agent, model or effort chosen for knowledge-base compilation; null clears a field. */
   setMemoryPrefs: (patch: { agent?: SessionKind | null; model?: string | null; effort?: string | null }) => void;
+  /** Remember the model or effort chosen for one agent in the AI rename dialog. */
+  setSessionTitlePrefs: (agent: SessionKind, patch: { model?: string; effort?: string }) => void;
   /** Updates the one global Agent/model/effort selection used for reference pre-summaries. */
   setReferSummary: (patch: Partial<ReferSummaryConfig>) => void;
   /** Shows or hides the whole-machine rows in the Info panel's Resources section. */
@@ -1532,6 +1541,9 @@ interface TermStore {
   setRedrawOnReveal: (v: boolean) => void;
   /** Toggles persisted foreground-priority output scheduling, effective on the next chunk. */
   setOutputScheduler: (v: boolean) => void;
+  setInputLatencyLog: (v: boolean) => void;
+  /** Sets the logging threshold; values outside the offered choices fall back to the default. */
+  setInputLatencyThresholdMs: (v: number) => void;
   /** Enables or disables automatic additions to active sidebar status filters. */
   setDynamicStatusFilter: (v: boolean) => void;
   setMaxLiveTabs: (v: number) => void;
@@ -1697,6 +1709,8 @@ function persistAndApplyVisual(getState: () => TermStore) {
     termRenderer: s.termRenderer,
     redrawOnReveal: s.redrawOnReveal,
     outputScheduler: s.outputScheduler,
+    inputLatencyLog: s.inputLatencyLog,
+    inputLatencyThresholdMs: s.inputLatencyThresholdMs,
     dynamicStatusFilter: s.dynamicStatusFilter,
     maxLiveTabs: s.maxLiveTabs,
     defaultShell: s.defaultShell,
@@ -1723,6 +1737,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     chatChromeDefault: s.chatChromeDefault,
     planExecutePrefs: s.planExecutePrefs,
     memoryPrefs: s.memoryPrefs,
+    sessionTitlePrefs: s.sessionTitlePrefs,
     referSummary: s.referSummary,
     showSystemResources: s.showSystemResources,
     infoCollapsed: s.infoCollapsed,
@@ -1846,24 +1861,25 @@ function statusSnapshot(
 }
 
 /**
- * Adds a session the user just created to every status-filtered sidebar view, so it stays under its parent while
- * a filter is active. It leaves again only when that view's snapshot is rebuilt (Refresh Status, the pane refresh
- * button, or a filter change), matching how existing snapshot members behave.
+ * Adds a session or group the user just created to every status-filtered sidebar view, so it stays under its parent
+ * while a filter is active. Session and group IDs are both UUIDs, so they share one snapshot map. A node leaves again
+ * only when that view's snapshot is rebuilt (Refresh Status, the pane refresh button, or a filter change); rebuilt
+ * snapshots hold sessions only, so a kept group then shows only when a session inside it matches.
  */
 function keepInStatusFilters(
   state: Pick<
     TermStore,
     "sidebarTreeViews" | "primarySidebarTreeViewId" | "statusFilterIds"
   >,
-  sessionId: string,
+  nodeId: string,
 ): Pick<TermStore, "sidebarTreeViews" | "statusFilterIds"> | null {
   if (!state.sidebarTreeViews.some((view) => view.statusFilter)) return null;
   let primaryIds = state.statusFilterIds;
   const sidebarTreeViews = state.sidebarTreeViews.map((view) => {
-    if (!view.statusFilter || view.statusFilterIds?.[sessionId]) return view;
+    if (!view.statusFilter || view.statusFilterIds?.[nodeId]) return view;
     const statusFilterIds = {
       ...(view.statusFilterIds ?? {}),
-      [sessionId]: true as const,
+      [nodeId]: true as const,
     };
     if (view.id === state.primarySidebarTreeViewId) primaryIds = statusFilterIds;
     return { ...view, statusFilterIds };
@@ -2255,6 +2271,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       await tree.setCollapsed("project", projectId, false).catch(() => {});
     }
     await get().loadTree();
+    set((state) => keepInStatusFilters(state, created.id) ?? {});
+    saveSidebarViewsTick(get);
     return created;
   },
 
@@ -4667,6 +4685,10 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set((state) => ({ memoryPrefs: mergeLaunchChoice(state.memoryPrefs, patch) }));
     persistAndApplyVisual(get);
   },
+  setSessionTitlePrefs: (agent, patch) => {
+    set((state) => ({ sessionTitlePrefs: { ...state.sessionTitlePrefs, [agent]: { ...state.sessionTitlePrefs[agent], ...patch } } }));
+    persistAndApplyVisual(get);
+  },
   setReferSummary: (patch) => {
     set((state) => ({ referSummary: { ...state.referSummary, ...patch } }));
     persistAndApplyVisual(get);
@@ -4715,6 +4737,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
   setOutputScheduler: (v) => {
     set({ outputScheduler: v });
+    persistAndApplyVisual(get);
+  },
+  setInputLatencyLog: (v) => {
+    set({ inputLatencyLog: v });
+    persistAndApplyVisual(get);
+  },
+  setInputLatencyThresholdMs: (v) => {
+    set({ inputLatencyThresholdMs: normalizeInputLatencyThreshold(v) });
     persistAndApplyVisual(get);
   },
   setDynamicStatusFilter: (v) => {

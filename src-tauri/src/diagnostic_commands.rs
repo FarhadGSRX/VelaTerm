@@ -225,6 +225,7 @@ const COMMANDS: &[&str] = &[
     "remove_worktree",
     "rename_node",
     "rename_session_with_agent",
+    "cancel_session_title",
     "session_title_options",
     "rename_path",
     "reorder_agent_presets",

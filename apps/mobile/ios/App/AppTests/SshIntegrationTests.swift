@@ -3,14 +3,16 @@ import Security
 import UIKit
 import Capacitor
 import SafariServices
+import WebKit
 @testable import VelaRemotePlugin
 
 /// Opt-in native account checks against the public service. Authorization is completed in the dedicated vlx-browser profile.
 final class RemoteAccountIntegrationTests: XCTestCase {
-    @MainActor private func account(_ plugin: VelaRemotePlugin, _ action: String, deviceId: String? = nil) async throws -> [String: Any] {
+    @MainActor private func account(_ plugin: VelaRemotePlugin, _ action: String, deviceId: String? = nil, grantId: String? = nil) async throws -> [String: Any] {
         try await withCheckedThrowingContinuation { continuation in
             var options: [String: Any] = ["action": action]
             if let deviceId { options["deviceId"] = deviceId }
+            if let grantId { options["grantId"] = grantId }
             let call = CAPPluginCall(callbackId: UUID().uuidString, methodName: "account", options: options, success: { result, _ in
                 continuation.resume(returning: result?.data ?? [:])
             }, error: { error in
@@ -20,15 +22,47 @@ final class RemoteAccountIntegrationTests: XCTestCase {
         }
     }
 
+    @MainActor private func connection(_ plugin: VelaRemotePlugin, _ action: String, id: String? = nil) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            var options: [String: Any] = [:]
+            if let id { options["id"] = id }
+            let call = CAPPluginCall(callbackId: UUID().uuidString, methodName: action, options: options, success: { _, _ in
+                continuation.resume()
+            }, error: { error in
+                continuation.resume(throwing: NSError(domain: error?.code ?? "connection", code: 1, userInfo: [NSLocalizedDescriptionKey: "Native connection failed"]))
+            })!
+            if action == "connect" { plugin.connect(call) } else { plugin.disconnect(call) }
+        }
+    }
+
+    @MainActor private func renderedProject(_ controller: UIViewController, name: String) async throws {
+        func webView(_ view: UIView) -> WKWebView? {
+            if let web = view as? WKWebView { return web }
+            for child in view.subviews { if let web = webView(child) { return web } }
+            return nil
+        }
+        let presented = try XCTUnwrap(controller.presentedViewController)
+        let web = try XCTUnwrap(webView(presented.view))
+        let encoded = String(decoding: try JSONSerialization.data(withJSONObject: name, options: .fragmentsAllowed), as: UTF8.self)
+        let expression = "!!document.querySelector('.m-app .m-header') && !document.querySelector('.m-load-status, .m-list[aria-busy=\"true\"]') && document.body.innerText.includes(\(encoded))"
+        for _ in 0..<60 {
+            if (try? await web.evaluateJavaScript(expression)) as? Bool == true { return }
+            try await Task.sleep(for: .seconds(1))
+        }
+        XCTFail("The expected remote project did not render")
+    }
+
     @MainActor func testNativeAuthorizationRecoveryAndLogout() async throws {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let marker = documents.appendingPathComponent("remote-account-fixture.json")
         guard FileManager.default.fileExists(atPath: marker.path) else { throw XCTSkip("Requires the explicit remote account fixture") }
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: marker)) as? [String: String] ?? [:]
         let requestFile = documents.appendingPathComponent("remote-account-request.json")
         let controller = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController as? CAPBridgeViewController)
         let plugin = try XCTUnwrap(controller.bridge?.plugin(withName: "VelaRemote") as? VelaRemotePlugin)
         let original = try plugin.vault.read()
         defer {
+            plugin.cancelAccountLogin()
             try? plugin.vault.write(original)
             try? FileManager.default.removeItem(at: requestFile)
             try? FileManager.default.removeItem(at: marker)
@@ -48,15 +82,17 @@ final class RemoteAccountIntegrationTests: XCTestCase {
         XCTAssertEqual(pending["pending"] as? Bool, true)
         var linked = false
         for _ in 0..<180 {
-            let result = try await account(restored, "poll")
-            if result["linked"] as? Bool == true { linked = true; break }
+            // Do not poll from the test: Safari must close even when WebView timers stop.
+            let stored = try plugin.vault.read()
+            if stored["accountToken"] != nil && stored["accountAttempt"] == nil && controller.presentedViewController == nil { linked = true; break }
             try await Task.sleep(for: .seconds(1))
         }
         XCTAssertTrue(linked, "Complete the fixture device authorization in vlx-browser")
         guard linked else { return }
         XCTAssertNil(try restored.vault.read()["accountAttempt"])
         XCTAssertNotNil(try restored.vault.read()["accountToken"])
-        _ = try await account(plugin, "poll")
+        let completed = try await account(plugin, "poll")
+        XCTAssertEqual(completed["linked"] as? Bool, true)
         try await Task.sleep(for: .seconds(1))
         XCTAssertNil(controller.presentedViewController)
         let status = try await account(VelaRemotePlugin(), "status")
@@ -64,13 +100,50 @@ final class RemoteAccountIntegrationTests: XCTestCase {
         let devices = try await account(restored, "devices")
         let list = try XCTUnwrap(devices["devices"] as? [[String: Any]])
         XCTAssertFalse(list.isEmpty)
-        let id = try XCTUnwrap(list.first?["id"] as? String)
-        _ = try await account(plugin, "open", deviceId: id)
-        XCTAssertTrue(controller.presentedViewController is SFSafariViewController)
+        if let name = fixture["projectName"] {
+            let access = list.flatMap { $0["access"] as? [[String: Any]] ?? [] }
+            let grant = try XCTUnwrap(access.first { $0["name"] as? String == name && $0["ready"] as? Bool == true })
+            _ = try await account(plugin, "open", grantId: try XCTUnwrap(grant["id"] as? String))
+            try await renderedProject(controller, name: name)
+        } else {
+            let id = try XCTUnwrap(list.first?["id"] as? String)
+            _ = try await account(plugin, "open", deviceId: id)
+            XCTAssertNotNil(controller.presentedViewController)
+        }
+        try await connection(plugin, "disconnect")
         _ = try await account(restored, "logout")
         let loggedOut = try await account(VelaRemotePlugin(), "status")
         XCTAssertEqual(loggedOut["linked"] as? Bool, false)
         XCTAssertNil(try restored.vault.read()["accountToken"])
+    }
+
+    @MainActor func testReviewHostSSHAndURL() async throws {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let marker = documents.appendingPathComponent("review-host-fixture.json")
+        guard FileManager.default.fileExists(atPath: marker.path) else { throw XCTSkip("Requires the explicit review host fixture") }
+        let fixture = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: marker)) as? [String: Any])
+        let rows = try XCTUnwrap(fixture["connections"] as? [[String: Any]])
+        let name = try XCTUnwrap(fixture["projectName"] as? String)
+        let controller = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController as? CAPBridgeViewController)
+        let plugin = try XCTUnwrap(controller.bridge?.plugin(withName: "VelaRemote") as? VelaRemotePlugin)
+        let original = try plugin.vault.read()
+        defer { try? plugin.vault.write(original); try? FileManager.default.removeItem(at: marker) }
+        try plugin.vault.update { store in
+            store["connections"] = rows
+            var keys = store["keys"] as? [String: String] ?? [:]
+            keys.merge(fixture["keys"] as? [String: String] ?? [:]) { _, fixture in fixture }
+            store["keys"] = keys
+        }
+        do {
+            for row in rows {
+                try await connection(plugin, "connect", id: try XCTUnwrap(row["id"] as? String))
+                try await renderedProject(controller, name: name)
+                try await connection(plugin, "disconnect")
+            }
+        } catch {
+            try? await connection(plugin, "disconnect")
+            throw error
+        }
     }
 }
 

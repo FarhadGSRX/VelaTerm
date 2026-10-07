@@ -103,6 +103,7 @@ export function FormModal({
   submittingLabel,
   onSubmit,
   onCancel,
+  onCancelSubmit,
   validate,
   formatSubmitError,
   onValuesChange,
@@ -115,6 +116,8 @@ export function FormModal({
   submittingLabel?: string;
   onSubmit: (values: Record<string, string>) => void | Promise<void>;
   onCancel: () => void;
+  /** Cancel an in-flight operation before closing; omitted operations remain non-dismissible. */
+  onCancelSubmit?: () => Promise<void>;
   /** Returns an error message to show below the fields and block submission, or null when the values are valid. */
   validate?: (values: Record<string, string>) => string | null;
   /** Formats submission failures for display; the default preserves the error message. */
@@ -138,10 +141,12 @@ export function FormModal({
   });
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const [cancelling, setCancelling] = useState(false);
+  const cancellingRef = useRef(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const changeValues = (changes: Record<string, string>) => {
-    if (submittingRef.current) return;
+    if (submittingRef.current || cancellingRef.current) return;
     setSubmitError(null);
     const next = { ...values, ...changes };
     setValues(next);
@@ -149,17 +154,29 @@ export function FormModal({
   };
   const changeValue = (key: string, value: string) => changeValues({ [key]: value });
   const cancel = () => {
-    if (!submittingRef.current) onCancel();
+    if (cancellingRef.current) return;
+    if (!submittingRef.current) { onCancel(); return; }
+    if (!onCancelSubmit) return;
+    cancellingRef.current = true;
+    setCancelling(true);
+    setSubmitError(null);
+    void onCancelSubmit().then(onCancel).catch(e => {
+      setSubmitError(formatSubmitError ? formatSubmitError(e) : e instanceof Error ? e.message : String(e));
+    }).finally(() => {
+      cancellingRef.current = false;
+      setCancelling(false);
+    });
   };
 
   const validationError = validate?.(values) ?? null;
   const error = validationError ?? submitError;
-  const canSubmit = !submitting && !validationError && fields.every(
+  const busy = submitting || cancelling;
+  const canSubmit = !busy && !validationError && fields.every(
     (f) => !f.required || values[f.key].trim().length > 0,
   );
 
   const submit = async () => {
-    if (!canSubmit || submittingRef.current) return;
+    if (!canSubmit || submittingRef.current || cancellingRef.current) return;
     // On submit, restore long dashes to `--` in fields marked normalizeDashes, such as launch arguments.
     const out: Record<string, string> = { ...values };
     for (const f of fields) {
@@ -171,7 +188,7 @@ export function FormModal({
     try {
       await onSubmit(out);
     } catch (e) {
-      setSubmitError(formatSubmitError ? formatSubmitError(e) : e instanceof Error ? e.message : String(e));
+      if (!cancellingRef.current) setSubmitError(formatSubmitError ? formatSubmitError(e) : e instanceof Error ? e.message : String(e));
     } finally {
       submittingRef.current = false;
       setSubmitting(false);
@@ -187,7 +204,7 @@ export function FormModal({
         aria-modal="true"
         aria-label={title}
         aria-describedby={description ? descriptionId : undefined}
-        aria-busy={submitting}
+        aria-busy={busy}
         style={{
           width: 380,
           maxWidth: "calc(100vw - 32px)",
@@ -203,6 +220,7 @@ export function FormModal({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.defaultPrevented) return;
+          if (e.key === "Enter" && e.target instanceof HTMLButtonElement) return;
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             void submit();
@@ -245,7 +263,7 @@ export function FormModal({
                   >
                     <input
                       type="checkbox"
-                      disabled={submitting}
+                      disabled={busy}
                       checked={checked}
                       onChange={(e) =>
                         changeValue(f.key, e.target.checked ? on : f.uncheckedValue ?? "")
@@ -270,7 +288,7 @@ export function FormModal({
               );
             }
             if (f.render) return <Field key={f.key} as="div" label={f.label} required={f.required}>
-              {f.render(values[f.key], v => changeValue(f.key, v), { values, changeValues, disabled: submitting })}
+              {f.render(values[f.key], v => changeValue(f.key, v), { values, changeValues, disabled: busy })}
             </Field>;
             return (
               <Field key={f.key} label={f.label} required={f.required}>
@@ -278,13 +296,13 @@ export function FormModal({
                   <SelectField
                     field={f}
                     value={values[f.key]}
-                    disabled={submitting}
+                    disabled={busy}
                     onChange={(v) => changeValue(f.key, v)}
                   />
                 ) : (
                 <input
                   className="vlx-input"
-                  disabled={submitting}
+                  disabled={busy}
                   autoCapitalize="none"
                   placeholder={f.placeholder}
                   autoFocus={f.autoFocus}
@@ -313,7 +331,7 @@ export function FormModal({
             marginTop: 18,
           }}
         >
-          <button className="vlx-btn" onClick={cancel} disabled={submitting}>
+          <button className="vlx-btn" onClick={cancel} disabled={cancelling || (submitting && !onCancelSubmit)}>
             {t("common.cancel")}
           </button>
           <button

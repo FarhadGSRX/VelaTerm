@@ -1,8 +1,9 @@
 //! Generate a replacement session title from conversation text in an isolated one-shot agent.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rusqlite::params;
@@ -49,6 +50,72 @@ impl Drop for Claim {
     }
 }
 
+struct TaskControl {
+    session_id: String,
+    owner: String,
+    cancelled: Arc<AtomicBool>,
+    registered: bool,
+    finished: bool,
+    touched: Instant,
+}
+static TASKS: OnceLock<Mutex<HashMap<(PathBuf, String), TaskControl>>> = OnceLock::new();
+struct Task { key: (PathBuf, String), cancelled: Arc<AtomicBool> }
+impl Task {
+    fn register(app: &AppCtx, id: &str, operation_id: &str, owner: &str) -> Result<Self, String> {
+        uuid::Uuid::parse_str(operation_id).map_err(|_| "session_title:invalid_operation")?;
+        let key = (app.data_dir()?, operation_id.to_string());
+        let mut tasks = TASKS.get_or_init(Default::default).lock().unwrap();
+        tasks.retain(|_, task| task.registered || task.touched.elapsed() < Duration::from_secs(300));
+        let task = tasks.entry(key.clone()).or_insert_with(|| TaskControl {
+            session_id: id.into(), owner: owner.into(), cancelled: Arc::new(AtomicBool::new(false)),
+            registered: false, finished: false, touched: Instant::now(),
+        });
+        if task.owner != owner || task.session_id != id { return Err("session_title:operation_owner".into()); }
+        if task.registered || task.finished { return Err("session_title:busy".into()); }
+        task.registered = true;
+        Ok(Self { key, cancelled: Arc::clone(&task.cancelled) })
+    }
+    fn check(&self) -> Result<(), String> {
+        if self.cancelled.load(Ordering::Acquire) { return Err("session_title:cancelled".into()); }
+        Ok(())
+    }
+    fn save(&self, app: &AppCtx, session: &Session, title: &str) -> Result<(), String> {
+        // Serialize cancellation with the final database write: an accepted cancel can never save.
+        let mut tasks = TASKS.get().unwrap().lock().unwrap();
+        self.check()?;
+        save_title(&app.db().conn.lock().unwrap(), session, title)?;
+        tasks.get_mut(&self.key).unwrap().finished = true;
+        Ok(())
+    }
+}
+impl Drop for Task {
+    fn drop(&mut self) {
+        let mut tasks = TASKS.get().unwrap().lock().unwrap();
+        if let Some(task) = tasks.get_mut(&self.key).filter(|task| task.finished) {
+            // A late cancel must report completion, rather than being accepted as an early cancel.
+            task.registered = false;
+            task.touched = Instant::now();
+        } else { tasks.remove(&self.key); }
+    }
+}
+
+/// Keep an early cancellation marker when the request reaches dispatch before its worker registers.
+pub fn cancel(app: &AppCtx, id: &str, operation_id: &str, owner: &str) -> Result<bool, String> {
+    uuid::Uuid::parse_str(operation_id).map_err(|_| "session_title:invalid_operation")?;
+    let key = (app.data_dir()?, operation_id.to_string());
+    let mut tasks = TASKS.get_or_init(Default::default).lock().unwrap();
+    tasks.retain(|_, task| task.registered || task.touched.elapsed() < Duration::from_secs(300));
+    let task = tasks.entry(key).or_insert_with(|| TaskControl {
+        session_id: id.into(), owner: owner.into(), cancelled: Arc::new(AtomicBool::new(true)),
+        registered: false, finished: false, touched: Instant::now(),
+    });
+    if task.owner != owner || task.session_id != id { return Err("session_title:operation_owner".into()); }
+    if task.finished { return Ok(false); }
+    task.cancelled.store(true, Ordering::Release);
+    task.touched = Instant::now();
+    Ok(true)
+}
+
 struct WorkDir(PathBuf);
 impl WorkDir {
     fn new(app: &AppCtx) -> Result<Self, String> {
@@ -69,12 +136,15 @@ impl Drop for WorkDir {
 }
 
 /// Generate and save once. No database lock is held while reading history or calling an agent.
-pub fn rename(app: &AppCtx, id: &str, agent: Option<SessionKind>, model: Option<&str>, effort: Option<&str>) -> Result<GeneratedTitle, String> {
+pub fn rename(app: &AppCtx, id: &str, agent: Option<SessionKind>, model: Option<&str>, effort: Option<&str>, operation_id: Option<&str>, owner: &str) -> Result<GeneratedTitle, String> {
+    let operation_id = operation_id.map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let task = Task::register(app, id, &operation_id, owner)?;
+    task.check()?;
     let _claim = Claim::acquire(app, id)?;
     let started = Instant::now();
     audit(id, "start", "program", "started", 0, 0, 0);
-    let result = generate_and_save(app, id, agent, model, effort);
-    audit(id, "finish", "program", if result.is_ok() { "success" } else { "failed" },
+    let result = generate_and_save(app, id, agent, model, effort, &task);
+    audit(id, "finish", "program", if result.is_ok() { "success" } else if task.cancelled.load(Ordering::Acquire) { "cancelled" } else { "failed" },
         1, usize::from(result.is_ok()), started.elapsed().as_millis() as u64);
     result
 }
@@ -123,7 +193,8 @@ fn selection_args(kind: SessionKind, selection: &mut super::session_settings::Se
         .map_err(|_| "session_title:invalid_selection".into())
 }
 
-fn generate_and_save(app: &AppCtx, id: &str, agent: Option<SessionKind>, model: Option<&str>, effort: Option<&str>) -> Result<GeneratedTitle, String> {
+fn generate_and_save(app: &AppCtx, id: &str, agent: Option<SessionKind>, model: Option<&str>, effort: Option<&str>, task: &Task) -> Result<GeneratedTitle, String> {
+    task.check()?;
     let session = repo::get_session(&app.db().conn.lock().unwrap(), id)?
         .ok_or("session_title:unavailable")?;
     if matches!(session.kind, SessionKind::Terminal | SessionKind::Browser) {
@@ -167,13 +238,13 @@ fn generate_and_save(app: &AppCtx, id: &str, agent: Option<SessionKind>, model: 
         "inputCount":messages.len(),"outputCount":0,"status":"started","durationMs":0
     }));
     let started = Instant::now();
-    let output = match headless::run_command(command, stdin.then_some(prompt.as_str()), TIMEOUT) {
+    let output = match headless::run_command_with_cancel(command, stdin.then_some(prompt.as_str()), TIMEOUT, Some(&task.cancelled)) {
         Ok(output) => output,
         Err(error) => {
-            let code = if matches!(error, HeadlessError::Timeout(_)) { "timeout" } else { "agent_unavailable" };
-            crate::diagnostics::record("ERROR", "session_title", json!({
+            let code = match error { HeadlessError::Timeout(_) => "timeout", HeadlessError::Cancelled => "cancelled", _ => "agent_unavailable" };
+            crate::diagnostics::record(if code == "cancelled" { "INFO" } else { "ERROR" }, "session_title", json!({
                 "sessionId":id,"step":"ai_failed","method":"AI",
-                "agent":kind.as_str(),"status":"failed","errorCode":if code=="timeout"{"timeout"}else{"operation_failed"},"inputCount":messages.len(),
+                "agent":kind.as_str(),"status":if code=="cancelled"{"cancelled"}else{"failed"},"errorCode":if code=="timeout"{"timeout"}else{"operation_failed"},"inputCount":messages.len(),
                 "outputCount":0,"durationMs":started.elapsed().as_millis() as u64
             }));
             return Err(format!("session_title:{code}"));
@@ -198,7 +269,7 @@ fn generate_and_save(app: &AppCtx, id: &str, agent: Option<SessionKind>, model: 
     }));
     let title = title?;
     let saving = Instant::now();
-    save_title(&app.db().conn.lock().unwrap(), &session, &title)?;
+    task.save(app, &session, &title)?;
     audit(id, "save", "program", "success", 1, 1, saving.elapsed().as_millis() as u64);
     app.emit(TREE_CHANGED, ());
     Ok(GeneratedTitle { title, agent: kind })
@@ -552,6 +623,39 @@ mod tests {
         assert_eq!(command.get_current_dir(), Some(path.as_path()));
         drop(dir);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn cancellation_before_registration_prevents_generation() {
+        let (_dir, app, session) = fixture();
+        let operation = uuid::Uuid::new_v4().to_string();
+        assert!(cancel(&app, &session.id, &operation, "test").unwrap());
+        assert_eq!(rename(&app, &session.id, None, None, None, Some(&operation), "test").err().unwrap(),
+            "session_title:cancelled");
+        assert!(!app.data_dir().unwrap().join("title-tasks").exists());
+        let _claim = Claim::acquire(&app, &session.id).unwrap();
+    }
+
+    #[test]
+    fn cancellation_is_scoped_and_serialized_with_saving() {
+        let (_dir, app, session) = fixture();
+        let operation = uuid::Uuid::new_v4().to_string();
+        let task = Task::register(&app, &session.id, &operation, "owner").unwrap();
+        assert!(cancel(&app, &session.id, &operation, "other-client").is_err());
+        assert!(cancel(&app, "another-session", &operation, "owner").is_err());
+        task.check().unwrap();
+        assert!(cancel(&app, &session.id, &operation, "owner").unwrap());
+        assert_eq!(task.save(&app, &session, "Unwanted title").unwrap_err(), "session_title:cancelled");
+        assert_eq!(repo::get_session_name(&app.db().conn.lock().unwrap(), &session.id).unwrap().as_deref(), Some("Original"));
+        drop(task);
+        let next = uuid::Uuid::new_v4().to_string();
+        let retry = Task::register(&app, &session.id, &next, "owner").unwrap();
+        assert!(cancel(&app, &session.id, &operation, "owner").unwrap());
+        retry.check().unwrap();
+        retry.save(&app, &session, "Generated").unwrap();
+        assert!(!cancel(&app, &session.id, &next, "owner").unwrap());
+        drop(retry);
+        assert!(!cancel(&app, &session.id, &next, "owner").unwrap());
     }
 
     #[test]

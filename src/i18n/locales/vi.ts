@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const vi: typeof en = {
+  "panel.averageOutput": "tốc độ đầu ra trung bình",
+  "panel.averageOutputHint": "Số token đầu ra mỗi giây được ước tính theo thời gian phản hồi đã đo, bao gồm token suy luận được báo cáo. Không tính thời gian thực thi công cụ và chờ người dùng. Không hiển thị giá trị nếu không thể đối chiếu chính xác lượng token đã dùng với thời gian đo. Đây không phải tốc độ giải mã thuần túy của mô hình.",
   "tree.newPlanExecuteSession": "Phiên lập kế hoạch/thực hiện mới…",
   "launch.splitTasks": "Tự động chia thành nhiều nhiệm vụ",
   "launch.splitTasksHint": "Phiên lập kế hoạch đề xuất các nhiệm vụ độc lập. Xem lại chỉ dẫn, tác nhân, mô hình và mức độ suy luận trước khi bắt đầu thực hiện.",
@@ -630,6 +632,10 @@ const vi: typeof en = {
   "settings.redrawOnReveal": "Vẽ lại khi chuyển thẻ",
   "settings.catAdvanced": "Nâng cao",
   "settings.outputScheduler": "Ưu tiên đầu ra tiền cảnh",
+  "settings.inputLatencyLog": "Ghi độ trễ nhập liệu",
+  "settings.inputLatencyThreshold": "Ngưỡng ghi",
+  "settings.inputLatencyLogHint":
+    "Mặc định tắt. Khi bật, các lần gõ phím trong chế độ hội thoại có chữ hiện ra chậm hơn ngưỡng sẽ được ghi vào nhật ký chẩn đoán. Chỉ lưu thời gian, không bao giờ lưu nội dung bạn gõ.",
   "settings.recordSessions": "Ghi nhật ký phiên",
   "settings.recordSessionsHint":
     "Mặc định tắt. Khi bật, đầu ra terminal được lưu vào tệp nhật ký để phát lại và tìm kiếm kho lưu trữ. Phiên terminal thường không bao giờ được ghi; phiên tác nhân đọc bản ghi hội thoại riêng.",
@@ -1786,6 +1792,8 @@ const vi: typeof en = {
   "chat.catalogFailed": "Cập nhật thất bại. Bạn vẫn có thể sử dụng danh mục trước đó.",
   "chat.catalogRefresh": "Làm mới",
   "chat.modelsCliOutdated": "Phiên bản Claude Code hiện tại không cung cấp được danh sách mô hình. Hãy cập nhật Claude Code để xem tất cả các mô hình khả dụng.",
+  "chat.modelsLoadFailed": "Không thể tải danh sách mô hình.",
+  "chat.modelsEmpty": "Không có mô hình nào khả dụng.",
   "chat.modelDefault": "Mô hình mặc định",
   "chat.mode.default": "Luôn hỏi",
   "chat.mode.agentDefault": "Mặc định của agent",

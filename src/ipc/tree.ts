@@ -199,9 +199,15 @@ export function deleteNode(kind: NodeKind, id: string): Promise<void> {
 }
 
 /** Generate and save a title from the backend's complete conversation snapshot. */
-export function renameSessionWithAgent(sessionId: string, agent?: SessionKind, model?: string, effort?: string): Promise<{ title: string; agent: SessionKind }> {
+export function renameSessionWithAgent(sessionId: string, agent?: SessionKind, model?: string, effort?: string, operationId?: string): Promise<{ title: string; agent: SessionKind }> {
   return invoke("rename_session_with_agent", { sessionId, ...(agent ? { agent } : {}),
-    ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}) });
+    ...(model !== undefined ? { model } : {}), ...(effort !== undefined ? { effort } : {}),
+    ...(operationId ? { operationId } : {}) });
+}
+
+/** Cancel only this client's title task; an accepted cancellation prevents saving its result. */
+export function cancelSessionTitle(sessionId: string, operationId: string): Promise<boolean> {
+  return invoke("cancel_session_title", { sessionId, operationId });
 }
 
 export function sessionTitleOptions(sessionId: string): Promise<{

@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const ko: typeof en = {
+  "panel.averageOutput": "평균 출력 속도",
+  "panel.averageOutputHint": "측정된 응답 시간을 기준으로 추정한 초당 출력 토큰 수입니다. 보고된 추론 토큰을 포함하며, 도구 실행 시간과 사용자 대기 시간은 제외합니다. 사용량과 측정 시간을 신뢰할 수 있게 대응시킬 수 없으면 표시하지 않습니다. 모델 자체의 디코딩 속도를 나타내는 값은 아닙니다.",
   "tree.newPlanExecuteSession": "새 계획/실행 세션…",
   "launch.splitTasks": "여러 작업으로 자동 분할",
   "launch.splitTasksHint": "계획 세션이 독립적인 작업을 제안합니다. 실행 전에 각 작업의 지시 사항, 에이전트, 모델 및 추론 강도를 검토할 수 있습니다.",
@@ -632,6 +634,10 @@ const ko: typeof en = {
   "settings.redrawOnReveal": "탭 전환 시 다시 그리기", // Redraw on tab switch
   "settings.catAdvanced": "고급", // Advanced
   "settings.outputScheduler": "포그라운드 우선 출력", // Foreground-priority output
+  "settings.inputLatencyLog": "입력 지연 기록", // Input latency log
+  "settings.inputLatencyThreshold": "기록 기준값", // Logging threshold
+  "settings.inputLatencyLogHint":
+    "기본값은 끔. 켜면 대화 보기에서 키를 누른 뒤 글자가 표시되기까지 기준값보다 오래 걸린 경우 진단 로그에 기록합니다. 시간만 기록하며 입력한 내용은 기록하지 않습니다.", // Input latency log hint
   "settings.recordSessions": "세션 로그 기록", // Record session logs
   "settings.recordSessionsHint":
     "기본값은 끔. 켜면 터미널 출력을 로그 파일로 저장해 보관 재생과 검색에 사용합니다. 일반 터미널 세션은 기록하지 않으며, 에이전트 세션은 자체 대화 기록을 읽습니다.", // Record session logs hint
@@ -1809,6 +1815,8 @@ const ko: typeof en = {
   "chat.catalogFailed": "업데이트하지 못했습니다. 기존 목록은 계속 사용할 수 있습니다.",
   "chat.catalogRefresh": "새로 고침",
   "chat.modelsCliOutdated": "현재 버전의 Claude Code는 모델 목록을 제공하지 않습니다. Claude Code를 업데이트하면 사용 가능한 모든 모델을 볼 수 있습니다.",
+  "chat.modelsLoadFailed": "모델 목록을 불러오지 못했습니다.",
+  "chat.modelsEmpty": "사용 가능한 모델이 없습니다.",
   "chat.modelDefault": "기본 모델",
   "chat.mode.default": "매번 확인",
   "chat.mode.agentDefault": "에이전트 기본값",

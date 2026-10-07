@@ -14,6 +14,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::models::SessionKind;
@@ -268,6 +269,8 @@ pub enum HeadlessError {
     Start(String),
     /// The process outlived its deadline and was killed.
     Timeout(Duration),
+    /// The caller cancelled the operation and its process tree was killed.
+    Cancelled,
     /// The process exited nonzero. Carries a trimmed tail of stderr for the caller to report.
     Failed { code: Option<i32>, stderr: String },
     /// The process succeeded but printed nothing usable.
@@ -284,6 +287,7 @@ impl std::fmt::Display for HeadlessError {
             ),
             Self::Start(e) => write!(f, "could not start the summarizer: {e}"),
             Self::Timeout(d) => write!(f, "summarizer timed out after {}s", d.as_secs()),
+            Self::Cancelled => write!(f, "summarizer was cancelled"),
             Self::Failed { code, stderr } => match code {
                 Some(c) => write!(f, "summarizer exited {c}: {stderr}"),
                 None => write!(f, "summarizer was terminated: {stderr}"),
@@ -349,10 +353,21 @@ pub fn run(
 /// Capture a prepared one-shot command with the same pipe draining and process-tree deadline.
 /// Callers own arguments, working directory and environment; this function only manages execution.
 pub(crate) fn run_command(
-    mut command: std::process::Command,
+    command: std::process::Command,
     stdin_prompt: Option<&str>,
     timeout: Duration,
 ) -> Result<String, HeadlessError> {
+    run_command_with_cancel(command, stdin_prompt, timeout, None)
+}
+
+/// Cancellation covers process execution and inherited pipes held open by helper processes.
+pub(crate) fn run_command_with_cancel(
+    mut command: std::process::Command,
+    stdin_prompt: Option<&str>,
+    timeout: Duration,
+    cancelled: Option<&AtomicBool>,
+) -> Result<String, HeadlessError> {
+    check_cancelled(cancelled)?;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -402,29 +417,37 @@ pub(crate) fn run_command(
         receiver
     });
 
-    let status = match wait_with_deadline(&mut child, timeout.saturating_sub(started.elapsed())) {
-        Some(status) => status,
-        None => {
+    let status = match wait_with_deadline(&mut child, timeout.saturating_sub(started.elapsed()), cancelled) {
+        Ok(status) => status,
+        Err(error) => {
             terminate(&mut child);
             let _ = child.wait();
-            return Err(HeadlessError::Timeout(timeout));
+            return Err(if matches!(error, HeadlessError::Cancelled) { error } else { HeadlessError::Timeout(timeout) });
         }
     };
 
     // Helpers may keep inherited pipes open after the main process exits. Collect both streams
     // within the original deadline instead of joining reader threads without a time limit.
-    let collect = |reader: Option<std::sync::mpsc::Receiver<String>>| match reader {
-        Some(reader) => reader.recv_timeout(timeout.saturating_sub(started.elapsed())),
-        None => Ok(String::new()),
+    let collect = |reader: Option<std::sync::mpsc::Receiver<String>>| -> Result<String, HeadlessError> {
+        let Some(reader) = reader else { return Ok(String::new()) };
+        loop {
+            check_cancelled(cancelled)?;
+            let remaining = timeout.saturating_sub(started.elapsed());
+            match reader.recv_timeout(remaining.min(Duration::from_millis(50))) {
+                Ok(output) => return Ok(output),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !remaining.is_zero() => {},
+                Err(_) => return Err(HeadlessError::Timeout(timeout)),
+            }
+        }
     };
     let (stdout, stderr) = match collect(out_reader)
         .and_then(|out| collect(err_reader).map(|err| (out, err)))
     {
         Ok(output) => output,
-        Err(_) => {
+        Err(error) => {
             terminate(&mut child);
             let _ = child.wait();
-            return Err(HeadlessError::Timeout(timeout));
+            return Err(error);
         }
     };
 
@@ -518,26 +541,33 @@ fn decode_output(shape: OutputShape, stdout: &str) -> Result<String, HeadlessErr
         .ok_or(HeadlessError::Empty)
 }
 
-/// Wait for the child, giving up after `timeout`. Returns None when the deadline passed first.
+fn check_cancelled(cancelled: Option<&AtomicBool>) -> Result<(), HeadlessError> {
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) { return Err(HeadlessError::Cancelled); }
+    Ok(())
+}
+
+/// Wait for the child, giving up after `timeout` or when cancellation is requested.
 ///
 /// `Child` has no timed wait, so poll it. The interval is short enough to feel immediate and long enough
 /// that a multi-minute run costs almost nothing to watch.
 fn wait_with_deadline(
     child: &mut std::process::Child,
     timeout: Duration,
-) -> Option<std::process::ExitStatus> {
+    cancelled: Option<&AtomicBool>,
+) -> Result<std::process::ExitStatus, HeadlessError> {
     const POLL: Duration = Duration::from_millis(50);
     let deadline = std::time::Instant::now() + timeout;
     loop {
+        check_cancelled(cancelled)?;
         match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
+            Ok(Some(status)) => return Ok(status),
             // A child that vanished cannot be waited for; treat it as finished rather than spinning to
             // the deadline.
-            Err(_) => return None,
+            Err(_) => return Err(HeadlessError::Timeout(timeout)),
             Ok(None) => {}
         }
         if std::time::Instant::now() >= deadline {
-            return None;
+            return Err(HeadlessError::Timeout(timeout));
         }
         std::thread::sleep(POLL.min(deadline.saturating_duration_since(std::time::Instant::now())));
     }
@@ -817,6 +847,26 @@ mod tests {
             "got: {result:?}"
         );
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_kills_helpers_during_execution_and_output_collection() {
+        for script in ["sleep 60 & wait", "sleep 60 & printf answer"] {
+            let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+            let flag = std::sync::Arc::clone(&cancelled);
+            let cancel = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                flag.store(true, Ordering::Release);
+            });
+            let mut command = crate::host::command("sh");
+            command.args(["-c", script]);
+            let started = std::time::Instant::now();
+            let result = run_command_with_cancel(command, None, Duration::from_secs(10), Some(&cancelled));
+            cancel.join().unwrap();
+            assert!(matches!(result, Err(HeadlessError::Cancelled)), "got: {result:?}");
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
     }
 
     #[cfg(unix)]

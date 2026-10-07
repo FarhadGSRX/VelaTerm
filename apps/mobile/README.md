@@ -154,6 +154,8 @@ URL/SSH 项目网页可通过来源受限的 `__VELATERM_NOTIFICATIONS__` 调用
 
 同日后续：用户要求继续修复并验证后，已更新公网账号中继与 nginx，修复主机首次建立 HTTPS 隧道时缺少 rustls provider 初始化的问题。正式域名上的真实 E2EE 会话已收到 Claude 回复；范围隔离、终端拒绝、访客重连及撤销界面通过。iOS 和 Android 模拟器分别通过 1 项真实原生账号集成测试，涵盖安全存储恢复、授权和退出。新版已安装到 iPhone 17 Pro，但启动仍因锁屏被拒绝；未连接 Android 真机。现有主机客户端也需更新到对应协议版本。详见[上线与联调报告](../../plans/processed/远程访问与手机真机联调_20260912.md)。
 
+2026-10-07：iOS 账号授权改由原生任务持续轮询，Safari 全屏覆盖应用、WebView 定时器暂停时仍能检查授权结果并返回应用。重新登录和退出会取消当前任务，旧请求的迟到响应不会覆盖新登录状态。移动端现有 43 项测试及 iOS 模拟器应用、集成测试源码的 `build-for-testing` 编译通过；本轮未运行真实账号、SSH 或 URL 集成测试，授权恢复与手机真机流程仍待验收。iOS 构建号为 3，应用版本仍为 0.1.0。
+
 原生账号集成测试默认不访问公网。显式运行前，应准备可删除的专用账号并在 vlx-browser 测试 Profile 登录；测试启动后会将待确认设备的 code 和 URL 写入 App 私有目录的 `remote-account-request.json`，由该 Profile 完成确认。iOS 需预先在 App Documents 目录创建 `remote-account-fixture.json` 标记，并只运行 `AppTests/RemoteAccountIntegrationTests`；测试结束删除标记。Android instrumentation 需显式传入 `-e remoteAccount true -e class com.velaterm.mobile.RemoteAccountIntegrationTest`。测试恢复原有安全存储，验证结束后还应删除专用账号和遗留测试文件。这些测试不代替物理手机中的第三方登录与后台恢复验收。
 
 ### Sign in with Apple（4.8 本地修复）

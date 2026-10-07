@@ -29,7 +29,7 @@ $ARGUMENTS
 ## Planning and execution mode
 
 When the user requests planning and execution, add `--plan-execute`. Keep this conversation as the
-initiator; a new planner organizes work and dispatches to persistent execution sessions. Independent review is enabled by default in a separate Review session; add `--no-review` when the user requests no review. Plan only collects context, coordinates and summarizes in either mode.
+initiator; a new planner organizes work and dispatches to persistent execution sessions. Independent review is disabled by default; add `--review` when the user requests review, which then runs in a separate Review session. Plan only collects context, coordinates and summarizes in either mode.
 Add `--split-tasks` when the user requests task decomposition. Do not plan, split or implement the task
 in this conversation, and do not use in-process subagents.
 

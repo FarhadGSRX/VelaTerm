@@ -1,6 +1,7 @@
 //! Turn accounting is owned by the backend. This component only formats the current snapshot.
 import { useEffect, useRef, useState } from "react";
 import { fmtTokens } from "../../format";
+import { useT } from "../../i18n";
 import { agentTurnStats, type AgentTurnStats } from "../../ipc/commands";
 import type { Session } from "../../types";
 import { Section } from "./parts";
@@ -14,6 +15,7 @@ export function TurnStatsView({ stats, state = "ready" }: {
   stats: AgentTurnStats | null;
   state?: "loading" | "waiting" | "error" | "ready";
 }) {
+  const t = useT();
   const percent = stats?.contextPercent;
   const tone = percent != null && percent >= 90 ? "crit" : percent != null && percent >= 70 ? "warn" : "ok";
   const context = `${contextTokens(stats?.contextTokens)} / ${contextTokens(stats?.contextLimit)}`;
@@ -69,8 +71,8 @@ export function TurnStatsView({ stats, state = "ready" }: {
             <span className="m-k">cache hit</span>
             <span className="m-v">{stats?.cacheHitPercent == null ? "—" : `${stats.cacheHitPercent.toFixed(1)}%`}</span>
           </div>
-          <div className="turn-metric" title="Average rate of completed, measured model streams, including reported reasoning tokens. Excludes tool execution and user waits. Unavailable when stream timing was not recorded.">
-            <span className="m-k">generation</span>
+          <div className="turn-metric" title={t("panel.averageOutputHint")}>
+            <span className="m-k">{t("panel.averageOutput")}</span>
             <span className="m-v">{rate == null ? "—" : `${rate.toFixed(1)} tok/s`}</span>
           </div>
           <div className="turn-metric" title="Distinct paths from successful, explicitly recorded file edits. Shell edits and child-agent changes may not be reported.">

@@ -18,6 +18,7 @@ vi.mock("../ipc/commands", () => ({
 vi.mock("../ipc/tree", () => ({
   listTree: vi.fn().mockResolvedValue({ projects: [], groups: [], sessions: [] }),
   createSession: vi.fn(),
+  createGroup: vi.fn(),
   setCollapsed: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../notify", () => ({
@@ -346,6 +347,20 @@ describe("membership updates for the sidebar status filter", () => {
     // The new session is idle, so a refresh drops it like any other stale member.
     useTermStore.getState().refreshSidebarTreeViewStatusMatch("main", createdId);
     expect(useTermStore.getState().statusFilterIds).toEqual({ [staleId]: true });
+  });
+
+  it("keeps a newly created group in status-filtered views", async () => {
+    const createdId = "filter-group";
+    vi.mocked(tree.createGroup).mockResolvedValueOnce({
+      id: createdId, projectId: "p", parentGroupId: null, name: "New group", sortOrder: 0, collapsed: false,
+    } as Awaited<ReturnType<typeof tree.createGroup>>);
+
+    await useTermStore.getState().addGroup("p", null, "New group");
+
+    const state = useTermStore.getState();
+    expect(state.statusFilterIds).toEqual({ [staleId]: true, [createdId]: true });
+    expect(state.sidebarTreeViews.find((view) => view.id === "main")?.statusFilterIds)
+      .toEqual({ [staleId]: true, [createdId]: true });
   });
 
   it("keeps the original static snapshot behavior when dynamic additions are disabled", () => {

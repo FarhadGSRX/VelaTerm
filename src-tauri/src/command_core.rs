@@ -1542,9 +1542,17 @@ pub fn chat_models(ctx: &AppCtx, session_id: &str) -> Result<serde_json::Value, 
             serde_json::to_value(models)
         }
         SessionKind::Codex => {
+            if let Some(models) = ctx.chat().live_codex_models(session_id) {
+                return serde_json::to_value(models?).map_err(|e| e.to_string());
+            }
             let bin = crate::agent::executable::for_session(ctx, &session);
             let args = crate::agent::inject::split_extra_args(session.agent_args.as_deref());
-            serde_json::to_value(crate::agent::codex_models::list(&bin, &args)?)
+            let root = {
+                let conn = ctx.db().conn.lock().unwrap();
+                repo::get_project_root(&conn, &session.project_id)?
+            };
+            let cwd = session.cwd.as_deref().filter(|c| !c.trim().is_empty()).or(root.as_deref());
+            serde_json::to_value(crate::agent::codex_models::list_in_dir(&bin, &args, cwd)?)
         }
         SessionKind::Opencode => {
             // The running server already knows its providers; without one, a short-lived server answers.

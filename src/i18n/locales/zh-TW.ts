@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const zhTW: typeof en = {
+  "panel.averageOutput": "平均輸出速度",
+  "panel.averageOutputHint": "依測得的回應時間估算每秒輸出的 token 數，包含智慧體回報的推理 token，不計工具執行和等待使用者的時間。用量與計時無法可靠對應時，不顯示數值。此指標並非模型的純解碼速度。",
   "tree.newPlanExecuteSession": "新增規劃/執行會話…",
   "launch.splitTasks": "自動拆分多個任務",
   "launch.splitTasksHint": "由規劃會話拆分獨立任務；執行前可逐項確認任務說明、智慧體、模型和推理強度。",
@@ -624,6 +626,10 @@ const zhTW: typeof en = {
   "settings.redrawOnReveal": "切回分頁時重繪", // Redraw on tab switch
   "settings.catAdvanced": "進階", // Advanced
   "settings.outputScheduler": "前台優先輸出", // Foreground-priority output
+  "settings.inputLatencyLog": "輸入延遲記錄", // Input latency log
+  "settings.inputLatencyThreshold": "記錄門檻", // Logging threshold
+  "settings.inputLatencyLogHint":
+    "預設關閉。開啟後，會話檢視中按鍵後文字顯示慢於門檻的情況會寫入診斷日誌。只記錄耗時，不記錄輸入的內容。", // Input latency log hint
   "settings.recordSessions": "記錄會話日誌", // Record session logs
   "settings.recordSessionsHint":
     "預設關。開啟後會把會話的終端輸出存成日誌檔，供歸檔回放與搜尋。普通終端會話一律不錄；agent 會話歸檔讀自己的對話記錄。", // Record session logs hint
@@ -1777,6 +1783,8 @@ const zhTW: typeof en = {
   "chat.catalogFailed": "更新失敗，仍可使用原有目錄。",
   "chat.catalogRefresh": "重新整理",
   "chat.modelsCliOutdated": "目前版本的 Claude Code 無法提供模型清單。更新 Claude Code 後即可查看所有可用模型。",
+  "chat.modelsLoadFailed": "無法載入模型清單。",
+  "chat.modelsEmpty": "目前沒有可用的模型。",
   "chat.modelDefault": "預設模型",
   "chat.mode.default": "每次詢問",
   "chat.mode.agentDefault": "智慧體預設",

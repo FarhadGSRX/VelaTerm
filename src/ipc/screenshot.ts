@@ -22,6 +22,9 @@ export const screenshotShortcutGet = () => invoke<ScreenshotShortcutStatus>("scr
 export const screenshotShortcutSet = (shortcut: string) =>
   invoke<ScreenshotShortcutStatus>("screenshot_shortcut_set", { shortcut });
 
+/** Start screen capture through the same native entry point as the global hotkey. */
+export const screenshotStart = () => invoke<void>("screenshot_start");
+
 // ── Overlay window (screenshot.html) ──
 
 /** PNG of the captured monitor. */

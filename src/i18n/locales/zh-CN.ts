@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const zhCN: typeof en = {
+  "panel.averageOutput": "平均输出速度",
+  "panel.averageOutputHint": "按测得的响应耗时估算每秒输出的 token 数，包含智能体报告的推理 token，不计工具执行和等待用户的时间。无法可靠匹配用量与计时时不显示数值。此指标并非模型的纯解码速度。",
   "tree.newPlanExecuteSession": "新建规划/执行会话…",
   "launch.splitTasks": "自动拆分多个任务",
   "launch.splitTasksHint": "由规划会话拆分独立任务；执行前可逐项确认任务说明、智能体、模型和推理强度。",
@@ -623,6 +625,10 @@ const zhCN: typeof en = {
   "settings.redrawOnReveal": "切回标签时重绘",
   "settings.catAdvanced": "高级",
   "settings.outputScheduler": "前台优先输出",
+  "settings.inputLatencyLog": "输入延迟记录",
+  "settings.inputLatencyThreshold": "记录阈值",
+  "settings.inputLatencyLogHint":
+    "默认关闭。开启后，会话视图中按键后文字显示慢于阈值的情况会写入诊断日志。只记录耗时，不记录输入的内容。",
   "settings.recordSessions": "记录会话日志",
   "settings.recordSessionsHint":
     "默认关。开启后会把会话的终端输出存成日志文件，供归档回放与搜索。普通终端会话一律不录；agent 会话归档读自己的对话记录。",
@@ -1776,6 +1782,8 @@ const zhCN: typeof en = {
   "chat.catalogFailed": "更新失败，仍可使用原有目录。",
   "chat.catalogRefresh": "刷新",
   "chat.modelsCliOutdated": "当前版本的 Claude Code 无法提供模型列表。更新 Claude Code 后即可查看全部可用模型。",
+  "chat.modelsLoadFailed": "无法加载模型列表。",
+  "chat.modelsEmpty": "暂无可用模型。",
   "chat.modelDefault": "默认模型",
   "chat.mode.default": "每次询问",
   "chat.mode.agentDefault": "智能体默认",

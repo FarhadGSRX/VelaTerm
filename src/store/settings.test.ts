@@ -109,6 +109,22 @@ describe("memoryPrefs sanitization", () => {
   });
 });
 
+describe("sessionTitlePrefs sanitization", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("keeps well-formed per-agent model and effort choices", () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ sessionTitlePrefs: { claude: { model: "opus", effort: 3 }, codex: "gpt-5", grok: { effort: "" } } }),
+    );
+    expect(loadSettings().sessionTitlePrefs).toEqual({ claude: { model: "opus" }, grok: { effort: "" } });
+  });
+
+  it("defaults to no remembered choices", () => {
+    expect(loadSettings().sessionTitlePrefs).toEqual({});
+  });
+});
+
 describe("reference summary settings", () => {
   beforeEach(() => localStorage.clear());
 

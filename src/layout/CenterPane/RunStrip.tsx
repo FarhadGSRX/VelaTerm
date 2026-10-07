@@ -5,7 +5,7 @@
 //! running: each command's label, how long it has run, its log, and a way to stop it. It takes no space
 //! while nothing runs.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Backdrop } from "../../components/Backdrop";
 import { StatusIndicator } from "../../components/StatusIndicator";
 import { useT } from "../../i18n";
@@ -13,6 +13,7 @@ import { runLogTail, runStop, type BackgroundRun, type RunLog } from "../../ipc/
 import { useTermStore } from "../../store/termStore";
 import type { SessionId } from "../../types";
 import { fmtElapsed } from "./session/TaskView";
+import { parseAnsi, spanCss } from "./ansiLog";
 import "./run-strip.css";
 
 /** How long the stop button waits for its confirming second click. */
@@ -129,6 +130,8 @@ function RunLogDialog({ label, onClose }: { label: string; onClose: () => void }
     if (el) el.scrollTop = el.scrollHeight;
   }, [log?.text]);
 
+  const spans = useMemo(() => (log?.text ? parseAnsi(log.text) : []), [log?.text]);
+
   const status = !log
     ? ""
     : log.running
@@ -157,7 +160,18 @@ function RunLogDialog({ label, onClose }: { label: string; onClose: () => void }
           <div className="run-log-failure">{failure}</div>
         ) : (
           <pre ref={text} className="run-log-text">
-            {log && !log.text ? t("term.runs.logEmpty") : log?.text}
+            {log && !log.text
+              ? t("term.runs.logEmpty")
+              : spans.map((span, i) => {
+                  const css = spanCss(span.style);
+                  return Object.keys(css).length ? (
+                    <span key={i} style={css}>
+                      {span.text}
+                    </span>
+                  ) : (
+                    span.text
+                  );
+                })}
           </pre>
         )}
       </div>

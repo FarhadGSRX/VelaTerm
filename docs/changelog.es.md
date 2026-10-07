@@ -1,8 +1,21 @@
+## v0.2.9 — 2026-10-07
+
+- ✨ El cambio de nombre con IA recuerda el modelo y el nivel de razonamiento elegidos para cada agente.
+- ⛔ La generación de títulos con IA se puede cancelar con Cancel, Esc o un clic fuera del diálogo, y después se puede volver a intentar.
+- 🧭 Los nuevos flujos Plan/Execute tienen el rol Review independiente desactivado por defecto y permiten activarlo en el diálogo de inicio o con `--review`.
+- 🤖 El selector de modelos de Chat muestra los estados de carga, error y lista vacía con Retry, y las opciones de Codex corresponden a la cuenta y la configuración de la sesión actual.
+- 📊 El panel Info muestra una estimación de la velocidad media de salida, incluidos los tokens de razonamiento registrados, o un guion cuando no se puede calcular.
+- 🩺 Los ajustes avanzados ofrecen un diagnóstico opcional de la latencia de entrada con un umbral ajustable, sin registrar el texto que escribe.
+- ✂️ La herramienta experimental de capturas de pantalla tiene un botón en la barra de título de las plataformas de escritorio Tauri compatibles, incluso cuando su atajo de teclado está desactivado.
+- 🌬️ Los indicadores cian de tareas en segundo plano usan la misma animación de pulsación en el árbol de sesiones, los filtros de estado y la barra de estado.
+- 📁 Los grupos creados con un filtro de estado activo permanecen visibles hasta actualizar el estado o cambiar el filtro, siempre que también coincidan con la búsqueda por nombre.
+- 🎨 Los registros de comandos en segundo plano muestran colores, estilos de texto y la última línea de progreso, y la barra de ejecución deja visible el indicador de foco del panel.
+
 ## v0.2.8 — 2026-10-06
 
 - 🪟 Windows: al volver a la ventana, el foco del teclado se mantiene donde está si ya se encuentra dentro de la página.
 
-- 🛡️ Windows: el antivirus Huorong ya no detecta VelaTerm ni vela-server como `Trojan/MSIL.ShellLoader.q`.
+- 🛡️ Windows: el antivirus Huorong ya no detecta VelaTerm ni vela-server como `Trojan/MSIL.ShellLoader.q`. Se trataba de un falso positivo: para ejecutar comandos de shell desde la vista de conversación, VelaTerm creaba cada proceso en estado suspendido y después lo reanudaba, una secuencia de llamadas que también utiliza el software malicioso para inyectar código. Ahora los procesos se inician de forma normal y se ha eliminado el código que provocaba la detección.
 
 - 🔕 Windows: al crear sesiones y actualizar la lista de modelos ya no se ejecuta PowerShell en segundo plano, y el estado de las sesiones de Cursor ahora se determina a partir de la salida del terminal, lo que puede ser algo menos preciso.
 

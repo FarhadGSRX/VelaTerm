@@ -2,15 +2,16 @@ import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@t
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session } from "../types";
 
-const mocks = vi.hoisted(() => ({ rename: vi.fn(), options: vi.fn(), models: vi.fn(), t: (key: string) => key }));
+const mocks = vi.hoisted(() => ({ rename: vi.fn(), cancel: vi.fn(), options: vi.fn(), models: vi.fn(), t: (key: string) => key }));
 const state = vi.hoisted(() => new Proxy({
   sessions: [] as Session[], projects: [], groups: [], agentPresets: [], agentDefaults: {},
   runtimes: {}, paneTrees: {}, sidebarTreeViews: [], ephemeralSessions: {}, openTabs: [], liveTabs: [],
+  sessionTitlePrefs: {},
 }, { get: (target, key) => key in target ? target[key as keyof typeof target] : vi.fn() }));
 vi.mock("../store/termStore", () => ({
   useTermStore: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state }),
 }));
-vi.mock("../ipc/tree", () => ({ renameSessionWithAgent: mocks.rename, sessionTitleOptions: mocks.options }));
+vi.mock("../ipc/tree", () => ({ renameSessionWithAgent: mocks.rename, cancelSessionTitle: mocks.cancel, sessionTitleOptions: mocks.options }));
 vi.mock("../ipc/launch", async importOriginal => ({ ...await importOriginal<object>(), launchModels: mocks.models }));
 vi.mock("../ipc/commands", async importOriginal => ({
   ...await importOriginal<object>(), listShells: vi.fn().mockResolvedValue([]), gitbashStatus: vi.fn().mockResolvedValue(null),
@@ -46,6 +47,7 @@ function options(available = true) {
 function openRoute(query = "?smartRename=session") { window.history.replaceState(null, "", `/${query}`); render(<SmartRenameRoute />); }
 beforeEach(() => {
   state.sessions = [session()]; mocks.rename.mockReset(); mocks.options.mockReset(); mocks.models.mockReset();
+  mocks.cancel.mockReset(); mocks.cancel.mockResolvedValue(true);
   mocks.options.mockResolvedValue(options());
   mocks.models.mockResolvedValue({ models: [{ id: "custom-model", label: "Custom", effortLevels: ["low", "high", "ultra"] }], effortLevels: ["low", "high", "ultra"] });
   window.history.replaceState(null, "", "/");
@@ -114,15 +116,52 @@ describe("AI session renaming", () => {
     const submit = screen.getByRole("button", { name: "common.rename" });
     fireEvent.click(submit); fireEvent.click(submit);
     expect(mocks.rename).toHaveBeenCalledTimes(1);
-    expect(mocks.rename).toHaveBeenCalledWith("session", "codex", "custom-model", "ultra");
+    expect(mocks.rename).toHaveBeenCalledWith("session", "codex", "custom-model", "ultra", expect.any(String));
     expect(screen.getByRole("status").textContent).toContain("sessionTitle.generating");
     expect(screen.getByRole("combobox", { name: "orch.agentLabel" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("combobox", { name: "spawn.modelLabel" })).toHaveProperty("disabled", true);
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-    expect(readSmartRenameRoute()).not.toBeNull();
     await act(async () => { finish({ title: "Generated", agent: "codex" }); });
     await waitFor(() => expect(readSmartRenameRoute()).toBeNull());
     expect(state.sessions[0].name).toBe("Existing title");
+  });
+
+  it.each(["button", "Escape"])("cancels a running task via %s and permits a fresh retry", async action => {
+    let fail!: (cause: Error) => void;
+    mocks.rename.mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }))
+      .mockResolvedValueOnce({ title: "Generated", agent: "claude" });
+    openRoute();
+    await screen.findByRole("combobox", { name: "spawn.modelLabel" });
+    fireEvent.click(screen.getByRole("button", { name: "common.rename" }));
+    const operationId = mocks.rename.mock.calls[0][4];
+    expect(screen.getByRole("button", { name: "common.cancel" })).toHaveProperty("disabled", false);
+    if (action === "button") fireEvent.click(screen.getByRole("button", { name: "common.cancel" }));
+    else fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(mocks.cancel).toHaveBeenCalledWith("session", operationId);
+    expect(readSmartRenameRoute()).not.toBeNull();
+    await act(async () => { fail(new Error("session_title:cancelled")); });
+    await waitFor(() => expect(readSmartRenameRoute()).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(state.sessions[0].name).toBe("Existing title");
+    act(() => { window.history.pushState(null, "", "/?smartRename=session"); window.dispatchEvent(new PopStateEvent("popstate")); });
+    await screen.findByRole("combobox", { name: "spawn.modelLabel" });
+    fireEvent.click(screen.getByRole("button", { name: "common.rename" }));
+    await waitFor(() => expect(readSmartRenameRoute()).toBeNull());
+    expect(mocks.rename.mock.calls[1][4]).not.toBe(operationId);
+  });
+
+  it("cancels on navigation and a late response cannot close a reopened dialog", async () => {
+    let finish!: (value: { title: string; agent: string }) => void;
+    mocks.rename.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    openRoute();
+    await screen.findByRole("combobox", { name: "spawn.modelLabel" });
+    fireEvent.click(screen.getByRole("button", { name: "common.rename" }));
+    act(() => { window.history.pushState(null, "", "/"); window.dispatchEvent(new PopStateEvent("popstate")); });
+    expect(mocks.cancel).toHaveBeenCalledWith("session", mocks.rename.mock.calls[0][4]);
+    act(() => { window.history.pushState(null, "", "/?smartRename=session"); window.dispatchEvent(new PopStateEvent("popstate")); });
+    await screen.findByRole("combobox", { name: "spawn.modelLabel" });
+    await act(async () => { finish({ title: "Late result", agent: "claude" }); });
+    expect(readSmartRenameRoute()?.sessionId).toBe("session");
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   it("retains the selections and original title after an error so the user can retry", async () => {

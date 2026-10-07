@@ -92,6 +92,10 @@ export interface MemoryPrefs {
   effort?: string;
 }
 
+/** Last model and reasoning effort chosen in the AI rename dialog, per agent. An agent without an entry
+ * falls back to the session's own model and effort. */
+export type SessionTitlePrefs = Partial<Record<SessionKind, { model?: string; effort?: string }>>;
+
 /** One global pre-summary choice for session references. Agent capabilities and CLI argument mapping
  * remain backend-owned; the client persists only the user's selection. */
 export interface ReferSummaryConfig {
@@ -128,6 +132,11 @@ export interface PersistedSettings {
   /** Foreground-priority output scheduling, enabled by default. Foreground output writes immediately,
    * while background output is batched to prevent busy agents from degrading focused typing. */
   outputScheduler: boolean;
+  /** Records composer keystrokes whose text appears later than `inputLatencyThresholdMs` in the
+   * diagnostic log. Off by default; only timings and a key category are written, never the text. */
+  inputLatencyLog: boolean;
+  /** Delay in milliseconds from keypress to the painted frame above which a keystroke is recorded. */
+  inputLatencyThresholdMs: number;
   /** Whether active sidebar status filters automatically include sessions that newly match. Existing
    * members remain stable until the filter itself changes. */
   dynamicStatusFilter: boolean;
@@ -193,6 +202,8 @@ export interface PersistedSettings {
   /** Last agent, model and reasoning effort chosen when organizing a session into the knowledge base,
    * so the next dialog opens on the setup that was used last time. */
   memoryPrefs: MemoryPrefs;
+  /** Last model and reasoning effort chosen for each agent in the AI rename dialog. */
+  sessionTitlePrefs: SessionTitlePrefs;
   /** Optional pre-summary used by `vrefer --ask`; there is one choice for every caller and target. */
   referSummary: ReferSummaryConfig;
   /** Whether the Info panel's Resources section shows the whole-machine group. Off hides those rows and
@@ -226,6 +237,16 @@ export const COMPOSER_CHIP_IDS = [
   "codexCredits",
 ] as const;
 export type ComposerChipId = (typeof COMPOSER_CHIP_IDS)[number];
+/** Delay thresholds offered for input latency logging, in milliseconds. */
+export const INPUT_LATENCY_THRESHOLDS = [20, 50, 100, 200, 500] as const;
+export const DEFAULT_INPUT_LATENCY_THRESHOLD_MS = 50;
+
+/** Keeps a stored threshold within the offered choices, falling back to the default. */
+export function normalizeInputLatencyThreshold(value: unknown): number {
+  return (INPUT_LATENCY_THRESHOLDS as readonly number[]).includes(value as number)
+    ? (value as number) : DEFAULT_INPUT_LATENCY_THRESHOLD_MS;
+}
+
 /** The chips that sat beside the message before the list became configurable, plus Tasks. */
 export const DEFAULT_COMPOSER_INLINE_CHIPS: ComposerChipId[] = ["model", "effort", "collaboration", "permission", "tasks"];
 /** Revision 1 made Tasks an inline chip by default. */
@@ -243,6 +264,8 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   termRenderer: "dom",
   redrawOnReveal: false,
   outputScheduler: true,
+  inputLatencyLog: false,
+  inputLatencyThresholdMs: DEFAULT_INPUT_LATENCY_THRESHOLD_MS,
   dynamicStatusFilter: true,
   maxLiveTabs: DEFAULT_MAX_LIVE_TABS,
   defaultShell: "",
@@ -269,6 +292,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   chatChromeDefault: false,
   planExecutePrefs: { plan: {}, exec: {}, review: {} },
   memoryPrefs: {},
+  sessionTitlePrefs: {},
   referSummary: { enabled: false, agent: "claude", model: "", effort: "" },
   showSystemResources: true,
   infoCollapsed: {},
@@ -296,6 +320,20 @@ function sanitizeLaunchChoice(input: unknown): MemoryPrefs {
   if (typeof source.agent === "string" && source.agent) result.agent = source.agent as SessionKind;
   if (typeof source.model === "string") result.model = source.model;
   if (typeof source.effort === "string") result.effort = source.effort;
+  return result;
+}
+
+function sanitizeSessionTitlePrefs(value: unknown): SessionTitlePrefs {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: SessionTitlePrefs = {};
+  for (const [agent, choice] of Object.entries(value as Record<string, unknown>)) {
+    if (!agent || !choice || typeof choice !== "object" || Array.isArray(choice)) continue;
+    const { model, effort } = choice as Record<string, unknown>;
+    const entry: { model?: string; effort?: string } = {};
+    if (typeof model === "string") entry.model = model;
+    if (typeof effort === "string") entry.effort = effort;
+    result[agent as SessionKind] = entry;
+  }
   return result;
 }
 
@@ -350,8 +388,11 @@ export function loadSettings(): PersistedSettings {
         : {};
     merged.planExecutePrefs = sanitizePlanExecutePrefs(parsed.planExecutePrefs);
     merged.memoryPrefs = sanitizeLaunchChoice(parsed.memoryPrefs);
+    merged.sessionTitlePrefs = sanitizeSessionTitlePrefs(parsed.sessionTitlePrefs);
     merged.referSummary = sanitizeReferSummary(parsed.referSummary);
     merged.composerInlineChips = sanitizeComposerInlineChips(parsed.composerInlineChips);
+    merged.inputLatencyLog = merged.inputLatencyLog === true;
+    merged.inputLatencyThresholdMs = normalizeInputLatencyThreshold(merged.inputLatencyThresholdMs);
     // A list saved before revision 1 gains Tasks at the end. The bumped revision is written with the next
     // save, so switching Tasks off again afterwards is kept.
     const inlineRevision = typeof parsed.composerInlineChipsRevision === "number" ? parsed.composerInlineChipsRevision : 0;

@@ -4,6 +4,7 @@ import { md } from "../../../markdownEngine";
 import type { ChatEvent, ChatPermission, ChatSnapshot } from "../../../ipc/chat";
 import type { SessionPermissionState } from "../../../hooks/useSessionPermissionState";
 import type { PermissionAnswer } from "./permissionCards";
+import type { ReactNode } from "react";
 
 vi.mock("../../../ipc/transport", async (original) => ({
   ...await original<typeof import("../../../ipc/transport")>(), invoke: vi.fn(), listen: vi.fn(), onTransportReconnect: vi.fn(),
@@ -12,12 +13,12 @@ vi.mock("./engineSwitch", () => ({ useEngineSwitch: () => ({ switchTo: vi.fn(), 
 // Exercise the pane's orchestration; menu layout is covered separately by the controls themselves.
 vi.mock("./controls", () => ({
   LevelBar: () => null,
-  ControlChip: ({ title, label, value, options, onPick, disabled }: {
+  ControlChip: ({ title, label, value, options, onPick, disabled, footer }: {
     title: string; label?: string; value: string; options: { value: string; label: string; tag?: string }[];
-    onPick: (value: string, keep: boolean) => void; disabled?: boolean;
-  }) => <select aria-label={title} data-label={label} value={value} disabled={disabled} onChange={(event) => onPick(event.target.value, true)}>
+    onPick: (value: string, keep: boolean) => void; disabled?: boolean; footer?: ReactNode;
+  }) => <><select aria-label={title} data-label={label} value={value} disabled={disabled} onChange={(event) => onPick(event.target.value, true)}>
     {options.map((option) => <option key={option.value} value={option.value}>{option.label}{option.tag ? ` — ${option.tag}` : ""}</option>)}
-  </select>,
+  </select>{footer}</>,
 }));
 vi.mock("./permissionCards", () => ({
   PermissionCard: ({ request, onAnswer }: {
@@ -86,6 +87,49 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+it("keeps the running model visible on discovery failure and restores choices after retry", async () => {
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let failModels = true;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_models" && failModels
+    ? Promise.reject(new Error("model discovery timed out")) : previous(command, args));
+  await mountPane("codex", null);
+  await screen.findByText("Could not load models.");
+  const chip = screen.getByRole("combobox", { name: "Model" });
+  expect(chip.getAttribute("data-label")).toBe("old-model");
+  expect(chip.querySelectorAll("option")).toHaveLength(0);
+  expect(useTermStore.getState().chatModelByKind.codex).toBeUndefined();
+  failModels = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(chip.getAttribute("data-label")).toBe("Old"));
+  expect(screen.queryByText("Could not load models.")).toBeNull();
+  fireEvent.change(chip, { target: { value: "new-model" } });
+  await act(async () => complete());
+  expect(chip.getAttribute("data-label")).toBe("New");
+});
+
+it("keeps a model entry and retry action when discovery returns an empty catalogue", async () => {
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_models"
+    ? Promise.resolve([]) as Promise<never> : previous(command, args));
+  await mountPane("codex", null);
+  await screen.findByText("No models are available.");
+  expect(screen.getByRole("combobox", { name: "Model" }).getAttribute("data-label")).toBe("old-model");
+  expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+});
+
+it("retries discovery when the native session becomes ready", async () => {
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let failModels = true;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_models" && failModels
+    ? Promise.reject(new Error("Codex is still starting")) : previous(command, args));
+  await mountPane("codex", null);
+  await screen.findByText("Could not load models.");
+  failModels = false;
+  act(() => eventCallback({ type: "session", agentSessionId: "thread-1", model: "old-model" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Model" }).getAttribute("data-label")).toBe("Old"));
+  expect(screen.queryByText("Could not load models.")).toBeNull();
+});
 
 it("replays newer events over a late snapshot without losing history or restoring rewound rows", async () => {
   let finishSnapshot!: (value: unknown) => void;

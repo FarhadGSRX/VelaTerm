@@ -2501,6 +2501,19 @@ impl ChatManager {
         (!list.is_empty()).then(|| crate::agent::claude_models::from_live(&list))
     }
 
+    /// Use the session's own provider configuration and account when a Codex process is alive.
+    /// A live query failure must remain visible instead of launching a differently configured peer.
+    pub fn live_codex_models(&self, session_id: &str) -> Option<Result<Vec<crate::agent::codex_models::CodexModel>, String>> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        if proc.kind != SessionKind::Codex || !proc.alive.load(Ordering::Relaxed) { return None; }
+        if !proc.codex_initialized.load(Ordering::Relaxed) {
+            return Some(Err("Codex is still starting. Please retry when the session is ready.".into()));
+        }
+        Some(proc.request_and_wait("model_list", |id| {
+            json!({"id":id,"method":"model/list","params":{}})
+        }).map(|result| crate::agent::codex_models::parse_models(&result)))
+    }
+
     /// Add a measured stream rate when this process observed matching output and usage events.
     pub fn enrich_turn_stats(&self, session_id: &str, stats: &mut crate::agent::transcript::TurnStats) {
         let proc = self.sessions.lock().unwrap().get(session_id).cloned();
@@ -4638,6 +4651,7 @@ fn handle_codex_notification(
     if method == "serverRequest/resolved" {
         let Some(id) = params.get("requestId") else { return };
         let key = codex_protocol::request_key(id);
+        proc.extras.lock().unwrap().generation.codex_request_resolved(&key, now_ms());
         if proc.permissions.lock().unwrap().remove(&key).is_some() {
             emit(app, session_id, json!({"type":"permissionResolved","id":key}));
             emit_state(app, session_id, AgentState::Working);
@@ -5270,6 +5284,13 @@ fn handle_codex_request(
     payload["_codexRequestId"] = request_id;
     payload["_codexMethod"] = json!(method);
     payload["_codexParams"] = params.clone();
+    // Only blocking requests for the root turn affect its output throughput estimate.
+    let root = proc.agent_session_id.lock().unwrap().clone();
+    if codex_notification_thread_id(&params).is_some_and(|id| root.as_deref() == Some(id))
+        && params.get("isBlocking").and_then(Value::as_bool) != Some(false)
+    {
+        proc.extras.lock().unwrap().generation.codex_request(&key, now_ms());
+    }
     // File changes may be accepted for the rest of the session; commands carry their own, richer offers.
     if method == "item/fileChange/requestApproval" {
         payload["permission_suggestions"] = json!([{
@@ -7389,6 +7410,53 @@ mod tests {
         assert_eq!(tables, 0);
         drop(conn);
         manager.stop(&app, "s").unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn codex_model_discovery_uses_the_live_peer_without_changing_its_turn() {
+        let app = ctx("codex-live-models");
+        let (mut proc, stdout) = cat_process();
+        Arc::get_mut(&mut proc).unwrap().kind = SessionKind::Codex;
+        *proc.model.lock().unwrap() = Some("current-model".into());
+        proc.turn.lock().unwrap().running = true;
+        let manager = ChatManager::new();
+        manager.sessions.lock().unwrap().insert("s".into(), proc.clone());
+        let responder = proc.clone();
+        let worker = std::thread::spawn(move || {
+            for (index, line) in BufReader::new(stdout).lines().take(2).enumerate() {
+                let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
+                assert_eq!(request["method"], "model/list");
+                let response = if index == 0 {
+                    json!({"id":request["id"],"result":{"data":[{"id":"account-model","displayName":"Account model","supportedReasoningEfforts":[]}]}})
+                } else {
+                    json!({"id":request["id"],"error":{"code":-1,"message":"Models temporarily unavailable"}})
+                };
+                handle_codex_line(&app, "s", &responder, &response.to_string());
+            }
+        });
+        let listed = manager.live_codex_models("s").unwrap().unwrap();
+        assert_eq!(listed[0].id, "account-model");
+        assert_eq!(manager.live_codex_models("s").unwrap().unwrap_err(), "Models temporarily unavailable");
+        assert_eq!(proc.model.lock().unwrap().as_deref(), Some("current-model"));
+        assert!(proc.turn.lock().unwrap().running);
+        assert!(proc.pending.lock().unwrap().is_empty());
+        assert!(proc.waiters.lock().unwrap().is_empty());
+        proc.child.lock().unwrap().kill().unwrap();
+        proc.child.lock().unwrap().wait().unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn codex_model_discovery_distinguishes_startup_from_an_absent_peer() {
+        let manager = ChatManager::new();
+        assert!(manager.live_codex_models("s").is_none());
+        let proc = inert_process(SessionKind::Codex);
+        proc.codex_initialized.store(false, Ordering::Relaxed);
+        manager.sessions.lock().unwrap().insert("s".into(), proc.clone());
+        assert!(manager.live_codex_models("s").unwrap().unwrap_err().contains("still starting"));
+        proc.alive.store(false, Ordering::Relaxed);
+        assert!(manager.live_codex_models("s").is_none());
         proc.child.lock().unwrap().wait().unwrap();
     }
 

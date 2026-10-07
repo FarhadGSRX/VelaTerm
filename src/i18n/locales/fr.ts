@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const fr: typeof en = {
+  "panel.averageOutput": "débit moyen",
+  "panel.averageOutputHint": "Estimation du nombre de jetons produits par seconde sur la durée de réponse mesurée, y compris les jetons de raisonnement signalés. Le temps d’exécution des outils et l’attente de l’utilisateur sont exclus. Aucune valeur n’est affichée si l’utilisation et la durée ne peuvent pas être rapprochées de manière fiable. Il ne s’agit pas de la vitesse de décodage seule du modèle.",
   "tree.newPlanExecuteSession": "Nouvelle session planification/exécution…",
   "launch.splitTasks": "Diviser automatiquement en plusieurs tâches",
   "launch.splitTasksHint": "La session de planification propose des tâches indépendantes. Vérifiez les instructions, les agents, les modèles et l’effort de raisonnement avant de lancer l’exécution.",
@@ -634,6 +636,10 @@ const fr: typeof en = {
   "settings.redrawOnReveal": "Redessiner au changement d'onglet", // Redraw on tab switch
   "settings.catAdvanced": "Avancé", // Advanced
   "settings.outputScheduler": "Sortie prioritaire au premier plan", // Foreground-priority output
+  "settings.inputLatencyLog": "Journaliser la latence de saisie", // Input latency log
+  "settings.inputLatencyThreshold": "Seuil d'enregistrement", // Logging threshold
+  "settings.inputLatencyLogHint":
+    "Désactivé par défaut. Une fois activé, les frappes dans la vue conversation dont le texte s'affiche après le seuil sont consignées dans le journal de diagnostic. Seules les durées sont enregistrées, jamais le texte saisi.", // Input latency log hint
   "settings.recordSessions": "Enregistrer les journaux de session", // Record session logs
   "settings.recordSessionsHint":
     "Désactivé par défaut. Une fois activé, la sortie du terminal est enregistrée dans un fichier journal pour la relecture d'archive et la recherche. Les sessions de terminal simples ne sont jamais enregistrées ; les sessions d'agent lisent leur propre transcription.", // Record session logs hint
@@ -1841,6 +1847,8 @@ const fr: typeof en = {
   "chat.catalogFailed": "Échec de la mise à jour. Le catalogue précédent reste disponible.",
   "chat.catalogRefresh": "Actualiser",
   "chat.modelsCliOutdated": "Cette version de Claude Code ne peut pas fournir la liste de ses modèles. Mettez à jour Claude Code pour afficher tous les modèles disponibles.",
+  "chat.modelsLoadFailed": "Impossible de charger la liste des modèles.",
+  "chat.modelsEmpty": "Aucun modèle disponible.",
   "chat.modelDefault": "Modèle par défaut",
   "chat.mode.default": "Toujours demander",
   "chat.mode.agentDefault": "Par défaut de l'agent",

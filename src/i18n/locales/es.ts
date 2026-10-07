@@ -3,6 +3,8 @@
 import type en from "./en";
 
 const es: typeof en = {
+  "panel.averageOutput": "salida media",
+  "panel.averageOutputHint": "Estimación de los tokens generados por segundo durante el tiempo de respuesta medido, incluidos los tokens de razonamiento declarados. Excluye la ejecución de herramientas y la espera del usuario. No se muestra ningún valor si el uso y el tiempo no se pueden relacionar de forma fiable. No representa la velocidad de decodificación pura del modelo.",
   "tree.newPlanExecuteSession": "Nueva sesión de planificación/ejecución…",
   "launch.splitTasks": "Dividir automáticamente en varias tareas",
   "launch.splitTasksHint": "La sesión de planificación propone tareas independientes. Revise las instrucciones, los agentes, los modelos y el esfuerzo de razonamiento antes de iniciar la ejecución.",
@@ -634,6 +636,10 @@ const es: typeof en = {
   "settings.redrawOnReveal": "Redibujar al cambiar de pestaña", // Redraw on tab switch
   "settings.catAdvanced": "Avanzado", // Advanced
   "settings.outputScheduler": "Salida con prioridad en primer plano", // Foreground-priority output
+  "settings.inputLatencyLog": "Registrar la latencia de escritura", // Input latency log
+  "settings.inputLatencyThreshold": "Umbral de registro", // Logging threshold
+  "settings.inputLatencyLogHint":
+    "Desactivado por defecto. Si se activa, las pulsaciones en la vista de conversación cuyo texto tarda más que el umbral en aparecer se guardan en el registro de diagnóstico. Solo se guardan los tiempos, nunca lo que escribe.", // Input latency log hint
   "settings.recordSessions": "Registrar registros de sesión", // Record session logs
   "settings.recordSessionsHint":
     "Desactivado por defecto. Si se activa, la salida del terminal se guarda en un archivo de registro para reproducción de archivo y búsqueda. Las sesiones de terminal normales nunca se graban; las sesiones de agente leen su propia transcripción.", // Record session logs hint
@@ -1838,6 +1844,8 @@ const es: typeof en = {
   "chat.catalogFailed": "No se pudo actualizar. El catálogo anterior sigue disponible.",
   "chat.catalogRefresh": "Actualizar",
   "chat.modelsCliOutdated": "Esta versión de Claude Code no puede mostrar su lista de modelos. Actualice Claude Code para ver todos los modelos disponibles.",
+  "chat.modelsLoadFailed": "No se pudo cargar la lista de modelos.",
+  "chat.modelsEmpty": "No hay modelos disponibles.",
   "chat.modelDefault": "Modelo predeterminado",
   "chat.mode.default": "Preguntar siempre",
   "chat.mode.agentDefault": "Predeterminado del agente",

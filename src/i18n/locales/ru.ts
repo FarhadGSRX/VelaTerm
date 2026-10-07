@@ -13,6 +13,8 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const ru: typeof en = {
+  "panel.averageOutput": "средняя скорость вывода",
+  "panel.averageOutputHint": "Оценка количества выходных токенов в секунду за измеренное время ответа, включая сообщённые токены рассуждений. Время выполнения инструментов и ожидания пользователя не учитывается. Значение не отображается, если данные об использовании токенов нельзя надёжно сопоставить с измеренным временем. Это не скорость декодирования самой модели.",
   "tree.newPlanExecuteSession": "Новая сессия планирования/выполнения…",
   "launch.splitTasks": "Автоматически разделить на несколько задач",
   "launch.splitTasksHint": "Сеанс планирования предложит независимые задачи. Перед запуском проверьте инструкции, агентов, модели и глубину рассуждений.",
@@ -642,6 +644,10 @@ const ru: typeof en = {
   "settings.redrawOnReveal": "Перерисовка при возврате к вкладке", // Redraw on tab switch
   "settings.catAdvanced": "Дополнительно", // Advanced
   "settings.outputScheduler": "Приоритет вывода активного терминала", // Foreground-priority output
+  "settings.inputLatencyLog": "Журнал задержки ввода", // Input latency log
+  "settings.inputLatencyThreshold": "Порог записи", // Logging threshold
+  "settings.inputLatencyLogHint":
+    "По умолчанию выключено. Когда включено, нажатия клавиш в виде беседы, текст которых появляется позже порога, записываются в журнал диагностики. Сохраняется только время, введённый текст не сохраняется.", // Input latency log hint
   "settings.recordSessions": "Запись журналов сессий", // Record session logs
   "settings.recordSessionsHint":
     "По умолчанию выключено. Когда включено, вывод терминала сохраняется в файл журнала для воспроизведения из архива и поиска. Обычные сессии терминала никогда не записываются; сессии агента читают собственную расшифровку.", // Record session logs hint
@@ -1843,6 +1849,8 @@ const ru: typeof en = {
   "chat.catalogFailed": "Не удалось обновить каталог. Предыдущий каталог остаётся доступным.",
   "chat.catalogRefresh": "Обновить",
   "chat.modelsCliOutdated": "Эта версия Claude Code не предоставляет список моделей. Обновите Claude Code, чтобы увидеть все доступные модели.",
+  "chat.modelsLoadFailed": "Не удалось загрузить список моделей.",
+  "chat.modelsEmpty": "Нет доступных моделей.",
   "chat.modelDefault": "Модель по умолчанию",
   "chat.mode.default": "Всегда спрашивать",
   "chat.mode.agentDefault": "По умолчанию агента",

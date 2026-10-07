@@ -31,7 +31,7 @@ pub struct TurnStats {
     pub context_tokens: Option<u64>,
     pub context_limit: Option<u64>,
     pub context_percent: Option<f64>,
-    /// Measured model stream rate; only supplied by a live engine with matching token counts.
+    /// Estimated output throughput over measured response time, including reported reasoning.
     pub generation_tokens_per_second: Option<f64>,
 }
 impl TurnStats {

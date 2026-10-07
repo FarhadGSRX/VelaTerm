@@ -55,7 +55,7 @@ const STATUS_CHIPS: {
   { st: "working", color: "var(--status-working)", pulse: true, labelKey: "tree.filterWorking" },
   { st: "asking", color: "var(--status-asking)", pulse: true, labelKey: "tree.filterAsking" },
   { st: "waiting", color: "var(--status-waiting)", pulse: false, labelKey: "tree.filterWaiting" },
-  { st: "background", color: "var(--status-background)", pulse: false, labelKey: "tree.filterBackground" },
+  { st: "background", color: "var(--status-background)", pulse: true, labelKey: "tree.filterBackground" },
 ];
 
 function StatusChips() {
@@ -213,12 +213,17 @@ export function SessionListPage({ onOpen, loading=false, error=null, onRefresh }
       subMemo.set(s.id, vis);
       return vis;
     };
+    // A group created while a status filter is active joins the snapshot so it stays visible even though it is empty.
+    const keptGroup = (g: Group) =>
+      statusFiltering && !!statusFilterIds && g.id in statusFilterIds &&
+      (!filter || g.name.toLowerCase().includes(filter));
     const memo = new Map<string, boolean>();
     const groupVisible = (g: Group): boolean => {
       const cached = memo.get(g.id);
       if (cached !== undefined) return cached;
       const vis =
         nodeNameMatch(g.name) ||
+        keptGroup(g) ||
         sessions.some(
           (s) => !s.parentSessionId && s.groupId === g.id && subtreeVisible(s),
         ) ||
