@@ -11,6 +11,7 @@
     "dev": "vite",
     "dev:tauri": "node scripts/run-sh.cjs dev-desktop.sh",
     "dev:desktop": "node scripts/run-sh.cjs dev-desktop.sh",
+    "build:fg": "node scripts/run-sh.cjs build-fg.sh",
     "dev:electron": "node scripts/run-sh.cjs dev-electron.sh",
     "dev:web": "node scripts/run-sh.cjs dev-serve.sh",
     "dev:server": "node scripts/run-sh.cjs dev-server.sh",

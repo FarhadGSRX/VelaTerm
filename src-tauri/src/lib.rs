@@ -886,17 +886,23 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             if let Err(e) = agent::spawn_cli::install(&data_dir) {
                 crate::diagnostic_warn!("failed to install built-in command shims (vspawn / vopen etc. will be unavailable): {e}");
             }
-            // Release builds auto-install the shell command on Windows/Linux; macOS requires explicit action.
-            #[cfg(all(not(debug_assertions), not(target_os = "macos")))]
-            match agent::spawn_cli::install_user_cli() {
-                Ok(status) => println!(
-                    "vela command ready: {}",
-                    status.path.as_deref().unwrap_or("PATH")
-                ),
-                Err(e) => crate::diagnostic_warn!("failed to install vela command in PATH: {e}"),
+            // The vela command and the skills live in user-global locations that every installed edition shares.
+            // A side-by-side edition built with VLX_USER_INTEGRATIONS=off leaves them to the primary install, so
+            // the two do not overwrite each other's copies on every launch.
+            let manage_user_integrations = option_env!("VLX_USER_INTEGRATIONS") != Some("off");
+            if manage_user_integrations {
+                // Release builds auto-install the shell command on Windows/Linux; macOS requires explicit action.
+                #[cfg(all(not(debug_assertions), not(target_os = "macos")))]
+                match agent::spawn_cli::install_user_cli() {
+                    Ok(status) => println!(
+                        "vela command ready: {}",
+                        status.path.as_deref().unwrap_or("PATH")
+                    ),
+                    Err(e) => crate::diagnostic_warn!("failed to install vela command in PATH: {e}"),
+                }
+                // Refresh bundled skills in both Claude/Codex user directories on every version.
+                agent::spawn_cli::refresh_installed_skills();
             }
-            // Refresh bundled skills in both Claude/Codex user directories on every version.
-            agent::spawn_cli::refresh_installed_skills();
 
             // On Windows, register the bundled minimal Git Bash tree beside the executable and use it
             // in place. Avoid the former ~326 MB copy into data_dir and Defender scan on every variant

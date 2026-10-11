@@ -29,6 +29,8 @@ fn main() {
 
     // Rerun when the externally injected value changes.
     println!("cargo:rerun-if-env-changed=VLX_GIT_COMMIT");
+    // lib.rs reads this with option_env! to decide whether this edition manages the shared vela command and skills.
+    println!("cargo:rerun-if-env-changed=VLX_USER_INTEGRATIONS");
     // Rerun when Git HEAD changes so incremental builds do not retain a stale commit. In a normal clone this is
     // `<repo>/.git/HEAD` (build.rs runs from src-tauri, hence one parent). This is best-effort: in a worktree,
     // `.git` is a file rather than a directory, so Cargo ignores the missing path and an incremental build may not
