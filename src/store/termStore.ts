@@ -29,7 +29,7 @@ import {
   type SessionStateBatch,
 } from "../ipc/sessionState";
 import type { BackgroundRun } from "../ipc/runs";
-import { pushSetting } from "../ipc/settingsSync";
+import { flushNow, pushSetting } from "../ipc/settingsSync";
 import { isTauri } from "../ipc/transport";
 import { env } from "../platform";
 import { genId } from "../genId";
@@ -83,6 +83,7 @@ import {
   type InspectorTab,
   type NavLayout,
   type PaneStyle,
+  type SettingsTab,
   type ResolvedTheme,
   type Theme,
 } from "../theme";
@@ -926,6 +927,11 @@ interface TermStore {
    * only the one unpinned session slot is reusable.
    */
   pinnedTabs: SessionId[];
+  /** Tab kept visible beside whatever tab is active, so it survives single-tab session swapping.
+   * In-memory only: tab IDs are not stable across a restart, so persisting this would dangle. */
+  stickyTabId: SessionId | null;
+  /** Width of the sticky region as a percentage of the stage. */
+  stickySize: number;
   /**
    * Status notice after automatic background-tab eviction. Timestamp retriggers notices for repeated labels.
    */
@@ -1055,6 +1061,9 @@ interface TermStore {
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
   inspectorTab: InspectorTab;
+  settingsTab: SettingsTab;
+  /** Files pinned to the top of the file tree, keyed by project ID. */
+  favoritePaths: Record<string, string[]>;
   /** Single-tab mode: reuse the session slot and keep replaced tabs alive in the background. */
   singleTabMode: boolean;
   /** Terminal renderer: stable DOM or accelerated WebGL with GPU context limits. */
@@ -1070,8 +1079,10 @@ interface TermStore {
   dynamicStatusFilter: boolean;
   /** Configurable limit for background live tabs. */
   maxLiveTabs: number;
-  /** Default shell path/name for scratch terminals; empty means system default. Explicit creation flows may override it. */
+  /** Default shell path/name for Terminal sessions; empty means system default. Explicit creation flows may override it. */
   defaultShell: string;
+  /** Default shell path/name for local-agent sessions; empty means the platform default. */
+  agentShell: string;
   /** Platform shells discovered once at startup for the inline selector. */
   shells: ShellOption[];
   /** Interface monospace font, or `null` for the default stack. */
@@ -1495,6 +1506,13 @@ interface TermStore {
   setDividerStyle: (v: DividerStyle) => void;
   setNavLayout: (v: NavLayout) => void;
   setInspectorTab: (v: InspectorTab) => void;
+  setSettingsTab: (v: SettingsTab) => void;
+  /** Keeps `tabId` visible alongside the active tab, or clears the sticky slot with null. */
+  setStickyTab: (tabId: SessionId | null) => void;
+  /** Resizes the sticky region, clamped so neither side can be squeezed away. */
+  resizeSticky: (pct: number) => void;
+  /** Pins or unpins a file at the top of `projectId`'s file tree. */
+  toggleFavoritePath: (projectId: string, path: string) => void;
   /** Toggles persisted single-tab mode. */
   setSingleTabMode: (v: boolean) => void;
   /** Toggles confirmation before spawning child sessions. */
@@ -1549,6 +1567,7 @@ interface TermStore {
   setMaxLiveTabs: (v: number) => void;
   /** Sets the persisted default terminal shell; empty means system default. */
   setDefaultShell: (v: string) => void;
+  setAgentShell: (v: string) => void;
   /** Interface font family; empty or `null` uses the default stack. */
   setUiFontFamily: (v: string | null) => void;
   /** Interface font size in pixels; `null` follows density. */
@@ -1705,6 +1724,8 @@ function persistAndApplyVisual(getState: () => TermStore) {
     dividerStyle: s.dividerStyle,
     navLayout: s.navLayout,
     inspectorTab: s.inspectorTab,
+    settingsTab: s.settingsTab,
+    favoritePaths: s.favoritePaths,
     singleTabMode: s.singleTabMode,
     termRenderer: s.termRenderer,
     redrawOnReveal: s.redrawOnReveal,
@@ -1714,6 +1735,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     dynamicStatusFilter: s.dynamicStatusFilter,
     maxLiveTabs: s.maxLiveTabs,
     defaultShell: s.defaultShell,
+    agentShell: s.agentShell,
     uiFontFamily: s.uiFontFamily,
     uiFontSize: s.uiFontSize,
     termFontFamily: s.termFontFamily,
@@ -1999,6 +2021,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
   focusedPaneId: null,
   liveTabs: [],
   pinnedTabs: [],
+  stickyTabId: null,
+  stickySize: 35,
   liveEvictNotice: null,
   liveEvictAsk: false,
   docTabs: {},
@@ -2993,6 +3017,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
             : (openTabs.find((t) => paneTrees[t]) ?? null);
       }
       const pinnedTabs = state.pinnedTabs.filter((t) => t !== tabId);
+      // A closed tab cannot stay in the sticky slot; it would render an empty region forever.
+      const stickyTabId = state.stickyTabId === tabId ? null : state.stickyTabId;
       return {
         openTabs,
         paneTrees,
@@ -3000,6 +3026,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
         browserTabs,
         taskTabs,
         pinnedTabs,
+        stickyTabId,
         activeTabId,
         lastActiveSessionTabId,
         activeSessionId,
@@ -3281,6 +3308,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       const openTabs = state.openTabs.filter((t) => t !== tabId);
       // Remove background tabs from the pinned set because they no longer participate in reuse selection.
       const pinnedTabs = state.pinnedTabs.filter((t) => t !== tabId);
+      // A closed tab cannot stay in the sticky slot; it would render an empty region forever.
+      const stickyTabId = state.stickyTabId === tabId ? null : state.stickyTabId;
       // Append uniquely to `liveTabs`, preserving the complete pane tree.
       let liveTabs = state.liveTabs.filter((t) => t !== tabId);
       liveTabs.push(tabId);
@@ -3330,6 +3359,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
       return {
         openTabs,
         pinnedTabs,
+        stickyTabId,
         liveTabs,
         paneTrees,
         activeTabId,
@@ -3532,6 +3562,12 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
 
   closeSession: (sessionId) => {
+    // A stopped process has nothing left to read, so retire its unread marker here rather than in each
+    // caller. Every way a session's process ends routes through this action -- natural exit and remote
+    // kill via usePtySession's listeners, End Process and Close Draft via sessionMenu -- and the tree
+    // node itself survives, so `focusReturned`'s sweep (which only drops IDs whose session is gone)
+    // never reaches it and the blue dot would otherwise sit on a dead session until it was opened.
+    get().clearNotification(sessionId);
     // Remove the exited process's pane, closing its tab when last, while leaving the app in an empty state.
     const { paneTrees, openTabs, liveTabs } = get();
     const loc = locate(paneTrees, openTabs, sessionId);
@@ -4233,6 +4269,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       openTabs: [...c.openTabs, ...s.openTabs.filter((id) => s.taskTabs[id] && !c.openTabs.includes(id))],
       liveTabs: c.liveTabs,
       pinnedTabs: c.pinnedTabs,
+      stickyTabId: c.stickyTabId,
+      stickySize: c.stickySize,
       activeTabId: inTaskTab ? s.activeTabId : c.activeTabId,
       lastActiveSessionTabId: c.lastActiveSessionTabId,
       activeSessionId,
@@ -4632,6 +4670,29 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set({ inspectorTab: v });
     persistAndApplyVisual(get);
   },
+  setStickyTab: (tabId) =>
+    set((s) => ({ stickyTabId: s.stickyTabId === tabId ? null : tabId })),
+
+  resizeSticky: (pct) => set({ stickySize: Math.max(15, Math.min(85, pct)) }),
+
+  toggleFavoritePath: (projectId, path) => {
+    const current = get().favoritePaths[projectId] ?? [];
+    const next = current.includes(path)
+      ? current.filter((p) => p !== path)
+      : [...current, path];
+    set((s) => {
+      const favoritePaths = { ...s.favoritePaths };
+      // Drop the key entirely on the last removal so an untouched project leaves nothing behind.
+      if (next.length === 0) delete favoritePaths[projectId];
+      else favoritePaths[projectId] = next;
+      return { favoritePaths };
+    });
+    persistAndApplyVisual(get);
+  },
+  setSettingsTab: (v) => {
+    set({ settingsTab: v });
+    persistAndApplyVisual(get);
+  },
   setSingleTabMode: (v) => {
     set({ singleTabMode: v });
     persistAndApplyVisual(get);
@@ -4758,6 +4819,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
   setDefaultShell: (v) => {
     set({ defaultShell: v });
     persistAndApplyVisual(get);
+    // The backend reads this from app_settings at spawn time, so the debounced write has to start now rather
+    // than 400 ms from now; the same reason `locateAndSaveAgentPath` flushes before restarting a session.
+    void flushNow();
+  },
+  setAgentShell: (v) => {
+    set({ agentShell: v });
+    persistAndApplyVisual(get);
+    void flushNow();
   },
   setUiFontFamily: (v) => {
     set({ uiFontFamily: v && v.trim() ? v.trim() : null });

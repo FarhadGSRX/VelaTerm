@@ -35,6 +35,7 @@ import type {
   DividerStyle,
   NavLayout,
   PaneStyle,
+  SettingsTab,
 } from "../../theme";
 import { Field, Seg, SectionTitle } from "./settingsParts";
 import {
@@ -104,12 +105,20 @@ function LangSelect() {
 }
 
 /** Default-shell picker listing the system default plus detected shells. The row hides itself when
- * detection turns up nothing. New terminals without an explicit choice use this value; tree and
- * edit-form entry points may still override it per launch. */
-function ShellSelect() {
+ * detection turns up nothing. New sessions without an explicit choice use this value; tree and
+ * edit-form entry points may still override it per launch.
+ *
+ * `target` selects which default is edited. Agent sessions are configured separately from terminals because
+ * the two wants differ — Git Bash terminals alongside PowerShell 7 agents is a normal pairing — and because
+ * WSL is excluded from the agent list: agent hooks and executable paths do not cross that boundary, the same
+ * reason the per-session edit form filters it out. */
+function ShellSelect({ target }: { target: "terminal" | "agent" }) {
   const t = useT();
-  const defaultShell = useTermStore((s) => s.defaultShell);
+  const isAgent = target === "agent";
+  const value = useTermStore((s) => (isAgent ? s.agentShell : s.defaultShell));
   const setDefaultShell = useTermStore((s) => s.setDefaultShell);
+  const setAgentShell = useTermStore((s) => s.setAgentShell);
+  const setValue = isAgent ? setAgentShell : setDefaultShell;
   const [shells, setShells] = useState<ShellOption[]>([]);
   useEffect(() => {
     let alive = true;
@@ -121,24 +130,28 @@ function ShellSelect() {
     };
   }, []);
 
-  if (!shells.length) return null;
+  const selectable = isAgent ? shells.filter((s) => !s.id.startsWith("wsl:")) : shells;
+  if (!selectable.length) return null;
 
   const options = [
     { value: "", label: t("tree.shellSystemDefault") },
-    ...shells.map((s) => ({ value: s.path, label: s.label })),
+    ...selectable.map((s) => ({ value: s.path, label: s.label })),
   ];
 
+  // One caption serves as both the visible label and the control's accessible name.
+  const label = t(isAgent ? "settings.agentShell" : "settings.defaultShell");
+
   return (
-    <Field label={t("settings.defaultShell")}>
+    <Field label={label}>
       <Select
-        value={defaultShell}
-        onChange={setDefaultShell}
+        value={value}
+        onChange={setValue}
         options={options}
         size="sm"
         width={160}
         menuWidth={172}
         align="right"
-        ariaLabel={t("settings.defaultShell")}
+        ariaLabel={label}
       />
     </Field>
   );
@@ -297,7 +310,7 @@ function AccentPicker({
 }
 
 
-type Cat = "appearance" | "terminal" | "conversation" | "behavior" | "advanced" | "agents" | "shortcuts" | "general";
+type Cat = SettingsTab;
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const fonts = useFontCatalog();
@@ -357,7 +370,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setChatFontSize = useTermStore((s) => s.setChatFontSize);
   const setChatLineHeight = useTermStore((s) => s.setChatLineHeight);
 
-  const [cat, setCat] = useState<Cat>("appearance");
+  // Section navigation stays local so switching is instant and does not round-trip through settings
+  // persistence; the store copy is only the seed on open and the sink on change, which is what makes
+  // Settings reopen on the section last viewed instead of always Appearance.
+  const savedTab = useTermStore((s) => s.settingsTab);
+  const setSettingsTab = useTermStore((s) => s.setSettingsTab);
+  const [cat, setCatLocal] = useState<Cat>(savedTab);
+  const setCat = (v: Cat) => {
+    setCatLocal(v);
+    setSettingsTab(v);
+  };
   const [skillOn, setSkillOn] = useState<boolean | null>(null);
   const [cliStatus, setCliStatus] = useState<VelaCommandStatus | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
@@ -542,7 +564,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   />
                 </Field>
                 <Field label={t("settings.uiFont")}>
-                  <FontSelect fonts={fonts} value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} />
+                  <FontSelect fonts={fonts} value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} proportional />
                 </Field>
                 <Field label={t("settings.uiFontSize")}>
                   <FontSizeStepper
@@ -563,7 +585,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 <SectionTitle>{t("settings.catTerminal")}</SectionTitle>
                 <ImagePasteModeField />
                 <CompletionModeField />
-                <ShellSelect />
+                <ShellSelect target="terminal" />
+                <ShellSelect target="agent" />
                 <Field label={t("settings.termFont")}>
                   <FontSelect fonts={fonts} value={termFontFamily} onChange={setTermFontFamily} label={t("settings.termFont")} />
                 </Field>
@@ -697,7 +720,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                 <div>
                   <SectionTitle>{t("settings.catBehavior")}</SectionTitle>
-                  <Field label={t("settings.tabs")}>
+                  <Field label={t("settings.tabs")} hint={t("settings.tabsHint")}>
                     <Seg<"single" | "multi">
                       value={singleTabMode ? "single" : "multi"}
                       options={[
@@ -707,7 +730,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                       onChange={(v) => setSingleTabMode(v === "single")}
                     />
                   </Field>
-                  <Field label={t("settings.dynamicStatusFilter")}>
+                  <Field label={t("settings.dynamicStatusFilter")} hint={t("settings.dynamicStatusFilterHint")}>
                     <Seg<"on" | "off">
                       value={dynamicStatusFilter ? "on" : "off"}
                       options={[
@@ -718,7 +741,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     />
                   </Field>
                   {singleTabMode && (
-                    <Field label={t("settings.maxLiveTabs")}>
+                    <Field label={t("settings.maxLiveTabs")} hint={t("settings.maxLiveTabsHint")}>
                       <Seg<string>
                         value={String(maxLiveTabs)}
                         options={[
@@ -731,7 +754,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                       />
                     </Field>
                   )}
-                  <Field label={t("settings.spawnConfirm")}>
+                  <Field label={t("settings.spawnConfirm")} hint={t("settings.spawnConfirmHint")}>
                     <Seg<"on" | "off">
                       value={spawnConfirm ? "on" : "off"}
                       options={[

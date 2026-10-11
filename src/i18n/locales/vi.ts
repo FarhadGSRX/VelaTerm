@@ -453,13 +453,22 @@ const vi: typeof en = {
   "settings.navTree": "Dạng cây",
   "settings.navCompact": "Gọn",
   "settings.tabs": "Thẻ",
+  "settings.tabsHint":
+    "“Đơn” dùng lại cùng một thẻ cho mọi phiên bạn mở và giữ các phiên còn lại chạy nền. “Đa” cấp cho mỗi phiên một thẻ riêng.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "Tự động thêm vào bộ lọc trạng thái",
+  "settings.dynamicStatusFilterHint":
+    "Bộ lọc trạng thái giữ lại những phiên khớp tại thời điểm bạn áp dụng. Khi bật, những phiên bắt đầu khớp về sau cũng được thêm vào. Phiên không bao giờ bị loại bỏ khi trạng thái thay đổi.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "Đơn",
   "settings.tabMulti": "Nhiều",
   "settings.maxLiveTabs": "Giới hạn nền",
+  "settings.maxLiveTabsHint":
+    "Số phiên tiếp tục chạy nền ở chế độ một thẻ. Vượt giới hạn, phiên rảnh lâu nhất sẽ bị đóng; những phiên đang chạy, đang chờ xác nhận hoặc có thông báo chưa đọc thì được giữ lại.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell mặc định",
+  "settings.agentShell": "Shell tác nhân",
   "settings.spawnConfirm": "Xác nhận trước khi tạo phiên",
   "settings.usageAuto": "Tự động làm mới mức sử dụng",
+  "settings.spawnConfirmHint":
+    "Áp dụng cho các phiên mà tác nhân sinh ra bằng vspawn, không phải thẻ bạn tự mở. Khi bật, bạn có thể xem lại và sửa lời nhắc trước khi phiên khởi chạy.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Làm mới mức sử dụng",
   "settings.autoContinue": "Tiếp tục sau khi đặt lại giới hạn",
   "settings.autoContinueHint": "Khi Claude hoặc Codex dừng do giới hạn sử dụng 5 giờ hoặc hằng tuần, tác vụ sẽ tự động tiếp tục sau khi giới hạn được đặt lại.",
@@ -710,6 +719,7 @@ const vi: typeof en = {
   "settings.scGlobalSearch": "Tìm mọi phiên",
   "settings.scSelectAllTerminal": "Chọn tất cả trong terminal", // Select all in terminal
   "settings.scSaveDoc": "Lưu tài liệu",
+  "settings.scFocusSidebar": "Chuyển tiêu điểm vào thanh bên",
   "settings.scRecording": "Nhấn phím…",
   "settings.scHint":
     "Nhấp vào phím tắt, rồi nhấn tổ hợp mới (bắt buộc Cmd/Ctrl).",
@@ -1169,6 +1179,8 @@ const vi: typeof en = {
   "tab.killBgTab": "Dừng thẻ nền này (các tiến trình sẽ kết thúc)",
   "tab.newBrowserTab": "Thẻ mới",
   "tab.refreshFile": "Làm mới tệp",
+  "tab.stick": "Giữ hiển thị khi chia đôi",
+  "tab.unstick": "Bỏ giữ hiển thị",
   "tab.closeOthers": "Đóng các thẻ khác",
   "tab.closeRight": "Đóng các thẻ bên phải",
   "tab.closeAll": "Đóng tất cả thẻ",
@@ -1340,6 +1352,10 @@ const vi: typeof en = {
   "files.nameLabel": "Tên",
   "files.newTooltip": "Tệp hoặc thư mục mới",
   "files.openInTerminal": "Mở trong terminal",
+  "files.favorite": "Thêm vào mục yêu thích",
+  "files.unfavorite": "Xóa khỏi mục yêu thích",
+  "files.favorites": "Mục yêu thích",
+  "files.collapseAll": "Thu gọn tất cả",
   "files.revealInFinder": "Hiện trong trình quản lý tệp",
   "files.copyPath": "Sao chép đường dẫn",
   "files.copyRelPath": "Sao chép đường dẫn tương đối",

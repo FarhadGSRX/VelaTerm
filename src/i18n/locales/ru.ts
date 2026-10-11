@@ -463,13 +463,22 @@ const ru: typeof en = {
   "settings.navTree": "Дерево", // Tree
   "settings.navCompact": "Компактно", // Compact
   "settings.tabs": "Вкладки", // Tabs
+  "settings.tabsHint":
+    "«Одна» переиспользует одну и ту же вкладку для каждой открываемой сессии, а остальные продолжают работать в фоне. «Несколько» даёт каждой сессии собственную вкладку.",  // Single reuses one tab for every session you open, keeping the others running in the background. Multi gives each session its own tab.
   "settings.dynamicStatusFilter": "Динамическое добавление в фильтр статуса",
+  "settings.dynamicStatusFilterHint":
+    "Фильтр статуса сохраняет сессии, которые подходили в момент его применения. Если включено, добавляются и те, что начали подходить позже. Сессии никогда не убираются из списка при смене статуса.",  // A status filter keeps the sessions that matched when you applied it. When on, sessions that begin matching later are added as well. Sessions are never removed as their status changes.
   "settings.tabSingle": "Одна", // Single
   "settings.tabMulti": "Несколько", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
+  "settings.maxLiveTabsHint":
+    "Сколько сессий продолжают работать в фоне в режиме одной вкладки. Сверх лимита закрывается самая давняя неактивная сессия; работающие, ожидающие подтверждения и с непрочитанным уведомлением сохраняются.",  // How many sessions keep running in the background in single-tab mode. Beyond the limit the oldest idle session is closed; ones that are working, awaiting confirmation, or holding an unread notification are kept.
   "settings.defaultShell": "Shell по умолчанию", // Default shell
+  "settings.agentShell": "Shell агента", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
+  "settings.spawnConfirmHint":
+    "Относится к сессиям, которые агент порождает через vspawn, а не к вкладкам, открытым вами. Если включено, запрос можно просмотреть и отредактировать до запуска сессии.",  // Applies to sessions an agent derives with vspawn, not to tabs you open yourself. When on, you can review and edit the prompt before the session starts.
   "settings.usageRefresh": "Usage refresh", // Usage refresh
   "settings.autoContinue": "Продолжать после сброса лимита", // Continue after limit resets
   "settings.autoContinueHint": "Если Claude или Codex останавливается из-за 5-часового или недельного лимита использования, задача автоматически продолжится после сброса лимита.", // When a 5-hour or weekly usage limit stops Claude or Codex, the task continues automatically after the limit resets.
@@ -725,6 +734,7 @@ const ru: typeof en = {
   "settings.scGlobalSearch": "Поиск по всем сеансам", // Search all sessions
   "settings.scSelectAllTerminal": "Выделить всё в терминале", // Select all in terminal
   "settings.scSaveDoc": "Сохранить документ", // Save document
+  "settings.scFocusSidebar": "Фокус на боковой панели", // Focus sidebar
   "settings.scRecording": "Нажмите клавиши…", // Press keys…
   "settings.scHint":
     "Нажмите на сочетание, затем нажмите новую комбинацию (нужен Cmd/Ctrl).", // hint
@@ -1207,6 +1217,8 @@ const ru: typeof en = {
   "tab.killBgTab": "Завершить эту фоновую вкладку (её процессы завершатся)", // Kill this background tab…
   "tab.newBrowserTab": "Новая вкладка", // New Tab
   "tab.refreshFile": "Обновить файл", // Refresh File
+  "tab.stick": "Закрепить в разделённом виде", // Keep Visible in Split
+  "tab.unstick": "Открепить", // Stop Keeping Visible
   "tab.closeOthers": "Закрыть другие вкладки", // Close Other Tabs
   "tab.closeRight": "Закрыть вкладки справа", // Close Tabs to the Right
   "tab.closeAll": "Закрыть все вкладки", // Close All Tabs
@@ -1373,6 +1385,10 @@ const ru: typeof en = {
   "files.nameLabel": "Имя", // Name
   "files.newTooltip": "Новый файл или папка", // New file or folder
   "files.openInTerminal": "Open in Terminal",
+  "files.favorite": "Добавить в избранное", // Add to Favorites
+  "files.unfavorite": "Удалить из избранного", // Remove from Favorites
+  "files.favorites": "Избранное", // Favorites
+  "files.collapseAll": "Свернуть все", // Collapse All
   "files.revealInFinder": "Show in File Manager",
   "files.copyPath": "Copy Path",
   "files.copyRelPath": "Copy Relative Path",

@@ -291,7 +291,7 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
         "get_session_cwd" => to_value(app.pty().cwd(&req_str(args, "sessionId")?)),
         "list_shells" => {
             let data_dir = app.data_dir().ok();
-            to_value(crate::pty::manager::available_shells(data_dir.as_deref()))
+            to_value(crate::pty::manager::available_shells(app, data_dir.as_deref()))
         }
         "wsl_options" => to_value(crate::wsl_remote::options(app)?),
         // Git Bash status was previously desktop-only, causing every browser/remote mount probe to return

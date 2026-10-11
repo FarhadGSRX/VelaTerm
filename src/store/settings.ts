@@ -12,6 +12,7 @@ import type {
   InspectorTab,
   NavLayout,
   PaneStyle,
+  SettingsTab,
   VisualSettings,
 } from "../theme";
 import type { SessionEngine, SessionKind } from "../types";
@@ -122,6 +123,13 @@ export interface PersistedSettings {
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
   inspectorTab: InspectorTab;
+  /** Settings-modal section to reopen on. Remembered from the last section the user viewed. */
+  settingsTab: SettingsTab;
+  /** Files pinned to the top of the file tree, keyed by project ID so a favourite belongs to the repo
+   * it was chosen in. Values are absolute paths. Directories are never pinned — a favourite is a file
+   * you keep reopening, and pinning a directory would raise "expand where?" with no good answer.
+   * Entries under a project ID that no longer exists are simply never read. */
+  favoritePaths: Record<string, string[]>;
   /** Single-tab mode reuses the current tab and keeps the previous tree alive in the background. */
   singleTabMode: boolean;
   /** Terminal renderer. DOM is stable; WebGL can hit context limits with many terminals. */
@@ -142,8 +150,13 @@ export interface PersistedSettings {
   dynamicStatusFilter: boolean;
   /** User-configurable background keep-alive tab limit, defaulting to 32. */
   maxLiveTabs: number;
-  /** Default terminal shell; empty uses the system default. */
+  /** Default shell for Terminal sessions; empty uses the system default. Applied by the backend whenever a
+   * session carries no explicit shell, so it covers tree-created terminals as well as scratch ones. */
   defaultShell: string;
+  /** Default shell for local-agent sessions (Claude, Codex, ...); empty uses the platform default, which is
+   * Windows PowerShell on Windows. Kept separate from `defaultShell` so a Git Bash terminal and a PowerShell 7
+   * agent can coexist. WSL values are ignored here: agent hooks do not cross the WSL boundary. */
+  agentShell: string;
   /** Primary UI monospace font; null uses the default JetBrains Mono stack. */
   uiFontFamily: string | null;
   /** UI font size in pixels; null follows density without an inline `--ui-fs`. */
@@ -260,6 +273,8 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   dividerStyle: "subtle",
   navLayout: "tree",
   inspectorTab: "info",
+  settingsTab: "appearance",
+  favoritePaths: {},
   singleTabMode: true,
   termRenderer: "dom",
   redrawOnReveal: false,
@@ -269,6 +284,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   dynamicStatusFilter: true,
   maxLiveTabs: DEFAULT_MAX_LIVE_TABS,
   defaultShell: "",
+  agentShell: "",
   uiFontFamily: null,
   uiFontSize: null,
   termFontFamily: null,
@@ -284,7 +300,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   usageAutoRefresh: true,
   usageRefreshSec: 300,
   autoContinueAtUsageLimit: true,
-  imagePasteMode: "upload",
+  imagePasteMode: "agent",
   chatModel: "",
   chatModelByKind: {},
   chatEffortByModel: {},

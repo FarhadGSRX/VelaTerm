@@ -893,7 +893,7 @@ pub(crate) fn agent_environment_in_shell(app: &AppCtx, session_id: &str, cmd: &m
     let session = app.db().conn.lock().ok()
         .and_then(|conn| crate::db::repo::get_session(&conn, session_id).ok().flatten());
     let stored_shell = session.as_ref().map(|session| {
-        crate::pty::manager::resolve_shell(session.kind, session.shell.clone(), app.data_dir().ok().as_deref()).0
+        crate::pty::manager::resolve_shell(app, session.kind, session.shell.clone(), app.data_dir().ok().as_deref()).0
     });
     if let Some(environment) = crate::login_env::latest_environment_in(shell.or(stored_shell.as_deref()), cmd.get_current_dir()) { environment.apply_command(cmd); }
     // The same reasoning as for PTY sessions: an agent we start is a session of its own, never a
