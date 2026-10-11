@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VelaTerm fg",
+  "mainBinaryName": "velaterm-fg",
+  "identifier": "io.vlinx.vlxterm.fg.release",
+  "app": {
+    "windows": [
+      {
+        "title": "VelaTerm fg",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "dragDropEnabled": false,
+        "backgroundColor": "#23262b",
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    }
+  }
+}
