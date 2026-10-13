@@ -905,6 +905,7 @@ fn build_stat_body(sid: &str, args: &StatArgs, since: Option<u64>) -> String {
 ///
 /// A session that never reported a state counts as not idle. Its process may still be starting, and
 /// calling the run finished while one agent never even began would be the worst kind of wrong answer.
+/// A session whose process has stopped is finished whatever state it last recorded.
 fn all_idle(value: &serde_json::Value) -> bool {
     let empty = Vec::new();
     let sessions = value
@@ -914,7 +915,16 @@ fn all_idle(value: &serde_json::Value) -> bool {
     !sessions.is_empty()
         && sessions
             .iter()
-            .all(|s| s.get("state").and_then(|v| v.as_str()) == Some("waiting"))
+            .all(|s| matches!(display_state(s), "waiting" | "stopped"))
+}
+
+/// The state to show for one session row. A row the backend marks `alive: false` has no running process, so
+/// its recorded state is stale and it reads as `stopped`. Older backends omit `alive`; trust the state then.
+fn display_state(session: &serde_json::Value) -> &str {
+    if session.get("alive").and_then(|v| v.as_bool()) == Some(false) {
+        return "stopped";
+    }
+    session.get("state").and_then(|v| v.as_str()).unwrap_or("unknown")
 }
 
 /// One line per session: id, state, name, and how long it has been in that state.
@@ -936,7 +946,7 @@ fn render_stat(value: &serde_json::Value) -> String {
         lines.push(format!("=== {title} ==="));
     }
     for s in sessions {
-        let state = s.get("state").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let state = display_state(s);
         let age = s
             .get("updatedAt")
             .and_then(|v| v.as_i64())
@@ -2204,6 +2214,33 @@ mod tests {
         assert!(!all_idle(&mk(&[Some("waiting"), None])));
         // Nothing to report is not the same as everything finished.
         assert!(!all_idle(&serde_json::json!({ "sessions": [] })));
+    }
+
+    #[test]
+    fn a_session_without_a_running_process_reads_as_stopped() {
+        // A killed PTY settles to `waiting`, and a crash mid-turn can leave `working` behind; neither is true.
+        let value = serde_json::json!({ "sessions": [
+            {"sessionId": "aaaaaaaa-1111", "name": "killed", "kind": "claude",
+             "state": "waiting", "updatedAt": null, "alive": false},
+            {"sessionId": "bbbbbbbb-2222", "name": "crashed", "kind": "claude",
+             "state": "working", "updatedAt": null, "alive": false},
+            {"sessionId": "cccccccc-3333", "name": "old backend", "kind": "claude",
+             "state": "working", "updatedAt": null}
+        ]});
+        let out = render_stat(&value);
+        assert!(out.contains("aaaaaaaa  stopped"), "got: {out}");
+        assert!(out.contains("bbbbbbbb  stopped"), "got: {out}");
+        // Without the field the recorded state is all there is.
+        assert!(out.contains("cccccccc  working"), "got: {out}");
+
+        // Stopped sessions are finished, so a run whose only live agent is idle is done.
+        assert!(all_idle(&serde_json::json!({ "sessions": [
+            {"state": "working", "alive": false},
+            {"state": "waiting", "alive": true}
+        ]})));
+        assert!(!all_idle(&serde_json::json!({ "sessions": [
+            {"state": "working", "alive": true}
+        ]})));
     }
 
     #[test]
