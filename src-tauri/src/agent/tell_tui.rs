@@ -11,6 +11,11 @@
 //!   typed under the user's cursor. Receipts `queued` and `blocked`. A turn that ends without a Stop
 //!   (interrupted with Esc) keeps its messages until Claude's idle notification, which pastes them.
 //!
+//! - **Stopped** (no PTY): the session is woken. VelaTerm starts its terminal itself and resumes the saved
+//!   Claude conversation with the message as the launch prompt (`claude --resume <id> "<message>"`), so the
+//!   message is the first thing the resumed Claude reads. Receipt `sent`. A tab opened later attaches to
+//!   that process. A session with no saved conversation to resume is refused.
+//!
 //! Typing into a terminal is only safe while Claude owns it. A PTY whose Claude has exited still has a live
 //! shell, where pasted text would run as commands, so every paste first confirms a Claude process is in the
 //! PTY's process tree.
@@ -59,7 +64,7 @@ fn paste_bytes(text: &str) -> String {
 /// Fail unless Claude itself is running in the target's terminal.
 fn ensure_claude_in_terminal(app: &AppCtx, target: &str) -> Result<(), String> {
     if !app.pty().is_running(target) {
-        return Err("The target terminal is not running. Open the session, then send again".into());
+        return Err("The target terminal is not running".into());
     }
     let pid = app.pty().cwd_pid(target).ok_or("The target terminal has no process yet")?;
     match crate::procstat::subtree_has_process(pid, is_claude_executable) {
@@ -75,8 +80,58 @@ fn type_in(app: &AppCtx, target: &str, text: &str) -> Result<(), String> {
     app.pty().write(target, "\r")
 }
 
+/// Start a stopped Claude terminal session from the backend, resuming its conversation with `wire` as the
+/// launch prompt. The terminal starts at a default size; the first tab to attach resizes it.
+fn wake(app: &AppCtx, target: &str, wire: &str) -> Result<(), String> {
+    use crate::models::SessionKind;
+    let (session, extra_args, permission_mode) = {
+        let conn = app.db().conn.lock().map_err(|_| "The database is unavailable")?;
+        let session = crate::db::repo::get_session(&conn, target)?.ok_or("The target session no longer exists")?;
+        let stored = crate::db::repo::get_permission_mode(&conn, target)?;
+        let mode = crate::agent::permission_catalog::effective(&conn, SessionKind::Claude, stored.as_deref())?;
+        let args = crate::db::repo::get_agent_args(&conn, target)?;
+        let args = crate::agent::inject::merge_permission_flag(SessionKind::Claude, mode.as_deref(), args.as_deref());
+        (session, args, mode)
+    };
+    let resume_id = crate::agent::resume::checked_resume_id(SessionKind::Claude, session.agent_session_id.clone())?
+        .ok_or("The target has no saved Claude conversation to resume. Open it once, then send again")?;
+    crate::agent::inject::set_resume_prompt(target, wire);
+    let spawned = app.pty().spawn(
+        app.clone(),
+        target.to_string(),
+        SessionKind::Claude,
+        session.shell.clone(),
+        session.cwd.clone(),
+        None,
+        120,
+        32,
+        app.hooks().endpoint(),
+        Some(resume_id),
+        false,
+        None,
+        extra_args,
+        permission_mode,
+        None,
+        "vtell",
+        false,
+        Box::new(|_: &[u8]| true),
+    );
+    // The launch consumes the prompt; a spawn that failed or attached instead must not leave it behind.
+    crate::agent::inject::clear_resume_prompt(target);
+    let spawned = spawned?;
+    if spawned.attached {
+        return Err("The target terminal started while the message was being sent. Send again".into());
+    }
+    let launch = spawned.launch.ok_or("The target terminal has no Claude launch command")?;
+    app.pty().write(target, &format!("{launch}\r"))
+}
+
 /// Deliver an already-recorded `session_tells` message to a terminal session.
 pub fn deliver(app: &AppCtx, target: &str, wire: &str, id: &str) -> Result<&'static str, String> {
+    if !app.pty().is_running(target) {
+        wake(app, target, wire)?;
+        return Ok("sent");
+    }
     ensure_claude_in_terminal(app, target)?;
     let state = app.pty().cached_agent_state(target);
     let already_waiting = {
