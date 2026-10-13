@@ -1684,6 +1684,9 @@ fn handle_stat(app: &AppCtx, req: StatRequest) -> (u16, String) {
                 // A session that has never reported is not the same as one that reported idle.
                 "state": row.map(|r| r.state),
                 "updatedAt": row.map(|r| r.updated_at),
+                // The recorded state outlives the process: a PTY that exits settles to `waiting`. Report
+                // whether a terminal or chat process is actually running, so a dead session reads as one.
+                "alive": app.pty().is_running(id) || app.chat().is_alive(id),
             })
         })
         .collect();
