@@ -123,6 +123,39 @@ pub fn subtree_stats(pid: u32) -> Option<ProcStats> {
     Some(ProcStats { cpu, rss_bytes })
 }
 
+/// Whether a process whose executable name satisfies `matches` is running in the tree rooted at `pid`,
+/// including the root. None when the root itself is gone.
+///
+/// Reads a fresh process table of its own rather than the shared sampler: callers decide whether it is safe
+/// to type into a terminal, and a snapshot up to `MIN_REFRESH` old could still list an agent that has exited
+/// and left its shell prompt behind. Leaving the sampler alone also keeps its CPU deltas intact.
+pub fn subtree_has_process(pid: u32, matches: impl Fn(&str) -> bool) -> Option<bool> {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let root = Pid::from_u32(pid);
+    sys.process(root)?;
+    let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
+    for (p, process) in sys.processes() {
+        if let Some(parent) = process.parent() {
+            children.entry(parent).or_default().push(*p);
+        }
+    }
+    let mut stack = vec![root];
+    let mut seen: HashMap<Pid, ()> = HashMap::new();
+    while let Some(cur) = stack.pop() {
+        if seen.insert(cur, ()).is_some() {
+            continue;
+        }
+        if sys.process(cur).is_some_and(|process| matches(&process.name().to_string_lossy())) {
+            return Some(true);
+        }
+        if let Some(kids) = children.get(&cur) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+    Some(false)
+}
+
 /// Machine-wide CPU, memory, and swap, plus platform saturation signals. macOS reports both the
 /// kernel's memory pressure level and load average; Linux reports load average; Windows reports neither.
 #[derive(Debug, Clone, Serialize)]

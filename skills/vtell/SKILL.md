@@ -29,7 +29,13 @@ unique name substring. Quote names containing spaces. Prefer the full ID for ret
 is ambiguous, use the returned candidate list to identify the intended session; never choose arbitrarily.
 `vrefer --list` can help locate a target before sending. Self-targets, archived sessions, and sessions
 without native chat support are rejected. Supported recipients currently include Claude, Codex,
-OpenCode, Pi and OMP native chat sessions.
+OpenCode, Pi and OMP native chat sessions, and Claude sessions running in a terminal.
+
+A Claude terminal session receives the message as typed input when it is idle (`sent`). While it is
+working the message waits and is handed to Claude when that turn ends (`queued`), or after its pending
+question is answered (`blocked`). Delivery to a terminal requires Claude itself to be running in it: a
+stopped terminal, or one whose Claude has exited back to the shell, is refused rather than typed into.
+`--steer` has no running turn to join in a terminal and behaves like an ordinary message there.
 
 Send a self-contained message with the context and paths the recipient actually needs. Preserve the
 user's intended meaning and scope. Do not turn an informational update into an instruction to edit files.

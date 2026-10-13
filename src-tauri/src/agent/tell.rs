@@ -91,8 +91,10 @@ pub fn send(app: &AppCtx, req: &Request) -> Result<Value, String> {
     if sender.id == target {
         return Err("Choose another session as the target".into());
     }
-    if recipient.engine != "chat" || !super::plan_execute::supported(recipient.kind) {
-        return Err("The target must be a native chat session".into());
+    // A Claude running in a terminal takes messages through its keyboard and its Stop hook (tell_tui).
+    let terminal = recipient.engine == "tui" && recipient.kind == crate::models::SessionKind::Claude;
+    if !terminal && (recipient.engine != "chat" || !super::plan_execute::supported(recipient.kind)) {
+        return Err("The target must be a native chat session or a Claude terminal session".into());
     }
     let fingerprint = format!(
         "{:x}",
@@ -137,7 +139,13 @@ pub fn send(app: &AppCtx, req: &Request) -> Result<Value, String> {
             wire
         }
     };
-    let delivery = deliver(app, &target, &wire, &req.message_id, behavior(req.steer))?;
+    let delivery = if terminal {
+        super::tell_tui::deliver(app, &target, &wire, &req.message_id).map_err(|error| {
+            format!("Delivery to {target} failed: {error}. Message {} is retained; retry the same command with this message ID and unchanged text.", req.message_id)
+        })?
+    } else {
+        deliver(app, &target, &wire, &req.message_id, behavior(req.steer))?
+    };
     Ok(json!({"delivery":delivery,"messageId":req.message_id,"targetSessionId":target}))
 }
 
