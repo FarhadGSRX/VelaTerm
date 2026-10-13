@@ -33,8 +33,9 @@ OpenCode, Pi and OMP native chat sessions, and Claude sessions running in a term
 
 A Claude terminal session receives the message as typed input when it is idle (`sent`). While it is
 working the message waits and is handed to Claude when that turn ends (`queued`), or after its pending
-question is answered (`blocked`). Delivery to a terminal requires Claude itself to be running in it: a
-stopped terminal, or one whose Claude has exited back to the shell, is refused rather than typed into.
+question is answered (`blocked`). A stopped Claude terminal session is woken: VelaTerm resumes its saved
+conversation with the message as the first prompt (`sent`). A running terminal whose Claude has exited
+back to the shell is refused rather than typed into.
 `--steer` has no running turn to join in a terminal and behaves like an ordinary message there.
 
 Send a self-contained message with the context and paths the recipient actually needs. Preserve the
