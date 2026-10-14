@@ -150,7 +150,7 @@ pub fn run_view(args: &[String]) -> ! {
 }
 
 const SPAWN_USAGE: &str =
-    "usage: vspawn [--worktree] [--cwd <path>] [--yes] [--claude|--codex|--copilot|--kiro] [--model <name>] [--effort <level>] <task description...>\n\
+    "usage: vspawn [--worktree] [--cwd <path>] [--yes] [--agent <agent>|--claude|--codex|--copilot|--kiro|--pi] [--model <name>] [--effort <level>] <task description...>\n\
     --plan-execute    create planning, execution and optional independent review chat sessions\n\
     --split-tasks     let the planner propose multiple tasks for user confirmation (requires --plan-execute)\n\
     --worktree-mode <none|shared|each>   directory mode for all workflow roles; overrides --worktree (requires --plan-execute)\n\
@@ -158,6 +158,8 @@ const SPAWN_USAGE: &str =
     --plan-agent / --exec-agent / --review-agent <agent>   agent for each role\n\
     --plan-model / --exec-model / --review-model <model>   model for each role\n\
     --plan-effort / --exec-effort / --review-effort <level> reasoning effort for each role\n\
+    --agent <agent>   child agent: claude, codex, opencode, copilot, cursor, antigravity, cline, pi, omp, crush, kimi, kiro, grok or zoo\n\
+    --claude / --codex / --copilot / --kiro / --pi   shortcuts for --agent with that agent\n\
     --cwd <path>      child working directory and repository used to create a worktree\n\
     --request-id <uuid> reuse the same request identity after a lost acknowledgement\n\
     --yes             skip initial launch confirmation; split-task proposals still require review\n\
@@ -207,9 +209,9 @@ enum SpawnParse {
 }
 
 /// Parse arguments after `--spawn`. `--worktree/--wt` enables a worktree, `--no-worktree/--nowt`
-/// disables it, `--yes/-y/--no-confirm` skips the confirmation dialog, agent flags select kind,
-/// `--cwd`/`--model`/`--effort` take a value in either `--cwd x` or `--cwd=x` form, help flags show usage,
-/// and everything after `--` is prompt text even when prefixed by `-`. Other options are errors;
+/// disables it, `--yes/-y/--no-confirm` skips the confirmation dialog, `--agent` or a shortcut flag selects
+/// kind, `--cwd`/`--model`/`--effort`/`--agent` take a value in either `--cwd x` or `--cwd=x` form, help
+/// flags show usage, and everything after `--` is prompt text even when prefixed by `-`. Other options are errors;
 /// remaining words join into a required prompt.
 fn parse_spawn_args(rest: &[String]) -> SpawnParse {
     let mut request_id = None;
@@ -306,6 +308,7 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
             "--codex" => kind = Some("codex".to_string()),
             "--copilot" => kind = Some("copilot".to_string()),
             "--kiro" => kind = Some("kiro".to_string()),
+            "--pi" => kind = Some("pi".to_string()),
             "-h" | "--help" => return SpawnParse::Help,
             "--" => {
                 for w in &rest[i + 1..] {
@@ -314,7 +317,7 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
                 break;
             }
             // Value options. Both spellings are accepted because agents write one and people the other.
-            "--cwd" | "--model" | "--effort" => {
+            "--cwd" | "--model" | "--effort" | "--agent" => {
                 let Some(v) = rest
                     .get(i + 1)
                     .map(|s| s.as_str())
@@ -325,13 +328,18 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
                 match a {
                     "--cwd" => cwd = Some(v.to_string()),
                     "--model" => model = Some(v.to_string()),
+                    "--agent" => match task_agent(v) {
+                        Ok(k) => kind = Some(k),
+                        Err(e) => return SpawnParse::Err(e),
+                    },
                     _ => effort = Some(v.to_string()),
                 }
                 i += 1;
             }
             _ if a.starts_with("--cwd=")
                 || a.starts_with("--model=")
-                || a.starts_with("--effort=") =>
+                || a.starts_with("--effort=")
+                || a.starts_with("--agent=") =>
             {
                 // The prefix test guarantees a separator, so the split cannot fail.
                 let (flag, v) = a.split_once('=').unwrap_or((a, ""));
@@ -341,6 +349,10 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
                 match flag {
                     "--cwd" => cwd = Some(v.to_string()),
                     "--model" => model = Some(v.to_string()),
+                    "--agent" => match task_agent(v) {
+                        Ok(k) => kind = Some(k),
+                        Err(e) => return SpawnParse::Err(e),
+                    },
                     _ => effort = Some(v.to_string()),
                 }
             }
@@ -386,6 +398,20 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
         effort,
         prompt,
     })
+}
+
+/// Resolve an `--agent` value against the same task-capable catalogue the backend checks, so a typo
+/// fails here with the valid names instead of after the request is sent.
+fn task_agent(value: &str) -> Result<String, String> {
+    let options = super::launch_options::catalog();
+    let kind: Option<crate::models::SessionKind> = serde_json::from_value(serde_json::json!(value)).ok();
+    match kind {
+        Some(kind) if options.iter().any(|o| o.id == kind && o.accepts_task) => Ok(kind.as_str().to_owned()),
+        _ => {
+            let names: Vec<&str> = options.iter().filter(|o| o.accepts_task).map(|o| o.id.as_str()).collect();
+            Err(format!("vspawn: unknown agent {value}; use one of {}", names.join(", ")))
+        }
+    }
 }
 
 /// Build the `/spawn` JSON body, omitting kind so the backend can inherit it when absent. serde_json
@@ -1801,6 +1827,61 @@ mod tests {
             panic!("parsing should succeed");
         };
         assert!(!p.worktree);
+    }
+
+    #[test]
+    fn parse_spawn_selects_pi() {
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--pi", "--", "-wait", "for a task"])) else {
+            panic!("parsing should succeed");
+        };
+        assert_eq!(p.kind.as_deref(), Some("pi"));
+        assert_eq!(p.prompt, "-wait for a task");
+        assert!(!p.no_confirm, "selecting an agent must not skip confirmation");
+        assert!(!p.worktree);
+        let body: serde_json::Value = serde_json::from_str(&build_spawn_body("sid", &p, "/w")).unwrap();
+        assert_eq!(body["kind"], "pi");
+        assert_eq!(body["prompt"], "-wait for a task");
+        assert!(body.get("noConfirm").is_none());
+        // `vspawn-tree` prepends `--worktree`, which must survive the agent choice.
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--worktree", "--pi", "x"])) else {
+            panic!("parsing should succeed");
+        };
+        assert!(p.worktree);
+        assert_eq!(p.kind.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn parse_spawn_agent_option() {
+        // Every task-capable agent is reachable, in both spellings.
+        for option in super::super::launch_options::catalog().into_iter().filter(|o| o.accepts_task) {
+            let name = option.id.as_str();
+            let inline = format!("--agent={name}");
+            for a in [vec!["--agent", name, "x"], vec![inline.as_str(), "x"]] {
+                let SpawnParse::Ok(p) = parse_spawn_args(&args(&a)) else { panic!("{a:?} should parse") };
+                assert_eq!(p.kind.as_deref(), Some(name));
+            }
+            assert!(SPAWN_USAGE.contains(&format!(" {name}")), "usage should list {name}");
+        }
+        // The last selection wins, as with the shortcut flags.
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--codex", "--agent", "omp", "x"])) else {
+            panic!("parsing should succeed");
+        };
+        assert_eq!(p.kind.as_deref(), Some("omp"));
+        // A workflow without --plan-agent plans with the selected agent.
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--plan-execute", "--agent", "pi", "x"])) else {
+            panic!("parsing should succeed");
+        };
+        assert_eq!(p.plan_execute.unwrap().plan.agent, Some(crate::models::SessionKind::Pi));
+        for a in [
+            vec!["--agent"],
+            vec!["--agent=", "x"],
+            vec!["--agent", "terminal", "x"],
+            vec!["--agent", "browser", "x"],
+            vec!["--agent", "Pi", "x"],
+            vec!["--agent", "nope", "x"],
+        ] {
+            assert!(matches!(parse_spawn_args(&args(&a)), SpawnParse::Err(_)), "{a:?} should be rejected");
+        }
     }
 
     #[test]

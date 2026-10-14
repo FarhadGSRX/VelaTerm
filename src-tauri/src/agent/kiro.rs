@@ -6,9 +6,10 @@
 //! prompt, tools, and MCP servers are preserved, and re-cloning on every launch keeps the copy current. This
 //! mirrors the shadow-configuration approach already used for Crush in `agent/crush.rs`.
 //!
-//! The hook entries invoke a static forwarding script under `~/.kiro/vlx-term/`. Neither file stores a port,
-//! token, or session ID: the script reads only the `VLX_*` variables inherited by the managed process and
-//! no-ops when `kiro-cli` runs in an ordinary terminal.
+//! On Unix the hook entries invoke a static forwarding script under `~/.kiro/vlx-term/`; on Windows they call
+//! the VelaTerm executable's native `--agent-hook kiro` bridge, so no PowerShell script is involved. Neither
+//! stores a port, token, or session ID: both read only the `VLX_*` variables inherited by the managed process
+//! and no-op when `kiro-cli` runs in an ordinary terminal.
 //!
 //! Kiro exposes no permission-request hook, so Kiro sessions have no `asking` state; `working` and `waiting`
 //! are both authoritative. The script deliberately writes nothing to stdout: Kiro treats a `preToolUse` hook as
@@ -32,9 +33,13 @@ pub const AGENT_NAME: &str = "vlx-term";
 /// form never matched — every re-install then appended another copy of our entries.
 const MARKER: &str = "vlx-term/hook.";
 
-/// Whether a hook command string is one VelaTerm wrote, regardless of the platform's path separator.
+/// Argument prefix of the native bridge command used on Windows, which embeds no script path.
+const BRIDGE_MARKER: &str = "--agent-hook kiro ";
+
+/// Whether a hook command string is one VelaTerm wrote: a script command on either path separator, including
+/// the PowerShell script earlier Windows versions wrote, or the native bridge command.
 fn is_ours(command: &str) -> bool {
-    command.replace('\\', "/").contains(MARKER)
+    command.replace('\\', "/").contains(MARKER) || command.contains(BRIDGE_MARKER)
 }
 
 /// Agent-config hook trigger paired with the `e=` value forwarded to the local hook server.
@@ -62,20 +67,6 @@ curl -s -m 3 -X POST -H "Content-Type: application/json" --data-binary @- \
 exit 0
 "#;
 
-/// Windows PowerShell script with the same semantics as [`SH_SCRIPT`]; the event arrives as the first argument.
-const PS1_SCRIPT: &str = r#"# VelaTerm Kiro status bridge (auto-installed by VelaTerm; safe to delete).
-# Active only in Kiro sessions launched by VelaTerm; otherwise read stdin and exit successfully.
-param([string]$Event)
-$body = [Console]::In.ReadToEnd()
-if ($env:VLX_SPAWN_URL -and $env:VLX_SESSION_ID -and $env:VLX_TOKEN) {
-  try {
-    Invoke-RestMethod -Method Post -ContentType 'application/json' -TimeoutSec 3 -Body $body `
-      -Uri "$($env:VLX_SPAWN_URL)/hook/$($env:VLX_SESSION_ID)?t=$($env:VLX_TOKEN)&e=$Event" | Out-Null
-  } catch {}
-}
-exit 0
-"#;
-
 /// Kiro hook installation audit: record only phase, result, and duration, never configuration, paths, tokens, or session content.
 pub fn audit_install(status: &str, duration_ms: u128) {
     crate::diagnostics::record(if status=="failed"{"WARN"}else{"INFO"},"kiro_hook_install",serde_json::json!({"status":status,"durationMs":duration_ms as u64,"inputCount":1,"outputCount":usize::from(status=="success")}));
@@ -89,29 +80,28 @@ pub(crate) fn kiro_home() -> Option<PathBuf> {
     crate::host::home_dir().map(|home| home.join(".kiro"))
 }
 
-/// Forwarding script path: `<kiro_home>/vlx-term/hook.ps1` on Windows or `hook.sh` elsewhere.
+/// Unix forwarding script path: `<kiro_home>/vlx-term/hook.sh`.
 fn script_path(home: &Path) -> PathBuf {
-    let name = if cfg!(windows) {
-        "hook.ps1"
-    } else {
-        "hook.sh"
-    };
-    home.join("vlx-term").join(name)
+    home.join("vlx-term").join("hook.sh")
 }
 
-/// Build the command string Kiro runs for one event.
+/// PowerShell bridge written by earlier Windows versions, deleted on install.
+fn legacy_ps1_path(home: &Path) -> PathBuf {
+    home.join("vlx-term").join("hook.ps1")
+}
+
+/// Build the command string Kiro runs for one event against `target`: the script on Unix, the VelaTerm
+/// executable on Windows.
 ///
 /// POSIX single quoting stops the hook shell from re-evaluating paths containing spaces, `$`, backticks, or
-/// quotes. Windows runs PowerShell with the profile and execution policy bypassed so the script works on a
-/// stock machine.
-fn hook_command(script: &Path, event: &str) -> String {
-    let path = script.to_string_lossy();
+/// quotes. Kiro does not document which shell runs hooks on Windows, so the native bridge command uses the
+/// form cmd.exe, PowerShell, and POSIX shells all parse alike.
+fn hook_command(target: &Path, event: &str) -> String {
     if cfg!(windows) {
-        format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" {event}",
-            path.replace('"', "\"\"")
-        )
+        let args = format!("{BRIDGE_MARKER}{event}");
+        super::hook_bridge::command(target, super::hook_bridge::Shell::Any, &args)
     } else {
+        let path = target.to_string_lossy();
         format!("sh '{}' {event}", path.replace('\'', "'\\''"))
     }
 }
@@ -153,7 +143,7 @@ fn base_config(home: &Path) -> serde_json::Map<String, serde_json::Value> {
 ///
 /// Entries previously written by VelaTerm are identified by [`MARKER`] and replaced rather than duplicated, so
 /// re-installing after an upgrade converges instead of accumulating.
-fn merge_hooks(base: &mut serde_json::Map<String, serde_json::Value>, script: &Path) {
+fn merge_hooks(base: &mut serde_json::Map<String, serde_json::Value>, target: &Path) {
     let mut hooks = match base.remove("hooks") {
         Some(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
@@ -175,7 +165,7 @@ fn merge_hooks(base: &mut serde_json::Map<String, serde_json::Value>, script: &P
             })
             .collect();
         entries.push(serde_json::json!({
-            "command": hook_command(script, event),
+            "command": hook_command(target, event),
             "timeoutMs": 5000,
         }));
         hooks.insert(trigger.to_string(), serde_json::Value::Array(entries));
@@ -184,7 +174,7 @@ fn merge_hooks(base: &mut serde_json::Map<String, serde_json::Value>, script: &P
 }
 
 /// Generate the shadow agent configuration as pretty-printed JSON for easy user inspection.
-fn agent_json(home: &Path, script: &Path) -> String {
+fn agent_json(home: &Path, target: &Path) -> String {
     let mut config = base_config(home);
     config.insert(
         "name".to_string(),
@@ -197,7 +187,7 @@ fn agent_json(home: &Path, script: &Path) -> String {
                 .to_string(),
         ),
     );
-    merge_hooks(&mut config, script);
+    merge_hooks(&mut config, target);
     serde_json::to_string_pretty(&serde_json::Value::Object(config))
         .expect("agent JSON serialization must succeed")
 }
@@ -214,38 +204,40 @@ fn write_if_changed(path: &Path, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
 
-/// Install or refresh the forwarding script and the shadow agent, returning the agent name to pass to
-/// `--agent`.
+/// Install or refresh the forwarding bridge and the shadow agent, returning the agent name to pass to
+/// `--agent`. Unix writes the forwarding script; Windows points the hooks at `exe` and removes the PowerShell
+/// script earlier versions wrote.
 ///
 /// Missing home directories or permission failures return Err for logging only. The caller then omits
 /// `--agent`, so Kiro still launches with the user's own agent and simply reports no authoritative state.
-pub fn install() -> Result<String, String> {
+pub fn install(exe: &Path) -> Result<String, String> {
     let home = kiro_home().ok_or("Failed to resolve Kiro home directory")?;
-    install_at(&home)
+    install_at(&home, exe)
 }
 
 /// Like [`install`], with an explicit Kiro home so tests can run against a temporary directory.
-fn install_at(home: &Path) -> Result<String, String> {
-    let script = script_path(home);
-    let body = if cfg!(windows) {
-        PS1_SCRIPT
+fn install_at(home: &Path, exe: &Path) -> Result<String, String> {
+    let target = if cfg!(windows) {
+        let _ = std::fs::remove_file(legacy_ps1_path(home));
+        exe.to_path_buf()
     } else {
-        SH_SCRIPT
+        let script = script_path(home);
+        write_if_changed(&script, SH_SCRIPT)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&script)
+                .map_err(|e| format!("Failed to inspect Kiro hook script: {e}"))?
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&script, permissions)
+                .map_err(|e| format!("Failed to make Kiro hook script executable: {e}"))?;
+        }
+        script
     };
-    write_if_changed(&script, body)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&script)
-            .map_err(|e| format!("Failed to inspect Kiro hook script: {e}"))?
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script, permissions)
-            .map_err(|e| format!("Failed to make Kiro hook script executable: {e}"))?;
-    }
 
     let agent = home.join("agents").join(format!("{AGENT_NAME}.json"));
-    write_if_changed(&agent, &agent_json(home, &script))?;
+    write_if_changed(&agent, &agent_json(home, &target))?;
     Ok(AGENT_NAME.to_string())
 }
 
@@ -260,6 +252,9 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create temp home");
         dir
     }
+
+    /// Executable path handed to `install_at`; only Windows embeds it in the hook commands.
+    const EXE: &str = "/opt/VelaTerm/velaterm";
 
     /// Write a default agent config and point `chat.defaultAgent` at it.
     fn seed_default_agent(home: &Path, name: &str, body: &str) {
@@ -332,8 +327,8 @@ mod tests {
     #[test]
     fn reinstall_replaces_our_entries_instead_of_duplicating() {
         let home = temp_home("dedupe");
-        install_at(&home).expect("first install");
-        install_at(&home).expect("second install");
+        install_at(&home, Path::new(EXE)).expect("first install");
+        install_at(&home, Path::new(EXE)).expect("second install");
         let raw = std::fs::read_to_string(home.join("agents").join("vlx-term.json")).expect("read");
         let value: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
         for (trigger, _) in EVENTS {
@@ -377,7 +372,8 @@ mod tests {
     fn hook_command_quotes_paths_with_spaces() {
         let command = hook_command(Path::new("/Users/a b/.kiro/vlx-term/hook.sh"), "kiro_working");
         if cfg!(windows) {
-            assert!(command.contains("\"/Users/a b/.kiro/vlx-term/hook.sh\""));
+            // A nonexistent path has no 8.3 form, so the native bridge falls back to double quotes.
+            assert_eq!(command, "\"/Users/a b/.kiro/vlx-term/hook.sh\" --agent-hook kiro kiro_working");
         } else {
             assert!(command.contains("'/Users/a b/.kiro/vlx-term/hook.sh'"));
         }
@@ -387,19 +383,41 @@ mod tests {
     #[test]
     fn script_never_writes_to_stdout() {
         // An observing hook must stay silent: Kiro reads stdout, and echoing a decision would bypass the
-        // user's own permission prompts.
+        // user's own permission prompts. The native bridge's Kiro contract is silent too (see hook_bridge).
         assert!(!SH_SCRIPT.contains("echo '{"));
-        assert!(!PS1_SCRIPT.contains("Write-Output"));
+    }
+
+    #[test]
+    fn earlier_windows_powershell_entries_are_recognized_as_ours() {
+        assert!(is_ours(r#"powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\a\.kiro\vlx-term\hook.ps1" boot"#));
+        assert!(is_ours("C:/Users/a/AppData/Local/velaterm/velaterm.exe --agent-hook kiro kiro_waiting"));
+        assert!(!is_ours("echo mine"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_install_calls_the_native_bridge_and_removes_the_script() {
+        let home = temp_home("native");
+        std::fs::create_dir_all(home.join("vlx-term")).expect("bridge dir");
+        std::fs::write(legacy_ps1_path(&home), "# old bridge").expect("old script");
+        let exe = home.join("velaterm.exe");
+        install_at(&home, &exe).expect("install");
+        assert!(!legacy_ps1_path(&home).exists(), "the earlier PowerShell bridge should be removed");
+        let raw = std::fs::read_to_string(home.join("agents").join("vlx-term.json")).expect("read");
+        assert!(!raw.to_ascii_lowercase().contains("powershell"), "{raw}");
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        assert_eq!(event_of(&value, "stop"), "kiro_waiting");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn install_is_idempotent() {
         let home = temp_home("idempotent");
-        let name = install_at(&home).expect("first install");
+        let name = install_at(&home, Path::new(EXE)).expect("first install");
         assert_eq!(name, AGENT_NAME);
         let agent = home.join("agents").join("vlx-term.json");
         let first = std::fs::metadata(&agent).expect("metadata").modified().ok();
-        install_at(&home).expect("second install");
+        install_at(&home, Path::new(EXE)).expect("second install");
         let second = std::fs::metadata(&agent).expect("metadata").modified().ok();
         assert_eq!(first, second, "unchanged content must not rewrite the file");
         let _ = std::fs::remove_dir_all(&home);

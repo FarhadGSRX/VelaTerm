@@ -344,9 +344,16 @@ fn between(text: &str, open: &str, close: &str) -> Option<String> {
 
 /// Parse a complete Claude transcript into events, skipping sidechain, meta, and injected blocks.
 pub(crate) fn claude_events(content: &str) -> Vec<Event> {
+    claude_identified_events(content).into_iter().map(|(event,_)|event).collect()
+}
+
+/// Keep native identities beside the same events used by history, export, and search.
+pub(crate) fn claude_identified_events(content: &str) -> Vec<(Event,Option<String>)> {
     // Map tool_use IDs to names for subsequent tool_result display.
     let mut tool_names: HashMap<String, String> = HashMap::new();
     let mut out: Vec<Event> = Vec::new();
+    let mut identities = HashMap::new();
+    let mut block_counts: HashMap<String,usize> = HashMap::new();
 
     for line in content.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -382,6 +389,7 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
         let Some(msg) = v.get("message") else {
             continue;
         };
+        let first = out.len();
         match v.get("type").and_then(Value::as_str) {
             Some("user") => match msg.get("content") {
                 Some(Value::String(s)) => {
@@ -426,7 +434,13 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
                 let Some(items) = msg.get("content").and_then(Value::as_array) else {
                     continue;
                 };
-                for it in items {
+                // Claude persists each completed block separately, including empty thinking blocks.
+                // Count every block across frames just as the live engine's handle_assistant does.
+                let message_id = msg.get("id").and_then(Value::as_str);
+                let seen = block_counts.entry(message_id.unwrap_or("msg").to_string()).or_default();
+                let offset = *seen;
+                *seen += items.len();
+                for (index,it) in items.iter().enumerate() {
                     match it.get("type").and_then(Value::as_str) {
                         Some("text") => {
                             if let Some(s) = it.get("text").and_then(Value::as_str) {
@@ -435,6 +449,9 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
                                 // written to the recording. It says nothing; showing it would only
                                 // litter the conversation with the same line after every `/effort`.
                                 if !s.is_empty() && s != NO_RESPONSE_PLACEHOLDER {
+                                    if let Some(id) = message_id {
+                                        identities.insert(out.len(),format!("{id}:{}",offset+index));
+                                    }
                                     out.push(Event::AssistantText {
                                         text: s.to_string(),
                                         ts: ts.clone(),
@@ -480,8 +497,15 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
             }
             _ => {}
         }
+        if v["type"] == "user" {
+            if let Some(id) = v["uuid"].as_str() {
+                for (index,event) in out.iter().enumerate().skip(first) {
+                    if matches!(event,Event::User { .. }) {identities.insert(index,id.to_string());}
+                }
+            }
+        }
     }
-    out
+    out.into_iter().enumerate().map(|(index,event)|(event,identities.remove(&index))).collect()
 }
 
 /// Append a genuine user message, discarding empty text and injected blocks.

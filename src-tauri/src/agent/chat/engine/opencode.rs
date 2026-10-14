@@ -58,6 +58,7 @@ pub(super) struct OpencodeState {
     pub(super) default_model: Option<String>,
     /// Both idle event forms describe the same transition; only a preceding busy state ends a turn.
     busy: bool,
+    v2: crate::agent::chat::opencode_v2::Projection,
 }
 
 fn server(proc: &ChatProcess) -> Result<Arc<Server>, String> {
@@ -87,11 +88,13 @@ pub(super) fn prepare_terminal(proc: &ChatProcess, selection: &crate::agent::ses
         .ok_or("OpenCode has no model available for the terminal")?;
     let (provider, model) = wire::split_model(&model).ok_or("The OpenCode model must include its provider")?;
     let native = server.get(&format!("/session/{}", wire::encode_query(&id)))?;
+    let selected = proc.collaboration_mode.lock().unwrap().clone();
     // A fresh session needs an agent for the native TUI to restore its saved model and variant.
-    if native.get("agent").and_then(Value::as_str).is_none() {
+    if native.get("agent").and_then(Value::as_str).is_none()
+        || selected.as_deref().is_some_and(|agent| native.get("agent").and_then(Value::as_str)!=Some(agent)) {
         let config = server.get("/config")?;
         let modes = proc.collaboration_modes.lock().unwrap();
-        let agent = config.get("default_agent").and_then(Value::as_str)
+        let agent = selected.as_deref().or_else(|| config.get("default_agent").and_then(Value::as_str))
             .or_else(|| modes.iter().find(|m| m.mode == "build").map(|m| m.mode.as_str()))
             .or_else(|| modes.first().map(|m| m.mode.as_str()))
             .ok_or("OpenCode has no primary agent available for the terminal")?;
@@ -210,6 +213,7 @@ pub(super) fn bootstrap(
                 crate::diagnostic_warn!("chat: OpenCode history not reloaded: {e}");
             }
         }
+        if server.is_v2() { restore_v2_prompts(&app,&session_id,&proc,&server,&native_id); }
         proc.ready.store(true, Ordering::Relaxed);
         emit_state(&app, &session_id, AgentState::Waiting);
         start_waiting_message(&app, &session_id, &proc);
@@ -313,6 +317,7 @@ fn spawn_event_reader(
         let mut failures = 0;
         let mut initial = Some(reader);
         while proc.alive.load(Ordering::Relaxed) {
+            let reconnect=initial.is_none();
             let reader = match initial.take().map(Ok).unwrap_or_else(|| server.open_events()) {
                 Ok(reader) => reader,
                 Err(e) => {
@@ -326,6 +331,19 @@ fn spawn_event_reader(
                     continue;
                 }
             };
+            if reconnect && server.is_v2() {
+                let _callback=proc.callbacks.read().unwrap();
+                if proc.released.load(Ordering::Relaxed) || !app.chat().owns_process(&session_id,&proc){return;}
+                if let Ok(native)=root_session(&proc) {
+                    if let Err(message)=rebuild_timeline(&proc,&server,&native) {
+                        emit(&app,&session_id,json!({"type":"error","message":message}));
+                    }
+                    restore_v2_prompts(&app,&session_id,&proc,&server,&native);
+                    if let Ok(active)=server.get("/api/session/active") {
+                        if active.get(&native).is_none() {turn_idle(&app,&session_id,&proc);}
+                    }
+                }
+            }
             let mut delivered = false;
             for line in BufReader::new(reader).lines() {
                 let Ok(line) = line else { break };
@@ -343,6 +361,35 @@ fn spawn_event_reader(
             std::thread::sleep(Duration::from_millis(200));
         }
     });
+}
+
+fn restore_v2_prompts(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, server: &Server, native: &str) {
+    let mut pending=std::collections::HashSet::new();
+    let mut complete=true;
+    match server.get("/api/permission/request") {
+        Ok(permissions)=>for permit in permissions.as_array().into_iter().flatten() {
+            let owner=permit.get("sessionID").and_then(Value::as_str);
+            if matches!(route_for(proc,owner),Route::Unknown(_)){continue;}
+            if let Some(id)=permit.get("id").and_then(Value::as_str){pending.insert(id.to_string());}
+            handle_event(app,session_id,proc,json!({"type":"permission.asked","data":permit}));
+        },
+        Err(_)=>complete=false,
+    }
+    let mut sessions=vec![native.to_string()];
+    sessions.extend(proc.codex_subagent_ids.lock().unwrap().keys().cloned());
+    for owner in sessions {
+        match server.get(&format!("/api/session/{}/form",wire::encode_query(&owner))) {
+            Ok(forms)=>for form in forms.as_array().into_iter().flatten() {
+                if let Some(id)=form.get("id").and_then(Value::as_str){pending.insert(id.to_string());}
+                handle_event(app,session_id,proc,json!({"type":"form.created","data":{"form":form}}));
+            },
+            Err(_)=>complete=false,
+        }
+    }
+    if complete {
+        let stale:Vec<String>=proc.permissions.lock().unwrap().keys().filter(|id|!pending.contains(*id)).cloned().collect();
+        for id in stale {resolve_prompt(app,session_id,proc,Some(&json!(id)));}
+    }
 }
 
 /// Where an event belongs: the conversation itself, a subagent's card, or a child not yet linked.
@@ -374,6 +421,11 @@ fn event_session_id(event: &Value) -> Option<&str> {
 }
 
 pub(super) fn handle_event(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, event: Value) {
+    if event.get("data").is_some() && event.get("properties").is_none() {
+        let mapped = proc.opencode.lock().unwrap().v2.events(&event);
+        for event in mapped { handle_event(app,session_id,proc,event); }
+        return;
+    }
     let Some(kind) = event.get("type").and_then(Value::as_str) else { return };
     let props = event.get("properties").cloned().unwrap_or(Value::Null);
 
@@ -393,7 +445,7 @@ pub(super) fn handle_event(app: &AppCtx, session_id: &str, proc: &Arc<ChatProces
         Route::Child(path) => path,
         Route::Unknown(child) => {
             // Only conversation content is worth holding for a card that does not exist yet.
-            if kind.starts_with("message.") || kind.starts_with("permission.") || kind.starts_with("question.") {
+            if kind.starts_with("message.") || kind.starts_with("permission.") || kind.starts_with("question.") || kind.starts_with("form.") {
                 buffer_child_event(proc, &child, event);
             }
             return;
@@ -450,6 +502,13 @@ fn handle_routed(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, path: 
         "permission.asked" => permission_asked(app, session_id, proc, props),
         "permission.replied" => resolve_prompt(app, session_id, proc, props.get("requestID").or_else(|| props.get("id"))),
         "question.asked" => question_asked(app, session_id, proc, props),
+        "form.created" => {
+            if let Some(id)=props.get("id").and_then(Value::as_str) {
+                proc.permissions.lock().unwrap().insert(id.to_string(),props.clone());
+                emit(app,session_id,json!({"type":"permission","request":props}));
+                emit_state(app,session_id,AgentState::Asking);
+            }
+        }
         "question.replied" | "question.rejected" => {
             resolve_prompt(app, session_id, proc, props.get("requestID").or_else(|| props.get("id")))
         }
@@ -484,6 +543,12 @@ fn handle_routed(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, path: 
             }
         }
         "session.compacted" if root => handle_compaction(proc, true, None, None),
+        "session.compaction.failed" if root => {
+            // A failed summary never replaced the context. Remove its pending marker, retaining the error.
+            let mut timeline=proc.timeline.lock().unwrap();
+            let rows=timeline.rows.iter().filter(|row| !matches!(row,ChatRow::Compaction{status:"loading",..})).cloned().collect();
+            timeline.replace_all(rows);
+        }
         _ => {}
     }
 }
@@ -628,7 +693,7 @@ fn part_updated(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, path: &
             state.models.get(message_id).cloned(),
         )
     };
-    let finished = part.pointer("/time/end").is_some();
+    let finished = part.pointer("/time/end").is_some_and(|v|!v.is_null());
     match part.get("type").and_then(Value::as_str) {
         Some("text") if role == "user" => {
             // The engine drew its own turns when it sent them; only turns started elsewhere — a shell
@@ -777,12 +842,15 @@ fn permission_asked(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, pro
             Some(ChatRow::Tool { input, .. }) => Some(input.clone()),
             _ => None,
         });
-    let payload = wire::permission_payload(props, tool_input);
+    let mut payload = wire::permission_payload(props, tool_input);
+    let owner = props.get("sessionID").and_then(Value::as_str).map(str::to_string)
+        .or_else(|| root_session(proc).ok()).unwrap_or_default();
+    payload["_opencodeSessionId"] = json!(owner);
     // Bypass answers for the person, the way OpenCode's own `--auto` does: everything not denied by
     // configuration runs. Questions are not permissions and are still asked.
     if proc.mode.lock().unwrap().as_str() == "bypassPermissions" {
         if let Ok(server) = server(proc) {
-            if server.post(&format!("/permission/{id}/reply"), Some(&json!({"reply":"once"}))).is_ok() {
+            if server.permission_reply(&owner,id,"once").is_ok() {
                 return;
             }
         }
@@ -823,7 +891,13 @@ pub(super) fn respond(
     remember: bool,
 ) -> Result<(), String> {
     let server = server(proc)?;
-    if request.get("_opencodeKind").and_then(Value::as_str) == Some("question") {
+    let owner = request.get("_opencodeSessionId").and_then(Value::as_str).map(str::to_string)
+        .or_else(||root_session(proc).ok()).unwrap_or_default();
+    if request.get("_opencodeKind").and_then(Value::as_str) == Some("form") {
+        let action=if allow{"reply"}else{"cancel"};
+        let body=allow.then(||json!({"answer":updated_input.cloned().unwrap_or_else(||json!({}))}));
+        server.post(&format!("/api/session/{}/form/{}/{action}",wire::encode_query(&owner),wire::encode_query(request_id)),body.as_ref())?;
+    } else if request.get("_opencodeKind").and_then(Value::as_str) == Some("question") {
         if allow {
             let answers = wire::question_answers(request, updated_input);
             server.post(&format!("/question/{request_id}/reply"), Some(&json!({"answers":answers})))?;
@@ -838,7 +912,7 @@ pub(super) fn respond(
         } else {
             "once"
         };
-        server.post(&format!("/permission/{request_id}/reply"), Some(&json!({"reply":reply})))?;
+        server.permission_reply(&owner,request_id,reply)?;
     }
     proc.permissions.lock().unwrap().remove(request_id);
     emit(app, session_id, json!({"type":"permissionResolved","id":request_id}));
@@ -851,16 +925,16 @@ pub(super) fn respond(
 /// Bypass was switched on while prompts were waiting: answer the permissions, keep the questions.
 pub(super) fn approve_pending(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
     let Ok(server) = server(proc) else { return };
-    let pending: Vec<String> = proc
+    let pending: Vec<(String,String)> = proc
         .permissions
         .lock()
         .unwrap()
         .iter()
         .filter(|(_, request)| request.get("_opencodeKind").and_then(Value::as_str) == Some("permission"))
-        .map(|(id, _)| id.clone())
+        .map(|(id, request)| (id.clone(),request.get("_opencodeSessionId").and_then(Value::as_str).unwrap_or("").to_string()))
         .collect();
-    for id in pending {
-        if server.post(&format!("/permission/{id}/reply"), Some(&json!({"reply":"once"}))).is_ok() {
+    for (id,owner) in pending {
+        if server.permission_reply(&owner,&id,"once").is_ok() {
             proc.permissions.lock().unwrap().remove(&id);
             emit(app, session_id, json!({"type":"permissionResolved","id":id}));
         }
@@ -950,7 +1024,8 @@ pub(super) fn steer(proc: &Arc<ChatProcess>, row_id: &str, text: &str, images: &
     let agent = proc.collaboration_mode.lock().unwrap().clone();
     let model = proc.model.lock().unwrap().clone();
     let variant = proc.effort.lock().unwrap().clone();
-    let body = wire::prompt_body(&message_id, text, images, agent.as_deref(), model.as_deref(), variant.as_deref());
+    let mut body = wire::prompt_body(&message_id, text, images, agent.as_deref(), model.as_deref(), variant.as_deref());
+    if server.is_v2() { body["_delivery"]=json!("steer"); }
     proc.opencode.lock().unwrap().user_messages.insert(message_id.clone(), row_id.to_string());
     proc.user_targets.lock().unwrap().insert(row_id.to_string(), RewindTarget {
         message_id: message_id.clone(), last_message_id: None, turn_id: None, text: text.to_string(),
@@ -999,6 +1074,15 @@ fn run_turn_request(
 pub(super) fn abort(proc: &Arc<ChatProcess>) -> Result<(), String> {
     let server = server(proc)?;
     let native = root_session(proc)?;
+    if server.is_v2() {
+        // User shell commands run outside v2's foreground drain; interrupt alone does not stop them.
+        let shells=proc.opencode.lock().unwrap().v2.active_shells(&native);
+        for id in shells {
+            if let Err(error)=server.delete(&format!("/api/shell/{}",wire::encode_query(&id))) {
+                if !wire::is_not_found(&error){return Err(error);}
+            }
+        }
+    }
     server.post(&format!("/session/{native}/abort"), None)?;
     Ok(())
 }
@@ -1091,8 +1175,14 @@ pub(super) fn rewind(proc: &Arc<ChatProcess>, target: &RewindTarget) -> Result<(
 /// A subdirectory session can therefore restore stale files outside that directory. Check the live
 /// repository as well as the server's cached paths before allowing any snapshot mutation.
 fn ensure_snapshot_scope(proc: &ChatProcess, server: &Server, native: &str) -> Result<(), String> {
-    let paths = server.get("/path")?;
     let session = server.get(&format!("/session/{native}"))?;
+    let paths = if server.is_v2() {
+        let directory=session.pointer("/location/directory").and_then(Value::as_str).ok_or("OpenCode did not provide a directory for file restoration")?;
+        let root=crate::host::command("git").arg("-C").arg(directory).args(["rev-parse","--show-toplevel"])
+            .output().map_err(|e|format!("Cannot verify the Git root before file restoration: {e}"))?;
+        if !root.status.success(){return Err("OpenCode file restoration requires an accessible Git working tree".into());}
+        json!({"directory":directory,"worktree":String::from_utf8_lossy(&root.stdout).trim()})
+    } else {server.get("/path")?};
     let canonical = |value: Option<&str>| -> Result<std::path::PathBuf, String> {
         let value = value.filter(|value| !value.trim().is_empty())
             .ok_or("OpenCode did not provide a directory for file restoration")?;
@@ -1177,12 +1267,23 @@ pub(super) fn rebuild_timeline(proc: &Arc<ChatProcess>, server: &Arc<Server>, na
         state.calls.extend(restored.calls);
         state.models.extend(restored.models);
         state.message_parts.extend(restored.message_parts);
+        if server.is_v2() {state.v2.restore(restored.v2);}
         state.summaries.extend(
             messages
                 .iter()
                 .filter(|m| timeline::is_summary(&m.info))
                 .filter_map(|m| m.info.get("id").and_then(Value::as_str).map(str::to_string)),
         );
+    }
+    let mut buffers=proc.buffers.lock().unwrap();
+    for message in messages.iter().chain(cache.lock().unwrap().values().flatten().flatten()) {
+        for part in &message.parts {
+            if matches!(part.get("type").and_then(Value::as_str),Some("text"|"reasoning")) {
+                if let (Some(id),Some(text))=(part.get("id").and_then(Value::as_str),part.get("text").and_then(Value::as_str)) {
+                    buffers.insert(id.to_string(),text.to_string());
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1195,6 +1296,7 @@ fn collect_routes(
     routes: &mut HashMap<String, RowPath>,
     state: &mut OpencodeState,
 ) {
+    state.v2.seed(messages);
     for message in messages {
         if let (Some(id), Some(role)) = (
             message.info.get("id").and_then(Value::as_str),

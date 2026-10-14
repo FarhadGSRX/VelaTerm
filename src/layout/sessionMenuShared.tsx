@@ -3,11 +3,11 @@
 //! dialogs (sessionMenuDialogs.tsx). Keeping them separate avoids duplicate definitions and circular imports
 //! between the hook and dialogs.
 
-import { useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import Icons from "../components/Icons";
-import { t } from "../i18n";
+import { t, useT } from "../i18n";
 import { type WorktreeEntry } from "../ipc/commands";
-import { copyText } from "../ipc/info";
+import { platform } from "../platform";
 import { type SessionKind } from "../types";
 
 /** Agent kinds that support custom launch arguments. */
@@ -106,23 +106,56 @@ export function worktreeLabel(w?: WorktreeEntry): string {
   return w.branch ? `${w.branch}  ·  ${leaf}` : leaf;
 }
 
-/** Inline copy button that copies the supplied text and briefly shows a checkmark. */
-export function CopyBtn({ value }: { value: string }) {
-  const [done, setDone] = useState(false);
-  return (
+/** Copy supplied text with an optional contextual tooltip and confirmed clipboard feedback. */
+export function CopyBtn({ value, label, copiedLabel, disabled = false, icon, tooltip = false }: {
+  value: string; label?: string; copiedLabel?: string; disabled?: boolean; icon?: ReactNode; tooltip?: boolean;
+}) {
+  const t = useT(); const tooltipId = useId(); const request = useRef(0);
+  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
+  useEffect(() => {
+    setStatus("idle");
+    return () => { request.current += 1; };
+  }, [value]);
+  useEffect(() => {
+    if (status !== "copied" && status !== "failed") return;
+    const timer = window.setTimeout(() => setStatus("idle"), 2000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+  const action = label ?? t("common.copy");
+  const feedback = status === "copied" ? copiedLabel ?? t("common.copied") : status === "failed" ? t("common.copyFailed") : action;
+  const copy = async () => {
+    if (disabled || status === "copying") return;
+    const id = ++request.current;
+    setStatus("copying");
+    try {
+      await platform.clipboard.writeText(value, { reportFailure: true });
+      if (request.current === id) setStatus("copied");
+    } catch {
+      if (request.current === id) setStatus("failed");
+    }
+  };
+  const button = (
     <button
+      type="button"
       className="icon-btn sm"
-      title={done ? t("common.copied") : t("common.copy")}
-      style={{ flex: "0 0 auto", color: done ? "var(--green)" : "var(--text-muted)" }}
-      onClick={() => {
-        void copyText(value);
-        setDone(true);
-        setTimeout(() => setDone(false), 1200);
-      }}
+      title={tooltip ? undefined : feedback}
+      aria-label={action}
+      aria-describedby={tooltip ? tooltipId : undefined}
+      disabled={disabled}
+      aria-busy={status === "copying"}
+      aria-disabled={disabled || status === "copying"}
+      style={{ flex: "0 0 auto", color: status === "copied" ? "var(--green)" : "var(--text-muted)" }}
+      onClick={() => void copy()}
     >
-      {done ? <Icons.check size={13} /> : <Icons.copy size={13} />}
+      {status === "copied" ? <Icons.check size={13} /> : status === "failed" ? <Icons.x size={13} /> : icon ?? <Icons.copy size={13} />}
     </button>
   );
+  if (!tooltip) return button;
+  return <span className="copy-btn-wrap" data-copy-feedback={status === "copied" || status === "failed"}>
+    {button}
+    <span id={tooltipId} className="copy-btn-tooltip" role="tooltip">{feedback}</span>
+    <span className="copy-btn-announcement" role={status === "copied" || status === "failed" ? "status" : undefined}>{status === "copied" || status === "failed" ? feedback : ""}</span>
+  </span>;
 }
 
 /** Information row with a left label and right value; IDs/paths use monospace and can be copied. */

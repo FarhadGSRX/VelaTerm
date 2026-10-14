@@ -41,6 +41,7 @@ import type {
   QuitRequest,
   TransportCapability,
   UnlistenFn,
+  UpdateDownloadEvent,
   UpdaterCapability,
   VelaCommandCapability,
   WindowCapability,
@@ -273,12 +274,31 @@ const browser: BrowserCapability = {
     transportListen<BrowserPopupPayload>(`browser://popup/${tabId}`, (payload) => cb(payload)),
 };
 
+/** Windows, detected the same way as notify.ts; `env` only distinguishes macOS. */
+const isWindows = !env.isMac && /Win/i.test(navigator.userAgent);
+
+/**
+ * Windows final update step: the backend downloads through the updater plugin (signature verified), saves
+ * the installer in VelaTerm's own data folder rather than the plugin's Temp folder, starts it and exits.
+ * See src-tauri/src/updater_win.rs. Resolves only if installation could not start.
+ */
+async function installWindowsUpdate(rid: number, onEvent?: (event: UpdateDownloadEvent) => void): Promise<void> {
+  const { Channel, invoke } = await import("@tauri-apps/api/core");
+  const channel = new Channel<UpdateDownloadEvent>();
+  if (onEvent) channel.onmessage = onEvent;
+  await invoke("updater_install_windows", { rid, onEvent: channel });
+}
+
 /** Updater plugin on the desktop; browsers and remote windows do not self-update. */
 const updater: UpdaterCapability = {
   supported: env.isTauri,
   async check(headers) {
     const { check } = await import("@tauri-apps/plugin-updater");
-    return check(headers ? { headers } : undefined);
+    const update = await check(headers ? { headers } : undefined);
+    if (update && isWindows) {
+      update.downloadAndInstall = (onEvent) => installWindowsUpdate(update.rid, onEvent);
+    }
+    return update;
   },
   async relaunch() {
     const { relaunch } = await import("@tauri-apps/plugin-process");

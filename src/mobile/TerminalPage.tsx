@@ -16,6 +16,7 @@ import { useTermStore } from "../store/termStore";
 import { injectImageFiles } from "../terminal/imageInput";
 import { effectiveStatus, supportsChatEngine, type Session } from "../types";
 import { MobileSessionBody } from "./MobileSessionBody";
+import { AgentVersionBadge } from "../layout/CenterPane/session/AgentVersionBadge";
 import { MobileSessionLink, type MobileSessionView } from "./sessionNavigation";
 import "./sessionNavigation.css";
 
@@ -104,7 +105,10 @@ export function TerminalPage({
         <span className="m-row-dot">
           <StatusIndicator status={status} />
         </span>
-        <span className="m-title">{session.name}</span>
+        {session.engine === "chat" ? <div className="m-session-heading">
+          <span className="m-title">{session.name}</span>
+          <AgentVersionBadge session={session} hidden={false} />
+        </div> : <span className="m-title">{session.name}</span>}
         <span className="m-kind">{session.kind}</span>
         {session.kind === "kiro" && <MobileSessionLink sessionId={session.id} view={historyView ? "terminal" : "history"}
           className="vlx-btn m-session-view-link">

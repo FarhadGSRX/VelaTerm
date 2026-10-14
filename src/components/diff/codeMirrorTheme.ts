@@ -64,6 +64,33 @@ export const vlxCmTheme = EditorView.theme({
   },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": { lineHeight: "1.5" },
+  // MergeView's built-in light palette does not follow the application's CSS-variable theme.
+  ".cm-collapsedLines": {
+    background: "var(--bg-hover)",
+    color: "var(--text-dim)",
+    borderBlock: "1px solid var(--border)",
+    fontFamily: "var(--font-prose)",
+    textAlign: "center",
+    padding: "4px 10px",
+  },
+  ".cm-collapsedLines:hover": {
+    background: "var(--bg-active)",
+    color: "var(--text)",
+  },
+  "&.cm-merge-a .cm-changedLine": {
+    backgroundColor: "color-mix(in srgb, var(--red) 8%, transparent)",
+  },
+  "&.cm-merge-b .cm-changedLine": {
+    backgroundColor: "color-mix(in srgb, var(--green) 8%, transparent)",
+  },
+  "&.cm-merge-a .cm-changedText": {
+    background: "color-mix(in srgb, var(--red) 18%, transparent)",
+  },
+  "&.cm-merge-b .cm-changedText": {
+    background: "color-mix(in srgb, var(--green) 18%, transparent)",
+  },
+  "&.cm-merge-a .cm-changedLineGutter": { background: "var(--red)" },
+  "&.cm-merge-b .cm-changedLineGutter": { background: "var(--green)" },
 });
 
 /** Highlight and theme extensions shared by both sides of a diff. */

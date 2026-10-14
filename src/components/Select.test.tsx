@@ -135,3 +135,45 @@ describe("Select", () => {
     expect(screen.getByRole("combobox").textContent).toContain("Select a branch");
   });
 });
+
+function MultipleHarness() {
+  const [value, setValue] = useState(["low"]);
+  return <Select multiple value={value} onChange={setValue} options={OPTIONS} menuPortal ariaLabel="types" selectAllLabel="Select All" clearLabel="Clear selection" placeholder="Choose types" />;
+}
+
+it("supports continuous multi-selection and bulk actions without closing the dropdown", () => {
+  render(<MultipleHarness />);
+  const trigger = screen.getByRole("combobox", { name: "types" });
+  fireEvent.click(trigger);
+  expect(screen.getByRole("listbox").getAttribute("aria-multiselectable")).toBe("true");
+  fireEvent.click(screen.getByRole("option", { name: "medium" }));
+  fireEvent.click(screen.getByRole("option", { name: "high" }));
+  fireEvent.click(screen.getByRole("option", { name: "low" }));
+  expect(trigger.textContent).toContain("medium, high");
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
+  expect(trigger.textContent).toContain("Choose types");
+  fireEvent.click(screen.getByRole("button", { name: "Select All" }));
+  expect(screen.getAllByRole("option", { selected: true })).toHaveLength(3);
+  fireEvent.keyDown(trigger, { key: "Escape" });
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+it("keeps keyboard focus on a toggled option and closes only the dropdown on Escape or Tab", () => {
+  const parentEscape = vi.fn();
+  render(<div onKeyDown={e => { if (e.key === "Escape") parentEscape(); }}><MultipleHarness /></div>);
+  const trigger = screen.getByRole("combobox", { name: "types" });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.keyDown(trigger, { key: " " });
+  expect(screen.getByRole("option", { name: "low" }).getAttribute("aria-selected")).toBe("false");
+  fireEvent.keyDown(trigger, { key: " " });
+  expect(screen.getByRole("option", { name: "low" }).getAttribute("aria-selected")).toBe("true");
+  fireEvent.keyDown(trigger, { key: "a", ctrlKey: true });
+  expect(screen.getAllByRole("option", { selected: true })).toHaveLength(3);
+  fireEvent.keyDown(trigger, { key: "Escape" });
+  expect(parentEscape).not.toHaveBeenCalled();
+  fireEvent.click(trigger);
+  fireEvent.keyDown(trigger, { key: "Tab" });
+  expect(screen.queryByRole("listbox")).toBeNull();
+});

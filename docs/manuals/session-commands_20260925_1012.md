@@ -2,6 +2,8 @@
 
 Created: 2026-09-25 10:12
 
+Updated: 2026-10-13 14:42
+
 > VelaTerm adds a set of short commands to every session it starts. You and your agents use them to start other sessions, open files, read and search other conversations, check which sessions are busy, send messages between sessions, and wait for long commands. This chapter is a reference for each command and for the matching agent skills.
 
 ## 1. Where the commands work
@@ -42,7 +44,7 @@ Skills marked "You" run only when you call them; the others can also be used by 
 ## 3. vspawn and vspawn-tree
 
 ```text
-vspawn [--worktree] [--cwd <path>] [--yes] [--claude|--codex|--copilot|--kiro] [--model <name>] [--effort <level>] <task description...>
+vspawn [--worktree] [--cwd <path>] [--yes] [--agent <agent>|--claude|--codex|--copilot|--kiro|--pi] [--model <name>] [--effort <level>] <task description...>
 ```
 
 Starts a new session under the current one and sends the task as its first message. `vspawn-tree` is the same command with a separate git worktree.
@@ -52,7 +54,8 @@ Starts a new session under the current one and sends the task as its first messa
 | `--worktree` | Give the child its own worktree and branch |
 | `--cwd <path>` | Working directory and repository for the child |
 | `--yes` | Start without the confirmation card |
-| `--claude`, `--codex`, `--copilot`, `--kiro` | Agent of the child; by default the current session's agent (Claude Code for plain terminals) |
+| `--agent <agent>` | Agent of the child: `claude`, `codex`, `opencode`, `copilot`, `cursor`, `antigravity`, `cline`, `pi`, `omp`, `crush`, `kimi`, `kiro`, `grok` or `zoo`; by default the current session's agent (Claude Code for plain terminals) |
+| `--claude`, `--codex`, `--copilot`, `--kiro`, `--pi` | Shortcuts for `--agent` with that agent |
 | `--model <name>`, `--effort <level>` | Model and reasoning effort of the child |
 | `--plan-execute` and related options | Start a planning and execution workflow |
 

@@ -674,7 +674,7 @@ impl PtyManager {
         let kiro_agent: Option<String> = if kind == SessionKind::Kiro {
             let started = std::time::Instant::now();
             crate::agent::kiro::audit_install("started", 0);
-            match crate::agent::kiro::install() {
+            match crate::agent::kiro::install(std::path::Path::new(&exe_path)) {
                 Ok(name) => {
                     crate::agent::kiro::audit_install("success", started.elapsed().as_millis());
                     Some(name)
@@ -690,9 +690,20 @@ impl PtyManager {
         } else {
             None
         };
-        // Windows temporarily forgoes lifecycle hooks; see `codex_lifecycle_hooks_supported`.
+        // Lifecycle hooks need a Codex that accepts the trust flag and a hooks table this platform can pass
+        // intact; otherwise the session keeps notify plus the rollout scan.
         let codex_hooks_supported = kind != SessionKind::Codex
-            || (!cfg!(windows) && codex_lifecycle_hooks_supported(bin_path.as_deref()));
+            || (codex_lifecycle_hooks_supported(bin_path.as_deref())
+                && crate::agent::inject::build_codex_hooks(&exe_path).is_some());
+        let opencode_v2 = kind == SessionKind::Opencode && crate::agent::opencode::is_v2(bin_path.as_deref().unwrap_or("opencode"));
+        let opencode_new_terminal = opencode_v2 && resume_id.is_none();
+        let mut resume_id = resume_id;
+        if opencode_v2 {
+            let session=crate::agent::session_settings::session(&app,&id)?;
+            let choice=crate::agent::session_settings::resolve(&app,&session)?;
+            resume_id=Some(crate::agent::opencode::prepare_v2_terminal(&app,&id,bin_path.as_deref().unwrap_or("opencode"),
+                spawn_cwd.as_deref(),resume_id.as_deref(),&choice)?);
+        }
         let should_capture_agent_id = resume_id.is_none() || fork;
         let mut terminal_thinking_off = false;
         let extra_args = if matches!(kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Opencode | SessionKind::Antigravity) {
@@ -706,9 +717,21 @@ impl PtyManager {
                     kind, inject::shell_kind(&shell), extra_args.as_deref(), &selection,
                 );
                 for (key, value) in values { cmd.env(key, value); }
-                Some(args)
+                Some(if opencode_v2 {crate::agent::session_settings::without_selection_args(kind,Some(&args))}else{args})
             } else { extra_args }
         } else { extra_args };
+        let extra_args = if opencode_v2 {
+            let mut args=crate::agent::session_settings::without_selection_args(kind,extra_args.as_deref());
+            args.push_str(" --standalone");
+            if matches!(permission_mode.as_deref(),Some("skip"|"bypassPermissions")){args.push_str(" --auto");}
+            if opencode_new_terminal {
+                if let Some(prompt)=init_prompt.as_deref().filter(|p|!p.trim().is_empty()) {
+                    cmd.env(inject::INIT_PROMPT_ENV,prompt);
+                    args.push_str(&format!(" --prompt {}",inject::value_ref(inject::shell_kind(&shell),inject::INIT_PROMPT_ENV)));
+                }
+            }
+            Some(args.trim().to_string())
+        } else {extra_args};
         // Only the Windows theme-injection branch mutates this value.
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut agent_spawn = inject::prepare_with_args_capabilities(
@@ -763,7 +786,7 @@ impl PtyManager {
         // OpenCode receives inline configuration pointing to the installed state-bridge plugin. It reads
         // injected `VLX_*` values and reports session, idle, and permission events. Installation failure
         // leaves OpenCode functional with screen detection as a fallback.
-        if kind == SessionKind::Opencode {
+        if kind == SessionKind::Opencode && !opencode_v2 {
             if let Ok(data_dir) = app.data_dir() {
                 let plugin = crate::agent::opencode::plugin_path(&data_dir);
                 if plugin.exists() {
@@ -781,7 +804,7 @@ impl PtyManager {
         // Lazily install Copilot's static state-bridge hooks under `~/.copilot/hooks/vlx-term.json`.
         // Installation is idempotent and dynamic values remain in `VLX_*`; failures only disable authoritative state.
         if kind == SessionKind::Copilot {
-            if let Err(e) = crate::agent::copilot::install() {
+            if let Err(e) = crate::agent::copilot::install(std::path::Path::new(&exe_path)) {
                 crate::diagnostic_warn!(
                     "failed to install copilot hooks (copilot status reporting unavailable): {e}"
                 );
@@ -792,7 +815,7 @@ impl PtyManager {
         // user entries and refusing malformed structures. Dynamic values stay in `VLX_*`; failures only
         // disable authoritative state reporting.
         if kind == SessionKind::Cursor {
-            if let Err(e) = crate::agent::cursor::install() {
+            if let Err(e) = crate::agent::cursor::install(std::path::Path::new(&exe_path)) {
                 crate::diagnostic_warn!(
                     "failed to install cursor hooks (cursor status reporting unavailable): {e}"
                 );
@@ -817,10 +840,10 @@ impl PtyManager {
             }
         }
 
-        // Install Antigravity's static bridge at `~/.gemini/vlx-term/hook.sh` and merge the dedicated
+        // Install Antigravity's Unix script or Windows native bridge and merge the dedicated
         // `vlx-term-status` group into global hooks, preserving all user groups. Failures retain normal launch.
         if kind == SessionKind::Antigravity {
-            if let Err(e) = crate::agent::antigravity::install() {
+            if let Err(e) = crate::agent::antigravity::install(std::path::Path::new(&exe_path)) {
                 crate::diagnostic_warn!("failed to install antigravity hooks (antigravity status reporting unavailable): {e}");
             }
         }
@@ -830,7 +853,7 @@ impl PtyManager {
         // touching user configuration or data. Failures retain Crush's own configuration and screen fallback.
         if kind == SessionKind::Crush {
             match app.data_dir() {
-                Ok(data_dir) => match crate::agent::crush::install(&data_dir) {
+                Ok(data_dir) => match crate::agent::crush::install(&data_dir, std::path::Path::new(&exe_path)) {
                     Ok(config_dir) => {
                         cmd.env("CRUSH_GLOBAL_CONFIG", &config_dir);
                     }
@@ -849,7 +872,7 @@ impl PtyManager {
         if kind == SessionKind::Kimi {
             let started = std::time::Instant::now();
             crate::agent::kimi::audit_install("started", 0);
-            if crate::agent::kimi::install().is_err() {
+            if crate::agent::kimi::install(std::path::Path::new(&exe_path)).is_err() {
                 crate::agent::kimi::audit_install("failed", started.elapsed().as_millis());
             } else {
                 crate::agent::kimi::audit_install("success", started.elapsed().as_millis());
@@ -1256,8 +1279,8 @@ impl PtyManager {
                     Arc::clone(&alive),
                 );
             }
-            // OpenCode is marked immediately and relies on plugin events for working, waiting, and asking.
-            // The hook body also persists its session ID for later `--session` resume.
+            // v1 reports authoritative plugin events. v2 persists its identity before launch and uses
+            // the existing terminal activity monitor because its preview has no v1 event hook API.
             SessionKind::Opencode => {
                 app_extra.emit(
                     &status_event_extra,
@@ -1266,6 +1289,9 @@ impl PtyManager {
                         state_source: None,
                     },
                 );
+                if opencode_v2 {
+                    spawn_status_monitor(app_extra,status_event_extra,Arc::clone(&last_activity),Arc::clone(&alive));
+                }
             }
             // Copilot is marked immediately and relies on command-hook lifecycle events. The forwarded hook
             // body persists its session ID for later `--resume=<id>` without file scanning.
@@ -1898,11 +1924,9 @@ fn open_recorder(app: &AppCtx, id: &str) -> Option<Recorder> {
 /// unsupported and retains notify/screen/busy fallback. Windows `.cmd` wrappers run through cmd.exe; native
 /// executables run directly. Probe each launch so an in-place Codex upgrade takes effect immediately.
 ///
-/// Callers currently skip this probe on Windows and never inject hooks there. The inline TOML table passed
-/// as `-c hooks=<table>` contains spaces and double quotes, and an npm-installed `codex.cmd` re-parses the
-/// command line through cmd.exe, which drops the quoting and splits the value into separate arguments. Codex
-/// then rejects the stray `--codex-hook` token and refuses to start (issue #53). Restore Windows hook support
-/// once the handlers move into `~/.codex/hooks.json`, leaving only quote-free flags on the command line.
+/// Windows once skipped this probe and injected no hooks (issue #53): the inline table's embedded double
+/// quotes did not survive npm's `codex.cmd` / `codex.ps1` wrappers. The Windows table now uses only
+/// single-quoted TOML literal strings (see `inject::codex_hooks_table`), so the probe applies everywhere.
 fn codex_lifecycle_hooks_supported(bin_path: Option<&str>) -> bool {
     let program = bin_path.filter(|p| !p.trim().is_empty()).unwrap_or("codex");
     #[cfg(windows)]

@@ -7,16 +7,17 @@ import type { ComposerChipId } from "../../../store/settings";
 
 /** One chip the pane offers for the current session, keyed for the user's preference list. */
 export interface ComposerChip {
-  id: ComposerChipId;
+  id: ComposerItemId;
   node: ReactNode;
 }
+export type ComposerItemId = ComposerChipId | "translation";
 
 /**
  * Splits the chips that exist for this session by the user's preference. `enabled` follows the order of
  * `inline` and skips ids the pane did not offer, so an enabled chip that is unavailable for this agent
  * or engine state is never rendered as an empty slot. `hidden` keeps the pane's own order.
  */
-export function arrangeComposerChips(chips: ComposerChip[], inline: ComposerChipId[]): {
+export function arrangeComposerChips(chips: ComposerChip[], inline: ComposerItemId[]): {
   enabled: ComposerChip[];
   hidden: ComposerChip[];
 } {

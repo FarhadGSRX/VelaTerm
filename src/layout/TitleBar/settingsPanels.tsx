@@ -45,6 +45,7 @@ import { defaultEngineFor } from "../../store/settings";
 import { supportsChatEngine, type SessionKind } from "../../types";
 import { kindIconEl } from "../sessionViewers/sessionMeta";
 import { Field, Seg, SectionTitle } from "./settingsParts";
+import { AgentPresetsSection } from "./AgentPresetsSection";
 
 /** i18n label keys for actions with configurable shortcuts. */
 const SC_LABEL: Record<ShortcutAction, I18nKey> = {
@@ -183,64 +184,30 @@ export function ShortcutsPanel() {
   const actions = SHORTCUT_ACTIONS.filter((a) => a !== "newBrowserTab" || isTauri || env.isElectron);
 
   return (
-    <>
-      <SectionTitle>{t("settings.catShortcuts")}</SectionTitle>
-      {actions.map((a) => (
-        <ShortcutRow
-          key={a}
-          label={t(SC_LABEL[a])}
-          combo={eff(a)}
-          recording={recording === a}
-          onStart={() => {
-            setErr(null);
-            setRecording(a);
-          }}
-          onCancel={() => setRecording(null)}
-          onCapture={(c) => capture(a, c)}
-        />
-      ))}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginTop: 14,
-        }}
-      >
-        <span
-          style={{
-            flex: 1,
-            fontSize: 11,
-            lineHeight: 1.5,
-            color: err ? "#e5484d" : "var(--text-dim)",
-          }}
-        >
-          {err ?? t("settings.scHint")}
-        </span>
-        <button
-          onClick={() => {
-            setErr(null);
-            setRecording(null);
-            resetShortcuts();
-            if (shot && shot.shortcut !== shot.defaultShortcut) applyShot(shot.defaultShortcut);
-          }}
-          style={{
-            flex: "none",
-            padding: "5px 14px",
-            fontSize: 11.5,
-            borderRadius: 5,
-            border: "1px solid var(--border)",
-            background: "var(--bg-active)",
-            color: "var(--text)",
-            cursor: "pointer",
-          }}
-        >
-          {t("settings.scReset")}
-        </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div>
+        <SectionTitle>{t("settings.catShortcuts")}</SectionTitle>
+        <div style={{ marginBottom: 10, fontSize: 11, lineHeight: 1.5, color: "var(--text-dim)" }}>
+          {t("settings.scHint")}
+        </div>
+        {actions.map((a) => (
+          <ShortcutRow
+            key={a}
+            label={t(SC_LABEL[a])}
+            combo={eff(a)}
+            recording={recording === a}
+            onStart={() => {
+              setErr(null);
+              setRecording(a);
+            }}
+            onCancel={() => setRecording(null)}
+            onCapture={(c) => capture(a, c)}
+          />
+        ))}
+        {err && <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: "#e5484d" }}>{err}</div>}
       </div>
       {shot?.supported && (
-        <>
+        <div>
           <SectionTitle>{t("settings.scScreenshotSection")}</SectionTitle>
           <ShortcutRow
             label={t("settings.scScreenshot")}
@@ -267,9 +234,23 @@ export function ShortcutsPanel() {
           >
             {shotErr ?? (shot.error ? t("settings.scInUse") : t("settings.scScreenshotHint"))}
           </div>
-        </>
+        </div>
       )}
-    </>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          className="vlx-btn"
+          onClick={() => {
+            setErr(null);
+            setRecording(null);
+            resetShortcuts();
+            if (shot && shot.shortcut !== shot.defaultShortcut) applyShot(shot.defaultShortcut);
+          }}
+        >
+          {t("settings.scReset")}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -616,6 +597,7 @@ export function AgentsPanel() {
       >
         {t("settings.agentArgsHint")}
       </div>
+      <AgentPresetsSection />
     </>
   );
 }

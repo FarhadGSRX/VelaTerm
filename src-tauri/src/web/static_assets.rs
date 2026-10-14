@@ -28,7 +28,7 @@ use std::sync::{Mutex, OnceLock};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 
-use super::Assets;
+use super::frontend;
 
 /// Brotli quality. See the module docs for the measurements behind this value.
 const BROTLI_QUALITY: i32 = 9;
@@ -237,9 +237,9 @@ pub(crate) async fn serve(
     mime: &'static str,
     headers: &HeaderMap,
 ) -> Option<Response> {
-    let asset = Assets::get(request_path)?;
-    let hash = asset.metadata.sha256_hash();
-    let data = asset.data.into_owned();
+    let asset = frontend::get(request_path)?;
+    let hash = asset.sha256;
+    let data = asset.data;
 
     let mut encoding = negotiate(headers);
     if encoding != Encoding::Identity

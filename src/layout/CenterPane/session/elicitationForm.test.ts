@@ -5,6 +5,7 @@ import {
   initialElicitationValues,
   isElicitationComplete,
   parseElicitationFields,
+  isElicitationVisible,
 } from "./elicitationForm";
 
 const schema = {
@@ -75,5 +76,58 @@ describe("elicitation form", () => {
   it("yields no fields for a schema it cannot read", () => {
     expect(parseElicitationFields(null)).toEqual([]);
     expect(parseElicitationFields({ type: "string" })).toEqual([]);
+  });
+
+  it("keeps arrays without choices editable and supports custom multiselect values", () => {
+    const fields = parseElicitationFields({ properties: {
+      unknown: { type: "array", items: { type: "object" } },
+      custom: { type: "array", custom: true, items: { type: "string" } },
+    }, required: ["unknown", "custom"] });
+    expect(fields.map((field) => field.kind)).toEqual(["text", "multiselect"]);
+    const values = { unknown: '[{"name":"sample"}]', custom: ["free choice"] };
+    expect(isElicitationComplete(fields, values)).toBe(true);
+    expect(buildElicitationContent(fields, values)).toEqual(values);
+  });
+
+  it("preserves v2 option values, multiselect defaults and conditional typed answers", () => {
+    const fields = parseElicitationFields({ properties: {
+      region: { type: "string", oneOf: [{ const: "eu", title: "Europe" }] },
+      tags: { type: "array", default: ["one"], items: { oneOf: [{ const: "one", title: "First" }] } },
+      count: { type: "integer", default: 2 },
+      reason: { type: "string", when: [{ key: "count", op: "eq", value: 2 }] },
+    }, required: ["reason"] });
+    const values = initialElicitationValues(fields);
+    expect(values.tags).toEqual(["one"]);
+    expect(isElicitationVisible(fields[3], fields, values)).toBe(true);
+    expect(isElicitationComplete(fields, values)).toBe(false);
+    values.count = "3";
+    values.region = "eu";
+    values.reason = "hidden stale input";
+    expect(isElicitationComplete(fields, values)).toBe(true);
+    expect(buildElicitationContent(fields, values)).toEqual({ tags: ["one"], count: 3, region: "eu" });
+  });
+
+  it("requires an external confirmation before submitting", () => {
+    const fields = parseElicitationFields({ properties: { confirmed: { type: "boolean", url: "https://example.com" } } });
+    const values = initialElicitationValues(fields);
+    expect(isElicitationComplete(fields, values)).toBe(false);
+    values.confirmed = true;
+    expect(isElicitationComplete(fields, values)).toBe(true);
+    expect(buildElicitationContent(fields, values)).toEqual({ confirmed: true });
+  });
+
+  it("keeps native field order and omits answers behind hidden dependencies", () => {
+    const fields = parseElicitationFields({ properties: {
+      detail: { type: "string", when: [{ key: "count", op: "eq", value: 2 }] },
+      count: { type: "integer", default: 2, when: [{ key: "enabled", op: "eq", value: true }] },
+      enabled: { type: "boolean", default: false },
+    }, propertyOrder: ["enabled", "count", "detail"], required: ["detail"] });
+    const values: ReturnType<typeof initialElicitationValues> = { ...initialElicitationValues(fields), detail: "hidden answer" };
+    expect(fields.map((field) => field.name)).toEqual(["enabled", "count", "detail"]);
+    expect(isElicitationVisible(fields[2], fields, values)).toBe(false);
+    expect(isElicitationComplete(fields, values)).toBe(true);
+    expect(buildElicitationContent(fields, values)).toEqual({ enabled: false });
+    values.enabled = true;
+    expect(buildElicitationContent(fields, values)).toEqual({ enabled: true, count: 2, detail: "hidden answer" });
   });
 });

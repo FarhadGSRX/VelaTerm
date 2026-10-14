@@ -770,6 +770,7 @@ mod native_tests {
             token: "unused-test-token".into(),
         });
         let ctx = AppCtx::Headless(host);
+        let model=std::env::var("VLX_HANDOFF_TEST_MODEL").unwrap_or_else(|_|"openai/gpt-5.5".into());
         let source = {
             let conn = ctx.db().conn.lock().unwrap();
             let project = repo::import_project(&conn, dir.to_str().unwrap()).unwrap();
@@ -801,11 +802,11 @@ mod native_tests {
             source
         };
         let result = (|| -> Result<(), String> {
-            crate::command_core::chat_set_model(&ctx, &source.id, Some("openai/gpt-5.5"))?;
+            crate::command_core::chat_set_model(&ctx, &source.id, Some(&model))?;
             crate::command_core::chat_set_effort(&ctx, &source.id, Some("high"))?;
             crate::command_core::set_session_engine(&ctx, &source.id, "tui")?;
             let session = session(&ctx, &source.id)?;
-            let expected = json!({"model":"openai/gpt-5.5","effort":"high"});
+            let expected = json!({"model":model,"effort":"high"});
             if native_state(&session)? != expected {
                 return Err("native model or variant was lost".into());
             }

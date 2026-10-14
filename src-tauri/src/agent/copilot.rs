@@ -5,8 +5,10 @@
 //! would also move authentication and history, so use a minimally invasive user-level hook file:
 //!
 //! - Write only `~/.copilot/hooks/vlx-term.json` (respecting COPILOT_HOME), leaving user files untouched.
-//! - Static Bash/PowerShell commands read injected session variables, build the hook URL, and forward
-//!   stdin payload unchanged. Dynamic ports/tokens stay in the environment, so startup needs no rewrite.
+//! - The Bash command reads injected session variables, builds the hook URL, and forwards the stdin payload
+//!   unchanged. The PowerShell command, which Copilot uses on Windows, only calls the VelaTerm executable's
+//!   native `--agent-hook copilot` bridge, which does the same without a PowerShell network call. Dynamic
+//!   ports/tokens stay in the environment, so startup needs no rewrite.
 //! - Outside a vlx-managed session, missing variables make the hook exit successfully without effects.
 //! - Install lazily only when the user actually starts a Copilot session.
 //!
@@ -39,19 +41,17 @@ pub fn hooks_path() -> Option<PathBuf> {
 ///
 /// Bash sends only with all three VLX variables, forwards stdin unchanged via `--data-binary @-`,
 /// limits the request to three seconds, and always exits zero so hook failure cannot interrupt Copilot.
-/// PowerShell implements the same semantics for Windows.
-fn hook_entry(event: &str) -> serde_json::Value {
+/// PowerShell hands the same work to `exe`, whose bridge applies the same guards, limits, and exit code.
+fn hook_entry(exe: &Path, event: &str) -> serde_json::Value {
     let bash = format!(
         "[ -n \"$VLX_SPAWN_URL\" ] && [ -n \"$VLX_SESSION_ID\" ] && [ -n \"$VLX_TOKEN\" ] || exit 0; \
          curl -s -m 3 -X POST -H \"Content-Type: application/json\" --data-binary @- \
          \"$VLX_SPAWN_URL/hook/$VLX_SESSION_ID?t=$VLX_TOKEN&e={event}\" >/dev/null 2>&1; exit 0"
     );
-    let powershell = format!(
-        "if ($env:VLX_SPAWN_URL -and $env:VLX_SESSION_ID -and $env:VLX_TOKEN) {{ \
-         try {{ $b = [Console]::In.ReadToEnd(); \
-         Invoke-RestMethod -Method Post -ContentType 'application/json' -TimeoutSec 3 -Body $b \
-         -Uri \"$($env:VLX_SPAWN_URL)/hook/$($env:VLX_SESSION_ID)?t=$($env:VLX_TOKEN)&e={event}\" \
-         | Out-Null }} catch {{}} }}; exit 0"
+    let powershell = super::hook_bridge::command(
+        exe,
+        super::hook_bridge::Shell::PowerShell,
+        &format!("--agent-hook copilot {event}"),
     );
     serde_json::json!({
         "type": "command",
@@ -62,17 +62,17 @@ fn hook_entry(event: &str) -> serde_json::Value {
 }
 
 /// Generate pretty-printed hook JSON for easy user inspection.
-pub fn hooks_json() -> String {
+pub fn hooks_json(exe: &Path) -> String {
     let v = serde_json::json!({
         "version": 1,
         "hooks": {
-            "sessionStart": [hook_entry("boot")],
-            "userPromptSubmitted": [hook_entry("working")],
-            "preToolUse": [hook_entry("working")],
-            "postToolUse": [hook_entry("working")],
-            "permissionRequest": [hook_entry("asking")],
-            "agentStop": [hook_entry("waiting")],
-            "errorOccurred": [hook_entry("waiting")]
+            "sessionStart": [hook_entry(exe, "boot")],
+            "userPromptSubmitted": [hook_entry(exe, "working")],
+            "preToolUse": [hook_entry(exe, "working")],
+            "postToolUse": [hook_entry(exe, "working")],
+            "permissionRequest": [hook_entry(exe, "asking")],
+            "agentStop": [hook_entry(exe, "waiting")],
+            "errorOccurred": [hook_entry(exe, "waiting")]
         }
     });
     serde_json::to_string_pretty(&v).expect("serializing static JSON should not fail")
@@ -82,14 +82,14 @@ pub fn hooks_json() -> String {
 ///
 /// Idempotently preserve mtime when content matches and overwrite changed mappings after upgrades.
 /// Missing home or permissions return Err for logging only; Copilot still starts with screen inference.
-pub fn install() -> Result<PathBuf, String> {
+pub fn install(exe: &Path) -> Result<PathBuf, String> {
     let path = hooks_path().ok_or("Failed to resolve user home directory")?;
-    install_at(&path)
+    install_at(&path, exe)
 }
 
 /// Like install, with an explicit target path for tests.
-fn install_at(path: &Path) -> Result<PathBuf, String> {
-    let content = hooks_json();
+fn install_at(path: &Path, exe: &Path) -> Result<PathBuf, String> {
+    let content = hooks_json(exe);
     if let Ok(existing) = std::fs::read_to_string(path) {
         if existing == content {
             return Ok(path.to_path_buf());
@@ -107,9 +107,12 @@ fn install_at(path: &Path) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
+    /// Executable path embedded in the PowerShell commands.
+    const EXE: &str = "/opt/VelaTerm/velaterm";
+
     #[test]
     fn hooks_json_is_valid_and_maps_events() {
-        let v: serde_json::Value = serde_json::from_str(&hooks_json()).expect("should be valid JSON");
+        let v: serde_json::Value = serde_json::from_str(&hooks_json(Path::new(EXE))).expect("should be valid JSON");
         assert_eq!(v["version"], 1);
         let hooks = v["hooks"].as_object().unwrap();
         // Every event is present.
@@ -149,6 +152,10 @@ mod tests {
         assert!(bash.ends_with("exit 0"), "it should fall back to exit 0");
         // Forward stdin unchanged because session-ID capture depends on it.
         assert!(bash.contains("--data-binary @-"));
+        // PowerShell only starts the native bridge: no script, no network call, no policy override.
+        let powershell = hooks["agentStop"][0]["powershell"].as_str().unwrap();
+        assert_eq!(powershell, "& '/opt/VelaTerm/velaterm' --agent-hook copilot waiting");
+        assert_eq!(hooks["permissionRequest"][0]["powershell"], "& '/opt/VelaTerm/velaterm' --agent-hook copilot asking");
     }
 
     #[test]
@@ -158,20 +165,20 @@ mod tests {
         let target = tmp.join("hooks").join(HOOKS_FILE);
 
         // First installation writes the file.
-        let p = install_at(&target).expect("installation should succeed");
+        let p = install_at(&target, Path::new(EXE)).expect("installation should succeed");
         assert_eq!(p, target);
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), hooks_json());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), hooks_json(Path::new(EXE)));
 
         // Identical content does not rewrite or change mtime.
         let mtime1 = std::fs::metadata(&target).unwrap().modified().unwrap();
-        install_at(&target).unwrap();
+        install_at(&target, Path::new(EXE)).unwrap();
         let mtime2 = std::fs::metadata(&target).unwrap().modified().unwrap();
         assert_eq!(mtime1, mtime2, "identical contents should not be rewritten");
 
         // Replace outdated or accidentally modified content with the current version.
         std::fs::write(&target, "{}").unwrap();
-        install_at(&target).unwrap();
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), hooks_json());
+        install_at(&target, Path::new(EXE)).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), hooks_json(Path::new(EXE)));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

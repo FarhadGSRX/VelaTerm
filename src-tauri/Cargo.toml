@@ -1,6 +1,6 @@
 [package]
 name = "velaterm"
-version = "0.2.9"
+version = "0.2.10"
 description = "VelaTerm multi-session terminal manager"
 authors = ["vlinx"]
 edition = "2021"
@@ -61,7 +61,11 @@ tao-macros = { version = "=0.1.4", registry = "crates-io" }
 font-kit = { version = "0.14.3", optional = true }
 # The built-in browser needs unstable Window::add_child multi-WebView APIs. Their signatures may change,
 # so the version is pinned within 2.11 and call sites are centralized.
-tauri = { version = "2", features = ["unstable", "image-png"], optional = true }
+# Default features minus `compression`: the frontend is embedded as plain bytes, because antivirus heuristics
+# treat large compressed blobs inside an executable as a packed loader. The installer compresses it anyway.
+tauri = { version = "2", default-features = false, features = [
+    "wry", "common-controls-v6", "dynamic-acl", "x11", "dbus", "unstable", "image-png",
+], optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
@@ -78,6 +82,9 @@ tauri-plugin-single-instance = { version = "2", optional = true }
 tauri-plugin-global-shortcut = { version = "~2.3.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Source offsets let translation replace prose without rewriting Markdown, code, or link destinations.
+pulldown-cmark = { version = "0.13.4", default-features = false }
+semver = "1"
 # Kimi hooks safely merge into existing config.toml only after parsing validates it.
 toml_edit = "0.25"
 # Minisign verification of vela-server artifacts: GUI SSH provisioning and headless `vela-server update`.
@@ -108,9 +115,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync",
 tokio-util = { version = "0.7", features = ["io"] }
 # Extension traits for axum WebSocket split, next, and send.
 futures-util = "0.3"
-# Embed compressed ../dist assets in release binaries for offline use and transparent decompression, while
-# debug reads disk. Shared by vela-server and desktop --serve, substantially reducing frontend-heavy size.
-rust-embed = { version = "8", features = ["compression"] }
+# Embed ../dist assets in release binaries for offline use, while debug reads disk. Only builds without the
+# window use it for the frontend (vela-server, the Electron sidecar); the desktop build serves remote access
+# from Tauri's own copy (web/frontend.rs). The `compression` feature stays off in every build: Huorong
+# deletes executables whose frontend is stored as large compressed blobs (Trojan/MSIL.ShellLoader.q), so
+# vela-server embeds plain bytes and ships inside a zip instead (see server_supply.rs).
+rust-embed = { version = "8" }
 # SHA-256 for the self-signed-certificate fingerprint (tls.rs) and server-binary manifest verification
 # (server_supply.rs); login hashing moved to Argon2id below.
 sha2 = "0.10"
@@ -143,9 +153,9 @@ base64 = "0.22"
 # Cross-platform process-tree CPU/memory sampling uses sysinfo native APIs rather than external ps. Enable
 # only `system`, pin the version for reproducibility, and omit unrelated disk/network/component/user features.
 sysinfo = { version = "=0.33.1", default-features = false, features = ["system"] }
-# On-the-fly compression of static frontend assets (see web/static_assets.rs). rust-embed's `compression`
-# feature only shrinks the assets inside the binary and hands back plaintext bytes, so it does nothing for
-# transfer size; these two codecs do. Brotli is preferred and gzip is the fallback for older clients.
+# On-the-fly compression of static frontend assets for transfer (see web/static_assets.rs). The bundle is
+# embedded uncompressed (see rust-embed and tauri above), so these two codecs are what shrink responses.
+# Brotli is preferred and gzip is the fallback for older clients.
 brotli = "8"
 flate2 = "1"
 # Verified, application-owned CodeGraph runtime archives on all supported platforms.
@@ -167,6 +177,11 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", optional = true }
 
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+# Change notification for the Files and Git tabs (FSEvents on macOS, ReadDirectoryChangesW on Windows). Linux keeps
+# polling: inotify needs a watch per directory and large repositories exhaust the per-user limit.
+notify = "8"
+
 [target.'cfg(windows)'.dependencies]
 # On-demand full Git Bash self-extractor download with blocking streamed progress, default Windows schannel
 # TLS, and JSON parsing for GitHub releases.
@@ -184,6 +199,10 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     # GetFocus, so window reactivation moves focus only when it stopped at the top-level window.
     "Win32_UI_Input_KeyboardAndMouse",
+    # GetShortPathNameW, so native hook commands can name the executable without quoting (agent/hook_bridge.rs).
+    "Win32_Storage_FileSystem",
+    # LoadLibraryW, so the bundled conpty.dll replaces the inbox ConPTY (pty/conpty_win.rs).
+    "Win32_System_LibraryLoader",
     # Native WinRT toast notifications with Activated navigation; the official plugin lacks desktop clicks.
     "Foundation",
     "Data_Xml_Dom",

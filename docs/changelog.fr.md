@@ -1,3 +1,24 @@
+## v0.2.10 — 2026-10-13
+
+- 🧩 OpenCode v2 est pris en charge en plus de v1, et la liste des modèles se charge correctement avec OpenCode v2.0.26.
+- 🏷️ L’en-tête de session affiche la version de la CLI de l’agent ; lorsqu’une version plus récente existe, le numéro de version renvoie aux instructions officielles de mise à niveau.
+- 🗂️ Le panneau Git affiche jusqu’à 1 000 fichiers modifiés et propose d’ajouter les dossiers volumineux comme `node_modules` à `.gitignore`.
+- 🔤 Le panneau Git affiche correctement les noms de fichiers non ASCII, indexe, désindexe et annule les modifications uniquement sur les fichiers choisis, et regroupe les conflits à part.
+- 📜 L’historique Git conserve la plage chargée, les éléments dépliés et la position de défilement lors de l’actualisation.
+- 🌿 La branche affichée dans le panneau de droite, la barre d’état, le titre du terminal et la barre latérale se met à jour dès que vous changez de branche, sans redémarrage.
+- 📁 L’arborescence des fichiers actualise automatiquement les dossiers ouverts et signale ceux qui contiennent des modifications Git.
+- 🧹 Windows : les mises à jour automatiques ne laissent plus d’installateur dans le dossier Temp, et les restes des mises à jour précédentes sont supprimés.
+- 🪝 Windows : Codex, Crush, Kiro, Cursor, Kimi, Antigravity, Copilot et Grok transmettent l’état des sessions directement à VelaTerm, sans scripts PowerShell.
+- 🖱️ Windows : les programmes plein écran du terminal comme vim reçoivent les clics et le défilement de la souris ; la molette n’est plus convertie en touches fléchées.
+- 🕘 Les terminaux zsh lisent et écrivent de nouveau votre propre `~/.zsh_history` : `history` et la flèche haut affichent aussi les commandes des autres terminaux.
+- 🖥️ Les nouvelles sessions Claude et Codex s’ouvrent en vue conversation ; les autres agents s’ouvrent par défaut dans le terminal.
+- 🚀 `vspawn` accepte `--pi` et `--agent <nom>` et peut ainsi lancer n’importe quel agent qui accepte des tâches.
+- ⏱️ Si la liste des modèles n’est pas chargée au bout de 30 secondes, une erreur s’affiche avec Retry.
+- 🗑️ Les préréglages enregistrés peuvent être supprimés dans Paramètres ▸ Agents.
+- ⌨️ L’info-bulle du bouton de capture d’écran indique le raccourci actuel, et son icône se distingue mieux du bouton de partage.
+- 🧭 Le panneau de droite revient de nouveau de Connaissances vers Info et les autres onglets.
+- ✍️ macOS : saisir `/` dans le terminal avec une méthode de saisie ne l’insère plus deux fois.
+
 ## v0.2.9 — 2026-10-07
 
 - ✨ Le renommage par IA mémorise le modèle et le niveau de raisonnement choisis pour chaque agent.

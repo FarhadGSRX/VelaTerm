@@ -222,7 +222,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Hidden debug shortcut Cmd/Ctrl+Opt+E toggles the error log like Option-clicking the settings gear.
+  // Hidden debug shortcut Cmd/Ctrl+Opt+E toggles the error log.
   // Use e.code because macOS Option+E is a dead key and e.key is unreliable.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

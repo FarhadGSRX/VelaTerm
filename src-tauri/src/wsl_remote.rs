@@ -239,10 +239,9 @@ pub fn connect(app: &crate::host::AppCtx, distribution: &str, restart_existing: 
         };
         progress("supply", None);
         let platform = crate::server_supply::platform_key("linux", arch);
-        let binary = crate::server_supply::ensure_supplied(&data_dir, crate::VERSION, &platform, &|pct| progress("supply", Some(pct)))?;
-        let sha = crate::server_supply::cached_sha256(&binary)?;
+        let supplied = crate::server_supply::ensure_supplied(&data_dir, crate::VERSION, &platform, &|pct| progress("supply", Some(pct)))?;
         progress("transfer", None);
-        connection.run("install", &[("source", &binary.to_string_lossy()), ("sha", &sha)])?;
+        connection.run("install", &[("source", &supplied.bin.to_string_lossy()), ("sha", &supplied.sha256)])?;
     }
     if upgrade { connection.stop(&previous)?; previous = connection.status()?; }
     progress("start", None);

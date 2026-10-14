@@ -13,12 +13,15 @@
 //! its question — "accept file edits for the rest of this session", "always allow this command". Each is
 //! a button that allows the tool and adopts the rule in one press, so the same question stops coming back.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import Icons from "../../../components/Icons";
 import Select from "../../../components/Select";
+import Combo from "../../../components/Combo";
 import { useT } from "../../../i18n";
-import type { ChatPermission } from "../../../ipc/chat";
+import type { ChatPermission, QuestionAnswerSelection } from "../../../ipc/chat";
+import { QuestionText, useQuestionTranslation } from "../../../translation/Question";
+import { translationError } from "../../../translation/SettingsSection";
 import { Markdown } from "./markdown";
 import { parsePermissionSuggestions, type Mode, type SuggestionOffer } from "./permissions";
 import {
@@ -36,8 +39,10 @@ import {
   buildElicitationContent,
   initialElicitationValues,
   isElicitationComplete,
+  isElicitationVisible,
   parseElicitationFields,
   type ElicitationField,
+  type ElicitationValue,
   type ElicitationValues,
 } from "./elicitationForm";
 
@@ -52,12 +57,14 @@ export interface PermissionAnswer {
   mode?: Mode;
   /** Standing rules the answer adopts, taken from the ones the question offered. */
   updatedPermissions?: unknown[];
+  questionAnswers?: QuestionAnswerSelection[];
+  sendOriginal?: boolean;
 }
 
 export interface PermissionCardProps {
   request: ChatPermission;
   cwd?: string;
-  onAnswer: (request: ChatPermission, answer: PermissionAnswer) => void;
+  onAnswer: (request: ChatPermission, answer: PermissionAnswer) => void | Promise<void>;
 }
 
 /** A tool waiting for permission, shown above the composer where an answer is expected. */
@@ -103,7 +110,7 @@ function ElicitationCard({
   const complete = isUrl || isElicitationComplete(fields, values);
   const server = request.mcp_server_name ?? "";
   const title = request.title ?? request.display_name;
-  const set = (name: string, value: string | boolean) => setValues((prev) => ({ ...prev, [name]: value }));
+  const set = (name: string, value: ElicitationValue) => setValues((prev) => ({ ...prev, [name]: value }));
   return (
     <div className="sv-permission">
       <div className="sv-permission-head">
@@ -122,7 +129,7 @@ function ElicitationCard({
           {request.url}
         </a>
       ) : (
-        fields.map((field) => (
+        fields.filter((field) => isElicitationVisible(field, fields, values)).map((field) => (
           <ElicitationInput key={field.name} field={field} value={values[field.name]} onChange={set} />
         ))
       )}
@@ -156,8 +163,8 @@ function ElicitationInput({
   onChange,
 }: {
   field: ElicitationField;
-  value: string | boolean | undefined;
-  onChange: (name: string, value: string | boolean) => void;
+  value: ElicitationValue | undefined;
+  onChange: (name: string, value: ElicitationValue) => void;
 }) {
   const t = useT();
   const label = (
@@ -167,11 +174,26 @@ function ElicitationInput({
     </span>
   );
   const hint = field.description ? <span className="sv-elicit-hint">{field.description}</span> : null;
+  if (field.kind === "multiselect") {
+    const selected = Array.isArray(value) ? value : [];
+    return <div className="sv-elicit-field">
+      {label}{hint}
+      {(field.options ?? []).map((option) => <label key={option.value} className="sv-elicit-check">
+        <input type="checkbox" checked={selected.includes(option.value)} onChange={(e) => onChange(field.name,
+          e.target.checked ? [...selected, option.value] : selected.filter((v) => v !== option.value))} />
+        {option.label}
+      </label>)}
+      {field.custom ? <textarea className="sv-question-other" aria-label={field.label} rows={2}
+        value={selected.filter((v) => !field.options?.some((o) => o.value === v)).join("\n")}
+        onChange={(e) => onChange(field.name, [...selected.filter((v) => field.options?.some((o) => o.value === v)),
+          ...e.target.value.split("\n").filter((v) => v.trim() !== "")])} /> : null}
+    </div>;
+  }
   if (field.kind === "boolean") {
     return (
       <label className="sv-elicit-field sv-elicit-check">
         <input type="checkbox" checked={value === true} onChange={(e) => onChange(field.name, e.target.checked)} />
-        {label}
+        {field.url ? <a href={field.url} target="_blank" rel="noreferrer">{field.label}</a> : label}
         {hint}
       </label>
     );
@@ -182,7 +204,9 @@ function ElicitationInput({
       <label className="sv-elicit-field">
         {label}
         {hint}
-        <Select width="100%" value={text} ariaLabel={field.label} onChange={(value) => onChange(field.name, value)} options={[{ value: "", label: t("chat.elicitation.choose") }, ...(field.options?.map((option) => ({ value: option.value, label: option.label })) ?? [])]} />
+        {field.custom ? <Combo value={text} onChange={(value) => onChange(field.name, value)} allowCustom
+          options={(field.options ?? []).map((option) => ({ value: option.value, label: option.label }))} />
+          : <Select width="100%" value={text} ariaLabel={field.label} onChange={(value) => onChange(field.name, value)} options={[{ value: "", label: t("chat.elicitation.choose") }, ...(field.options?.map((option) => ({ value: option.value, label: option.label })) ?? [])]} />}
       </label>
     );
   }
@@ -232,12 +256,16 @@ function QuestionCard({
 }: {
   request: ChatPermission;
   questions: QuestionFormQuestion[];
-  onAnswer: (request: ChatPermission, answer: PermissionAnswer) => void;
+  onAnswer: PermissionCardProps["onAnswer"];
 }) {
   const t = useT();
+  const translation = useQuestionTranslation(request);
   const [selections, setSelections] = useState<Selections>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
   const [active, setActive] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submitting = useRef(false);
 
   const index = Math.min(active, questions.length - 1);
   const question = questions[index];
@@ -276,15 +304,21 @@ function QuestionCard({
     }
   };
 
-  const submit = () => {
-    if (!allAnswered) return;
-    onAnswer(request, {
-      allow: true,
-      updatedInput: buildAnsweredInput(request.input, questions, selections, otherTexts),
-    });
+  const submit = async (sendOriginal = false) => {
+    if (!allAnswered || submitting.current) return;
+    submitting.current = true; setBusy(true); setError("");
+    try {
+      await onAnswer(request, {
+        allow: true,
+        questionAnswers: questions.map((_, i) => ({ selected: [...(selections[i] ?? [])], text: otherTexts[i] ?? "" })),
+        sendOriginal,
+      });
+    } catch (error) { setError(translationError(error, t)); }
+    finally { submitting.current = false; setBusy(false); }
   };
 
   const dismiss = () => {
+    if (submitting.current) return;
     // Closing a question that asked for nothing in particular is an empty answer, not a refusal: the
     // agent should carry on rather than record a tool it was not allowed to run.
     if (shouldSubmitEmptyOnDismiss(questions)) {
@@ -298,7 +332,8 @@ function QuestionCard({
   };
 
   const primary = () => {
-    if (isLast) submit();
+    if (submitting.current) return;
+    if (isLast) void submit();
     else if (answered) setActive(index + 1);
   };
 
@@ -308,6 +343,8 @@ function QuestionCard({
         <Icons.info size={13} />
         <span className="sv-permission-title">{t("chat.question.heading")}</span>
       </div>
+
+      {translation.control}
 
       {questions.length > 1 && (
         <div className="sv-question-tabs" role="tablist">
@@ -320,13 +357,13 @@ function QuestionCard({
               onClick={() => setActive(i)}
             >
               {isQuestionAnswered(q, i, selections, otherTexts) ? <Icons.check size={11} /> : null}
-              {q.header}
+              <QuestionText original={q.header} translated={translation.questions?.[i]?.header} mode={translation.mode} target={translation.target} />
             </button>
           ))}
         </div>
       )}
 
-      <div className="sv-question-text">{question.question}</div>
+      <div className="sv-question-text"><QuestionText original={question.question} translated={translation.questions?.[index]?.question} mode={translation.mode} target={translation.target} /></div>
 
       {question.options.length > 0 && (
         <div className="sv-question-options" role={question.multiSelect ? undefined : "radiogroup"}>
@@ -335,6 +372,7 @@ function QuestionCard({
               key={option.label}
               role={question.multiSelect ? "checkbox" : "radio"}
               aria-checked={selected.has(i)}
+              disabled={busy}
               className={"sv-question-option" + (selected.has(i) ? " sv-question-option-on" : "")}
               onClick={() => toggle(i)}
             >
@@ -347,9 +385,9 @@ function QuestionCard({
                 {selected.has(i) && question.multiSelect ? <Icons.check size={10} /> : null}
               </span>
               <span className="sv-question-option-text">
-                <span className="sv-question-option-label">{option.label}</span>
+                <span className="sv-question-option-label"><QuestionText original={option.label} translated={translation.questions?.[index]?.options[i]?.label} mode={translation.mode} target={translation.target} /></span>
                 {option.description ? (
-                  <span className="sv-question-option-desc">{option.description}</span>
+                  <span className="sv-question-option-desc"><QuestionText original={option.description} translated={translation.questions?.[index]?.options[i]?.description} mode={translation.mode} target={translation.target} /></span>
                 ) : null}
               </span>
             </button>
@@ -361,16 +399,17 @@ function QuestionCard({
         <input
           className="sv-question-other"
           value={otherText}
+          disabled={busy}
           aria-label={question.question}
           placeholder={
-            question.placeholder ??
+            (translation.mode !== "original" ? translation.questions?.[index]?.placeholder : undefined) ?? question.placeholder ??
             (question.options.length === 0
               ? t("chat.question.answerPlaceholder")
               : t("chat.question.otherPlaceholder"))
           }
           onChange={(e) => type(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
               e.preventDefault();
               primary();
             }
@@ -378,13 +417,19 @@ function QuestionCard({
         />
       )}
 
+      {busy && <div className="translation-message-status" role="status">{t(translation.outgoing && Object.values(otherTexts).some(text => text.trim()) ? "translation.translating" : "common.loading")}</div>}
+      {error && <div className="translation-message-status" role="alert">{error}
+        <button className="vlx-btn" onClick={() => void submit()}>{t("common.retry")}</button>
+        {translation.outgoing && <button className="vlx-btn" onClick={() => void submit(true)}>{t("translation.sendOriginal")}</button>}
+      </div>}
+
       <div className="sv-permission-actions">
-        <button className="sv-deny" onClick={dismiss}>
+        <button className="sv-deny" disabled={busy} onClick={dismiss}>
           {t("chat.question.dismiss")}
         </button>
         <button
           className="sv-allow"
-          disabled={isLast ? !allAnswered : !answered}
+          disabled={busy || (isLast ? !allAnswered : !answered)}
           onClick={primary}
         >
           {isLast ? t("chat.question.submit") : t("chat.question.next")}

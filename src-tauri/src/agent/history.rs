@@ -166,11 +166,13 @@ fn scan_jsonl(root: &Path, kind: SessionKind, directory: &Path, out: &mut Vec<Hi
 }
 
 fn scan_opencode(root: &Path, directory: &Path, out: &mut Vec<HistoricalSession>) -> Result<(), String> {
-    let db = root.join("opencode.db");
+    let db = std::env::var_os("OPENCODE_DB").filter(|p|!p.is_empty()).map(PathBuf::from).unwrap_or_else(||root.join("opencode.db"));
     if db.exists() {
         let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
         conn.busy_timeout(std::time::Duration::from_secs(2)).map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare("SELECT id, title, directory, time_updated FROM session WHERE parent_id IS NULL")
+        for table in ["session","session_v2"] {
+        if !crate::agent::opencode_store::has_table(&conn,table) {continue;}
+        let mut stmt = conn.prepare(&format!("SELECT id, COALESCE(title,''), directory, time_updated FROM {table} WHERE parent_id IS NULL"))
             .map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |r| Ok(HistoricalSession {
             kind: SessionKind::Opencode, agent_session_id: r.get(0)?, title: r.get(1)?,
@@ -183,6 +185,7 @@ fn scan_opencode(root: &Path, directory: &Path, out: &mut Vec<HistoricalSession>
                 if s.title.is_empty() { s.title = s.agent_session_id.clone(); }
                 out.push(s);
             }
+        }
         }
     }
     // Older OpenCode releases keep one JSON object per session.

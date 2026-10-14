@@ -37,6 +37,20 @@ describe("dark palette preference", () => {
       useTermStore.setState({ theme, darkStyle });
     }
   });
+
+  it("keeps this window's inspector tab when another client's settings are hydrated", () => {
+    const { inspectorTab } = useTermStore.getState();
+    vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    try {
+      useTermStore.setState({ inspectorTab: "git" });
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...loadSettings(), inspectorTab: "knowledge" }));
+      useTermStore.getState().hydrateSettingsFromCache();
+      expect(useTermStore.getState().inspectorTab).toBe("git");
+    } finally {
+      useTermStore.setState({ inspectorTab });
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("terminal renderer migration", () => {
@@ -63,17 +77,18 @@ describe("terminal renderer migration", () => {
 describe("defaultEngineFor", () => {
   beforeEach(() => localStorage.clear());
 
-  it("opens every chat-capable agent in the conversation", () => {
+  it("uses each agent's built-in default view", () => {
     expect(defaultEngineFor("claude", {})).toBe("chat");
     expect(defaultEngineFor("codex", {})).toBe("chat");
-    expect(defaultEngineFor("opencode", {})).toBe("chat");
-    expect(defaultEngineFor("pi", {})).toBe("chat");
-    expect(defaultEngineFor("omp", {})).toBe("chat");
+    expect(defaultEngineFor("opencode", {})).toBe("tui");
+    expect(defaultEngineFor("pi", {})).toBe("tui");
+    expect(defaultEngineFor("omp", {})).toBe("tui");
+    expect(defaultEngineFor("antigravity", {})).toBe("tui");
   });
 
   it("prefers the saved per-agent choice over the built-in default", () => {
-    expect(defaultEngineFor("omp", { omp: { engine: "tui" } })).toBe("tui");
-    expect(defaultEngineFor("pi", { pi: { engine: "tui" } })).toBe("tui");
+    expect(defaultEngineFor("omp", { omp: { engine: "chat" } })).toBe("chat");
+    expect(defaultEngineFor("pi", { pi: { engine: "chat" } })).toBe("chat");
   });
 });
 
@@ -160,10 +175,10 @@ describe("legacy defaultSessionEngine migration", () => {
     expect(s.agentDefaults.claude?.engine).toBe("tui");
     expect(s.agentDefaults.codex?.engine).toBe("tui");
     expect(s.agentDefaults.opencode?.engine).toBe("tui");
-    // Pi and OMP were never covered by the app-wide setting, so the unified fallback still applies.
+    // Pi and OMP were never covered by the app-wide setting, so their built-in defaults still apply.
     expect(s.agentDefaults.pi?.engine).toBeUndefined();
-    expect(defaultEngineFor("pi", s.agentDefaults)).toBe("chat");
-    expect(defaultEngineFor("omp", s.agentDefaults)).toBe("chat");
+    expect(defaultEngineFor("pi", s.agentDefaults)).toBe("tui");
+    expect(defaultEngineFor("omp", s.agentDefaults)).toBe("tui");
   });
 
   it("keeps an explicit per-agent choice while migrating the rest", () => {

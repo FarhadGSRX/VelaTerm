@@ -399,13 +399,13 @@ pub fn safe_fields(data: &Value) -> Value {
             "interface" => matches!(
                 s,
                 "claude CLI" | "codex CLI" | "opencode CLI" | "pi CLI" | "omp CLI" | "grok CLI"
-                    | "claude local CLI" | "codex local CLI"
+                    | "claude local CLI" | "codex local CLI" | "OpenAI compatible Chat Completions"
             ),
             "agent" => matches!(s, "claude" | "codex" | "opencode" | "pi" | "omp" | "grok"),
-            "field" => s == "title",
-            "goal" => matches!(s, "compile_thematic_memory" | "codex_security_scan" | "rename_session_from_conversation"),
+            "field" => matches!(s,"title"|"pairs"),
+            "goal" => matches!(s, "compile_thematic_memory" | "codex_security_scan" | "rename_session_from_conversation" | "translate_conversation_prose"),
             "inputType" => matches!(s, "text" | "image" | "mixed"),
-            "schema" => matches!(s, "memory-wiki-v1" | "codex-security/1.0" | "session-title-v1"),
+            "schema" => matches!(s, "memory-wiki-v1" | "codex-security/1.0" | "session-title-v1" | "translation-lines-v1"),
             "preview" => matches!(
                 s,
                 "[source and memory content redacted]"
@@ -414,7 +414,7 @@ pub fn safe_fields(data: &Value) -> Value {
                     | "[conversation content redacted]"
                     | "[title content redacted]"
             ),
-            "entityType" => matches!(s, "memory_entry" | "security_finding" | "session_title"),
+            "entityType" => matches!(s, "memory_entry" | "security_finding" | "session_title" | "translated_line"),
             "effort" => matches!(
                 s,
                 "configured_default" | "low" | "medium" | "high" | "xhigh" | "max"

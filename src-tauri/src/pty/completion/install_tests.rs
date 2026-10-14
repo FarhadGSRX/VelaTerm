@@ -32,15 +32,18 @@ fn zsh_startup_preserves_profiles_and_restores_zdotdir() {
         .env("ZDOTDIR", cmd.get_env("ZDOTDIR").unwrap())
         .args([
             "-lic",
-            "printf 'RESULT:%s:%s:%s' \"$VLX_TEST_ORDER\" \"$ZDOTDIR\" \"$_vlxc_nonce\"",
+            "printf 'RESULT:%s:%s:%s|%s' \"$VLX_TEST_ORDER\" \"$ZDOTDIR\" \"$_vlxc_nonce\" \"$HISTFILE\"",
         ])
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        format!("RESULT:EPRL:{}:{}", original.display(), state.nonce)
-    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (result, histfile) = stdout.rsplit_once('|').unwrap();
+    assert_eq!(result, format!("RESULT:EPRL:{}:{}", original.display(), state.nonce));
+    // macOS /etc/zshrc sets HISTFILE from ZDOTDIR; it must follow the user's directory, not the startup one.
+    if !histfile.is_empty() {
+        assert_eq!(histfile, original.join(".zsh_history").to_string_lossy());
+    }
     drop(state);
     std::fs::remove_dir_all(root).unwrap();
 }

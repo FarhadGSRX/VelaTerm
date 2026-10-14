@@ -153,12 +153,29 @@ fn build_claude_settings_at(port: u16, token: &str, sid: &str) -> String {
     .to_string()
 }
 
-/// Builds the Codex `-c notify` JSON array: `[<exe>, "--notify-env"]`.
+/// Builds the Codex `-c notify` array: `[<exe>, "--notify-env"]`.
 ///
 /// When Codex emits `agent-turn-complete`, it runs `<exe> --notify-env <event-json>`. The hidden
 /// subcommand reads `VLX_CODEX_NOTIFY_URL` and posts the event to it with `e=waiting`. Keeping the URL
 /// outside the array lets the same static `config.toml` target a dynamic port and token.
+///
+/// Windows uses TOML literal strings, which contain no double quote: see [`codex_notify_value`].
 pub fn build_codex_notify(exe_path: &str) -> String {
+    codex_notify_value(exe_path, cfg!(windows))
+}
+
+/// The `-c notify` value. Elsewhere it is a JSON array, which is also valid TOML.
+///
+/// On Windows an npm-installed Codex starts through `codex.cmd` or `codex.ps1`, and both re-quote the
+/// command line: cmd.exe and Windows PowerShell 5.1 do not preserve double quotes embedded in an argument.
+/// Measured with Codex 0.161.0 under cmd.exe, the JSON form made Codex fail with "failed to load bootstrap
+/// configuration". Single-quoted TOML literal strings keep backslashes and need no double quote, so the
+/// value reaches Codex intact from cmd.exe and PowerShell alike. A path containing `'` cannot be a literal
+/// string and keeps the JSON form.
+fn codex_notify_value(exe_path: &str, windows: bool) -> String {
+    if windows && !exe_path.contains(['\'', '\n']) {
+        return format!("['{exe_path}', '--notify-env']");
+    }
     serde_json::json!([exe_path, "--notify-env"]).to_string()
 }
 
@@ -186,32 +203,65 @@ pub fn build_codex_notify(exe_path: &str) -> String {
 /// `SubagentStop` is intentionally omitted because a child agent finishing does not mean the root turn
 /// has ended; registering it would incorrectly mark an active root session as waiting. Every handler has
 /// a five-second timeout, emits no stdout, and exits successfully. Hooks observe state but never make decisions.
-pub fn build_codex_hooks() -> String {
-    // Values in `-c key=value` are parsed as TOML. JSON arrays happen to be valid TOML, but a JSON
-    // object's `:` is not the `=` required by a TOML inline table, so it becomes a plain string and
-    // triggers `expected HooksToml`. Generate the inline table explicitly. `serde_json` string escaping
-    // is compatible with the TOML basic-string subset used here, including quotes and backslashes.
-    fn handler(state: &str) -> String {
+///
+/// `commandWindows` calls `exe_path` directly rather than through PowerShell. Codex does not document which
+/// shell runs it, so it uses the form cmd.exe, PowerShell, and POSIX shells all parse alike.
+///
+/// Returns None when the table cannot be passed safely on this platform; the caller then keeps the
+/// notify-only launch. See [`codex_hooks_table`] for the Windows form.
+pub fn build_codex_hooks(exe_path: &str) -> Option<String> {
+    let windows_command = |state: &str| {
+        super::hook_bridge::command(
+            std::path::Path::new(exe_path),
+            super::hook_bridge::Shell::Any,
+            &format!("--codex-hook {state}"),
+        )
+    };
+    codex_hooks_table(cfg!(windows), &windows_command)
+}
+
+/// The `-c hooks` inline table, with `windows_command` producing each handler's Windows command.
+///
+/// Values in `-c key=value` are parsed as TOML. JSON arrays happen to be valid TOML, but a JSON object's
+/// `:` is not the `=` required by a TOML inline table, so it becomes a plain string and triggers
+/// `expected HooksToml`. Generate the inline table explicitly. Elsewhere, `serde_json` string escaping is
+/// compatible with the TOML basic-string subset used here, including quotes and backslashes.
+///
+/// Windows must avoid double quotes entirely (issue #53). An npm-installed Codex starts through
+/// `codex.cmd` or `codex.ps1`, and neither preserves double quotes embedded in an argument: measured with
+/// Codex 0.161.0, the quoted table split under cmd.exe into a stray `--codex-hook` argument that Codex
+/// rejected, and degraded under Windows PowerShell into a plain string that failed config loading. Every
+/// string is therefore a single-quoted TOML literal, and `command` reuses the Windows command because the
+/// POSIX form needs `"$VLX_EXE"`. A Windows command that itself needs quotes yields None.
+fn codex_hooks_table(windows: bool, windows_command: &dyn Fn(&str) -> String) -> Option<String> {
+    let handler = |state: &str| -> Option<String> {
+        let win = windows_command(state);
+        if windows {
+            if win.contains(['\'', '"', '\n']) {
+                return None;
+            }
+            return Some(format!(
+                "{{ type = 'command', command = '{win}', commandWindows = '{win}', timeout = 5 }}"
+            ));
+        }
         let command = serde_json::to_string(&format!("\"$VLX_EXE\" --codex-hook {state}"))
             .expect("serializing the static hook command should not fail");
-        let command_windows = serde_json::to_string(&format!(
-            "powershell.exe -NoProfile -NonInteractive -Command \"& $env:VLX_EXE --codex-hook {state}\""
-        ))
-        .expect("serializing the static Windows hook command should not fail");
-        format!(
+        let command_windows = serde_json::to_string(&win)
+            .expect("serializing the Windows hook command should not fail");
+        Some(format!(
             "{{ type = \"command\", command = {command}, commandWindows = {command_windows}, timeout = 5 }}"
-        )
-    }
-    let group = |state: &str| format!("[{{ hooks = [{}] }}]", handler(state));
-    format!(
+        ))
+    };
+    let group = |state: &str| handler(state).map(|h| format!("[{{ hooks = [{h}] }}]"));
+    Some(format!(
         "{{ SessionStart = {}, UserPromptSubmit = {}, PreToolUse = {}, PermissionRequest = {}, Stop = {}, SessionEnd = {} }}",
-        group("ready"),
-        group("working"),
-        group("tool"),
-        group("asking"),
-        group("waiting"),
-        group("waiting")
-    )
+        group("ready")?,
+        group("working")?,
+        group("tool")?,
+        group("asking")?,
+        group("waiting")?,
+        group("waiting")?
+    ))
 }
 
 /// Manual Codex configuration snippet for precise state reporting, intended for `~/.codex/config.toml`.
@@ -981,9 +1031,10 @@ pub fn prepare_with_args_capabilities(
             // callback URL is supplied separately for `--notify-env`.
             let notify = value_ref(shell, CODEX_NOTIFY_ENV);
             let mut env = vec![(CODEX_NOTIFY_ENV.to_string(), build_codex_notify(exe_path))];
-            let status_args = if codex_hooks_supported {
+            let hooks_table = codex_hooks_supported.then(|| build_codex_hooks(exe_path)).flatten();
+            let status_args = if let Some(table) = hooks_table {
                 let hooks = value_ref(shell, CODEX_HOOKS_ENV);
-                env.push((CODEX_HOOKS_ENV.to_string(), build_codex_hooks()));
+                env.push((CODEX_HOOKS_ENV.to_string(), table));
                 // VelaTerm constructs these trusted hooks and injects them only into this process. Bypass
                 // Codex's interactive hook-trust prompt so every managed session does not require a manual
                 // `/hooks` confirmation. This flag affects hook trust only, not approval policy or sandboxing.
@@ -1883,7 +1934,7 @@ mod tests {
 
     #[test]
     fn codex_notify_is_argv_array() {
-        let s = build_codex_notify("/Apps/vlx-term");
+        let s = codex_notify_value("/Apps/vlx-term", false);
         let v: serde_json::Value = serde_json::from_str(&s).expect("should be a valid JSON array");
         assert_eq!(v[0], "/Apps/vlx-term");
         assert_eq!(v[1], "--notify-env");
@@ -1893,53 +1944,83 @@ mod tests {
 
     #[test]
     fn codex_hooks_are_valid_and_cover_full_turn_lifecycle() {
-        let hooks = build_codex_hooks();
-        for event in [
-            "SessionStart",
-            "UserPromptSubmit",
-            "PreToolUse",
-            "PermissionRequest",
-            "Stop",
-            "SessionEnd",
-        ] {
-            assert!(
-                hooks.contains(&format!("{event} = [{{ hooks = [")),
-                "{event} should be configured"
+        let windows_command = |state: &str| format!("C:/Apps/velaterm.exe --codex-hook {state}");
+        for windows in [false, true] {
+            let hooks = codex_hooks_table(windows, &windows_command).expect("a bare command always fits");
+            for event in [
+                "SessionStart",
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PermissionRequest",
+                "Stop",
+                "SessionEnd",
+            ] {
+                assert!(
+                    hooks.contains(&format!("{event} = [{{ hooks = [")),
+                    "{event} should be configured"
+                );
+            }
+            assert_eq!(
+                hooks.matches("--codex-hook working").count(),
+                2,
+                "only UserPromptSubmit reports the working state that starts a turn, through command and commandWindows"
             );
+            assert_eq!(
+                hooks.matches("--codex-hook tool").count(),
+                2,
+                "PreToolUse reports a mid-turn working that the out-of-order guard can intercept"
+            );
+            assert_eq!(
+                hooks.matches("--codex-hook ready").count(),
+                2,
+                "SessionStart carries the health-handshake command in both fields"
+            );
+            assert_eq!(hooks.matches("--codex-hook asking").count(), 2);
+            assert_eq!(
+                hooks.matches("--codex-hook waiting").count(),
+                4,
+                "Stop and SessionEnd each carry the command in both fields"
+            );
+            assert!(
+                !hooks.contains("PostToolUse"),
+                "PostToolUse races Stop and would push a finished turn back into working"
+            );
+            assert!(
+                !hooks.contains("SubagentStop"),
+                "a subagent stopping must not end the root turn"
+            );
+            assert!(hooks.contains("timeout = 5"));
+            // The Windows command calls the executable itself: no PowerShell launcher.
+            assert!(!hooks.to_ascii_lowercase().contains("powershell"));
         }
+
+        let posix = codex_hooks_table(false, &windows_command).unwrap();
+        assert!(posix.contains("type = \"command\""));
+        assert!(posix.contains("$VLX_EXE"));
+        assert!(posix.contains("commandWindows = \"C:/Apps/velaterm.exe --codex-hook waiting\""), "{posix}");
+
+        // Windows: no double quote may appear anywhere, or npm's codex.cmd / codex.ps1 split the value (issue #53).
+        let windows = codex_hooks_table(true, &windows_command).unwrap();
+        assert!(!windows.contains('"'), "{windows}");
+        assert!(windows.contains("type = 'command'"));
+        assert!(windows.contains(
+            "command = 'C:/Apps/velaterm.exe --codex-hook waiting', commandWindows = 'C:/Apps/velaterm.exe --codex-hook waiting'"
+        ), "{windows}");
+        // A command that still needs quotes cannot be passed safely, so Windows keeps notify only.
+        let quoted = |state: &str| format!("\"C:/A B/velaterm.exe\" --codex-hook {state}");
+        assert!(codex_hooks_table(true, &quoted).is_none());
+        assert!(codex_hooks_table(false, &quoted).is_some());
+    }
+
+    #[test]
+    fn codex_notify_on_windows_has_no_double_quote() {
         assert_eq!(
-            hooks.matches("--codex-hook working").count(),
-            2,
-            "only UserPromptSubmit reports the working state that starts a turn, with one Unix and one Windows command"
+            codex_notify_value(r"C:\Users\a\AppData\Local\velaterm\velaterm.exe", true),
+            r"['C:\Users\a\AppData\Local\velaterm\velaterm.exe', '--notify-env']"
         );
-        assert_eq!(
-            hooks.matches("--codex-hook tool").count(),
-            2,
-            "PreToolUse reports a mid-turn working that the out-of-order guard can intercept"
-        );
-        assert_eq!(
-            hooks.matches("--codex-hook ready").count(),
-            2,
-            "SessionStart carries one Unix and one Windows health-handshake command"
-        );
-        assert_eq!(hooks.matches("--codex-hook asking").count(), 2);
-        assert_eq!(
-            hooks.matches("--codex-hook waiting").count(),
-            4,
-            "Stop and SessionEnd each carry one Unix and one Windows command"
-        );
-        assert!(
-            !hooks.contains("PostToolUse"),
-            "PostToolUse races Stop and would push a finished turn back into working"
-        );
-        assert!(
-            !hooks.contains("SubagentStop"),
-            "a subagent stopping must not end the root turn"
-        );
-        assert!(hooks.contains("type = \"command\""));
-        assert!(hooks.contains("timeout = 5"));
-        assert!(hooks.contains("$VLX_EXE"));
-        assert!(hooks.contains("$env:VLX_EXE"));
+        // A path containing a single quote cannot be a TOML literal string and keeps the JSON form.
+        assert_eq!(codex_notify_value(r"C:\it's\v.exe", true), r#"["C:\\it's\\v.exe","--notify-env"]"#);
+        assert_eq!(codex_notify_value("/Apps/vlx-term", false), r#"["/Apps/vlx-term","--notify-env"]"#);
     }
 
     #[test]

@@ -1,3 +1,24 @@
+## v0.2.10 — 2026-10-13
+
+- 🧩 Hỗ trợ OpenCode v2 bên cạnh v1, và danh sách mô hình tải đúng với OpenCode v2.0.26.
+- 🏷️ Tiêu đề phiên hiển thị phiên bản CLI của tác nhân; khi có bản mới hơn, số phiên bản sẽ dẫn tới hướng dẫn nâng cấp chính thức.
+- 🗂️ Bảng Git hiển thị tối đa 1.000 tệp thay đổi và đề xuất thêm các thư mục lớn như `node_modules` vào `.gitignore`.
+- 🔤 Bảng Git hiển thị đúng tên tệp có ký tự ngoài ASCII; thao tác stage, bỏ stage và hủy thay đổi chỉ áp dụng cho đúng các tệp bạn chọn, và các xung đột được xếp thành nhóm riêng.
+- 📜 Lịch sử Git giữ nguyên phạm vi đã tải, các mục đã mở rộng và vị trí cuộn khi làm mới.
+- 🌿 Nhánh hiển thị ở bảng bên phải, thanh trạng thái, tiêu đề terminal và thanh bên được cập nhật ngay khi bạn chuyển nhánh, không cần khởi động lại.
+- 📁 Cây tệp tự động làm mới các thư mục đang mở và đánh dấu thư mục có thay đổi Git.
+- 🧹 Windows: bản tự cập nhật không còn để lại trình cài đặt trong thư mục Temp, và phần còn sót từ các lần cập nhật trước sẽ được xóa.
+- 🪝 Windows: Codex, Crush, Kiro, Cursor, Kimi, Antigravity, Copilot và Grok báo trạng thái phiên trực tiếp cho VelaTerm, không qua script PowerShell.
+- 🖱️ Windows: các chương trình terminal toàn màn hình như vim nhận được thao tác nhấp và cuộn chuột; con lăn chuột không còn bị biến thành phím mũi tên.
+- 🕘 Terminal zsh lại đọc và ghi đúng tệp `~/.zsh_history` của bạn, nên `history` và phím mũi tên lên hiển thị cả các lệnh từ terminal khác.
+- 🖥️ Phiên Claude và Codex mới mở ở chế độ hội thoại; các tác nhân khác mặc định mở trong terminal.
+- 🚀 `vspawn` hỗ trợ `--pi` và `--agent <tên>`, có thể khởi chạy bất kỳ tác nhân nào nhận tác vụ.
+- ⏱️ Nếu danh sách mô hình chưa tải được sau 30 giây, ứng dụng sẽ hiển thị lỗi kèm Retry.
+- 🗑️ Có thể xóa các cấu hình đặt sẵn đã lưu trong Cài đặt ▸ Tác nhân.
+- ⌨️ Chú thích của nút chụp màn hình hiển thị phím tắt hiện tại, và biểu tượng dễ phân biệt hơn với nút chia sẻ.
+- 🧭 Bảng bên phải lại chuyển được từ Kiến thức sang Thông tin và các thẻ khác.
+- ✍️ macOS: gõ `/` trong terminal bằng bộ gõ không còn bị nhập hai lần.
+
 ## v0.2.9 — 2026-10-07
 
 - ✨ Tính năng đổi tên bằng AI ghi nhớ mô hình và mức độ suy luận đã chọn cho từng tác nhân.

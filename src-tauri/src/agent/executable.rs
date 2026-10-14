@@ -135,6 +135,11 @@ fn discover(kind: SessionKind) -> LaunchBinary {
     if let Some(path) = find_in_shell(name) {
         return LaunchBinary::Path(path);
     }
+    if kind == SessionKind::Opencode {
+        if let Some(path)=find_on_path("opencode2").or_else(||find_in_shell("opencode2")) {
+            return LaunchBinary::Path(path);
+        }
+    }
     if super::install::dangling_npm_install(kind.as_str()) {
         return LaunchBinary::Broken;
     }

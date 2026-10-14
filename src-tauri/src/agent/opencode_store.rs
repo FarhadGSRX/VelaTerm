@@ -35,6 +35,7 @@ pub fn data_dir() -> Option<PathBuf> {
 }
 
 pub fn db_path() -> Option<PathBuf> {
+    if let Some(path)=std::env::var_os("OPENCODE_DB").filter(|p|!p.is_empty()) { return Some(PathBuf::from(path)); }
     data_dir().map(|dir| dir.join("opencode.db"))
 }
 
@@ -58,12 +59,37 @@ fn parse_json(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or(Value::Null)
 }
 
+pub(crate) fn has_table(conn: &Connection, name: &str) -> bool {
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",[name],|row|row.get(0)).unwrap_or(false)
+}
+
+fn session_table(conn: &Connection, id: &str) -> Result<&'static str, String> {
+    for table in ["session_v2","session"] {
+        if !has_table(conn,table) {continue;}
+        let exists: bool=conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=?1)"),[id],|r|r.get(0))
+            .map_err(|e|format!("Failed to read OpenCode's store: {e}"))?;
+        if exists {return Ok(table);}
+    }
+    Err(format!("OpenCode has no session {id}"))
+}
+
+/// A native-store lookup covers both generations without invoking a different installed CLI.
+pub fn session_exists(id: &str) -> Result<bool, String> {
+    let conn=open()?;
+    match session_table(&conn,id) {
+        Ok(_)=>Ok(true),
+        Err(error) if error.starts_with("OpenCode has no session ")=>Ok(false),
+        Err(error)=>Err(error),
+    }
+}
+
 /// The native model and variant used when OpenCode resumes its terminal interface.
 pub fn session_model(session_id: &str) -> Result<Option<Value>, String> {
     use rusqlite::OptionalExtension;
     let conn = open()?;
+    let table=session_table(&conn,session_id)?;
     let raw: Option<Option<String>> = conn.query_row(
-        "SELECT model FROM session WHERE id = ?1", [session_id], |row| row.get(0),
+        &format!("SELECT model FROM {table} WHERE id = ?1"), [session_id], |row| row.get(0),
     ).optional().map_err(|e| format!("Failed to read OpenCode session model: {e}"))?;
     Ok(raw.flatten().map(|text| parse_json(&text)))
 }
@@ -74,9 +100,14 @@ pub fn session_model(session_id: &str) -> Result<Option<Value>, String> {
 /// staged on the session and cleaned up at the next prompt, and until then the rows still exist.
 pub fn messages(session_id: &str) -> Result<Vec<OpencodeMessage>, String> {
     let conn = open()?;
+    messages_from(&conn,session_id)
+}
+
+fn messages_from(conn: &Connection, session_id: &str) -> Result<Vec<OpencodeMessage>, String> {
+    let table=session_table(conn,session_id)?;
     let revert = {
         let mut statement = conn
-            .prepare("SELECT revert FROM session WHERE id = ?1")
+            .prepare(&format!("SELECT revert FROM {table} WHERE id = ?1"))
             .map_err(|e| format!("Failed to read OpenCode's store: {e}"))?;
         let mut rows = statement
             .query([session_id])
@@ -89,7 +120,22 @@ pub fn messages(session_id: &str) -> Result<Vec<OpencodeMessage>, String> {
             None => return Err(format!("OpenCode has no session {session_id}")),
         }
     };
-    let mut out = read_messages(&conn, session_id)?;
+    let mut out = if has_table(conn,"session_message") && (table=="session_v2" || !has_table(conn,"message")) {
+        let mut statement=conn.prepare("SELECT id,type,data FROM session_message WHERE session_id=?1 ORDER BY seq,id")
+            .map_err(|e|format!("Failed to read OpenCode's store: {e}"))?;
+        let rows=statement.query_map([session_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?)))
+            .map_err(|e|format!("Failed to read OpenCode's store: {e}"))?;
+        let mut out=Vec::new();
+        for row in rows {
+            let (id,kind,data)=row.map_err(|e|format!("Failed to read OpenCode's store: {e}"))?;
+            let mut native=parse_json(&data);
+            if !native.is_object(){return Err("OpenCode's store contains an invalid message".into());}
+            native["id"]=Value::String(id);
+            native["type"]=Value::String(kind);
+            out.extend(crate::agent::chat::opencode_v2::messages(session_id,&native));
+        }
+        out
+    } else if has_table(conn,"message") {read_messages(conn,session_id)?} else {Vec::new()};
     if let Some(cut) = revert.as_ref().and_then(|value| reverted_from(value)) {
         if let Some(index) = out.iter().position(|m| m.info.get("id").and_then(Value::as_str) == Some(cut)) {
             out.truncate(index);
@@ -183,5 +229,28 @@ mod tests {
         // Whatever the machine has, the answer ends in OpenCode's own directory name.
         let dir = data_dir();
         assert!(dir.is_none_or(|d| d.ends_with("opencode")));
+    }
+
+    #[test]
+    fn v2_store_reads_sequence_and_revert_without_changing_native_rows() {
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE session_v2(id TEXT,revert TEXT); CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,seq INTEGER,data TEXT);
+            INSERT INTO session_v2 VALUES ('ses_native',NULL);").unwrap();
+        for (id,kind,seq,data) in [("msg_z","user",1,serde_json::json!({"text":"first"})),
+            ("msg_a","assistant",2,serde_json::json!({"content":[{"type":"text","text":"reply"}],"time":{"completed":200}})),
+            ("msg_b","user",3,serde_json::json!({"text":"reverted"}))] {
+            conn.execute("INSERT INTO session_message VALUES (?1,'ses_native',?2,?3,?4)",rusqlite::params![id,kind,seq,data.to_string()]).unwrap();
+        }
+        let before:i64=conn.query_row("SELECT total_changes()",[],|r|r.get(0)).unwrap();
+        let rows=messages_from(&conn,"ses_native").unwrap();
+        assert_eq!(rows.iter().map(|m|m.info["id"].as_str().unwrap()).collect::<Vec<_>>(),["msg_z","msg_a","msg_b"]);
+        assert_eq!(conn.query_row::<i64,_,_>("SELECT total_changes()",[],|r|r.get(0)).unwrap(),before);
+        conn.execute("UPDATE session_v2 SET revert=?1",[serde_json::json!({"messageID":"msg_b"}).to_string()]).unwrap();
+        assert_eq!(messages_from(&conn,"ses_native").unwrap().len(),2);
+        conn.execute_batch("CREATE TABLE session(id TEXT,revert TEXT); CREATE TABLE message(id TEXT,session_id TEXT,time_created INTEGER,data TEXT);
+            CREATE TABLE part(id TEXT,message_id TEXT,session_id TEXT,time_created INTEGER,data TEXT);
+            INSERT INTO session VALUES ('ses_v1',NULL);
+            INSERT INTO session_message VALUES ('msg_setting','ses_v1','model-switched',1,'{}');").unwrap();
+        assert!(messages_from(&conn,"ses_v1").unwrap().is_empty());
     }
 }

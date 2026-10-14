@@ -944,6 +944,8 @@ struct ChatProcess {
     kind: SessionKind,
     cwd: Option<String>,
     bin: String,
+    /// CLI version captured before this process started, even if its installation later updates.
+    version: Option<String>,
     auth_settings_args: Vec<String>,
     auth_restart: AtomicBool,
     action: Mutex<()>,
@@ -1555,6 +1557,7 @@ impl ChatManager {
             cmd.process_group(0);
             owner.inherit(&mut cmd);
         }
+        let version = crate::agent::version::installed(bin);
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(error) => { owner.retire(app,session_id); return Err(spawn_failure(kind,bin,cwd,&error)); }
@@ -1576,6 +1579,7 @@ impl ChatManager {
             owner: Mutex::new(Some(owner)),
             kind,
             bin: bin.to_string(),
+            version,
             auth_settings_args: auth::claude::settings_args(extra_args),
             auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
@@ -2005,6 +2009,7 @@ impl ChatManager {
                     // A delayed editor from another client must not rewrite completed execution facts.
                     if item.images.is_empty() && super::shell::parse_context(&item.text).is_some() { continue; }
                     crate::agent::spawn_requests::edit_queued(app, session_id, id, text, &item.images)?;
+                    crate::agent::translation::forget_queued(app,session_id,id)?;
                     item.text = text.to_string();
                 }
             }
@@ -2018,6 +2023,12 @@ impl ChatManager {
         let proc = self.get(session_id)?;
         let mut turn = proc.turn.lock().unwrap();
         interrupt_locked(&proc, &mut turn)
+    }
+
+    /// Read the current proposal without copying the conversation timeline or launching any IO.
+    pub fn pending_permission(&self,session_id: &str,request_id: &str) -> Result<Value,String> {
+        self.get(session_id)?.permissions.lock().unwrap().get(request_id).cloned()
+            .ok_or_else(||"That permission request is no longer waiting for an answer".into())
     }
 
     /// Answer a permission question. Allowing runs the tool as proposed.
@@ -2070,7 +2081,9 @@ impl ChatManager {
         if proc.kind == SessionKind::Omp {
             return pi::respond_extension_ui(app, session_id, &proc, request_id, allow);
         }
-        proc.permissions.lock().unwrap().remove(request_id);
+        if proc.permissions.lock().unwrap().remove(request_id).is_none() {
+            return Err("That permission request is no longer waiting for an answer".into());
+        }
         if proc.kind == SessionKind::Codex {
             // The rule the card adopted, if any, travels inside `updated_permissions`; the wire module
             // turns it into the matching native decision.
@@ -2625,6 +2638,12 @@ impl ChatManager {
             _ => (None, false),
         };
         Ok(TaskOutput { command, output, truncated })
+    }
+
+    /// A running peer retains its startup version; None means there is no live peer.
+    pub fn agent_version(&self, session_id: &str) -> Option<Option<String>> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        proc.alive.load(Ordering::Relaxed).then(||proc.version.clone())
     }
 
     pub fn snapshot(&self, session_id: &str) -> ChatSnapshot {
@@ -4747,6 +4766,17 @@ fn handle_codex_notification(
             }
         }
         "item/started" => {
+            if params["item"]["type"]=="userMessage" {
+                if let Some(native)=params["item"]["id"].as_str() {
+                    let turn=params["turnId"].as_str();
+                    let targets=proc.user_targets.lock().unwrap();
+                    let rows=proc.timeline.lock().unwrap().user_messages().into_iter()
+                        .filter(|(id,_)|targets.get(id).is_some_and(|target|target.turn_id.as_deref()==turn))
+                        .map(|(id,_)|id).collect::<Vec<_>>();
+                    drop(targets);
+                    super::super::translation::bind_native_message(app,session_id,native,&rows);
+                }
+            }
             if let Some(item) = params.get("item") {
                 upsert_codex_item_at(proc, item, true, None);
             }
@@ -5534,6 +5564,16 @@ fn claim_native_writer(app: &AppCtx, proc: &ChatProcess) -> Result<(), String> {
     Ok(())
 }
 
+fn write_claude_user_message(app: &AppCtx, session_id: &str, proc: &ChatProcess, row: &str, text: &str, images: &[ChatImage]) -> Result<(),String> {
+    let mut message=protocol::user_message(text,images);
+    if proc.kind==SessionKind::Claude {
+        if let Some(native)=super::super::translation::claude_message_uuid(app,session_id,row)? {
+            message["uuid"]=json!(native);
+        }
+    }
+    proc.write(&message)
+}
+
 /// Submit a prompt to the active turn without changing its clock or draining its queue.
 fn dispatch_steer(
     app: &AppCtx,
@@ -5574,7 +5614,7 @@ fn dispatch_steer(
         }
         SessionKind::Opencode => opencode::steer(proc, &row_id, text, images)?,
         SessionKind::Pi | SessionKind::Omp => pi::steer(proc, text, images)?,
-        _ => proc.write(&protocol::user_message(text, images))?,
+        _ => write_claude_user_message(app,session_id,proc,&row_id,text,images)?,
     }
     if proc.kind != SessionKind::Opencode && !super::shell::is_tagged(text) {
         crate::agent::server::try_auto_rename(app, session_id, text);
@@ -5698,7 +5738,7 @@ fn dispatch(
             ), text, &commands))?;
         }
     } else {
-        proc.write(&protocol::user_message(text, images))?;
+        write_claude_user_message(app,session_id,proc,&row_id,text,images)?;
     }
     let receipt = message_id.map(|id|super::submissions::finish_dispatch(&app.db().conn.lock().unwrap(), session_id, id, "sent"))
         .transpose().map_err(|message|DispatchFailure { message, written:true });
@@ -6174,6 +6214,7 @@ fn frame_context_tokens(message: &Value) -> Option<u64> {
 // ─────────────────────────── Emission ───────────────────────────
 
 fn emit(app: &AppCtx, session_id: &str, mut payload: Value) {
+    super::super::translation::observe(app, session_id, &payload);
     super::super::plan_execute::observe(app, session_id, &payload);
     super::super::tell::decorate(app, session_id, &mut payload);
     app.emit(&event_name(session_id), payload);
@@ -6306,6 +6347,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn agent_version_keeps_the_running_peers_startup_version() {
+        let manager = ChatManager::new();
+        let mut proc = inert_process(SessionKind::Codex);
+        Arc::get_mut(&mut proc).unwrap().version = Some("0.100.0".into());
+        manager.sessions.lock().unwrap().insert("s".into(), proc.clone());
+        assert_eq!(manager.agent_version("s"), Some(Some("0.100.0".into())));
+        proc.alive.store(false, Ordering::Relaxed);
+        assert_eq!(manager.agent_version("s"), None);
+        assert_eq!(manager.agent_version("unknown"), None);
+    }
+
     /// Pi and OMP leave the context limit to the model catalogue: a running process answers with the one
     /// the CLI itself reports, and every other kind has nothing to add.
     #[test]
@@ -6335,6 +6388,7 @@ mod tests {
             owner: Mutex::new(None),
             kind,
             bin: "true".into(),
+            version: None,
             auth_settings_args: Vec::new(),
             auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
@@ -7527,6 +7581,7 @@ mod tests {
             owner: Mutex::new(None),
             kind: SessionKind::Claude,
             bin: "true".into(),
+            version: None,
             auth_settings_args: Vec::new(),
             auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
@@ -9269,6 +9324,82 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
+    }
+
+    #[test]
+    fn claude_question_translation_preserves_wire_identity_and_rejects_late_answers() {
+        use crate::agent::translation;
+        use std::time::Instant;
+        let app=ctx("claude-question-translation");
+        {
+            let conn=app.db().conn.lock().unwrap();
+            conn.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES ('p','test','/tmp',0)",[]).unwrap();
+            conn.execute("INSERT INTO sessions(id,project_id,name,kind,engine,created_at) VALUES ('s','p','Questions','claude','chat',0)",[]).unwrap();
+        }
+        let (proc,stdout)=cat_process();app.chat().sessions.lock().unwrap().insert("s".into(),proc.clone());
+        let mut reader=BufReader::new(stdout);
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url=format!("http://{}/v1",server.server_addr());
+        let service=translation::dispatch(&app,"translation_service_save",&json!({"service":{"name":"fixture","baseUrl":url,"model":"fixture"}}),true).unwrap();
+        translation::dispatch(&app,"translation_save",&json!({"config":{"engine":"api","serviceId":service}}),true).unwrap();
+        translation::dispatch(&app,"translation_enable",&json!({"enabled":true}),true).unwrap();
+        let prefs=json!({"outgoing":true,"replies":true,"source":"en","target":"de","replySource":"en","replyTarget":"de","display":"immersive","repliesSince":0});
+        translation::dispatch(&app,"translation_session_save",&json!({"sessionId":"s","preferences":prefs}),true).unwrap();
+        let worker=std::thread::spawn(move || {
+            for index in 0..4 {
+                let mut req=server.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+                let mut body=String::new();req.as_reader().read_to_string(&mut body).unwrap();
+                let body:Value=serde_json::from_str(&body).unwrap();
+                let prompt=body["messages"][0]["content"].as_str().unwrap();
+                let lines:Vec<String>=serde_json::from_str(prompt.split("INPUT JSON:\n").nth(1).unwrap()).unwrap();
+                if index>0 {assert_eq!(lines.len(),1);}
+                let content=json!({"sourceLanguage":"en","lines":lines.iter().map(|s|s.replace("Hello","Hallo")).collect::<Vec<_>>()});
+                req.respond(tiny_http::Response::from_string(json!({"choices":[{"message":{"content":content.to_string()}}]}).to_string())).unwrap();
+            }
+        });
+        let input=json!({"metadata":{"source":"fixture"},"questions":[{"header":"Hello","question":"Hello plan?","options":[{"label":"Original option","description":"Hello install.sh"}],"multiSelect":false}]});
+        let request=json!({"id":"ask","tool_name":"AskUserQuestion","input":input});
+        proc.permissions.lock().unwrap().insert("ask".into(),request.clone());
+        let display=translation::dispatch(&app,"translation_question",&json!({"sessionId":"s","requestId":"ask"}),false).unwrap();
+        assert_eq!(display["input"]["questions"][0]["question"],"Hallo plan?");
+        assert_eq!(display["originalInput"],input);
+        assert_eq!(translation::dispatch(&app,"translation_question",&json!({"sessionId":"s","requestId":"ask"}),false).unwrap()["input"],display["input"]);
+        let args=json!({"sessionId":"s","requestId":"ask","allow":true,"questionAnswers":[{"selected":[0],"text":""}]});
+        crate::web::dispatch::dispatch(&app,"chat_permission",&args,"test",crate::web::dispatch::CallOrigin::Local).unwrap();
+        let wire=read_codex_request(&mut reader);
+        assert_eq!(wire["response"]["request_id"],"ask");
+        assert_eq!(wire["response"]["response"]["updatedInput"]["questions"],input["questions"]);
+        assert_eq!(wire["response"]["response"]["updatedInput"]["answers"],json!({"Hello plan?":"Original option"}));
+        assert!(translation::answer_question(&app,"s","ask",&json!([{"text":"late"}]),false).is_err());
+        for (index,change) in ["none","language","resolved"].iter().enumerate() {
+            proc.permissions.lock().unwrap().insert("ask".into(),request.clone());
+            let text=format!("Hello typed {index}");
+            if *change=="none" {
+                translation::answer_question(&app,"s","ask",&json!([{"text":text}]),false).unwrap();
+                assert_eq!(read_codex_request(&mut reader)["response"]["response"]["updatedInput"]["answers"]["Hello plan?"],"Hallo typed 0");
+            } else {
+                // Change authoritative state before the completion guard, using the shared gate.
+                let gate=translation::GATE.lock().unwrap();let app2=app.clone();
+                let task=std::thread::spawn(move ||translation::answer_question(&app2,"s","ask",&json!([{"text":text}]),false));
+                let deadline=Instant::now()+Duration::from_secs(5);
+                while app.db().conn.lock().unwrap().query_row("SELECT COUNT(*) FROM translation_cache",[],|r|r.get::<_,u64>(0)).unwrap()<(index+2) as u64 {
+                    assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+                }
+                if *change=="language" {
+                    let mut changed=prefs.clone();changed["target"]=json!("fr");
+                    app.db().conn.lock().unwrap().execute("UPDATE translation_preferences SET value=?1 WHERE session_id='s'",[changed.to_string()]).unwrap();
+                } else {proc.permissions.lock().unwrap().remove("ask");}
+                drop(gate);assert!(task.join().unwrap().is_err());
+                app.db().conn.lock().unwrap().execute("UPDATE translation_preferences SET value=?1 WHERE session_id='s'",[prefs.to_string()]).unwrap();
+            }
+        }
+        worker.join().unwrap();
+        proc.permissions.lock().unwrap().insert("ask".into(),request);
+        assert!(translation::answer_question(&app,"s","ask",&json!([{"text":"Unavailable service"}]),false).is_err());
+        assert!(proc.permissions.lock().unwrap().contains_key("ask"));
+        translation::answer_question(&app,"s","ask",&json!([{"text":"Send original"}]),true).unwrap();
+        assert_eq!(read_codex_request(&mut reader)["response"]["response"]["updatedInput"]["answers"]["Hello plan?"],"Send original");
+        *proc.stdin.lock().unwrap()=None;proc.child.lock().unwrap().wait().unwrap();
     }
 
     fn accept_codex_permission_turn(app: &AppCtx, proc: &Arc<ChatProcess>, request: &Value, turn_id: &str) {

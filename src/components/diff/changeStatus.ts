@@ -8,6 +8,7 @@ export const STATUS_META: Record<string, { letter: string; color: string }> = {
   deleted: { letter: "D", color: "var(--danger, #e05252)" },
   untracked: { letter: "U", color: "var(--text-muted)" },
   renamed: { letter: "R", color: "var(--cyan, #4aa)" },
+  conflicted: { letter: "!", color: "var(--danger, #e05252)" },
 };
 
 /** Badge letter for a status, falling back to `?` for values this build does not know. */

@@ -33,6 +33,62 @@ pub fn install(data_dir: &Path) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// The preview identifies itself as 0.0.0-beta; stable v2 uses major version 2.
+pub fn is_v2(bin: &str) -> bool {
+    if Path::new(bin).file_stem().and_then(|v|v.to_str())==Some("opencode2") {return true;}
+    is_v2_version(super::version::installed(bin).as_deref())
+}
+
+pub fn is_v2_version(version: Option<&str>) -> bool {
+    version.and_then(|v|semver::Version::parse(v).ok())
+        .is_some_and(|v|v.major>=2 || (v.major==0 && v.pre.as_str().starts_with("beta")))
+}
+
+/// v2's full TUI has no model flag or v1 plugin hooks. Prepare its native session through its own
+/// authenticated API so even a fresh terminal has a durable identity before it starts.
+pub fn prepare_v2_terminal(app: &crate::host::AppCtx, session: &str, bin: &str, cwd: Option<&str>,
+    resume: Option<&str>, choice: &super::session_settings::Selection) -> Result<String,String> {
+    use crate::agent::chat::opencode_protocol as wire;
+    let port=wire::configured_port(app,&format!("terminal.{session}"))?;
+    let password=wire::random_password();
+    let mut command=crate::host::command(bin);
+    command.args(["serve","--hostname","127.0.0.1","--port"]).arg(port.to_string())
+        .env("OPENCODE_SERVER_PASSWORD",&password).env("OPENCODE_SERVER_USERNAME","opencode")
+        .env_remove(super::inject::OPENCODE_CONFIG_ENV)
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if let Some(cwd)=cwd {command.current_dir(cwd);}
+    crate::login_env::refresh_command(&mut command);
+    super::executable::prepare_command(&mut command,bin);
+    let mut child=command.spawn().map_err(|e|format!("Failed to prepare OpenCode v2's terminal: {e}"))?;
+    let result=(|| {
+        let server=wire::Server::new(port,&password,cwd);
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+        while !server.healthy() {
+            if child.try_wait().map_err(|e|e.to_string())?.is_some() || std::time::Instant::now()>=deadline {
+                return Err("OpenCode v2 did not start its terminal preparation server".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        if !server.is_v2(){return Err("The configured OpenCode executable did not expose the v2 API".into());}
+        let native=match resume {Some(id)=>server.get(&format!("/session/{}",wire::encode_query(id)))?,None=>server.post("/session",None)?};
+        let id=native.get("id").and_then(serde_json::Value::as_str).ok_or("OpenCode did not return a session id")?;
+        if native.get("agent").and_then(serde_json::Value::as_str).is_none() {
+            let modes=wire::parse_agents(&server.get("/agent")?);
+            let agent=modes.first().ok_or("OpenCode has no primary agent available for the terminal")?;
+            server.post(&format!("/session/{id}/agent"),Some(&serde_json::json!({"agent":agent.mode})))?;
+        }
+        if let Some(model)=choice.model.as_deref() {
+            let (provider,model)=wire::split_model(model).ok_or("The OpenCode model must include its provider")?;
+            server.post(&format!("/session/{id}/model"),Some(&serde_json::json!({"model":{"id":model,"providerID":provider,
+                "variant":choice.effort.as_deref().unwrap_or("default")}})))?;
+        }
+        crate::db::repo::set_agent_session_id(&app.db().conn.lock().unwrap(),session,id,crate::models::SessionKind::Opencode)?;
+        Ok(id.to_string())
+    })();
+    let _=child.kill();let _=child.wait();
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

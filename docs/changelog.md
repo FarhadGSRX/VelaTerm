@@ -1,11 +1,32 @@
 # Changelog
 
-> Created: 2026-07-09 16:10 · Updated: 2026-10-07
+> Created: 2026-07-09 16:10 · Updated: 2026-10-14 14:27
 
 All notable changes to VelaTerm are documented here, newest first.
 v0.1.91 is the first public release; earlier version numbers were internal iterations and are not covered.
 
 ---
+
+## v0.2.10 — 2026-10-13
+
+- 🧩 OpenCode v2 is supported alongside v1, and the model list loads correctly with OpenCode v2.0.26.
+- 🏷️ The session header shows the agent CLI's version; when a newer release is available, the version links to the official upgrade instructions.
+- 🗂️ The Git panel shows up to 1,000 changed files and offers to add large folders such as `node_modules` to `.gitignore`.
+- 🔤 The Git panel displays non-ASCII file names correctly, stages, unstages, and discards exactly the files you choose, and lists conflicts in their own group.
+- 📜 Git history keeps its loaded range, expanded items, and scroll position when it refreshes.
+- 🌿 The branch shown in the right panel, status bar, terminal title, and sidebar updates as soon as you switch branches, without restarting.
+- 📁 The Files tree refreshes open folders automatically and marks folders that contain Git changes.
+- 🧹 Windows: self-updates no longer leave installers in the Temp folder, and leftovers from earlier updates are removed.
+- 🪝 Windows: Codex, Crush, Kiro, Cursor, Kimi, Antigravity, Copilot, and Grok report session status directly to VelaTerm without PowerShell scripts.
+- 🖱️ Windows: full-screen terminal programs such as vim receive mouse clicks and scrolling; the mouse wheel no longer turns into arrow keys.
+- 🕘 zsh terminals read and write your own `~/.zsh_history` again, so `history` and the Up arrow show commands from other terminals too.
+- 🖥️ New Claude and Codex sessions open in conversation view; other agents open in the terminal by default.
+- 🚀 `vspawn` accepts `--pi` and `--agent <name>`, so it can start any agent that accepts tasks.
+- ⏱️ If the model list hasn't loaded after 30 seconds, it shows an error with Retry.
+- 🗑️ Saved presets can be deleted in Settings ▸ Agents.
+- ⌨️ The screenshot button's tooltip shows its current shortcut, and its icon is easier to tell apart from Share.
+- 🧭 The right panel switches back from Knowledge to Info and other tabs again.
+- ✍️ macOS: typing `/` in the terminal with an input method no longer enters it twice.
 
 ## v0.2.9 — 2026-10-07
 

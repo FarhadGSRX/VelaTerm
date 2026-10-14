@@ -74,6 +74,8 @@ pub struct ChatEvent {
     /// Provider id used only while rebuilding richer live rows; it is not part of the IPC contract.
     #[serde(skip)]
     native_id: Option<String>,
+    #[serde(skip)]
+    translation_ids: Vec<String>,
 }
 
 impl ChatEvent {
@@ -89,6 +91,7 @@ impl ChatEvent {
             is_error: false,
             pending: false,
             native_id: None,
+            translation_ids: Vec::new(),
             shell: None,
         }
     }
@@ -301,13 +304,17 @@ fn codex_rewind_targets(content: &str) -> Vec<RewindTarget> {
 
 /// Fold parsed events into rows: pair each tool result with its call, and join adjacent same-kind messages.
 fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
+    fold_identified(events.into_iter().map(|event| (event,None)).collect())
+}
+
+fn fold_identified(events: Vec<(Event,Option<String>)>) -> Vec<ChatEvent> {
     let mut out: Vec<ChatEvent> = Vec::new();
     // Tool id -> index in `out` of the pending card waiting for that result.
     let mut pending: HashMap<String, usize> = HashMap::new();
 
-    for ev in events {
+    for (ev, identity) in events {
         match ev {
-            Event::User { text, ts } => push_message(&mut out, "user", text, ts),
+            Event::User { text, ts } => push_message(&mut out, "user", text, ts, identity),
             Event::Shell { id, command, output, exit_code, cancelled, truncated, ts } => {
                 let mut event = ChatEvent::message("user", format!("!{command}"), ts);
                 let context = super::shell::ShellContext {
@@ -319,8 +326,8 @@ fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
                     &context, context.status()));
                 out.push(event);
             }
-            Event::AssistantText { text, ts } => push_message(&mut out, "assistant", text, ts),
-            Event::Thinking { text, ts } => push_message(&mut out, "thinking", text, ts),
+            Event::AssistantText { text, ts } => push_message(&mut out, "assistant", text, ts, identity),
+            Event::Thinking { text, ts } => push_message(&mut out, "thinking", text, ts, None),
             // Each command answers a separate line someone typed, so two of them stay two rows even when
             // they arrive back to back.
             Event::Command { text, ts } => out.push(ChatEvent::message("command", text, ts)),
@@ -344,6 +351,7 @@ fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
                     is_error: false,
                     pending: true,
                     native_id: id,
+                    translation_ids: Vec::new(),
                     shell: None,
                 });
             }
@@ -374,6 +382,7 @@ fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
                     is_error,
                     pending: false,
                     native_id: id,
+                    translation_ids: Vec::new(),
                     shell: None,
                 });
             }
@@ -401,8 +410,12 @@ fn native_shell_pair(input: &str, output: &str) -> Option<(String, super::shell:
 }
 
 fn fold_claude(events: Vec<Event>) -> Vec<ChatEvent> {
+    fold_claude_shells(fold(events))
+}
+
+fn fold_claude_shells(events: Vec<ChatEvent>) -> Vec<ChatEvent> {
     let mut out: Vec<ChatEvent> = Vec::new();
-    for event in fold(events) {
+    for event in events {
         if let Some(previous) = out.last_mut() {
             if previous.kind == "user" && event.kind == "user" {
                 if let Some((text, context)) = native_shell_pair(
@@ -428,17 +441,20 @@ fn fold_claude(events: Vec<Event>) -> Vec<ChatEvent> {
 /// One turn commonly arrives as several content blocks; drawing each as its own bubble would break a single
 /// answer into fragments. A tool row in between ends the run, because text before and after a tool call are
 /// genuinely separate parts of the answer.
-fn push_message(out: &mut Vec<ChatEvent>, kind: &'static str, text: String, ts: Option<String>) {
+fn push_message(out: &mut Vec<ChatEvent>, kind: &'static str, text: String, ts: Option<String>, identity: Option<String>) {
     if let Some(last) = out.last_mut() {
         if kind != "user" && last.kind == kind {
             if let Some(prev) = last.text.as_mut() {
                 prev.push_str("\n\n");
                 prev.push_str(&text);
+                last.translation_ids.extend(identity);
                 return;
             }
         }
     }
-    out.push(ChatEvent::message(kind, text, ts));
+    let mut event=ChatEvent::message(kind,text,ts);
+    event.translation_ids.extend(identity);
+    out.push(event);
 }
 
 // ─────────────────────────── Replaying into a live conversation ───────────────────────────
@@ -461,6 +477,70 @@ struct CodexSubagentReplay {
 /// displayed page, so the ids do not shift when a client loads earlier history.
 fn replay_id(index: usize) -> String {
     format!("h-{index}")
+}
+
+/// Translation aliases use identities from the same recording that produces the replay rows.
+/// Codex's completed UserMessage id differs from its response-item id; pair those adjacent records
+/// before folding, so repeated text and merged assistant blocks never require a content lookup.
+pub fn translation_aliases(kind: SessionKind, agent_session_id: &str) -> Result<Vec<(String,String,Vec<String>,String)>,String> {
+    if !matches!(kind,SessionKind::Claude|SessionKind::Codex) {return Ok(Vec::new());}
+    type Aliases=Vec<(String,String,Vec<String>,String)>;
+    struct Cached { path:std::path::PathBuf, size:u64, modified:std::time::SystemTime, aliases:Aliases }
+    static CACHE:std::sync::OnceLock<std::sync::Mutex<HashMap<String,Cached>>>=std::sync::OnceLock::new();
+    let cache=CACHE.get_or_init(||std::sync::Mutex::new(HashMap::new()));
+    let key=format!("{}:{agent_session_id}",kind.as_str());
+    {
+        let saved=cache.lock().unwrap();
+        if let Some(value)=saved.get(&key) {
+            if let Ok(meta)=std::fs::metadata(&value.path) {
+                if meta.len()==value.size && meta.modified().ok()==Some(value.modified) {return Ok(value.aliases.clone());}
+            }
+        }
+    }
+    let path=if kind==SessionKind::Claude {
+        resume::find_claude_transcript(agent_session_id).ok_or("Claude transcript file not found")?
+    } else {resume::find_codex_rollout(agent_session_id).ok_or("Codex rollout file not found")?};
+    let before=std::fs::metadata(&path).ok().and_then(|m|m.modified().ok().map(|modified|(m.len(),modified)));
+    let aliases=if kind==SessionKind::Claude {
+        claude_translation_aliases(&resume::read_claude_transcript(agent_session_id)?)
+    } else {codex_translation_aliases(&resume::read_codex_rollout_chain(agent_session_id)?.1)};
+    if let Ok(meta)=std::fs::metadata(&path) {
+        if let Ok(modified)=meta.modified() {
+            if before!=Some((meta.len(),modified)) {return Ok(aliases);}
+            let mut saved=cache.lock().unwrap();
+            if saved.len()>=16 {saved.clear();}
+            saved.insert(key,Cached {path,size:meta.len(),modified,aliases:aliases.clone()});
+        }
+    }
+    Ok(aliases)
+}
+
+pub(crate) fn claude_translation_aliases(content: &str) -> Vec<(String,String,Vec<String>,String)> {
+    let events=crate::agent::export::claude_identified_events(content);
+    fold_claude_shells(fold_identified(events)).into_iter()
+        .filter(|event|event.shell.is_none() && !event.translation_ids.is_empty())
+        .map(|event|(replay_id(event.index),event.kind.to_string(),event.translation_ids,event.text.unwrap_or_default())).collect()
+}
+
+pub(crate) fn codex_translation_aliases(content: &str) -> Vec<(String,String,Vec<String>,String)> {
+    let mut events:Vec<(Event,Option<String>)>=Vec::new();
+    let mut pending_user:Option<usize>=None;
+    for line in content.lines() {
+        let Ok(value)=serde_json::from_str::<Value>(line) else {continue;};
+        if value["type"]=="event_msg" && value["payload"]["type"]=="item_completed" && value["payload"]["item"]["type"]=="UserMessage" {
+            if let Some(index)=pending_user.take() {
+                events[index].1=value["payload"]["item"]["id"].as_str().map(str::to_string);
+            }
+        }
+        for event in codex_events(line) {
+            let identity=if matches!(&event,Event::AssistantText { .. }) {value["payload"]["id"].as_str().map(str::to_string)} else {None};
+            if matches!(&event,Event::User { .. }) {pending_user=Some(events.len());}
+            events.push((event,identity));
+        }
+    }
+    fold_identified(events).into_iter().filter(codex_replay_event_visible)
+        .filter(|event|event.shell.is_none() && !event.translation_ids.is_empty())
+        .map(|event|(replay_id(event.index),event.kind.to_string(),event.translation_ids,event.text.unwrap_or_default())).collect()
 }
 
 /// Read a recording back as timeline rows, for a conversation the agent is resuming.
@@ -1225,6 +1305,32 @@ mod tests {
 
     fn claude(lines: &[&str]) -> Vec<ChatEvent> {
         fold(claude_events(&lines.join("\n")))
+    }
+
+    #[test]
+    fn claude_translation_aliases_use_live_block_indexes_and_replay_rows() {
+        let content=[
+            serde_json::json!({"type":"user","uuid":"user-one","message":{"content":"Same"}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"thinking","thinking":""}]}}),
+            serde_json::json!({"type":"assistant","isSidechain":true,"message":{"id":"answer","content":[{"type":"text","text":"Child"}]}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"tool_use","id":"tool","name":"Read","input":{}}]}}),
+            serde_json::json!({"type":"user","uuid":"tool-result","message":{"content":[{"type":"tool_result","tool_use_id":"tool","content":"done"}]}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"text","text":" First\n"}]}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"text","text":"Second"}]}}),
+            serde_json::json!({"type":"user","uuid":"user-two","message":{"content":"Same"}}),
+        ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        let aliases=claude_translation_aliases(&content);
+        assert_eq!(aliases,vec![
+            ("h-0".into(),"user".into(),vec!["user-one".into()],"Same".into()),
+            ("h-2".into(),"assistant".into(),vec!["answer:2".into(),"answer:3".into()],"First\n\nSecond".into()),
+            ("h-3".into(),"user".into(),vec!["user-two".into()],"Same".into()),
+        ]);
+        let rows=claude_replay(&content,&mut |_|Err("No subagent".into()),&mut HashSet::new(),0);
+        for (id,kind,_,text) in aliases {
+            let row=rows.iter().find(|row|row.id()==id).unwrap();
+            let value=serde_json::to_value(row).unwrap();
+            assert_eq!(value["kind"],kind);assert_eq!(value["text"],text);
+        }
     }
 
     fn claude_task_record(tool: &str, agent: &str) -> String {

@@ -762,6 +762,7 @@ fn opencode_session_missing(id: &str) -> bool {
     if id.is_empty() {
         return false;
     }
+    if let Ok(exists)=crate::agent::opencode_store::session_exists(id) {return !exists;}
     let Ok(output) = crate::host::command("opencode")
         .args(["export", id])
         .env("NO_COLOR", "1")

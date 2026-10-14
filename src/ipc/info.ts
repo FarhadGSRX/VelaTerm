@@ -14,8 +14,21 @@ export interface DirEntry {
   isDir: boolean;
   /** Whether this is hidden (name starts with `.`, such as `.claude`/`.env`); hidden by default with a UI toggle. */
   isHidden: boolean;
-  /** Git-change badge (M/A/U/D), or null when unchanged. */
+  /** Backend Git decoration (M/A/U/D/R/!) for a file or changed descendants, or null. */
   gitBadge: string | null;
+}
+
+/** A change-notification lease; renew it within 90 seconds or it lapses. */
+export interface WatchInfo {
+  /** The watched directory; `fs://changed` events carry this exact string. */
+  root: string;
+  /** False when this platform does not watch, so the caller keeps polling. */
+  supported: boolean;
+}
+
+/** Watch a directory for changes; events arrive through `onFsChanged`. */
+export function fsWatch(path: string): Promise<WatchInfo> {
+  return invoke<WatchInfo>("fs_watch", { path });
 }
 
 /** List a directory's direct children, directories first and sorted by name, including Git badges. */

@@ -1,4 +1,4 @@
-//! The single dropdown used by every plain single-choice control in the app: a trigger button plus a
+//! The shared dropdown for fixed single-choice and multiple-choice controls in the app: a trigger button plus a
 //! popup list of options. Before this existed the same button-and-popup markup had been copied into a
 //! dozen files, and the copies had drifted apart in height, font size, panel background, shadow, and
 //! hover colour, so two dropdowns sitting in the same dialog no longer looked alike.
@@ -6,8 +6,9 @@
 //! A native `<select>` is not used because WKWebView renders one as a light beveled system control
 //! that ignores the theme, which is why the hand-rolled version appeared in the first place.
 //!
-//! Scope: one value, chosen from a fixed list, committed on click. Controls that also accept free
-//! text (the model field) or that carry submenus (right-click menus, which belong to ContextMenu)
+//! Scope: values chosen from a fixed list, committed on click. Multi-select keeps the menu open.
+//! Controls that also accept free text (the model field) or that carry submenus
+//! (right-click menus, which belong to ContextMenu)
 //! are not this component's job.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
@@ -116,24 +117,19 @@ export function useMenuPosition(
   return menuPosition;
 }
 
-export default function Select<T extends string>({
-  value,
-  onChange,
-  options,
-  width = 160,
-  menuWidth,
-  size = "md",
-  mono = false,
-  align = "left",
-  placeholder,
-  disabled,
-  title,
-  ariaLabel,
-  leading,
-  menuPortal = false,
-}: {
+type SelectProps<T extends string> = ({
+  multiple?: false;
   value: T;
-  onChange: (v: T) => void;
+  onChange: (value: T) => void;
+} | {
+  multiple: true;
+  value: T[];
+  onChange: (value: T[]) => void;
+  selectAllLabel?: string;
+  clearLabel?: string;
+}) & {
+  /** Optional summary for the selected values in the collapsed trigger. */
+  summary?: string;
   options: SelectOption<T>[];
   /** Trigger width. Pass "100%" to fill a flex row. */
   width?: number | string;
@@ -153,7 +149,13 @@ export default function Select<T extends string>({
   leading?: string;
   /** Render long lists outside clipping/scrolling parents, anchored to the trigger. */
   menuPortal?: boolean;
-}) {
+};
+
+export default function Select<T extends string>(props: SelectProps<T>) {
+  const { value, options, width = 160, menuWidth, size = "md", mono = false, align = "left",
+    placeholder, disabled, title, ariaLabel, leading, menuPortal = false, summary } = props;
+  const multiple = props.multiple === true;
+
   const s = SIZES[size];
   const [open, setOpen] = useState(false);
   // Keyboard focus is tracked separately from the committed value: arrow keys move the highlight and
@@ -164,18 +166,21 @@ export default function Select<T extends string>({
   const listId = useId();
   const menuPosition = useMenuPosition(btnRef, listRef, open, menuPortal, menuWidth, align);
 
-  const selected = options.findIndex((o) => o.value === value);
+  const selected = options.findIndex(o => props.multiple ? props.value.includes(o.value) : o.value === props.value);
   const current = selected >= 0 ? options[selected] : undefined;
 
-  // Opening starts the highlight on the current value so Enter alone is a no-op rather than a jump.
+  // Selection changes must not move the cursor while toggling several options.
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) setActive(selected);
-  }, [open, selected]);
+    if (open && (!wasOpen.current || !multiple)) setActive(selected);
+    wasOpen.current = open;
+  }, [open, selected, multiple]);
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
 
   // Keep the highlighted row in view while arrowing through a list taller than the panel.
   useLayoutEffect(() => {
     if (!open || active < 0) return;
-    const row = listRef.current?.children[active] as HTMLElement | undefined;
+    const row = listRef.current?.querySelector<HTMLElement>(`[data-select-index="${active}"]`);
     const list = listRef.current;
     if (!row || !list) return;
     // Scroll the list only. scrollIntoView also moves surrounding settings panes under the pointer.
@@ -188,8 +193,13 @@ export default function Select<T extends string>({
   const commit = (i: number) => {
     const opt = options[i];
     if (!opt || opt.disabled) return;
-    onChange(opt.value);
-    setOpen(false);
+    if (disabled) return;
+    if (props.multiple) {
+      props.onChange(props.value.includes(opt.value) ? props.value.filter(value => value !== opt.value) : [...props.value, opt.value]);
+    } else {
+      props.onChange(opt.value);
+      setOpen(false);
+    }
     btnRef.current?.focus();
   };
 
@@ -202,12 +212,20 @@ export default function Select<T extends string>({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (open && props.multiple && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      const all = options.filter(o => !o.disabled).every(o => props.value.includes(o.value));
+      props.onChange(options.filter(o => o.disabled ? props.value.includes(o.value) : !all).map(o => o.value));
+      return;
+    }
     if (e.key === "Escape") {
       if (!open) return;
       e.preventDefault();
+      e.stopPropagation();
       setOpen(false);
       return;
     }
+    if (e.key === "Tab") { setOpen(false); return; }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!open) {
@@ -271,6 +289,7 @@ export default function Select<T extends string>({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
+        aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
         aria-label={ariaLabel}
         title={title}
         disabled={disabled}
@@ -296,7 +315,7 @@ export default function Select<T extends string>({
           opacity: disabled ? 0.6 : 1,
         }}
       >
-        {current?.icon}
+        {!multiple && current?.icon}
         <span
           style={{
             flex: 1,
@@ -306,7 +325,7 @@ export default function Select<T extends string>({
             whiteSpace: "nowrap",
           }}
         >
-          {current?.label ?? placeholder ?? value}
+          {summary ?? (multiple ? options.filter(o => (value as T[]).includes(o.value)).map(o => o.label).join(", ") || placeholder : current?.label ?? placeholder ?? value)}
         </span>
         <Icons.chevD size={12} style={{ color: "var(--text-muted)", flex: "none" }} />
       </button>
@@ -321,9 +340,10 @@ export default function Select<T extends string>({
           />
           <div
             ref={listRef}
-            id={listId}
-            role="listbox"
-            aria-label={ariaLabel}
+            id={multiple ? undefined : listId}
+            role={multiple ? undefined : "listbox"}
+            aria-label={multiple ? undefined : ariaLabel}
+            onMouseDown={e => e.preventDefault()}
             // A wrapping <label> would otherwise forward a row click on to the trigger button as a
             // second activation, reopening the popup the moment a choice closed it. Label activation
             // is a default action, so only preventDefault cancels it; stopPropagation alone does not.
@@ -337,13 +357,20 @@ export default function Select<T extends string>({
               ...(menuPortal ? menuPosition : {}),
             }}
           >
+            {props.multiple && (props.selectAllLabel || props.clearLabel) && <div role="presentation" style={{ display: "flex", gap: 8, padding: "4px 4px 8px", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
+              {props.selectAllLabel && <button type="button" className="vlx-btn" onClick={() => props.onChange(options.filter(o => !o.disabled || props.value.includes(o.value)).map(o => o.value))}>{props.selectAllLabel}</button>}
+              {props.clearLabel && <button type="button" className="vlx-btn" onClick={() => props.onChange(options.filter(o => o.disabled && props.value.includes(o.value)).map(o => o.value))}>{props.clearLabel}</button>}
+            </div>}
+            <div id={multiple ? listId : undefined} role={multiple ? "listbox" : undefined} aria-label={multiple ? ariaLabel : undefined} aria-multiselectable={multiple || undefined}>
             {options.map((opt, i) => {
-              const on = i === selected;
+              const on = props.multiple ? props.value.includes(opt.value) : i === selected;
               const hot = i === active;
               return (
                 <div
                   key={opt.value || `_${i}`}
                   role="option"
+                  id={`${listId}-${i}`}
+                  data-select-index={i}
                   aria-selected={on}
                   aria-disabled={opt.disabled || undefined}
                   onClick={() => commit(i)}
@@ -356,6 +383,7 @@ export default function Select<T extends string>({
                     opacity: opt.disabled ? 0.45 : 1,
                   }}
                 >
+                  {multiple && <span aria-hidden="true" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "none", width: 16, height: 16, border: `1px solid ${on ? "var(--accent)" : "var(--border-strong)"}`, borderRadius: 3, background: on ? "var(--accent)" : "transparent", color: "var(--text-on-accent)", boxSizing: "border-box" }}>{on && <Icons.check size={12} />}</span>}
                   {opt.icon}
                   <span
                     style={{
@@ -381,6 +409,7 @@ export default function Select<T extends string>({
                 </div>
               );
             })}
+            </div>
           </div>
         </>
       )}

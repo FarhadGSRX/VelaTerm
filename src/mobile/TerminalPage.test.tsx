@@ -11,6 +11,7 @@ vi.mock("../terminal/imageInput", () => ({injectImageFiles:vi.fn()}));
 vi.mock("../layout/sessionViewers/TranscriptViewer", () => ({assistantLabel:()=>"Claude"}));
 vi.mock("../layout/CenterPane/session/rows", () => ({MessageBubble:({text}:{text:string})=><p>{text}</p>,ReasoningRow:()=>null,ToolCard:()=>null}));
 vi.mock("../layout/CenterPane/session/ChatPane", () => ({ChatPane:()=>{if(fixture.crash)throw new Error("fixture render failure");return <p>recovered</p>}}));
+vi.mock("../layout/CenterPane/session/AgentVersionBadge", () => ({AgentVersionBadge:()=> <span data-testid="agent-version">v1.0.0</span>}));
 vi.mock("./MobileTerminal", () => ({MobileTerminal:()=> <div data-testid="terminal"/>}));
 vi.mock("./KeyBar", () => ({KeyBar:()=> <div data-testid="keys"/>}));
 import {TerminalPage} from "./TerminalPage";
@@ -18,6 +19,12 @@ const session = {id:"fixture", name:"Fixture session", kind:"claude", engine:"tu
 beforeEach(()=>{fixture.exit.mockResolvedValue(()=>{});fixture.killed.mockResolvedValue(()=>{});});
 afterEach(()=>{cleanup();vi.resetAllMocks();fixture.crash=false;delete (window as {__VELATERM_CONNECTION_MENU__?:boolean}).__VELATERM_CONNECTION_MENU__;});
 describe("mobile error navigation",()=>{
+  it("shows the agent version in the visible mobile header for conversation sessions",()=>{
+    const view=render(<TerminalPage session={{...session,engine:"chat"}} onBack={()=>{}}/>);
+    expect(screen.getByRole("banner").contains(screen.getByTestId("agent-version"))).toBe(true);
+    view.rerender(<TerminalPage session={{...session,kind:"kiro",engine:"tui"}} onBack={()=>{}}/>);
+    expect(screen.queryByTestId("agent-version")).toBeNull();
+  });
   it("retains Kiro terminal controls and returns to the list on PTY exit",()=>{
     const back=vi.fn();render(<TerminalPage session={{...session,kind:"kiro"}} onBack={back}/>);
     expect(screen.getByTestId("terminal")).toBeTruthy();

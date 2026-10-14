@@ -4,9 +4,10 @@
 //! injection like Claude, OpenCode, or Cline. To avoid modifying repositories, merge into the global user
 //! `hooks.json`, as with Cursor:
 //!
-//! - Install a static script under `~/.gemini/vlx-term/`, using hook.ps1 on Windows.
+//! - On Unix, install a static script under `~/.gemini/vlx-term/`. On Windows, call the VelaTerm executable's
+//!   native `--agent-hook antigravity` bridge instead, so no PowerShell script is involved.
 //! - Replace only the namespaced top-level `vlx-term-status` group in global hooks.json, preserving all user
-//!   groups and refusing a nonobject root. The static script reads injected VLX_* values, forwards stdin to
+//!   groups and refusing a nonobject root. Either bridge reads injected VLX_* values, forwards stdin to
 //!   `/hook/<sid>?t=<token>&e=<state>`, and returns `{"decision":"allow"}` so observation never blocks tools.
 //! - Missing variables in unmanaged sessions produce a harmless allow response.
 //! - Install lazily only when an Antigravity session actually launches.
@@ -128,20 +129,6 @@ echo '{"decision":"allow"}'
 exit 0
 "#;
 
-/// Windows PowerShell script matching SH_SCRIPT, with state in `$args[0]`.
-const PS1_SCRIPT: &str = r#"# vlx-term status bridge hook (auto-installed by vlx-term; safe to delete).
-# Only active in Antigravity (agy) sessions launched by vlx-term (reads VLX_* env vars).
-param([string]$Event)
-$body = [Console]::In.ReadToEnd()
-if ($env:VLX_SPAWN_URL -and $env:VLX_SESSION_ID -and $env:VLX_TOKEN) {
-  try {
-    Invoke-RestMethod -Method Post -ContentType 'application/json' -TimeoutSec 3 -Body $body `
-      -Uri "$($env:VLX_SPAWN_URL)/hook/$($env:VLX_SESSION_ID)?t=$($env:VLX_TOKEN)&e=$Event" | Out-Null
-  } catch {}
-}
-Write-Output '{"decision":"allow"}'
-"#;
-
 /// `(Antigravity event, status e= value)` pairs to register.
 const EVENTS: [(&str, &str); 3] = [
     ("PreInvocation", "working"),
@@ -154,10 +141,9 @@ fn gemini_home() -> Option<PathBuf> {
     crate::host::home_dir().map(|h| h.join(".gemini"))
 }
 
-/// Hook script path under `~/.gemini/vlx-term/`, using hook.ps1 on Windows.
+/// Unix hook script path: `~/.gemini/vlx-term/hook.sh`. Earlier Windows versions wrote `hook.ps1` beside it.
 fn hook_script_path() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "hook.ps1" } else { "hook.sh" };
-    gemini_home().map(|h| h.join("vlx-term").join(name))
+    gemini_home().map(|h| h.join("vlx-term").join("hook.sh"))
 }
 
 /// Verified global hooks path: `~/.gemini/config/hooks.json`. Embedded docs and Orca confirm it; the older
@@ -166,21 +152,20 @@ fn hooks_json_path() -> Option<PathBuf> {
     gemini_home().map(|h| h.join("config").join("hooks.json"))
 }
 
-/// Build the hooks.json command: execute the shebang script directly on Unix or quoted `powershell -File`
-/// for a Windows `.ps1` path.
-fn hook_command(script: &Path, event: &str) -> String {
+/// Build the hooks.json command for `target`: execute the shebang script directly on Unix, or call the
+/// VelaTerm executable's native bridge on Windows. Antigravity does not document which shell runs hooks on
+/// Windows, so the bridge command uses the form cmd.exe, PowerShell, and POSIX shells all parse alike.
+fn hook_command(target: &Path, event: &str) -> String {
     if cfg!(windows) {
-        format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" {event}",
-            script.display()
-        )
+        let args = format!("--agent-hook antigravity {event}");
+        super::hook_bridge::command(target, super::hook_bridge::Shell::Any, &args)
     } else {
-        format!("{} {event}", script.display())
+        format!("{} {event}", target.display())
     }
 }
 
 /// Construct our flat event group without nested hooks, matcher, or redundant JSON timeout.
-fn build_group(script: &Path) -> serde_json::Value {
+fn build_group(target: &Path) -> serde_json::Value {
     let mut group = serde_json::Map::new();
     for (event, status) in EVENTS {
         group.insert(
@@ -188,7 +173,7 @@ fn build_group(script: &Path) -> serde_json::Value {
             serde_json::json!([
                 {
                     "type": "command",
-                    "command": hook_command(script, status)
+                    "command": hook_command(target, status)
                 }
             ]),
         );
@@ -197,28 +182,34 @@ fn build_group(script: &Path) -> serde_json::Value {
 }
 
 /// Merge only `root["vlx-term-status"]` in place, preserving other groups; reject a nonobject root.
-fn merge_into(root: &mut serde_json::Value, script: &Path) -> Result<(), String> {
+fn merge_into(root: &mut serde_json::Value, target: &Path) -> Result<(), String> {
     let obj = root
         .as_object_mut()
         .ok_or("hooks.json root is not a JSON object")?;
-    obj.insert(GROUP.to_string(), build_group(script));
+    obj.insert(GROUP.to_string(), build_group(target));
     Ok(())
 }
 
-/// Install the hook script, merge global hooks.json, and return its path.
+/// Install the bridge, merge global hooks.json, and return its path. Unix writes the hook script; Windows
+/// points the hooks at `exe` and removes the PowerShell script earlier versions wrote.
 ///
 /// Idempotently preserve matching content/mtime. Missing home, permissions, or malformed JSON returns Err
 /// for logging; Antigravity still starts with screen-detected state only.
-pub fn install() -> Result<PathBuf, String> {
+pub fn install(exe: &Path) -> Result<PathBuf, String> {
     let script = hook_script_path().ok_or("Failed to resolve user home directory")?;
     let hooks = hooks_json_path().ok_or("Failed to resolve user home directory")?;
-    install_at(&script, &hooks)
+    install_at(&script, &hooks, exe)
 }
 
 /// As `install`, with explicit target paths for tests.
-fn install_at(script: &Path, hooks_json: &Path) -> Result<PathBuf, String> {
+fn install_at(script: &Path, hooks_json: &Path, exe: &Path) -> Result<PathBuf, String> {
+    if cfg!(windows) {
+        let _ = std::fs::remove_file(script.with_file_name("hook.ps1"));
+        merge_one(exe, hooks_json)?;
+        return Ok(hooks_json.to_path_buf());
+    }
     // 1. Preserve matching script content and make Unix files executable.
-    let body = if cfg!(windows) { PS1_SCRIPT } else { SH_SCRIPT };
+    let body = SH_SCRIPT;
     let script_current = std::fs::read_to_string(script)
         .map(|s| s == body)
         .unwrap_or(false);
@@ -242,7 +233,7 @@ fn install_at(script: &Path, hooks_json: &Path) -> Result<PathBuf, String> {
 }
 
 /// Read, merge, and write one hooks.json only on change; reject invalid JSON without overwriting.
-fn merge_one(script: &Path, hooks_json: &Path) -> Result<(), String> {
+fn merge_one(target: &Path, hooks_json: &Path) -> Result<(), String> {
     let existing = std::fs::read_to_string(hooks_json).ok();
     let mut root: serde_json::Value = match &existing {
         Some(text) if !text.trim().is_empty() => serde_json::from_str(text).map_err(|_| {
@@ -253,7 +244,7 @@ fn merge_one(script: &Path, hooks_json: &Path) -> Result<(), String> {
         })?,
         _ => serde_json::json!({}),
     };
-    merge_into(&mut root, script)?;
+    merge_into(&mut root, target)?;
     let content = serde_json::to_string_pretty(&root)
         .map_err(|e| format!("Failed to serialize hooks.json: {e}"))?;
     if existing.as_deref() != Some(content.as_str()) {
@@ -379,13 +370,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Executable path handed to `install_at`; only Windows embeds it in the hook commands.
+    const EXE: &str = "/opt/VelaTerm/velaterm";
+
+    #[cfg(unix)]
     #[test]
     fn fresh_install_writes_script_and_group() {
         let dir = tmp_dir("fresh");
         let script = dir.join("vlx-term/hook.sh");
         let hooks = dir.join("config/hooks.json");
 
-        install_at(&script, &hooks).expect("installation should succeed");
+        install_at(&script, &hooks, Path::new(EXE)).expect("installation should succeed");
 
         // The script is installed and executable on Unix.
         assert!(std::fs::read_to_string(&script)
@@ -427,16 +422,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_install_calls_the_native_bridge_and_removes_the_script() {
+        let dir = tmp_dir("native");
+        let script = dir.join("vlx-term/hook.sh");
+        let hooks = dir.join("config/hooks.json");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(script.with_file_name("hook.ps1"), "# old bridge").unwrap();
+        let exe = dir.join("velaterm.exe");
+        install_at(&script, &hooks, &exe).expect("installation should succeed");
+        assert!(!script.with_file_name("hook.ps1").exists(), "the earlier PowerShell bridge should be removed");
+        assert!(!script.exists(), "Windows writes no hook script");
+        let raw = std::fs::read_to_string(&hooks).unwrap();
+        assert!(!raw.to_ascii_lowercase().contains("powershell"), "{raw}");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let pre = v[GROUP]["PreInvocation"][0]["command"].as_str().unwrap();
+        assert!(pre.ends_with(" --agent-hook antigravity working"), "{pre}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn install_is_idempotent() {
         let dir = tmp_dir("idem");
         let script = dir.join("vlx-term/hook.sh");
         let hooks = dir.join("config/hooks.json");
 
-        install_at(&script, &hooks).unwrap();
+        install_at(&script, &hooks, Path::new(EXE)).unwrap();
         let mtime1 = std::fs::metadata(&hooks).unwrap().modified().unwrap();
         let smtime1 = std::fs::metadata(&script).unwrap().modified().unwrap();
-        install_at(&script, &hooks).unwrap();
+        install_at(&script, &hooks, Path::new(EXE)).unwrap();
         assert_eq!(
             std::fs::metadata(&hooks).unwrap().modified().unwrap(),
             mtime1,
@@ -466,7 +482,7 @@ mod tests {
         )
         .unwrap();
 
-        install_at(&script, &hooks).unwrap();
+        install_at(&script, &hooks, Path::new(EXE)).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&hooks).unwrap()).unwrap();
 
@@ -477,6 +493,7 @@ mod tests {
         );
         // Our group now points to the current script and no longer contains the old path.
         let pre = v[GROUP]["PreInvocation"][0]["command"].as_str().unwrap();
+        #[cfg(unix)]
         assert!(pre.starts_with(&script.display().to_string()) || pre.contains("hook.sh"));
         assert!(!pre.contains("/old/hook.sh"), "the old vlx group should be replaced wholesale");
         assert!(v[GROUP].get("PostInvocation").is_some());
@@ -493,7 +510,7 @@ mod tests {
         std::fs::write(&hooks, "{ not json").unwrap();
 
         // Invalid JSON returns Err and leaves the original file unchanged.
-        assert!(install_at(&script, &hooks).is_err(), "invalid JSON should be refused rather than written");
+        assert!(install_at(&script, &hooks, Path::new(EXE)).is_err(), "invalid JSON should be refused rather than written");
         assert_eq!(
             std::fs::read_to_string(&hooks).unwrap(),
             "{ not json",

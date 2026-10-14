@@ -306,6 +306,21 @@ export interface CloneProgress {
   percent: number | null;
 }
 
+/** Something changed below a watched directory. */
+export interface FsChange {
+  /** Matches `WatchInfo.root`. */
+  root: string;
+  /** Directories whose listing changed, relative to `root` with `/` separators (`""` is the root);
+   *  null when too many changed to list and everything shown should be re-read. */
+  dirs: string[] | null;
+  /** Something in git's own files changed, which moves status and badges. */
+  git: boolean;
+}
+
+export function onFsChanged(cb: (event: FsChange) => void): Promise<UnlistenFn> {
+  return listen<FsChange>("fs://changed", cb);
+}
+
 export function onCloneProgress(
   cb: (progress: CloneProgress) => void,
 ): Promise<UnlistenFn> {

@@ -308,6 +308,14 @@ pub fn configure_zsh_startup(
     for file in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] {
         let mut body = String::from("# Load the user's startup file with its original ZDOTDIR.\n");
         body.push_str(if file == ".zshenv" { &initial } else { restore });
+        if file == ".zshrc" {
+            // /etc/zshrc on macOS runs before this file and sets HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history while
+            // ZDOTDIR still points here; repeat that assignment with the user's own ZDOTDIR.
+            body.push_str(&format!(
+                "[[ ${{HISTFILE-}} != {} ]] || HISTFILE=${{ZDOTDIR:-$HOME}}/.zsh_history\n",
+                quote(&dir.join(".zsh_history").to_string_lossy())
+            ));
+        }
         body.push_str(&format!("[[ ! -r ${{ZDOTDIR:-$HOME}}/{file} ]] || builtin source \"${{ZDOTDIR:-$HOME}}/{file}\"\n"));
         match file {
             ".zlogin" => body.push_str(&finish),

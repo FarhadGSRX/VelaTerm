@@ -1,3 +1,24 @@
+## v0.2.10 — 2026-10-13
+
+- 🧩 O OpenCode v2 é compatível junto com o v1, e a lista de modelos carrega corretamente no OpenCode v2.0.26.
+- 🏷️ O cabeçalho da sessão mostra a versão da CLI do agente; quando há uma versão mais nova, o número da versão leva às instruções oficiais de atualização.
+- 🗂️ O painel Git mostra até 1.000 arquivos alterados e sugere adicionar pastas grandes, como `node_modules`, ao `.gitignore`.
+- 🔤 O painel Git exibe corretamente nomes de arquivo com caracteres não ASCII, prepara, remove da preparação e descarta apenas os arquivos escolhidos, e agrupa os conflitos separadamente.
+- 📜 O histórico do Git mantém o intervalo carregado, os itens expandidos e a posição de rolagem ao ser atualizado.
+- 🌿 O branch exibido no painel direito, na barra de status, no título do terminal e na barra lateral é atualizado assim que você troca de branch, sem reiniciar.
+- 📁 A árvore de arquivos atualiza automaticamente as pastas abertas e marca as que contêm alterações do Git.
+- 🧹 Windows: as atualizações automáticas não deixam mais instaladores na pasta Temp, e as sobras de atualizações anteriores são removidas.
+- 🪝 Windows: Codex, Crush, Kiro, Cursor, Kimi, Antigravity, Copilot e Grok informam o status da sessão diretamente ao VelaTerm, sem scripts do PowerShell.
+- 🖱️ Windows: programas de terminal em tela cheia, como o vim, recebem cliques e rolagem do mouse; a roda do mouse não vira mais teclas de seta.
+- 🕘 Os terminais zsh voltam a ler e gravar o seu próprio `~/.zsh_history`, então `history` e a seta para cima também mostram os comandos de outros terminais.
+- 🖥️ Novas sessões do Claude e do Codex abrem na visualização de conversa; os demais agentes abrem no terminal por padrão.
+- 🚀 O `vspawn` aceita `--pi` e `--agent <nome>` e pode iniciar qualquer agente que aceite tarefas.
+- ⏱️ Se a lista de modelos não carregar em 30 segundos, aparece um erro com Retry.
+- 🗑️ Predefinições salvas podem ser excluídas em Configurações ▸ Agentes.
+- ⌨️ A dica do botão de captura de tela mostra o atalho atual, e o ícone ficou mais fácil de distinguir do botão de compartilhar.
+- 🧭 O painel direito volta a alternar de Conhecimento para Info e outras abas.
+- ✍️ macOS: digitar `/` no terminal com um método de entrada não insere mais o caractere duas vezes.
+
 ## v0.2.9 — 2026-10-07
 
 - ✨ A renomeação com IA lembra o modelo e o nível de raciocínio escolhidos para cada agente.

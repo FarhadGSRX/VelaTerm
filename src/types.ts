@@ -352,6 +352,8 @@ export function countByAgentState(
 export interface GitStatus {
   isRepo: boolean;
   branch?: string | null;
+  /** Full HEAD identity, or null before the first commit. */
+  head?: string | null;
   ahead: number;
   behind: number;
   staged: number;
@@ -361,4 +363,14 @@ export interface GitStatus {
   isWorktree?: boolean;
   /** Top-level working directory for this worktree, present only when isWorktree is true. */
   worktreePath?: string | null;
+  /** Short name of the branch's upstream, such as `origin/main`; null when none is configured. */
+  upstream?: string | null;
+  /** Whether any remote is configured, so a branch without upstream can be published. */
+  hasRemote?: boolean;
+  /** Operation stopped on conflicts, waiting to be continued or aborted. */
+  operation?: GitOperation | null;
+  /** Top-level directory of the working tree; change-list paths are relative to it. */
+  root?: string | null;
 }
+
+export type GitOperation = "merge" | "rebase" | "cherry-pick" | "revert";

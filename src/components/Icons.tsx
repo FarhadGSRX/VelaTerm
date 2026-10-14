@@ -160,7 +160,8 @@ const Icons: Record<string, IconComponent> = {
   grid: I([r("rect", { key: 1, x: 2.5, y: 2.5, width: 4, height: 4, rx: .5 }), r("rect", { key: 2, x: 9.5, y: 2.5, width: 4, height: 4, rx: .5 }), r("rect", { key: 3, x: 2.5, y: 9.5, width: 4, height: 4, rx: .5 }), r("rect", { key: 4, x: 9.5, y: 9.5, width: 4, height: 4, rx: .5 })]),
   menu: I(r("path", { key: 1, d: "M3 4h10M3 8h10M3 12h10" })),
   clipboard: I([r("rect", { key: 1, x: 3.5, y: 3.5, width: 9, height: 10, rx: 1 }), r("rect", { key: 2, x: 5.5, y: 2, width: 5, height: 3, rx: 1 })]),
-  scissors: I([r("circle", { key: 1, cx: 4, cy: 4, r: 2 }), r("circle", { key: 2, cx: 4, cy: 12, r: 2 }), r("path", { key: 3, d: "M5.5 5.5L13 13M5.5 10.5L13 3" })]),
+  // Upright scissors keep the screenshot action distinct from the adjacent share nodes.
+  scissors: I([r("circle", { key: 1, cx: 4, cy: 12, r: 2 }), r("circle", { key: 2, cx: 12, cy: 12, r: 2 }), r("path", { key: 3, d: "M5.5 10.5L13 3M10.5 10.5L3 3" })]),
   bookmark: I(r("path", { key: 1, d: "M4 2.5h8v11l-4-3-4 3z" })),
   // Screenshot annotation tools.
   shotRect: I(r("rect", { key: 1, x: 2.5, y: 3.5, width: 11, height: 9, rx: 0.5 })),

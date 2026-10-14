@@ -51,18 +51,18 @@ export interface AgentDefaultConfig {
    * AgentInstallCard fills it after locating a successful one-click installation, or with a path the
    * user enters in the card's path field. */
   path?: string;
-  /** View a new session of this agent opens in. Missing falls back to the conversation view for every
-   * chat-capable agent (`defaultEngineFor`). */
+  /** View a new session of this agent opens in. Missing uses the agent's built-in default
+   * (`defaultEngineFor`): conversation for Claude/Codex, terminal for other agents. */
   engine?: SessionEngine;
 }
 
-/** View a newly created session of this agent opens in: its saved per-agent choice, then the unified
- * conversation default. Callers only use this for kinds the chat engine can drive. */
+/** View a newly created session of this agent opens in: its saved per-agent choice, then its built-in
+ * default. Callers only use this for kinds the chat engine can drive. */
 export function defaultEngineFor(
   kind: SessionKind,
   agentDefaults: Record<string, AgentDefaultConfig>,
 ): SessionEngine {
-  return agentDefaults[kind]?.engine ?? "chat";
+  return agentDefaults[kind]?.engine ?? (kind === "claude" || kind === "codex" ? "chat" : "tui");
 }
 
 /** The permission a session launches with: its own choice, or the agent kind's global default when it has
@@ -411,8 +411,8 @@ export function loadSettings(): PersistedSettings {
       merged.termRenderer = "dom";
     }
     // The view choice used to be a single app-wide setting covering Claude, Codex and OpenCode, while Pi
-    // and OMP were outside its scope. Fold a saved choice into those three agents; newer chat-capable
-    // agents use the unified conversation default. Clone first so the module-level defaults are never mutated.
+    // and OMP were outside its scope. Fold a saved choice into those three agents; other agents use their
+    // built-in defaults. Clone first so the module-level defaults are never mutated.
     merged.agentDefaults =
       merged.agentDefaults && typeof merged.agentDefaults === "object" && !Array.isArray(merged.agentDefaults)
         ? { ...merged.agentDefaults }

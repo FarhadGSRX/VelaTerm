@@ -46,6 +46,10 @@
 .m-back { flex: none; display: flex; align-items: center; font-size: 14px; color: var(--text-mid); padding: 8px 10px 8px 0; touch-action: manipulation; }
 .m-back:active { color: var(--text); }
 .m-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; color: var(--text); }
+.m-session-heading { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; padding: 8px 0; }
+.m-session-heading .sv-agent-version { font-size: 12px; gap: 8px; flex-wrap: wrap; }
+.m-session-heading .sv-agent-version-current { max-width: 100%; }
+.m-session-heading .sv-agent-version-update { display: inline-flex; align-items: center; max-width: 100%; min-height: 28px; }
 .m-kind { flex: none; font-size: 11px; color: var(--text-faint); }
 
 /* ── Session list toolbar: search and status filters ── */

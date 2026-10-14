@@ -1,9 +1,11 @@
 //! Kimi Code CLI status bridge.
 //!
 //! Kimi's official hooks currently read only `~/.kimi-code/config.toml` and offer no per-launch inline
-//! configuration. On the user's first Kimi session, append a clearly delimited VelaTerm block and write a static
-//! forwarding script to `~/.kimi-code/vlx-term/hook.sh`. The block stores no port, token, or session ID. The script
-//! reads only `VLX_*` variables inherited by the managed process and no-ops when `kimi` runs in an ordinary terminal.
+//! configuration. On the user's first Kimi session, append a clearly delimited VelaTerm block. On Unix the block
+//! runs a static forwarding script at `~/.kimi-code/vlx-term/hook.sh`; on Windows, which has no `sh`, it calls the
+//! VelaTerm executable's native `--agent-hook kimi` bridge. The block stores no port, token, or session ID. Both
+//! bridges read only `VLX_*` variables inherited by the managed process and no-op when `kimi` runs in an ordinary
+//! terminal.
 
 use std::path::{Path, PathBuf};
 
@@ -31,17 +33,25 @@ fn kimi_home() -> Option<PathBuf> {
     crate::host::home_dir().map(|home| home.join(".kimi-code"))
 }
 
-fn hook_rule(script: &Path, source_event: &str, target_event: &str) -> String {
-    // POSIX single quoting prevents the hook shell from reevaluating paths containing spaces, `$`, backticks, or quotes.
-    let path = script.to_string_lossy().replace('\'', "'\\''");
-    let command = format!("sh '{path}' {target_event}");
+/// One hook rule against `target`: the forwarding script on Unix, the VelaTerm executable on Windows.
+fn hook_rule(target: &Path, source_event: &str, target_event: &str) -> String {
+    let command = if cfg!(windows) {
+        // Kimi does not document which shell runs hooks on Windows, so use the form cmd.exe, PowerShell, and
+        // POSIX shells all parse alike.
+        let args = format!("--agent-hook kimi {target_event}");
+        super::hook_bridge::command(target, super::hook_bridge::Shell::Any, &args)
+    } else {
+        // POSIX single quoting prevents the hook shell from reevaluating paths containing spaces, `$`, backticks, or quotes.
+        let path = target.to_string_lossy().replace('\'', "'\\''");
+        format!("sh '{path}' {target_event}")
+    };
     let quoted = serde_json::to_string(&command).expect("hook command serialization must succeed");
     format!("[[hooks]]\nevent = \"{source_event}\"\ncommand = {quoted}\ntimeout = 5\n")
 }
 
-fn config_block(script: &Path) -> String {
+fn config_block(target: &Path) -> String {
     let mut out = format!("{BLOCK_BEGIN}\n");
-    for (source, target) in [
+    for (source, event) in [
         ("SessionStart", "boot"),
         ("UserPromptSubmit", "kimi_working"),
         ("PreToolUse", "kimi_working"),
@@ -52,7 +62,7 @@ fn config_block(script: &Path) -> String {
         ("StopFailure", "kimi_idle"),
         ("Interrupt", "kimi_idle"),
     ] {
-        out.push_str(&hook_rule(script, source, target));
+        out.push_str(&hook_rule(target, source, event));
     }
     out.push_str(BLOCK_END);
     out.push('\n');
@@ -92,21 +102,34 @@ fn write_if_changed(path: &Path, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("Failed to write {}: {e}", path.display()))
 }
 
-/// Install/upgrade the script and dedicated hooks block. Validate with `toml_edit` before and after writing; never overwrite invalid configuration.
-pub fn install() -> Result<PathBuf, String> {
+/// Install/upgrade the bridge and dedicated hooks block. Validate with `toml_edit` before and after writing; never
+/// overwrite invalid configuration. Unix writes the forwarding script; Windows points the block at `exe` and removes
+/// the POSIX script earlier versions wrote there.
+pub fn install(exe: &Path) -> Result<PathBuf, String> {
     let home = kimi_home().ok_or("Failed to resolve Kimi Code home directory")?;
+    install_at(&home, exe)
+}
+
+/// As [`install`], with an explicit Kimi home for tests.
+fn install_at(home: &Path, exe: &Path) -> Result<PathBuf, String> {
     let script = home.join("vlx-term").join("hook.sh");
-    write_if_changed(&script, HOOK_SCRIPT)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&script)
-            .map_err(|e| format!("Failed to inspect Kimi hook script: {e}"))?
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script, permissions)
-            .map_err(|e| format!("Failed to make Kimi hook script executable: {e}"))?;
-    }
+    let target = if cfg!(windows) {
+        let _ = std::fs::remove_file(&script);
+        exe.to_path_buf()
+    } else {
+        write_if_changed(&script, HOOK_SCRIPT)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&script)
+                .map_err(|e| format!("Failed to inspect Kimi hook script: {e}"))?
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&script, permissions)
+                .map_err(|e| format!("Failed to make Kimi hook script executable: {e}"))?;
+        }
+        script
+    };
 
     let config = home.join("config.toml");
     let existing = match std::fs::read_to_string(&config) {
@@ -119,10 +142,47 @@ pub fn install() -> Result<PathBuf, String> {
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("Kimi config is invalid; refusing to modify it: {e}"))?;
     }
-    let merged = merge_block(&existing, &config_block(&script))?;
+    let merged = merge_block(&existing, &config_block(&target))?;
     merged
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| format!("Generated Kimi config is invalid; refusing to write it: {e}"))?;
     write_if_changed(&config, &merged)?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("vlx-kimi-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp home");
+        dir
+    }
+
+    #[test]
+    fn install_writes_one_rule_per_event_and_converges() {
+        let home = temp_home("install");
+        std::fs::write(home.join("config.toml"), "model = \"k2\"\n").unwrap();
+        let exe = home.join("velaterm");
+        install_at(&home, &exe).expect("first install");
+        install_at(&home, &exe).expect("second install");
+        let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        let doc = config.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+        assert_eq!(doc["model"].as_str(), Some("k2"), "user settings survive");
+        assert_eq!(config.matches(BLOCK_BEGIN).count(), 1, "re-install replaces the block");
+        assert_eq!(config.matches("[[hooks]]").count(), 9);
+        assert!(config.contains("kimi_asking") && config.contains("kimi_idle"));
+        assert!(!config.to_ascii_lowercase().contains("powershell"));
+        if cfg!(windows) {
+            assert!(config.contains("--agent-hook kimi kimi_waiting"), "{config}");
+            assert!(!config.contains("sh '"), "Windows has no sh: {config}");
+            assert!(!home.join("vlx-term").join("hook.sh").exists());
+        } else {
+            assert!(config.contains("vlx-term/hook.sh' kimi_waiting"), "{config}");
+            assert_eq!(std::fs::read_to_string(home.join("vlx-term").join("hook.sh")).unwrap(), HOOK_SCRIPT);
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }

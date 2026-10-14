@@ -10,11 +10,13 @@ import { getBackendVersion } from "../../ipc/commands";
 import { apiUrl, isShareSurface } from "../../ipc/shareBase";
 import { invoke, isTauri } from "../../ipc/transport";
 import { recordRequestError } from "../../ipc/reqLog";
-import { screenshotShortcutGet, screenshotStart } from "../../ipc/screenshot";
+import { screenshotShortcutGet, screenshotStart, type ScreenshotShortcutStatus } from "../../ipc/screenshot";
+import { formatAccelerator } from "../../screenshot/accelerator";
 import { webServerStatus, type WebServerStatus } from "../../ipc/webServer";
 import { env, platform } from "../../platform";
 import { useTermStore } from "../../store/termStore";
 import { runAfterInitialSettings } from "../../store/settingsWatch";
+import { navigateTranslation, translationUrl, useTranslationRoute } from "../../translation/navigation";
 import { resolveTheme } from "../../theme";
 import { ShareModal } from "../../components/ShareModal";
 import { AppMenuBar } from "./AppMenuBar";
@@ -48,7 +50,7 @@ function useHotReloadTime(): string {
     const handler = () => setStamp(fmtClock(new Date()));
     import.meta.hot.on("vite:afterUpdate", handler);
     return () => {
-      import.meta.hot?.off("vite:afterUpdate", handler);
+      import.meta.hot?.off?.("vite:afterUpdate", handler);
     };
   }, []);
   return stamp;
@@ -103,11 +105,19 @@ export function TitleBar() {
   // Store-level settings visibility is shared by the gear and the macOS native Settings menu.
   const settingsOpen = useTermStore((s) => s.settingsOpen);
   const setSettingsOpen = useTermStore((s) => s.setSettingsOpen);
+  const translationRoute = useTranslationRoute();
+  const settingsRoute = translationRoute.get("settings");
+  const translationSessionId = translationRoute.get("translationSession");
+  const routeSessions = useTermStore(s => s.sessions);
+  const translationDormant = useTermStore(s => translationSessionId ? !!s.dormantSessions[translationSessionId] : false);
+  useEffect(() => {
+    if (translationSessionId && routeSessions.some(session => session.id === translationSessionId && session.engine === "chat") && (useTermStore.getState().activeSessionId !== translationSessionId || translationDormant)) useTermStore.getState().openSession(translationSessionId);
+  }, [translationSessionId, routeSessions, translationDormant]);
+  useEffect(() => { setSettingsOpen(!!settingsRoute); }, [settingsRoute, setSettingsOpen]);
+  const closeSettings = () => { setSettingsOpen(false); navigateTranslation(translationUrl({ settings: null, settingsSection: null, settingsTranslation: null, translationService: null })); };
   // Share-dialog visibility is shared by the header action and macOS native Share menu.
   const shareOpen = useTermStore((s) => s.shareOpen);
   const setShareOpen = useTermStore((s) => s.setShareOpen);
-  // Hidden error-log entry through Option/Alt-clicking the gear; a normal click opens settings.
-  const setErrorLogOpen = useTermStore((s) => s.setErrorLogOpen);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const connectOpen = new URLSearchParams(useSharingLocation()).has("connect");
   const setConnectOpen = (open: boolean | ((value: boolean) => boolean)) => {
@@ -126,7 +136,7 @@ export function TitleBar() {
   // Account link state lights the account icon. The relay is authoritative; query it once here and
   // refresh when the account panel reports a link change in this window.
   const [accountLinked, setAccountLinked] = useState(false);
-  const [screenshotSupported, setScreenshotSupported] = useState(false);
+  const [screenshotStatus, setScreenshotStatus] = useState<ScreenshotShortcutStatus | null>(null);
   // Frontend/backend versions for the mismatch banner; null when equal or not yet checked.
   const [versionMismatch, setVersionMismatch] = useState<{
     frontend: string;
@@ -178,15 +188,21 @@ export function TitleBar() {
   useEffect(() => {
     if (!env.isTauri) return;
     let alive = true;
-    void screenshotShortcutGet()
-      .then((status) => {
-        if (alive) setScreenshotSupported(status.supported);
-      })
-      .catch(() => {});
+    const refresh = () => {
+      void screenshotShortcutGet()
+        .then((status) => {
+          if (alive) setScreenshotStatus(status);
+        })
+        .catch(() => {});
+    };
+    // Re-read after settings close and when returning from another window's settings.
+    refresh();
+    window.addEventListener("focus", refresh);
     return () => {
       alive = false;
+      window.removeEventListener("focus", refresh);
     };
-  }, []);
+  }, [settingsOpen]);
 
   const syncRemoteStatus = (s: WebServerStatus | null) => {
     setRemoteRunning(s?.running ?? false);
@@ -512,11 +528,13 @@ export function TitleBar() {
         </button>
       )}
 
-      {screenshotSupported && (
+      {screenshotStatus?.supported && (
         <button
           type="button"
           className="tb-btn"
-          title={t("settings.scScreenshot")}
+          title={screenshotStatus.shortcut && !screenshotStatus.error
+            ? `${t("settings.scScreenshot")} (${formatAccelerator(screenshotStatus.shortcut)})`
+            : t("settings.scScreenshot")}
           aria-label={t("settings.scScreenshot")}
           onClick={() => {
             void screenshotStart().catch((error) => recordRequestError("screenshot_start", error));
@@ -543,12 +561,9 @@ export function TitleBar() {
           className="tb-btn"
           title={t("settings.title")}
           onClick={(e) => {
-            // Hidden debug action: Option/Alt-click opens the error log; normal click opens settings.
-            if (e.altKey) {
-              setErrorLogOpen(true);
-              return;
-            }
-            setSettingsOpen(!settingsOpen);
+            // Option/Alt reveals the translation category for this opening only.
+            if (settingsOpen && !e.altKey) closeSettings();
+            else navigateTranslation(translationUrl({ settings: "appearance", settingsSection: null, settingsTranslation: e.altKey ? "1" : null, translationService: null }));
           }}
         >
           <Icons.gear size={15} />
@@ -608,7 +623,7 @@ export function TitleBar() {
         </button>
       </div>
 
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsModal onClose={closeSettings} />}
       {shareOpen && <ShareModal onClose={() => setShareOpen(false)} />}
       {remoteOpen && (
         <RemoteAccessPanel

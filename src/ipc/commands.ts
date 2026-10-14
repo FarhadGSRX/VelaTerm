@@ -1,5 +1,6 @@
 //! Backend command wrappers using Tauri IPC on desktop and WebSocket in browsers through the transport adapter.
 
+import type { WatchInfo } from "./info";
 import {
   invoke,
   isElectronShell,
@@ -614,8 +615,13 @@ export function gitMergeApply(
 
 // Change viewing and diffs.
 
-/** One file changed relative to HEAD. */
+/** The Git area selected for a comparison. */
+export type GitChangeSide = "all" | "staged" | "unstaged" | "untracked" | "conflicted";
+
+/** One changed file with independent index and worktree facts. */
 export interface ChangedFile {
+  /** Original repository-relative path for a rename. */
+  originalPath?: string | null;
   /** Repository-root-relative path. */
   path: string;
   /** `"modified"` / `"added"` / `"deleted"` / `"untracked"` / `"renamed"`。 */
@@ -635,10 +641,18 @@ export interface ChangedFile {
   unstagedAdditions: number;
   unstagedDeletions: number;
   unstagedBinary: boolean;
+  /** For an unmerged path, which side did what. */
+  conflict?: GitConflictKind | null;
 }
+
+export type GitConflictKind =
+  | "both-modified" | "both-added" | "both-deleted"
+  | "added-by-us" | "added-by-them" | "deleted-by-us" | "deleted-by-them";
 
 /** Two sides of a file diff: HEAD versus worktree. */
 export interface FileDiff {
+  /** Text exceeds the viewer limit; this is not a binary file. */
+  tooLarge?: boolean;
   path: string;
   /** HEAD content, empty for added/untracked files. */
   original: string;
@@ -648,9 +662,26 @@ export interface FileDiff {
   binary: boolean;
 }
 
-/** Lists files changed from HEAD for View Changes. */
-export function gitChangedFiles(cwd: string): Promise<ChangedFile[]> {
-  return invoke<ChangedFile[]>("git_changed_files", { cwd });
+/** Changed files of a repository, capped by the backend. */
+export interface ChangedFileList {
+  files: ChangedFile[];
+  /** More changes exist than `files` holds; every line count is then zero. */
+  truncated: boolean;
+}
+
+/** Lists files changed from HEAD for View Changes and the Git panel. */
+export function gitChangedFiles(cwd: string): Promise<ChangedFileList> {
+  return invoke<ChangedFileList>("git_changed_files", { cwd });
+}
+
+/** Folder that floods a cut-off change list and could be added to `.gitignore`, if one does. */
+export function gitIgnoreSuggestion(cwd: string): Promise<string | null> {
+  return invoke<string | null>("git_ignore_suggestion", { cwd });
+}
+
+/** Adds the suggested folder to the repository's root `.gitignore`; false when it is already listed. */
+export function gitIgnoreFolder(cwd: string, folder: string): Promise<boolean> {
+  return invoke<boolean>("git_ignore_folder", { cwd, folder });
 }
 
 /** A repository found below a folder that is not itself a repository. */
@@ -667,16 +698,23 @@ export function gitDiscoverRepos(path: string): Promise<NestedRepo[]> {
 }
 
 /** Gets HEAD/worktree text for line-by-line View Changes diff. */
-export function gitFileDiff(cwd: string, path: string): Promise<FileDiff> {
-  return invoke<FileDiff>("git_file_diff", { cwd, path });
+export function gitFileDiff(cwd: string, path: string, side: GitChangeSide = "all"): Promise<FileDiff> {
+  return invoke<FileDiff>("git_file_diff", { cwd, path, side: side === "untracked" ? "unstaged" : side === "conflicted" ? "all" : side });
 }
 
 /** One commit for the group Info panel's recent history. */
 export interface CommitInfo {
+  /** Full identity; older servers may only provide the abbreviated hash. */
+  oid?: string;
   hash: string;
   subject: string;
+  message?: string;
   author: string;
   relative: string;
+  /** Parent identities; empty for a root commit, two or more for a merge. Absent from older servers. */
+  parents?: string[];
+  /** Ref names pointing at the commit, such as `HEAD -> main`, `origin/main`, or `tag: v1`. */
+  refs?: string[];
 }
 
 /** Gets recent commits for cwd's repository; returns empty outside a repository or with no commits. */
@@ -705,8 +743,95 @@ export function gitDiscard(cwd: string, paths: string[]): Promise<void> {
 }
 
 /** Commits what is staged and returns the new commit. */
-export function gitCommit(cwd: string, message: string, amend = false): Promise<CommitInfo> {
-  return invoke<CommitInfo>("git_commit", { cwd, message, amend });
+export function gitCommit(cwd: string, message: string, amend = false, expectHead?: string | null): Promise<CommitInfo> {
+  return invoke<CommitInfo>("git_commit", { cwd, message, amend, expectHead: expectHead ?? null });
+}
+
+/** How Pull integrates upstream commits: fast-forward only, rebase local commits, or merge. */
+export type GitPullMode = "ff-only" | "rebase" | "merge";
+
+/** Fetches from the default remote and prunes deleted remote branches. */
+export function gitFetch(cwd: string): Promise<void> {
+  return invoke<void>("git_fetch", { cwd });
+}
+
+/** Integrates the upstream branch into the current one. */
+export function gitPull(cwd: string, mode: GitPullMode = "ff-only"): Promise<void> {
+  return invoke<void>("git_pull", { cwd, mode });
+}
+
+/** Pushes the current branch, publishing it with upstream tracking when it has none. `force` uses --force-with-lease. */
+export function gitPush(cwd: string, force = false): Promise<void> {
+  return invoke<void>("git_push", { cwd, force });
+}
+
+/** What the current branch committed since it split from a base branch. */
+export interface BranchCompare {
+  /** Ref compared against, such as `origin/main`. */
+  base: string;
+  /** Where the histories split; the left side of each file diff. */
+  mergeBase: string;
+  /** HEAD at comparison time; the right side of each file diff. */
+  head: string;
+  /** Commits on this branch since the split. */
+  ahead: number;
+  /** Commits on the base since the split. */
+  behind: number;
+  files: ChangedFile[];
+  /** Branches that can be chosen as the base. */
+  candidates: string[];
+}
+
+/** Compares HEAD with `base`, or the default base; null when there is nothing to compare with. */
+export function gitBranchCompare(cwd: string, base?: string | null): Promise<BranchCompare | null> {
+  return invoke<BranchCompare | null>("git_branch_compare", { cwd, base: base ?? null });
+}
+
+/** Files changed between two commits. */
+export function gitRangeFiles(cwd: string, from: string, to: string): Promise<ChangedFile[]> {
+  return invoke<ChangedFile[]>("git_range_files", { cwd, from, to });
+}
+
+/** Both sides of one file between two commits. */
+export function gitRangeFileDiff(cwd: string, from: string, to: string, path: string): Promise<FileDiff> {
+  return invoke<FileDiff>("git_range_file_diff", { cwd, from, to, path });
+}
+
+/** Whether the Git panel can open a pull request here, and why not when it cannot. */
+export interface GitPrProvider {
+  provider: "gitea" | null;
+  available: boolean;
+  reason: "ok" | "not_gitea" | "no_token" | "unreachable";
+}
+
+export function gitPrProvider(cwd: string): Promise<GitPrProvider> {
+  return invoke<GitPrProvider>("git_pr_provider", { cwd });
+}
+
+/** Result of opening a pull request: its URL (empty when the server gave none) and a message. */
+export interface PrOutcome {
+  url: string;
+  message: string;
+}
+
+/** Pushes the current branch and opens a pull request into `base`. */
+export function gitOpenPullRequest(cwd: string, base: string, title: string, body: string): Promise<PrOutcome> {
+  return invoke<PrOutcome>("git_open_pull_request", { cwd, base, title, body });
+}
+
+/** Change-notification lease for the repository containing `cwd`, keyed by its top level. */
+export function gitWatch(cwd: string): Promise<WatchInfo> {
+  return invoke<WatchInfo>("git_watch", { cwd });
+}
+
+/** Aborts the merge, rebase, cherry-pick, or revert that stopped on conflicts. */
+export function gitAbortOperation(cwd: string): Promise<void> {
+  return invoke<void>("git_abort_operation", { cwd });
+}
+
+/** Continues the stopped operation once its conflicts are resolved and staged. */
+export function gitContinueOperation(cwd: string): Promise<void> {
+  return invoke<void>("git_continue_operation", { cwd });
 }
 
 /** Total commits reachable from HEAD; zero outside a repository or before the first commit. */
@@ -715,11 +840,11 @@ export function gitCommitCount(cwd: string): Promise<number> {
 }
 
 /** One page of history, newest first. */
-export function gitLogPage(cwd: string, limit: number, offset: number): Promise<CommitInfo[]> {
-  return invoke<CommitInfo[]>("git_log_page", { cwd, limit, offset });
+export function gitLogPage(cwd: string, limit: number, offset: number, head?: string | null): Promise<CommitInfo[]> {
+  return invoke<CommitInfo[]>("git_log_page", { cwd, limit, offset, head });
 }
 
-/** Files changed by one commit; merge commits return an empty list. */
+/** Files changed against a commit's first parent, or the empty tree for its first commit. */
 export function gitCommitFiles(cwd: string, hash: string): Promise<ChangedFile[]> {
   return invoke<ChangedFile[]>("git_commit_files", { cwd, hash });
 }

@@ -16,15 +16,15 @@ pub struct DirEntryInfo {
     /// Whether the name begins with `.`, hidden by default but toggleable like a system file browser. `.git` is
     /// skipped entirely by the backend and never returned.
     pub is_hidden: bool,
-    /// Git change badge (M/A/U/D) for direct files only, or None.
+    /// Git change badge (M/A/U/D/R/!) for a file or a directory's changed descendants.
     pub git_badge: Option<String>,
 }
 
 /// Lists direct children with directories (including symlinks to directories) first, then case-insensitive names,
-/// skipping `.git`. Dotfiles are returned with `is_hidden`. Direct changed files receive Git badges; non-repositories
+/// skipping `.git`. Dotfiles are returned with `is_hidden`. Changed files and directories receive Git badges; non-repositories
 /// produce none.
 pub fn list_dir(path: &str) -> Result<Vec<DirEntryInfo>, String> {
-    let badges = git_badges(path);
+    let badges = git_badges(path)?;
 
     let mut entries: Vec<DirEntryInfo> = Vec::new();
     let rd = std::fs::read_dir(path).map_err(|e| format!("Failed to read directory: {e}"))?;
@@ -41,11 +41,7 @@ pub fn list_dir(path: &str) -> Result<Vec<DirEntryInfo>, String> {
             Ok(ft) => ft.is_dir(),
             Err(_) => ent.path().is_dir(),
         };
-        let git_badge = if is_dir {
-            None
-        } else {
-            badges.get(&name).cloned()
-        };
+        let git_badge = badges.get(&name).cloned();
         entries.push(DirEntryInfo {
             name,
             is_dir,
@@ -62,53 +58,93 @@ pub fn list_dir(path: &str) -> Result<Vec<DirEntryInfo>, String> {
     Ok(entries)
 }
 
-/// Runs `git status --porcelain -- .` and collects badges for direct files whose relative path contains no `/`.
-/// Subdirectory changes are ignored because directories do not receive badges. Returns empty outside Git or without Git.
-fn git_badges(path: &str) -> HashMap<String, String> {
+/// Resolve root-relative porcelain paths against the listed directory, aggregating descendant changes.
+/// The backend owns badge precedence; clients only display these decorations.
+fn git_badges(path: &str) -> Result<HashMap<String, String>, String> {
     let mut map = HashMap::new();
     let out = crate::host::command("git")
-        .arg("-C")
-        .arg(path)
-        .args(["status", "--porcelain", "--", "."])
+        .args(["--no-optional-locks", "-C", path, "rev-parse", "--show-toplevel"])
         .output();
     let out = match out {
         Ok(o) if o.status.success() => o,
-        _ => return map,
+        _ => return Ok(map),
     };
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        // Format: `XY path`, where XY is a two-byte ASCII status code.
-        if line.len() < 4 {
-            continue;
+    let root = std::fs::canonicalize(String::from_utf8_lossy(&out.stdout).trim_end_matches(['\n', '\r']))
+        .map_err(|e| format!("Failed to resolve Git root: {e}"))?;
+    let directory = std::fs::canonicalize(path).map_err(|e| format!("Failed to resolve directory: {e}"))?;
+    let priority = |badge: &str| match badge { "!" => 6, "M" => 5, "D" => 4, "R" => 3, "A" => 2, _ => 1 };
+    let child_name = |relative: &str| {
+        let absolute = root.join(relative);
+        let local = absolute.strip_prefix(&directory).ok()?;
+        Some(local.components().next()?.as_os_str().to_string_lossy().into_owned())
+    };
+    for entry in crate::git::path_status(path, true)? {
+        let badge = crate::git::status_badge(&entry.xy);
+        let destination = child_name(&entry.path);
+        // Moving between child directories also decorates the source; a rename within one child stays R.
+        let source = entry.original_path.as_deref().filter(|_| entry.xy.contains('R'))
+            .and_then(child_name).filter(|name| Some(name) != destination.as_ref());
+        for (name, mark) in destination.into_iter().map(|name| (name, badge))
+            .chain(source.into_iter().map(|name| (name, "D"))) {
+            let previous = map.entry(name).or_insert_with(|| mark.to_string());
+            if priority(mark) > priority(previous) { *previous = mark.to_string(); }
         }
-        let xy = &line[..2];
-        let rest = &line[3..];
-        // For `orig -> new` renames, use the destination name.
-        let pathpart = rest.rsplit(" -> ").next().unwrap_or(rest);
-        // Strip Git's quotes around paths containing special characters.
-        let pathpart = pathpart.trim_matches('"');
-        if pathpart.contains('/') {
-            continue; // Ignore changes beneath subdirectories at this level.
-        }
-        map.insert(pathpart.to_string(), badge_for(xy).to_string());
     }
-    map
+    Ok(map)
 }
 
-/// Maps a two-character porcelain status to an M/A/U/D badge.
-fn badge_for(xy: &str) -> &'static str {
-    let mut chars = xy.chars();
-    let x = chars.next().unwrap_or(' ');
-    let y = chars.next().unwrap_or(' ');
-    if x == '?' {
-        return "U"; // Untracked.
+#[cfg(test)]
+mod git_badge_tests {
+    use super::*;
+
+    struct Repository(std::path::PathBuf);
+    impl Drop for Repository {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
     }
-    // Prefer the index status when present, otherwise the worktree status.
-    let c = if x != ' ' { x } else { y };
-    match c {
-        'A' => "A", // Added.
-        'D' => "D", // Deleted.
-        _ => "M",   // Collapse M/R/C/T into modified.
+    fn git(path: &std::path::Path, args: &[&str]) {
+        let result = crate::host::command("git").arg("-C").arg(path).args(args).output().unwrap();
+        assert!(result.status.success(), "Git command failed: {:?}", args);
+    }
+
+    /// Nested paths, Unicode, literal arrows, renames, and untracked descendants get real badges.
+    #[test]
+    fn nested_file_and_directory_decorations() {
+        let repo = Repository(std::env::temp_dir().join(format!("vlx-files-badges-{}", uuid::Uuid::new_v4())));
+        let root = &repo.0;
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        git(root, &["init"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "user.email", "test@example.test"]);
+        std::fs::write(src.join("文件 -> note.txt"), "original\n").unwrap();
+        std::fs::write(src.join("old.txt"), "rename\n").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-m", "Initial"]);
+        std::fs::write(src.join("文件 -> note.txt"), "changed\n").unwrap();
+        git(root, &["mv", "src/old.txt", "src/new.txt"]);
+        std::fs::create_dir_all(src.join("untracked")).unwrap();
+        std::fs::write(src.join("untracked/deep.txt"), "new\n").unwrap();
+        let top = list_dir(&root.to_string_lossy()).unwrap();
+        assert_eq!(top.iter().find(|e| e.name == "src").unwrap().git_badge.as_deref(), Some("M"));
+        let entries = list_dir(&src.to_string_lossy()).unwrap();
+        let badge = |name: &str| entries.iter().find(|e| e.name == name).unwrap().git_badge.as_deref();
+        assert_eq!(badge("文件 -> note.txt"), Some("M"));
+        assert_eq!(badge("new.txt"), Some("R"));
+        assert_eq!(badge("untracked"), Some("U"));
+        let nested = list_dir(&src.join("untracked").to_string_lossy()).unwrap();
+        assert_eq!(nested[0].git_badge.as_deref(), Some("U"));
+        let changes = crate::git::changed_files(&src.to_string_lossy()).unwrap();
+        assert!(changes.iter().any(|f| f.path == "src/文件 -> note.txt"));
+        git(root, &["restore", "src/文件 -> note.txt"]);
+        let clean = list_dir(&src.to_string_lossy()).unwrap();
+        assert_eq!(clean.iter().find(|e| e.name == "文件 -> note.txt").unwrap().git_badge, None);
+        let renamed = list_dir(&root.to_string_lossy()).unwrap();
+        assert_eq!(renamed.iter().find(|e| e.name == "src").unwrap().git_badge.as_deref(), Some("R"));
+        std::fs::create_dir_all(root.join("destination")).unwrap();
+        git(root, &["mv", "src/new.txt", "destination/new.txt"]);
+        let moved = list_dir(&root.to_string_lossy()).unwrap();
+        assert_eq!(moved.iter().find(|e| e.name == "src").unwrap().git_badge.as_deref(), Some("D"));
+        assert_eq!(moved.iter().find(|e| e.name == "destination").unwrap().git_badge.as_deref(), Some("R"));
     }
 }
 

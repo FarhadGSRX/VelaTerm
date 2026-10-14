@@ -569,6 +569,50 @@ describe("following a peer", () => {
     stop();
   });
 
+  it("sends a local change still in the debounce before a peer frame can overwrite it", async () => {
+    alignEnabledEmpty();
+    const stop = start();
+    await settle();
+    useTermStore.setState({ inspectorTab: "knowledge" });
+    vi.advanceTimersByTime(500);
+    await settle();
+    mirrorPush.mockClear();
+    mirrorPush.mockImplementationOnce(() => Promise.resolve({ rev: 11, source: "desktop", state: null }));
+
+    // The user switches to Info; a peer frame that still says knowledge lands inside the 150 ms debounce.
+    useTermStore.setState({ inspectorTab: "info" });
+    vi.advanceTimersByTime(50);
+    const frame = peerLayout("A", 10);
+    (frame.state as { right: { inspectorTab: string } }).right.inspectorTab = "knowledge";
+    emitLayout(frame);
+
+    expect(mirrorPush).toHaveBeenCalledTimes(1);
+    expect((mirrorPush.mock.calls[0][0] as { right: { inspectorTab: string } }).right.inspectorTab).toBe("info");
+    await settle();
+    vi.advanceTimersByTime(500);
+    // The service ordered our push after the frame, so the frame is stale and the click stands.
+    expect(useTermStore.getState().inspectorTab).toBe("info");
+    expect(mirrorPush).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("still follows a peer frame the service ordered after the flushed local change", async () => {
+    alignEnabledEmpty();
+    const stop = start();
+    await settle();
+    mirrorPush.mockClear();
+    mirrorPush.mockImplementationOnce(() => Promise.resolve({ rev: 9, source: "desktop", state: null }));
+
+    useTermStore.setState({ inspectorTab: "git" });
+    emitLayout(peerLayout("B", 10));
+    await settle();
+
+    expect(mirrorPush).toHaveBeenCalledTimes(1);
+    expect(useTermStore.getState().openTabs).toEqual(["B"]);
+    expect(useTermStore.getState().inspectorTab).toBe("files");
+    stop();
+  });
+
   it("stops following once disposed", async () => {
     alignEnabledEmpty();
     const stop = start();

@@ -890,12 +890,19 @@ interface TermStore {
   changesCwd: string | null;
   /** File the changes dialog should select on open, or `null` to select the first one. */
   changesPath: string | null;
+  /** Which Git area the changes dialog is comparing. */
+  changesSide: import("../ipc/commands").GitChangeSide;
   /**
    * Commit the changes dialog should show instead of the worktree, or `null` for uncommitted work.
    * Set from the Git panel's history so one dialog serves both "what changed since HEAD" and
    * "what did this commit change".
    */
   changesCommit: string | null;
+  /**
+   * With `changesCommit`, compare from this commit instead of the commit's parent: the Git panel's
+   * branch comparison shows everything from the merge base to HEAD this way. `label` names the base.
+   */
+  changesBase: { from: string; label: string } | null;
 
   // Center tabs and split panes.
   openTabs: SessionId[]; // Visible tabs, identified by root session ID.
@@ -1200,7 +1207,7 @@ interface TermStore {
   /** Closes branch merge. */
   closeMerge: () => void;
   /** Opens the changes dialog for a working directory. */
-  openChanges: (cwd: string, opts?: { path?: string; commit?: string }) => void;
+  openChanges: (cwd: string, opts?: { path?: string; commit?: string; side?: import("../ipc/commands").GitChangeSide; base?: { from: string; label: string } }) => void;
   /** Closes the changes dialog. */
   closeChanges: () => void;
   /** Executes a spawn: creates the child and optional worktree, stores its prompt, and opens it. */
@@ -1986,7 +1993,9 @@ export const useTermStore = create<TermStore>((set, get) => ({
   mergeTarget: null,
   changesCwd: null,
   changesPath: null,
+  changesSide: "all",
   changesCommit: null,
+  changesBase: null,
 
   openTabs: [],
   activeTabId: null,
@@ -2414,10 +2423,12 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set({
       changesCwd: cwd,
       changesPath: opts?.path ?? null,
+      changesSide: opts?.side ?? "all",
       changesCommit: opts?.commit ?? null,
+      changesBase: opts?.commit && opts.base ? opts.base : null,
     }),
   closeChanges: () =>
-    set({ changesCwd: null, changesPath: null, changesCommit: null }),
+    set({ changesCwd: null, changesPath: null, changesCommit: null, changesSide: "all", changesBase: null }),
 
   executeSpawn: async (req) => {
     await get().confirmSpawn(req);
@@ -4836,6 +4847,9 @@ export const useTermStore = create<TermStore>((set, get) => ({
     const theme = loadTheme();
     set({
       ...ps,
+      // The open inspector tab belongs to this window and its URL. The persisted value only seeds a
+      // fresh launch; applying it here would override a reloaded URL or follow another client's clicks.
+      inspectorTab: get().inspectorTab,
       theme,
       soundEnabled: loadSoundEnabled(),
       notifyEnabled: loadNotifyEnabled(),

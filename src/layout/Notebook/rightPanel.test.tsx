@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { setLang } from "../../i18n";
 import { useTermStore } from "../../store/termStore";
 import { loadSettings, SETTINGS_KEY } from "../../store/settings";
 import { RightPanel } from "../RightPanel/RightPanel";
+import { memoryNavigate, memoryUrl } from "../Memory/navigation";
 
 vi.mock("../RightPanel/FilesTab",()=>({FilesTab:()=> <div>File explorer</div>}));
 vi.mock("../RightPanel/InfoTab",()=>({InfoTab:()=> <div>Session info</div>}));
@@ -35,4 +36,30 @@ it("opens knowledge through its right tab URL and keeps the directory in that pa
   await waitFor(()=>expect(useTermStore.getState().inspectorTab).toBe("info"));
   expect(new URLSearchParams(location.search).get("inspector")).toBe("info");
   expect(new URLSearchParams(location.search).get("memory")).toBe("notebook/local");
+});
+
+it("lets a tab be reselected after settings sync switched away from the URL's tab",async()=>{
+  window.history.replaceState(null,"","/?inspector=info");render(<RightPanel/>);
+  act(()=>useTermStore.setState({inspectorTab:"knowledge"}));
+  await waitFor(()=>expect(new URLSearchParams(location.search).get("inspector")).toBe("knowledge"));
+  fireEvent.click(screen.getByRole("link",{name:"Info"}));
+  await waitFor(()=>expect(useTermStore.getState().inspectorTab).toBe("info"));
+});
+
+it("keeps an externally selected tab when an unrelated navigation follows",()=>{
+  render(<RightPanel/>);
+  act(()=>useTermStore.setState({inspectorTab:"knowledge"}));
+  expect(new URLSearchParams(location.search).get("inspector")).toBe("knowledge");
+  act(()=>memoryNavigate(memoryUrl("notebooks")));
+  expect(useTermStore.getState().inspectorTab).toBe("knowledge");
+});
+
+it("switches tabs while an unsaved-draft guard blocks page navigation",()=>{
+  window.history.replaceState(null,"","/?inspector=info&memory=entry%2Fm1");render(<RightPanel/>);
+  const guard=(event:Event)=>event.preventDefault();window.addEventListener("memory:beforeNavigate",guard);
+  try {
+    fireEvent.click(screen.getByRole("link",{name:"Git"}));
+    expect(useTermStore.getState().inspectorTab).toBe("git");
+    expect(new URLSearchParams(location.search).get("memory")).toBe("entry/m1");
+  } finally { window.removeEventListener("memory:beforeNavigate",guard); }
 });

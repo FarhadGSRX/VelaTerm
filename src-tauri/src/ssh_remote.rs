@@ -884,9 +884,204 @@ pub fn remote_binary_ok(
     }
 }
 
-/// Upload through the transport, verify remote SHA-256, atomically rename, and chmod executable. Delete
-/// mismatched temporary files so partial data never appears installed. This integrity flow is transport-neutral.
+/// Install the supplied vela-server on the remote host. The zip goes first when there is one: it is less
+/// than half the size of the binary, which no longer stores its frontend compressed. A host that cannot
+/// unpack it, or any failure on that path, falls back to uploading the raw binary. Either way the
+/// installed file must match `supplied.sha256` before it is moved into place. Returns how it was
+/// installed: `zip:<tool>` or `binary`.
 pub fn push_binary(
+    t: &dyn SshTransport,
+    sys: &RemoteSystem,
+    version: &str,
+    supplied: &crate::server_supply::Supplied,
+    progress: Progress,
+) -> Result<String, String> {
+    if !valid_version(version) {
+        return Err(format!("Invalid version: {version}"));
+    }
+    if !supplied.bin.is_file() {
+        return Err(format!("local binary not found: {}", supplied.bin.display()));
+    }
+    ensure_remote_layout(t, sys, version)?;
+    if let Some(zip) = supplied.zip.as_deref().filter(|z| z.is_file()) {
+        match push_zip(t, sys, version, zip, &supplied.sha256, progress) {
+            Ok(tool) => return Ok(format!("zip:{tool}")),
+            Err(_) => crate::diagnostic_warn!(
+                "[ssh] zip install of vela-server failed; uploading the binary instead"
+            ),
+        }
+    }
+    push_raw(t, sys, version, &supplied.bin, &supplied.sha256, progress)?;
+    Ok("binary".to_string())
+}
+
+/// Remote paths used while installing from the zip: the uploaded archive (home-relative for the
+/// transport, and absolute in the shell's syntax), the scratch directory it is unpacked into, and the
+/// unpacked binary.
+struct ZipPaths {
+    zip_rel: String,
+    zip_abs: String,
+    unpack_dir: String,
+    unpacked: String,
+}
+
+fn zip_paths(sys: &RemoteSystem, version: &str) -> ZipPaths {
+    let name = if sys.is_windows() { "vela-server.exe" } else { "vela-server" };
+    let zip_rel = format!(".velaterm/versions/{version}/.vela-server.zip");
+    match sys.shell {
+        RemoteShell::Posix => ZipPaths {
+            zip_abs: format!("$HOME/{zip_rel}"),
+            unpack_dir: format!("$HOME/.velaterm/versions/{version}/.unpack"),
+            unpacked: format!("$HOME/.velaterm/versions/{version}/.unpack/{name}"),
+            zip_rel,
+        },
+        RemoteShell::Powershell => {
+            let dir = format!("$env:USERPROFILE\\.velaterm\\versions\\{version}");
+            ZipPaths {
+                zip_abs: format!("{dir}\\.vela-server.zip"),
+                unpack_dir: format!("{dir}\\.unpack"),
+                unpacked: format!("{dir}\\.unpack\\{name}"),
+                zip_rel,
+            }
+        }
+    }
+}
+
+/// Remote script that unpacks the uploaded zip into a fresh scratch directory with the first tool that
+/// works, printing `unpacked:<tool>`; it fails when none does.
+///
+/// No single tool is present everywhere, so each OS gets an ordered list:
+/// - Windows: the system `tar.exe` (bsdtar, shipped since Windows 10 1803 and Server 2019) comes first in
+///   both shells. PowerShell then has `Expand-Archive` (5.0+, so Server 2016 too), which runs inside the
+///   login PowerShell rather than starting another. A Cygwin/MSYS shell goes on to the POSIX list; its own
+///   `tar` is GNU tar, which cannot read zip, so the system one is called by its full path.
+/// - macOS: `unzip` and `ditto` ship with the OS.
+/// - Linux: `unzip`, `bsdtar`, `python3` and `busybox` are each common but none universal. `gzip`, present
+///   in every base install, is the last resort: GNU gzip decodes a zip holding a single deflated file,
+///   which is exactly how the release zip is built. Cygwin and MSYS ship GNU gzip as well; macOS's gzip
+///   is not GNU and cannot, which is fine since its own tools always exist.
+fn unpack_zip_script(sys: &RemoteSystem, p: &ZipPaths) -> String {
+    match sys.shell {
+        RemoteShell::Posix => {
+            let name = p.unpacked.rsplit('/').next().unwrap_or("vela-server");
+            let mut tools: Vec<(&str, String)> = Vec::new();
+            if sys.is_windows() {
+                tools.push((
+                    "tar.exe",
+                    "\"$(cygpath -u \"$SYSTEMROOT\")/System32/tar.exe\" -xf \"$(cygpath -w \"$z\")\" -C \"$(cygpath -w \"$u\")\"".to_string(),
+                ));
+            }
+            tools.push(("unzip", "unzip -o -q \"$z\" -d \"$u\"".to_string()));
+            if sys.os == "macos" {
+                tools.push(("ditto", "ditto -x -k \"$z\" \"$u\"".to_string()));
+            }
+            tools.push(("bsdtar", "bsdtar -xf \"$z\" -C \"$u\"".to_string()));
+            if sys.os == "linux" {
+                tools.push((
+                    "python3",
+                    "python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \"$z\" \"$u\"".to_string(),
+                ));
+                tools.push(("busybox", "busybox unzip -o -q \"$z\" -d \"$u\"".to_string()));
+            }
+            if sys.os != "macos" {
+                tools.push(("gzip", "sh -c 'gzip -dc <\"$1\" >\"$2\"' sh \"$z\" \"$u/$n\"".to_string()));
+            }
+            let chain = tools
+                .iter()
+                .map(|(label, cmd)| format!("if vx {cmd}; then echo unpacked:{label}; exit 0; fi; "))
+                .collect::<String>();
+            // Each attempt starts without a leftover file, so success means this tool produced it.
+            format!(
+                "z=\"{z}\"; u=\"{u}\"; n=\"{name}\"; \
+                 rm -rf \"$u\" && mkdir -p \"$u\" || exit 1; \
+                 vx() {{ rm -f \"$u/$n\"; \"$@\" >/dev/null 2>&1 && [ -s \"$u/$n\" ]; }}; \
+                 {chain}echo 'no zip extractor worked' >&2; exit 1",
+                z = p.zip_abs,
+                u = p.unpack_dir,
+            )
+        }
+        // A native command's failure is not a PowerShell error, so tar.exe is judged by its exit code
+        // and output file; stderr from it would be a terminating error under 'Stop', hence the try.
+        RemoteShell::Powershell => format!(
+            "$ErrorActionPreference='Stop'; \
+             $z=\"{z}\"; $u=\"{u}\"; $o=\"{o}\"; \
+             if(Test-Path -LiteralPath $u){{ Remove-Item -Recurse -Force -LiteralPath $u }}; \
+             New-Item -ItemType Directory -Force -Path $u | Out-Null; \
+             $w=\"$env:SystemRoot\\System32\\tar.exe\"; $ok=$false; \
+             if(Test-Path -LiteralPath $w){{ try {{ & $w -xf $z -C $u 2>&1 | Out-Null; $ok=($LASTEXITCODE -eq 0) -and (Test-Path -LiteralPath $o) }} catch {{ $ok=$false }} }}; \
+             if($ok){{ Write-Output 'unpacked:tar.exe' }} else {{ \
+               Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $o; \
+               Expand-Archive -Force -LiteralPath $z -DestinationPath $u; \
+               if(-not (Test-Path -LiteralPath $o)){{ throw 'no zip extractor worked' }}; \
+               Write-Output 'unpacked:Expand-Archive' }}",
+            z = p.zip_abs,
+            u = p.unpack_dir,
+            o = p.unpacked,
+        ),
+    }
+}
+
+/// Remote command removing the uploaded zip and its scratch directory, ignoring missing paths.
+fn zip_cleanup_cmd(sys: &RemoteSystem, p: &ZipPaths) -> String {
+    match sys.shell {
+        RemoteShell::Posix => format!("rm -rf \"{}\" \"{}\"", p.unpack_dir, p.zip_abs),
+        RemoteShell::Powershell => format!(
+            "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath \"{}\",\"{}\"",
+            p.unpack_dir, p.zip_abs
+        ),
+    }
+}
+
+/// Upload the zip, unpack it remotely, verify the unpacked binary's SHA-256, and move it into place.
+/// Returns the tool that unpacked it. The archive and scratch directory are removed on every outcome.
+fn push_zip(
+    t: &dyn SshTransport,
+    sys: &RemoteSystem,
+    version: &str,
+    local_zip: &Path,
+    expected_sha256: &str,
+    progress: Progress,
+) -> Result<String, String> {
+    let p = zip_paths(sys, version);
+    let result = (|| {
+        t.upload(local_zip, &p.zip_rel, progress)?;
+        let out = shell_exec(t, sys, &unpack_zip_script(sys, &p))?;
+        let tool = out
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("unpacked:"))
+            .ok_or_else(|| format!("remote unpack reported no result: {out:?}"))?
+            .to_string();
+        let got = remote_sha256(t, sys, &p.unpacked)?;
+        if !got.eq_ignore_ascii_case(expected_sha256) {
+            return Err(format!(
+                "unpacked hash mismatch (refusing to place): expected {expected_sha256}, got {got}"
+            ));
+        }
+        install_file(t, sys, &p.unpacked, &sys.bin_path(version))?;
+        Ok(tool)
+    })();
+    let _ = shell_exec(t, sys, &zip_cleanup_cmd(sys, &p));
+    result
+}
+
+/// Atomically move a verified file to the final binary path; only POSIX needs an executable bit.
+fn install_file(t: &dyn SshTransport, sys: &RemoteSystem, from: &str, to: &str) -> Result<(), String> {
+    shell_exec(t, sys, &install_file_cmd(sys, from, to)).map(|_| ())
+}
+
+fn install_file_cmd(sys: &RemoteSystem, from: &str, to: &str) -> String {
+    match sys.shell {
+        RemoteShell::Posix => format!("mv -f \"{from}\" \"{to}\" && chmod +x \"{to}\""),
+        RemoteShell::Powershell => format!(
+            "$ErrorActionPreference='Stop'; Move-Item -Force -LiteralPath \"{from}\" -Destination \"{to}\""
+        ),
+    }
+}
+
+/// Upload the raw binary through the transport, verify remote SHA-256, atomically rename, and chmod
+/// executable. Delete mismatched temporary files so partial data never appears installed. This integrity
+/// flow is transport-neutral.
+fn push_raw(
     t: &dyn SshTransport,
     sys: &RemoteSystem,
     version: &str,
@@ -894,13 +1089,6 @@ pub fn push_binary(
     expected_sha256: &str,
     progress: Progress,
 ) -> Result<(), String> {
-    if !valid_version(version) {
-        return Err(format!("Invalid version: {version}"));
-    }
-    if !local_bin.is_file() {
-        return Err(format!("local binary not found: {}", local_bin.display()));
-    }
-    ensure_remote_layout(t, sys, version)?;
 
     // Upload paths are home-relative and bypass shell expansion. Forward slashes are correct for both
     // sftp-server implementations, including the Windows one.
@@ -924,16 +1112,7 @@ pub fn push_binary(
         ));
     }
 
-    // Atomically install; only POSIX needs an executable bit.
-    let final_abs = sys.bin_path(version);
-    let install = match sys.shell {
-        RemoteShell::Posix => format!("mv -f \"{tmp_abs}\" \"{final_abs}\" && chmod +x \"{final_abs}\""),
-        RemoteShell::Powershell => format!(
-            "$ErrorActionPreference='Stop'; Move-Item -Force -LiteralPath \"{tmp_abs}\" -Destination \"{final_abs}\""
-        ),
-    };
-    shell_exec(t, sys, &install)?;
-    Ok(())
+    install_file(t, sys, &tmp_abs, &sys.bin_path(version))
 }
 
 /// Delete one remote file, ignoring a missing path, in the detected shell's own syntax.
@@ -2028,20 +2207,20 @@ fn connect_inner(
     let platkey = crate::server_supply::platform_key(&sys.os, &sys.arch);
     // Use a verified local cache or download/verify from R2. VLX_DEV_SERVER_BIN bypasses publication for
     // development-only end-to-end testing.
-    let local_bin = match std::env::var("VLX_DEV_SERVER_BIN") {
+    // A `.zip` override is unpacked locally and exercises the zip upload path.
+    let supplied = match std::env::var("VLX_DEV_SERVER_BIN") {
         Ok(p) if !p.is_empty() && Path::new(&p).is_file() => {
             crate::diagnostic_warn!("[ssh] using dev-bypass vela-server: {p}");
-            PathBuf::from(p)
+            crate::server_supply::supply_dev_override(app_data_dir, Path::new(&p), &platkey)?
         }
         _ => crate::server_supply::ensure_supplied(app_data_dir, version, &platkey, &|pct| {
             progress("supply", Some(pct))
         })?,
     };
-    let sha = crate::server_supply::cached_sha256(&local_bin)?;
 
     // Skip upload for an integrity-valid remote binary; otherwise verify and atomically install it.
-    if !remote_binary_ok(t, &sys, version, &sha) {
-        push_binary(t, &sys, version, &local_bin, &sha, progress)?;
+    if !remote_binary_ok(t, &sys, version, &supplied.sha256) {
+        push_binary(t, &sys, version, &supplied, progress)?;
     }
     // Retry executable verification around transient ETXTBSY immediately after SCP.
     progress("start", None);
@@ -2280,6 +2459,78 @@ mod tests {
     }
 
     #[test]
+    fn zip_unpack_script_orders_tools_per_os() {
+        let order = |script: &str, tools: &[&str]| {
+            let at: Vec<usize> = tools
+                .iter()
+                .map(|t| script.find(&format!("unpacked:{t}")).unwrap_or_else(|| panic!("{t} missing")))
+                .collect();
+            assert!(at.windows(2).all(|w| w[0] < w[1]), "wrong order: {tools:?}");
+        };
+        let linux = sys_of("linux", "x86_64", RemoteShell::Posix);
+        let s = unpack_zip_script(&linux, &zip_paths(&linux, "0.2.10"));
+        order(&s, &["unzip", "bsdtar", "python3", "busybox", "gzip"]);
+        assert!(!s.contains("tar.exe") && !s.contains("ditto"));
+        assert!(s.contains("n=\"vela-server\""));
+
+        let mac = sys_of("macos", "aarch64", RemoteShell::Posix);
+        let s = unpack_zip_script(&mac, &zip_paths(&mac, "0.2.10"));
+        order(&s, &["unzip", "ditto", "bsdtar"]);
+        assert!(!s.contains("gzip"), "macOS gzip is not GNU gzip and cannot read zip");
+
+        // Cygwin/MSYS: the system bsdtar by full path first, since the shell's own tar is GNU tar.
+        let cyg = sys_of("windows", "x86_64", RemoteShell::Posix);
+        let s = unpack_zip_script(&cyg, &zip_paths(&cyg, "0.2.10"));
+        order(&s, &["tar.exe", "unzip", "bsdtar", "gzip"]);
+        assert!(s.contains("System32/tar.exe") && s.contains("n=\"vela-server.exe\""));
+
+        // Native PowerShell: tar.exe, then Expand-Archive inside the same PowerShell, all ASCII.
+        let ps = sys_of("windows", "x86_64", RemoteShell::Powershell);
+        let p = zip_paths(&ps, "0.2.10");
+        assert_eq!(p.zip_rel, ".velaterm/versions/0.2.10/.vela-server.zip");
+        assert_eq!(p.unpacked, "$env:USERPROFILE\\.velaterm\\versions\\0.2.10\\.unpack\\vela-server.exe");
+        let s = unpack_zip_script(&ps, &p);
+        order(&s, &["tar.exe", "Expand-Archive"]);
+        assert!(ps_stdin(&s).is_ok());
+        assert!(!s.to_ascii_lowercase().contains("powershell"), "must not start another PowerShell");
+    }
+
+    /// Run the POSIX unpack script under a real `sh` against a scratch HOME, as the remote shell would.
+    #[cfg(unix)]
+    #[test]
+    fn zip_unpack_script_runs_under_sh() {
+        use std::io::Write;
+        let home = std::env::temp_dir().join(format!("vlx-unpack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let vdir = home.join(".velaterm/versions/0.2.10");
+        std::fs::create_dir_all(&vdir).unwrap();
+        let body = b"vela-server test body\n".repeat(1000);
+        let mut w = zip::ZipWriter::new(std::fs::File::create(vdir.join(".vela-server.zip")).unwrap());
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("vela-server", opts).unwrap();
+        w.write_all(&body).unwrap();
+        w.finish().unwrap();
+
+        let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
+        let sys = sys_of(os, "x86_64", RemoteShell::Posix);
+        let p = zip_paths(&sys, "0.2.10");
+        let run = |script: &str| {
+            Command::new("sh").arg("-c").arg(script).env("HOME", &home).output().unwrap()
+        };
+        let out = run(&unpack_zip_script(&sys, &p));
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with("unpacked:"));
+        assert_eq!(std::fs::read(vdir.join(".unpack/vela-server")).unwrap(), body);
+
+        assert!(run(&install_file_cmd(&sys, &p.unpacked, &sys.bin_path("0.2.10"))).status.success());
+        assert!(run(&zip_cleanup_cmd(&sys, &p)).status.success());
+        assert_eq!(std::fs::read(vdir.join("vela-server")).unwrap(), body);
+        assert!(!vdir.join(".unpack").exists() && !vdir.join(".vela-server.zip").exists());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn serve_script_posix_detaches_and_records_state() {
         let sys = sys_of("linux", "x86_64", RemoteShell::Posix);
         let s = serve_script(&sys, "0.1.73", "pw123", 42000, false, true);
@@ -2510,6 +2761,38 @@ mod tests {
             login_status, 200,
             "/api/login with the random password should return 200, logging into the backend automatically"
         );
+    }
+
+    /// Ignored real-host test of the zip install path: remove this version's remote binary, push the zip
+    /// named by VLX_DEV_SERVER_BIN, and require that it was unpacked remotely rather than replaced by the
+    /// raw-binary fallback, then run `--version`. VLX_TEST_SSH_PUSH_HOST may be any supported OS.
+    #[test]
+    #[ignore = "requires VLX_TEST_SSH_PUSH_HOST and a .zip VLX_DEV_SERVER_BIN; run with cargo test -- --ignored"]
+    fn integration_push_zip_to_real_host() {
+        let (host, zip) = match (std::env::var("VLX_TEST_SSH_PUSH_HOST"), std::env::var("VLX_DEV_SERVER_BIN")) {
+            (Ok(h), Ok(z)) if !h.is_empty() && z.ends_with(".zip") => (h, PathBuf::from(z)),
+            _ => return,
+        };
+        let tmp = std::env::temp_dir().join("vlx-ssh-it-push");
+        let _ = std::fs::create_dir_all(&tmp);
+        let session = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
+        let t = OpensshTransport::connect(&host, &session, SshAuth::Auto, &|_, _| {})
+            .expect("connecting to the host should succeed");
+        let sys = probe_system(&t).expect("probing the remote system should succeed");
+        let platkey = crate::server_supply::platform_key(&sys.os, &sys.arch);
+        let supplied = crate::server_supply::supply_dev_override(&tmp, &zip, &platkey)
+            .expect("the dev zip should unpack locally");
+        let version = crate::VERSION;
+        let _ = shell_exec(&t, &sys, &remove_file_cmd(&sys, &sys.bin_path(version)));
+        assert!(!remote_binary_ok(&t, &sys, version, &supplied.sha256));
+
+        let how = push_binary(&t, &sys, version, &supplied, &|_, _| {}).expect("push should succeed");
+        let installed = remote_binary_ok(&t, &sys, version, &supplied.sha256);
+        let runs = wait_remote_executable(&t, &sys, version);
+        close_master(&host, &session);
+        assert!(how.starts_with("zip:"), "the zip path should be used, got {how}");
+        assert!(installed, "the installed binary should match the unpacked hash");
+        runs.expect("the installed vela-server should run --version");
     }
 
     /// Ignored real-host PTY password-auth regression test requiring host/password environment variables.

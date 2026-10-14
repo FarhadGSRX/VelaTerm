@@ -1,7 +1,7 @@
 //! Regression coverage for image-paste setting visibility and availability: every window sees the setting, but
 //! only the desktop shell running on the same machine as the agent can select native image paste.
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { env, setMode, setDynamicStatusFilter, latency, setInputLatencyLog, setInputLatencyThresholdMs } = vi.hoisted(() => ({
@@ -132,23 +132,23 @@ describe("image paste settings", () => {
     expect(screen.getByText("settings.imagePasteHint")).toBeTruthy();
   });
 
-  it("the Terminal category of the full settings dialog always contains the image paste entry", () => {
-    render(<SettingsModal onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "settings.catTerminal" }));
+  it("the Terminal category of the full settings dialog always contains the image paste entry", async () => {
+    await act(async () => render(<SettingsModal onClose={vi.fn()} />));
+    fireEvent.click(screen.getByRole("link", { name: "settings.catTerminal" }));
     expect(screen.getByText("settings.imagePasteMode")).toBeTruthy();
     expect(screen.getByText("settings.imagePasteUpload")).toBeTruthy();
     expect(screen.getByText("settings.imagePasteAgent")).toBeTruthy();
   });
 
-  it("dynamic additions to the status filter are on by default and can be turned off in the behaviour settings", () => {
+  it("dynamic additions to the status filter are on by default and can be turned off in the behaviour settings", async () => {
     const previous = localStorage.getItem(SETTINGS_KEY);
     localStorage.removeItem(SETTINGS_KEY);
     expect(loadSettings().dynamicStatusFilter).toBe(true);
     if (previous === null) localStorage.removeItem(SETTINGS_KEY);
     else localStorage.setItem(SETTINGS_KEY, previous);
 
-    render(<SettingsModal onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "settings.catBehavior" }));
+    await act(async () => render(<SettingsModal onClose={vi.fn()} />));
+    fireEvent.click(screen.getByRole("link", { name: "settings.catBehavior" }));
     const label = screen.getByText("settings.dynamicStatusFilter");
     const field = label.parentElement;
     expect(field).toBeTruthy();
@@ -185,7 +185,7 @@ describe("input latency log settings", () => {
 
   it("the Advanced category hides the threshold until logging is turned on", () => {
     render(<SettingsModal onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "settings.catAdvanced" }));
+    fireEvent.click(screen.getByRole("link", { name: "settings.catAdvanced" }));
     const field = screen.getByText("settings.inputLatencyLog").parentElement as HTMLElement;
     expect(screen.queryByText("settings.inputLatencyThreshold")).toBeNull();
     fireEvent.click(within(field).getByRole("button", { name: "common.on" }));
@@ -195,7 +195,7 @@ describe("input latency log settings", () => {
   it("the threshold offers fixed choices once logging is on", () => {
     latency.on = true;
     render(<SettingsModal onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "settings.catAdvanced" }));
+    fireEvent.click(screen.getByRole("link", { name: "settings.catAdvanced" }));
     const field = screen.getByText("settings.inputLatencyThreshold").parentElement as HTMLElement;
     fireEvent.click(within(field).getByRole("button", { name: "200 ms" }));
     expect(setInputLatencyThresholdMs).toHaveBeenCalledWith(200);

@@ -5,11 +5,14 @@
 //! duplicates such as `”"` or `，,`. REORDERED_KEYDOWN_MS recognizes and ignores that late keydown;
 //! see imeWebkitFix.ts.
 //!
+//! Additional cases cover native onData preceding the keyup fallback, composition lifecycle guards,
+//! and the real xterm textarea-change/composition timers used before and after cursor movement.
+//!
 //! Tests avoid relying on jsdom's InputEvent/KeyboardEvent field support. Plain Events receive
 //! `data`, `inputType`, `keyCode`, and related properties through defineProperty.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Terminal } from "@xterm/xterm";
+import { Terminal } from "@xterm/xterm";
 
 import { installWebkitImeFix, type WebkitImeFix } from "./imeWebkitFix";
 
@@ -24,10 +27,15 @@ function setup() {
     { textarea } as unknown as Terminal,
     (d) => sent.push(d),
   );
+  // Mirror usePtySession's onData path so both send orders reach the same PTY collector.
+  const nativeData = (data: string) => {
+    if (!fix.shouldSwallow(data)) sent.push(data);
+  };
   return {
     textarea,
     sent,
     fix,
+    nativeData,
     cleanup: () => {
       fix.dispose();
       container.remove();
@@ -54,12 +62,15 @@ function fireInput(
 function fireKey(
   textarea: HTMLTextAreaElement,
   type: "keydown" | "keyup",
-  init: { code: string; key: string; keyCode?: number; isComposing?: boolean },
+  init: { code: string; key: string; keyCode?: number; isComposing?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean },
 ) {
   const ev = new KeyboardEvent(type, {
     bubbles: true,
     code: init.code,
     key: init.key,
+    ctrlKey: init.ctrlKey,
+    altKey: init.altKey,
+    metaKey: init.metaKey,
   });
   Object.defineProperties(ev, {
     keyCode: { value: init.keyCode ?? 0 },
@@ -137,5 +148,175 @@ describe("imeWebkitFix", () => {
     fireKey(textarea, "keyup", { code: "KeyC", key: "c" }); // Letters are excluded by isPassthroughSymbol.
     expect(sent).toEqual([]);
     cleanup();
+  });
+
+  it("does not resend a slash that xterm emitted before keyup", () => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    nativeData("/");
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    expect(sent).toEqual(["/"]);
+    cleanup();
+  });
+
+  it("still sends a delayed slash immediately and consumes xterm's later copy", () => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    expect(sent).toEqual(["/"]);
+    nativeData("/");
+    expect(sent).toEqual(["/"]);
+    cleanup();
+  });
+
+  it("preserves two intentional slashes when xterm sends each before keyup", () => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    for (let i = 0; i < 2; i++) {
+      fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+      nativeData("/");
+      fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+      now += 100;
+    }
+    expect(sent.join("")).toBe("//");
+    cleanup();
+  });
+
+  it("does not mistake the previous slash's late copy for the current key's native send", () => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    now += 100;
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    nativeData("/"); // This is the previous key's duplicate, not the current slash.
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    nativeData("/");
+    expect(sent.join("")).toBe("//");
+    cleanup();
+  });
+
+  it("leaves slash keyups during composition to xterm even when isComposing is false", () => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    fireKey(textarea, "keyup", { code: "Slash", key: "/", isComposing: false });
+    expect(sent).toEqual([]);
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "测试/" }));
+    nativeData("测试/");
+    expect(sent).toEqual(["测试/"]);
+    cleanup();
+  });
+
+  it("disarms the slash fallback at compositionstart and preserves Chinese after cursor movement", () => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "测试" }));
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    nativeData("测试");
+    fireKey(textarea, "keydown", { code: "ArrowLeft", key: "ArrowLeft", keyCode: 37 });
+    nativeData("\x1b[D");
+    expect(sent).toEqual(["测试", "\x1b[D"]);
+    cleanup();
+  });
+
+  it("does not keep an IME slash marker across a non-IME keydown or focus loss", () => {
+    const { textarea, sent, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    fireKey(textarea, "keydown", { code: "ArrowLeft", key: "ArrowLeft", keyCode: 37 });
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    textarea.dispatchEvent(new Event("blur"));
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    expect(sent).toEqual([]);
+    cleanup();
+  });
+
+  it("keeps the delayed-symbol fallback when keydown alone reports isComposing", () => {
+    const { textarea, sent, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229, isComposing: true });
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    expect(sent).toEqual(["/"]);
+    cleanup();
+  });
+
+  it.each(["ctrlKey", "altKey", "metaKey"] as const)("does not insert a slash for a %s shortcut", modifier => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229, [modifier]: true });
+    nativeData("\x1b/");
+    fireKey(textarea, "keyup", { code: "Slash", key: "/", [modifier]: true });
+    expect(sent).toEqual(["\x1b/"]);
+    cleanup();
+  });
+
+  it("keeps ordinary English slashes and Chinese commits outside the fallback", () => {
+    const { textarea, sent, nativeData, cleanup } = setup();
+    fireKey(textarea, "keydown", { code: "Slash", key: "/", keyCode: 191 });
+    nativeData("/");
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    nativeData("中文");
+    expect(sent).toEqual(["/", "中文"]);
+    cleanup();
+  });
+});
+
+describe("imeWebkitFix with xterm's native input handlers", () => {
+  const cleanups: (() => void)[] = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addListener() {},
+      removeListener() {},
+    }));
+  });
+
+  afterEach(() => {
+    cleanups.splice(0).forEach(cleanup => cleanup());
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function setupNative() {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const term = new Terminal({ cols: 40, rows: 10 });
+    term.open(container);
+    const sent: string[] = [];
+    const fix = installWebkitImeFix(term, data => sent.push(data));
+    const sub = term.onData(data => {
+      if (!fix.shouldSwallow(data)) sent.push(data);
+    });
+    cleanups.push(() => { sub.dispose(); fix.dispose(); term.dispose(); container.remove(); });
+    return { textarea: term.textarea!, sent };
+  }
+
+  it("sends one slash when xterm's textarea-change timer runs before keyup", () => {
+    const { textarea, sent } = setupNative();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    textarea.value = "/";
+    vi.advanceTimersByTime(1);
+    expect(sent).toEqual(["/"]);
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    expect(sent).toEqual(["/"]);
+  });
+
+  it("preserves native Chinese composition after a delayed slash and an arrow key", () => {
+    const { textarea, sent } = setupNative();
+    fireKey(textarea, "keydown", { code: "Slash", key: "Process", keyCode: 229 });
+    fireKey(textarea, "keyup", { code: "Slash", key: "/" });
+    textarea.value = "/";
+    vi.advanceTimersByTime(1);
+    fireKey(textarea, "keydown", { code: "ArrowLeft", key: "ArrowLeft", keyCode: 37 });
+    fireKey(textarea, "keyup", { code: "ArrowLeft", key: "ArrowLeft", keyCode: 37 });
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.dispatchEvent(new CompositionEvent("compositionupdate", { bubbles: true, data: "ceshi" }));
+    textarea.value = "/ceshi";
+    vi.advanceTimersByTime(1);
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "测试" }));
+    textarea.value = "/测试";
+    vi.advanceTimersByTime(1);
+    expect(sent).toEqual(["/", "\x1b[D", "测试"]);
   });
 });

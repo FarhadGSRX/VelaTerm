@@ -87,13 +87,13 @@ it("provides separate controls and resets only the selected conversation value",
   expect(useTermStore.getState().uiFontSize).toBe(12.5);
   fireEvent.click(interfaceSize.getByTitle("Reset"));
   expect(useTermStore.getState().uiFontSize).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+  fireEvent.click(screen.getByRole("link", { name: "Terminal" }));
   const terminalSize = within(screen.getByRole("group", { name: "Terminal size" }));
   expect(terminalSize.getByTitle("Reset").textContent).toBe("13px");
   fireEvent.click(terminalSize.getByTitle("Larger"));
   expect(useTermStore.getState().termFontSize).toBe(13.5);
   fireEvent.click(terminalSize.getByTitle("Reset"));
-  fireEvent.click(screen.getByRole("button", { name: "Conversation view" }));
+  fireEvent.click(screen.getByRole("link", { name: "Conversation view" }));
   const conversationSize = within(screen.getByRole("group", { name: "Conversation font size" }));
   fireEvent.click(conversationSize.getByTitle("Smaller"));
   expect(conversationSize.getByTitle("Reset").textContent).toBe("13px");

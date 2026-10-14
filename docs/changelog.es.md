@@ -1,3 +1,24 @@
+## v0.2.10 — 2026-10-13
+
+- 🧩 Se admite OpenCode v2 además de v1, y la lista de modelos se carga correctamente con OpenCode v2.0.26.
+- 🏷️ La cabecera de la sesión muestra la versión de la CLI del agente; si hay una versión más reciente, el número de versión enlaza con las instrucciones oficiales de actualización.
+- 🗂️ El panel Git muestra hasta 1000 archivos modificados y propone añadir carpetas grandes como `node_modules` a `.gitignore`.
+- 🔤 El panel Git muestra correctamente los nombres de archivo con caracteres no ASCII, prepara, quita del área de preparación y descarta solo los archivos que eliges, y agrupa los conflictos por separado.
+- 📜 El historial de Git conserva el rango cargado, los elementos desplegados y la posición de desplazamiento al actualizarse.
+- 🌿 La rama que se muestra en el panel derecho, la barra de estado, el título del terminal y la barra lateral se actualiza en cuanto cambias de rama, sin reiniciar.
+- 📁 El árbol de archivos actualiza automáticamente las carpetas abiertas y marca las que contienen cambios de Git.
+- 🧹 Windows: las actualizaciones automáticas ya no dejan instaladores en la carpeta Temp y se eliminan los restos de actualizaciones anteriores.
+- 🪝 Windows: Codex, Crush, Kiro, Cursor, Kimi, Antigravity, Copilot y Grok informan del estado de la sesión directamente a VelaTerm, sin scripts de PowerShell.
+- 🖱️ Windows: los programas de terminal a pantalla completa, como vim, reciben los clics y el desplazamiento del ratón; la rueda ya no se convierte en teclas de flecha.
+- 🕘 Los terminales zsh vuelven a leer y escribir tu propio `~/.zsh_history`, así que `history` y la flecha arriba también muestran los comandos de otros terminales.
+- 🖥️ Las nuevas sesiones de Claude y Codex se abren en la vista de conversación; los demás agentes se abren en el terminal de forma predeterminada.
+- 🚀 `vspawn` admite `--pi` y `--agent <nombre>`, por lo que puede iniciar cualquier agente que acepte tareas.
+- ⏱️ Si la lista de modelos no se carga en 30 segundos, se muestra un error con Retry.
+- 🗑️ Los preajustes guardados se pueden eliminar en Ajustes ▸ Agentes.
+- ⌨️ La información emergente del botón de captura de pantalla muestra el atajo actual, y su icono se distingue mejor del botón de compartir.
+- 🧭 El panel derecho vuelve a cambiar de Conocimiento a Info y a las demás pestañas.
+- ✍️ macOS: escribir `/` en el terminal con un método de entrada ya no lo introduce dos veces.
+
 ## v0.2.9 — 2026-10-07
 
 - ✨ El cambio de nombre con IA recuerda el modelo y el nivel de razonamiento elegidos para cada agente.

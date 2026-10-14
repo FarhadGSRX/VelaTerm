@@ -40,6 +40,8 @@ impl Db {
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
         migrate(&conn)?;
         conn.execute_batch(crate::agent::chat::submissions::SCHEMA).map_err(|e| e.to_string())?;
+        conn.execute_batch(crate::agent::translation::SCHEMA).map_err(|e| e.to_string())?;
+        crate::agent::translation::migrate(&conn)?;
         // The saved-message recovery feature was removed; its tables held only that feature's copies.
         conn.execute_batch("DROP TABLE IF EXISTS chat_recovery_items; DROP TABLE IF EXISTS chat_recovery_state; DROP TABLE IF EXISTS chat_recovery_meta;").map_err(|e| e.to_string())?;
         conn.execute_batch(crate::agent::chat::ownership::SCHEMA).map_err(|e| e.to_string())?;

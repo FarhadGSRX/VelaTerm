@@ -42,6 +42,7 @@ export const Entry = memo(function Entry({
   rewindRequest,
   onRewindRequestHandled,
   onCancelShell,
+  feedback,
 }: {
   entry: DisplayRow;
   label: string;
@@ -56,6 +57,7 @@ export const Entry = memo(function Entry({
   rewindRequest: { rowId: string; token: number } | null;
   onRewindRequestHandled: (token: number) => void;
   onCancelShell?: (rowId: string) => void;
+  feedback?: ReactNode;
 }) {
   // The author line the pass in `toolRuns` placed on the first entry of an agent turn. Everything the
   // agent did in that turn sits under it, so reasoning and tool calls read as the agent's.
@@ -100,6 +102,7 @@ export const Entry = memo(function Entry({
         rewindRequest={rewindRequest}
         onRewindRequestHandled={onRewindRequestHandled}
         onCancelShell={onCancelShell}
+        feedback={feedback}
       />
     </>
   );
@@ -118,6 +121,7 @@ export function Row({
   rewindRequest,
   onRewindRequestHandled,
   onCancelShell,
+  feedback,
 }: {
   row: ChatRow;
   label: string;
@@ -132,6 +136,7 @@ export function Row({
   onRewindRequestHandled?: (token: number) => void;
   /** Stop a running shell command; the row knows only its own id. */
   onCancelShell?: (rowId: string) => void;
+  feedback?: ReactNode;
 }) {
   const t = useT();
   switch (row.kind) {
@@ -185,6 +190,8 @@ export function Row({
           who={row.origin ? messageSenderName(row.origin, t) : t("archive.you")}
           icon={row.origin ? kindIconEl(row.origin.agent, 14) : undefined}
           isUser
+          footnote={feedback}
+          rowId={row.id}
           text={row.text}
           images={row.images}
           at={row.at}
@@ -202,6 +209,8 @@ export function Row({
         <MessageBubble
           who={row.model ?? label}
           isUser={false}
+          streaming={row.streaming}
+          rowId={row.id}
           icon={icon}
           text={row.text}
           at={row.at}

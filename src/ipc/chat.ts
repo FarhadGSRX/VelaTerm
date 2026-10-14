@@ -704,8 +704,9 @@ export function chatSend(
   behavior?: SendBehavior,
   images?: ChatImage[],
   messageId?: string,
+  originalFallback?: boolean,
 ): Promise<"sent" | "steered" | "blocked" | "queued" | "command"> {
-  return invoke("chat_send", { sessionId, text, behavior, images, messageId });
+  return invoke("chat_send", { sessionId, text, behavior, images, messageId, originalFallback });
 }
 
 /** Stop waiting for the usage limit to reset; the conversation will not continue on its own. */
@@ -748,6 +749,9 @@ export function chatInterrupt(sessionId: string): Promise<void> {
   return invoke("chat_interrupt", { sessionId });
 }
 
+/** Native option indices and explicitly typed text stay separate until the host builds the answer. */
+export interface QuestionAnswerSelection { selected: number[]; text: string }
+
 /**
  * Answer a permission question.
  *
@@ -762,7 +766,7 @@ export function chatPermission(
   sessionId: string,
   requestId: string,
   allow: boolean,
-  options?: { updatedInput?: unknown; message?: string; updatedPermissions?: unknown[] },
+  options?: { updatedInput?: unknown; message?: string; updatedPermissions?: unknown[]; questionAnswers?: QuestionAnswerSelection[]; sendOriginal?: boolean },
 ): Promise<void> {
   return invoke("chat_permission", {
     sessionId,
@@ -771,6 +775,8 @@ export function chatPermission(
     updatedInput: options?.updatedInput,
     message: options?.message,
     updatedPermissions: options?.updatedPermissions,
+    questionAnswers: options?.questionAnswers,
+    sendOriginal: options?.sendOriginal,
   });
 }
 

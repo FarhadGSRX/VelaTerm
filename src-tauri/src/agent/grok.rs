@@ -25,17 +25,16 @@ fn hooks_path() -> Option<PathBuf> {
     grok_home().map(|home| home.join("hooks").join(HOOKS_FILE))
 }
 
-/// Quote an executable path for the platform shell used by Grok command hooks.
+/// Quote an executable path for the shell that runs Grok command hooks.
+///
+/// Grok does not document which shell runs hooks on Windows. A double-quoted path followed by arguments is a
+/// PowerShell syntax error, so Windows uses the form cmd.exe, PowerShell, and POSIX shells all parse alike.
 fn hook_command(exe: &Path, state: &str) -> String {
-    #[cfg(windows)]
-    {
-        // A double quote is not legal in a Windows file name, so wrapping is sufficient for cmd/PowerShell.
-        format!("\"{}\" --grok-hook {state}", exe.display())
-    }
-    #[cfg(not(windows))]
-    {
-        let quoted = exe.to_string_lossy().replace('\'', "'\\''");
-        format!("'{quoted}' --grok-hook {state}")
+    let args = format!("--grok-hook {state}");
+    if cfg!(windows) {
+        super::hook_bridge::command(exe, super::hook_bridge::Shell::Any, &args)
+    } else {
+        super::hook_bridge::command(exe, super::hook_bridge::Shell::Posix, &args)
     }
 }
 
@@ -128,6 +127,17 @@ mod tests {
             hooks["Notification"][0]["matcher"],
             "permission_prompt|elicitation_dialog"
         );
+    }
+
+    #[test]
+    fn hook_command_never_starts_with_a_double_quoted_path() {
+        // `"C:\...\velaterm.exe" --grok-hook working` is a PowerShell syntax error.
+        let command = hook_command(Path::new("/opt/velaterm/velaterm"), "working");
+        if cfg!(windows) {
+            assert_eq!(command, "/opt/velaterm/velaterm --grok-hook working");
+        } else {
+            assert_eq!(command, "'/opt/velaterm/velaterm' --grok-hook working");
+        }
     }
 
     #[test]

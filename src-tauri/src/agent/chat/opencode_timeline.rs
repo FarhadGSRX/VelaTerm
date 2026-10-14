@@ -21,7 +21,7 @@ const MAX_CHILD_DEPTH: usize = 4;
 /// for Claude's names and read the same fields, so the names are mapped rather than the cards duplicated.
 pub fn tool_name(raw: &str) -> String {
     match raw {
-        "bash" => "Bash",
+        "bash" | "shell" => "Bash",
         "edit" => "Edit",
         "multiedit" => "MultiEdit",
         "write" => "Write",
@@ -31,7 +31,7 @@ pub fn tool_name(raw: &str) -> String {
         "list" => "List",
         "webfetch" => "WebFetch",
         "websearch" => "WebSearch",
-        "task" => "Task",
+        "task" | "subagent" => "Task",
         "todowrite" => "TodoWrite",
         "todoread" => "TodoRead",
         "skill" => "Skill",
@@ -55,6 +55,7 @@ pub fn normalize_input(input: &Value) -> Value {
             "newString" => "new_string",
             "replaceAll" => "replace_all",
             "notebookPath" => "notebook_path",
+            "agent" => "subagent_type",
             other => other,
         };
         out.insert(renamed.to_string(), value.clone());
@@ -64,7 +65,7 @@ pub fn normalize_input(input: &Value) -> Value {
 
 /// The session a `task` call runs its subagent in, once the tool has started.
 pub fn child_session_of(part: &Value) -> Option<String> {
-    if part.get("tool").and_then(Value::as_str) != Some("task") {
+    if !matches!(part.get("tool").and_then(Value::as_str),Some("task"|"subagent")) {
         return None;
     }
     part.pointer("/state/metadata/sessionId")
@@ -89,7 +90,7 @@ pub fn tool_row(part: &Value) -> Option<ChatRow> {
         "failed" => state.get("error").and_then(Value::as_str).map(str::to_string),
         _ => None,
     };
-    let subagent = (raw_tool == "task").then(|| SubagentInfo {
+    let subagent = matches!(raw_tool,"task"|"subagent").then(|| SubagentInfo {
         title: input.get("subagent_type").and_then(Value::as_str).map(str::to_string),
         description: input.get("description").and_then(Value::as_str).map(str::to_string),
         model: state
@@ -159,11 +160,12 @@ pub fn error_message(error: &Value) -> Option<String> {
         return None;
     }
     let name = error.get("name").and_then(Value::as_str).unwrap_or("");
-    if name == "MessageAbortedError" {
+    if name == "MessageAbortedError" || error.get("type").and_then(Value::as_str)==Some("aborted") {
         return None;
     }
     let message = error
         .pointer("/data/message")
+        .or_else(||error.get("message"))
         .and_then(Value::as_str)
         .filter(|m| !m.trim().is_empty())
         .map(str::to_string)
@@ -697,6 +699,7 @@ mod tests {
     #[test]
     fn an_abort_is_not_an_error_but_a_failure_is() {
         assert_eq!(error_message(&json!({"name":"MessageAbortedError","data":{}})), None);
+        assert_eq!(error_message(&json!({"type":"aborted","message":"Step interrupted"})), None);
         assert_eq!(
             error_message(&json!({"name":"APIError","data":{"message":"quota"}})).as_deref(),
             Some("APIError: quota")

@@ -2,6 +2,11 @@
  *
  * The view follows the global background, text hierarchy, accent, density, and light/dark scheme. */
 
+.sv-agent-version { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; font-size: 10.5px; color: var(--text-faint); }
+.sv-agent-version-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-agent-version-update { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--accent); white-space: nowrap; text-decoration: none; }
+.sv-agent-version-update:hover { text-decoration: underline; }
+
 .sv {
   position: absolute;
   inset: 0;
@@ -2379,6 +2384,9 @@ select.sv-pill {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+.sv-elicit-field > .sv-elicit-check {
+  display: flex;
 }
 .sv-elicit-label {
   color: var(--text);

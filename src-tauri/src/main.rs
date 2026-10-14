@@ -60,11 +60,13 @@ fn main() {
     if matches!(
         args.get(1).map(String::as_str),
         Some("--notify") | Some("--notify-env") | Some("--codex-hook") | Some("--grok-hook") | Some("--cursor-hook")
+            | Some("--agent-hook")
     ) {
         match args.get(1).map(String::as_str) {
             Some("--codex-hook") => velaterm_lib::run_codex_hook(&args),
             Some("--grok-hook") => velaterm_lib::run_grok_hook(&args),
             Some("--cursor-hook") => velaterm_lib::run_cursor_hook(&args),
+            Some("--agent-hook") => velaterm_lib::run_agent_hook(&args),
             _ => velaterm_lib::run_notify(&args),
         }
         return;

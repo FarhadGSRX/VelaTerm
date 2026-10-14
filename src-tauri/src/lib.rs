@@ -20,6 +20,7 @@ mod window_layout;
 mod db;
 mod files;
 mod fonts;
+mod fs_watch;
 #[cfg(any(feature = "gui", feature = "sidecar"))]
 pub use fonts::print_font_catalog;
 mod git;
@@ -73,6 +74,9 @@ mod notify_native;
 // GUI-only Windows WinRT toasts with foreground session-aware click navigation.
 #[cfg(all(feature = "gui", target_os = "windows"))]
 mod notify_win;
+// Windows self-update installed from VelaTerm's own data folder instead of the updater plugin's Temp folder.
+#[cfg(feature = "gui")]
+mod updater_win;
 
 use agent::server::HookServer;
 use db::Db;
@@ -334,6 +338,12 @@ pub fn run_codex_hook(args: &[String]) {
 /// Hidden Cursor status hook. Completes before GUI, database, or service initialization.
 pub fn run_cursor_hook(args: &[String]) -> ! {
     agent::cursor::run(args)
+}
+
+/// Hidden `--agent-hook <agent> <event>` status bridge for Crush, Kiro, Antigravity, Copilot, and Kimi. Their hook
+/// configurations call this executable directly instead of a shell or PowerShell script.
+pub fn run_agent_hook(args: &[String]) -> ! {
+    agent::hook_bridge::run_agent(args)
 }
 
 /// Hidden Grok lifecycle-hook entry. Static `~/.grok/hooks/vlx-term.json` commands call this
@@ -845,6 +855,8 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             // Register the Windows AppUserModelId so bare no-bundle releases can display toasts.
             #[cfg(windows)]
             register_aumid_for_notifications(&app.config().identifier, &app.package_info().name);
+            // Remove installers left by earlier updates (background thread; Windows only).
+            updater_win::cleanup_leftovers(app.handle());
 
             // Store the database under the application data directory.
             let data_dir = app
@@ -909,6 +921,14 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
                 {
                     Ok(dir) => agent::gitbash::set_bundled_dir(dir),
                     Err(e) => crate::diagnostic_warn!("failed to resolve Git Bash resource path (falling back to PowerShell): {e}"),
+                }
+                // Load the bundled ConPTY before the first PTY so TUI mouse modes reach the terminal.
+                match app
+                    .path()
+                    .resolve("resources/conpty", tauri::path::BaseDirectory::Resource)
+                {
+                    Ok(dir) => pty::conpty_win::preload(&dir),
+                    Err(e) => crate::diagnostic_warn!("failed to resolve ConPTY resource path (using the system console host): {e}"),
                 }
                 // Best-effort background cleanup removes obsolete gitbash-min and staging trees only;
                 // never touch the still-used on-demand gitbash-full cache.
@@ -1191,6 +1211,8 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             // Most desktop data commands use this single spawn_blocking dispatch entry; adding a web
             // dispatch command automatically covers desktop too.
             commands::desktop_call,
+            // Windows final update step: download through the plugin, install from VelaTerm's own folder.
+            updater_win::updater_install_windows,
             commands::record_split_trace,
             commands::take_open_project_request,
             commands::quit_prompt_ack,
@@ -1401,7 +1423,7 @@ fn native_quit_confirmation(app: &tauri::AppHandle) {
 /// Return the build-time Tauri context from one macro expansion shared by GUI/headless, avoiding
 /// duplicate embedded resources and preserving release identifier overrides for default data paths.
 #[cfg(feature = "gui")]
-fn tauri_context() -> tauri::Context<tauri::Wry> {
+pub(crate) fn tauri_context() -> tauri::Context<tauri::Wry> {
     tauri::generate_context!()
 }
 

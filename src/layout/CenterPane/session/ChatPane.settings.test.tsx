@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { md } from "../../../markdownEngine";
 import type { ChatEvent, ChatPermission, ChatSnapshot } from "../../../ipc/chat";
+import type { TranslationSession, TranslationSettings } from "../../../ipc/translation";
 import type { SessionPermissionState } from "../../../hooks/useSessionPermissionState";
 import type { PermissionAnswer } from "./permissionCards";
 import type { ReactNode } from "react";
@@ -13,12 +14,15 @@ vi.mock("./engineSwitch", () => ({ useEngineSwitch: () => ({ switchTo: vi.fn(), 
 // Exercise the pane's orchestration; menu layout is covered separately by the controls themselves.
 vi.mock("./controls", () => ({
   LevelBar: () => null,
-  ControlChip: ({ title, label, value, options, onPick, disabled, footer }: {
+  ControlChip: ({ title, label, value, options, onPick, disabled, footer, keepLabel, onKeepCurrent, defaultValue }: {
     title: string; label?: string; value: string; options: { value: string; label: string; tag?: string }[];
     onPick: (value: string, keep: boolean) => void; disabled?: boolean; footer?: ReactNode;
-  }) => <><select aria-label={title} data-label={label} value={value} disabled={disabled} onChange={(event) => onPick(event.target.value, true)}>
+    keepLabel?: string; onKeepCurrent?: (value: string) => void; defaultValue?: string;
+  }) => <><select aria-label={title} data-label={label} data-default-value={defaultValue} value={value} disabled={disabled} onChange={(event) => onPick(event.target.value, true)}>
     {options.map((option) => <option key={option.value} value={option.value}>{option.label}{option.tag ? ` — ${option.tag}` : ""}</option>)}
-  </select>{footer}</>,
+  </select>{keepLabel && <label><input type="checkbox" onChange={event => {
+    if (event.target.checked) onKeepCurrent?.(value);
+  }} />{keepLabel}</label>}{footer}</>,
 }));
 vi.mock("./permissionCards", () => ({
   PermissionCard: ({ request, onAnswer }: {
@@ -42,6 +46,7 @@ let snapshotOverrides: Partial<ChatSnapshot>;
 let reconnectCallback: () => void;
 
 beforeEach(() => {
+  document.documentElement.dataset.theme = "light";
   clearChatCache();
   useOutbox.setState({ sessions: {} });
   snapshotOverrides = {};
@@ -165,6 +170,65 @@ async function mountPane(kind: "claude" | "codex" | "opencode" | "antigravity" =
   else await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_snapshot")).toBe(true));
   return view;
 }
+
+function mockOutgoingTranslation(pending: TranslationSession["pending"] = []) {
+  const settings: TranslationSettings = {
+    config: { enabled: true, conversationKinds: ["claude", "codex"], engine: "google", agent: "", model: "", effort: "", serviceId: "", version: 1, generation: 1, enabledSince: 0 },
+    editable: true, services: [], agents: [], conversationKinds: [], languages: [{ code: "en", name: "English" }],
+    engines: ["google"], protocols: [], displays: ["immersive"],
+  };
+  const session: TranslationSession = {
+    enabled: true, version: 1, generation: 1,
+    preferences: { outgoing: true, replies: false, source: "auto", target: "en", replySource: "auto", replyTarget: "en", display: "immersive", repliesSince: 0 },
+    replies: [], messages: [], pending,
+  };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "translation_settings") return Promise.resolve(settings) as Promise<never>;
+    if (command === "translation_session") return Promise.resolve(session) as Promise<never>;
+    if (command === "translation_prepare") return Promise.resolve({ id: args?.messageId }) as Promise<never>;
+    if (command === "translation_send") return Promise.resolve("sent") as Promise<never>;
+    return previous(command, args);
+  });
+}
+
+it("sends the first translated Claude message without waiting for its native session event", async () => {
+  snapshotOverrides = { running: false };
+  mockOutgoingTranslation();
+  const { container } = await mountPane();
+  await screen.findByRole("switch", { name: "Translation" });
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Hello" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send")).toBe(true));
+  const calls = vi.mocked(invoke).mock.calls.map(([command]) => command);
+  expect(calls.indexOf("translation_prepare")).toBeLessThan(calls.indexOf("chat_start"));
+  expect(calls.indexOf("chat_start")).toBeLessThan(calls.indexOf("translation_send"));
+  expect(calls).not.toContain("chat_send");
+});
+
+it("retries a prepared Claude message after restart without waiting for its native session event", async () => {
+  snapshotOverrides = { running: false };
+  mockOutgoingTranslation([{ id: "prepared-message", text: "Hello", images: [], behavior: "queue", status: "failed", translation: true, translationReady: true }]);
+  await mountPane();
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("translation_send", { sessionId: "s", messageId: "prepared-message", text: "Hello", images: [], behavior: "queue" }));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_prepare")).toBe(false);
+});
+
+it("still waits for the native Codex session before sending a translated message", async () => {
+  snapshotOverrides = { running: false };
+  mockOutgoingTranslation();
+  const { container } = await mountPane("codex");
+  await screen.findByRole("switch", { name: "Translation" });
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Hello" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_start")).toBe(true));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send")).toBe(false);
+  act(() => eventCallback({ type: "session", agentSessionId: "thread-1", model: "old-model" }));
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send")).toBe(true));
+});
 
 /** Serve `session_permission_state` from a value the test can change between events. */
 function mockPermissionState(read: () => SessionPermissionState) {
@@ -812,8 +876,8 @@ it("restores steering attachments on failure and clears them on retry", async ()
   vi.mocked(invoke).mockImplementation((command, args) => command === "chat_send"
     ? Promise.reject(new Error("Image rejected")) : previous(command, args));
   fireEvent.click(screen.getByRole("button", { name: "Steer" }));
-  await screen.findByText("Error: Image rejected");
-  expect(container.querySelector(".sv-submission img")).toBeTruthy();
+  const failedMessage = await screen.findByText("Error: Image rejected");
+  expect(failedMessage.closest(".sv-item")?.querySelector(".sv-msg-image")).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("chat_send", expect.objectContaining({ behavior: "steer", images: [{ mimeType: "image/png", data: "cG5n" }] }));
   vi.mocked(invoke).mockImplementation(previous);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -839,6 +903,21 @@ it("gives Escape to queue editing and open menus before stopping", async () => {
   option.remove();
   fireEvent.keyDown(container.querySelector(".term-mount")!, { key: "Escape" });
   expect(invoke).toHaveBeenCalledWith("chat_interrupt", { sessionId: "s" });
+});
+
+it.each(["claude", "codex"] as const)("saves the current %s effort when Set as default is checked without another selection", async (kind) => {
+  snapshotOverrides = { running: false, selection: { model: "old-model", effort: "high" } };
+  useTermStore.setState({ chatEffortByModel: { [`${kind}:new-model`]: "high" } });
+  await mountPane(kind);
+  const effort = screen.getByRole("combobox", { name: "Thinking effort" });
+  expect(effort.getAttribute("data-default-value")).toBe("");
+  vi.mocked(invoke).mockClear();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Set as default for Old" }));
+  expect(useTermStore.getState().chatEffortByModel).toEqual({ [`${kind}:old-model`]: "high", [`${kind}:new-model`]: "high" });
+  expect(useTermStore.getState().chatModelByKind[kind]).toBe("old-model");
+  expect(effort.getAttribute("data-default-value")).toBe("high");
+  expect(JSON.parse(localStorage.getItem("vlx-settings")!).chatEffortByModel[`${kind}:old-model`]).toBe("high");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_set_effort" || command === "chat_set_model")).toBe(false);
 });
 
 it.each(["claude", "codex", "opencode"] as const)("restores %s conversation settings instead of global defaults before its process starts", async (kind) => {

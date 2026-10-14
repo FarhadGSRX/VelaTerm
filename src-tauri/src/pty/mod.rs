@@ -4,6 +4,8 @@ pub mod manager;
 pub mod completion;
 pub mod monitor;
 pub mod session;
+#[cfg(windows)]
+pub mod conpty_win;
 
 /// Agent work state corresponding exactly to frontend `AgentState` using serde snake_case.
 ///

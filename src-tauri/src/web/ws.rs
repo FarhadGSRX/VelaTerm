@@ -260,7 +260,7 @@ async fn handle_socket(
         crate::host::SETTINGS_CHANGED,
         crate::session_state::STATE_EVENT,
     ];
-    let full_events: [&str; 15] = [
+    let full_events: [&str; 18] = [
         "spawn://request",
         "spawn://resolved",
         "plan-execute://proposal",
@@ -274,6 +274,8 @@ async fn handle_socket(
         // session this client has never opened is exactly what the per-attach registration could not do.
         crate::session_state::STATE_EVENT,
         crate::git::CLONE_PROGRESS_EVENT,
+        // The Files and Git tabs refresh on this instead of polling where the platform can watch.
+        crate::fs_watch::CHANGED_EVENT,
         // UI mirror: the shared layout and the on/off switch both reach every client this way.
         crate::web::mirror::LAYOUT_EVENT,
         crate::web::mirror::MODE_EVENT,
@@ -282,6 +284,8 @@ async fn handle_socket(
         // Account usage is polled once per machine; every client is told when that copy changes.
         crate::agent::usage_store::USAGE_EVENT,
         crate::agent::remote_model_catalog::EVENT,
+        "translation://settings",
+        "translation://defaults",
     ];
     let global_events: &[&str] = if share.is_some() {
         &share_events
@@ -521,7 +525,7 @@ fn handle_text(
             // them when the client first asks about that session — starting the engine or reading its state —
             // and do it before dispatching, since starting emits its first events synchronously. Share clients
             // only register sessions their grant covers, so no other session's events reach them.
-            if matches!(cmd.as_str(), "chat_start" | "chat_snapshot") {
+            if matches!(cmd.as_str(), "chat_start" | "chat_snapshot" | "translation_session") {
                 if let Some(sid) = args.get("sessionId").and_then(Value::as_str) {
                     let covered = share
                         .as_ref()
@@ -532,6 +536,9 @@ fn handle_text(
                             &crate::agent::chat::engine::event_name(sid),
                             out_tx.clone(),
                         ));
+                        if share.is_none() {
+                            event_ids.push(listen_forward(&ctx.app, &format!("translation://session/{sid}"), out_tx.clone()));
+                        }
                         // Work state reaches the sidebar through the channel PTY sessions use, so a session
                         // that never spawns a PTY still needs it registered.
                         if listened.insert(sid.to_string()) {
@@ -882,4 +889,27 @@ mod tests {
             "the Electron loopback lane must keep the full management plane"
         );
     }
+
+    #[tokio::test]
+    async fn translation_session_subscribes_once_before_returning_its_snapshot() {
+        let ctx=test_ctx(ServeMode::LoopbackHttp);
+        let (out_tx,mut out_rx)=mpsc::unbounded_channel();
+        let mut pty_subs=HashMap::new();let mut listened=HashSet::new();let mut chat_listened=HashSet::new();let mut event_ids=Vec::new();
+        let sid={let conn=ctx.app.db().conn.lock().unwrap();let project=crate::db::repo::create_virtual_project(&conn,"Translation event fixture").unwrap();
+            let session=crate::db::repo::create_session(&conn,&project.id,None,"Translation",SessionKind::Codex,None,None,None,None,None).unwrap();
+            crate::db::repo::set_session_engine(&conn,&session.id,"chat").unwrap();session.id};
+        for id in [1,2] {
+            let frame=json!({"t":"invoke","id":id,"cmd":"translation_session","args":{"sessionId":sid}}).to_string();
+            handle_text(&ctx,&frame,"translation-test",&out_tx,&mut pty_subs,&mut listened,&mut chat_listened,&mut event_ids,None);
+            let message=tokio::time::timeout(std::time::Duration::from_secs(5),out_rx.recv()).await.unwrap().unwrap();
+            let Message::Text(text)=message else {panic!("expected snapshot reply")};
+            let value:Value=serde_json::from_str(&text).unwrap();assert_eq!(value["ok"],true);
+        }
+        ctx.app.emit(&format!("translation://session/{sid}"),json!({}));
+        let Message::Text(text)=out_rx.recv().await.unwrap() else {panic!("expected translation event")};
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["name"],format!("translation://session/{sid}"));
+        assert!(out_rx.try_recv().is_err());
+        for id in event_ids {ctx.app.unlisten(id);}
+    }
+
 }

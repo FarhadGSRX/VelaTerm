@@ -28,7 +28,7 @@
 //! and continuous typing stays one character behind. The timely `keyup` contains the committed character in `key`,
 //! so send it immediately and let the deduplication table consume xterm's later copy.
 //!
-//! Four checks constrain the workaround:
+//! Additional checks constrain the workaround:
 //! - **keyCode===229** identifies an IME-processed keydown across languages. English input uses the real code and
 //!   is never recorded.
 //! - The keyup `key` must be a half-width ASCII symbol. Full-width conversions normally fall outside ASCII and
@@ -36,6 +36,10 @@
 //!   keys can still report their half-width source, so the next two checks are also required.
 //! - A timely input clears the keydown marker before keyup, preventing a duplicate. Only pass-through symbols with
 //!   delayed input retain the marker and are sent from keyup.
+//! - Native onData can arrive before keyup without an input event. Record that send on the current key so keyup
+//!   does not send it again. A swallowed duplicate of an earlier key does not count as the current key's send.
+//! - compositionstart/end track active composition independently of KeyboardEvent.isComposing, which WebKit
+//!   may report as false on keyup. Composition, non-IME keydowns, and focus loss disarm the keyup fallback.
 //! - A late reordered keydown is not marked. For full-width punctuation, input arrives first; marking the later
 //!   keydown would cause keyup to send the half-width source as well. Any IME keydown arriving within
 //!   `REORDERED_KEYDOWN_MS` of an immediate input commit is treated as that reordered event and ignored.
@@ -119,7 +123,8 @@ const DEDUP_MAX = 16;
 const REORDERED_KEYDOWN_MS = 50;
 
 export interface WebkitImeFix {
-  /** Called from `term.onData`; returns true when data is xterm's late duplicate of a workaround commit. */
+  /** Call for every `term.onData`: returns true for a late duplicate, otherwise records a native symbol
+   *  already sent by the current IME key so keyup does not send it again. */
   shouldSwallow: (data: string) => boolean;
   dispose: () => void;
 }
@@ -154,7 +159,8 @@ export function installWebkitImeFix(
   // keydown (keyCode 229). English mode uses real codes and never enters this path. A timely input such as
   // full-width punctuation clears the marker before keyup; a delayed pass-through input leaves it armed so keyup
   // sends immediately.
-  let imeKeydown: { code: string; at: number } | null = null;
+  let imeKeydown: { code: string; at: number; nativeData?: string } | null = null;
+  let composing = false;
   // Time of the latest immediate input commit, used to recognize a reordered late keydown.
   let lastInputCommitAt = 0;
 
@@ -168,7 +174,7 @@ export function installWebkitImeFix(
     // pass-through input arrives after keyup and merely clears an already empty marker.
     if (ie.inputType === "insertText") imeKeydown = null;
 
-    if (ie.isComposing) return; // Leave active composition to xterm.
+    if (composing || ie.isComposing) return; // Leave active composition to xterm.
     if (ie.inputType !== "insertText") return; // Accept direct insertion only, excluding composition/deletion.
     const data = ie.data;
     if (!data) return; // Ignore empty commits.
@@ -183,6 +189,8 @@ export function installWebkitImeFix(
   const onKeyDown = (e: Event) => {
     const ke = e as KeyboardEvent;
     if (ke.target !== textarea) return;
+    imeKeydown = null;
+    if (composing || ke.ctrlKey || ke.altKey || ke.metaKey) return;
     if (ke.keyCode !== 229) return;
     if (Date.now() - lastInputCommitAt < REORDERED_KEYDOWN_MS) return;
     imeKeydown = { code: ke.code, at: Date.now() };
@@ -194,7 +202,10 @@ export function installWebkitImeFix(
   const onKeyUp = (e: Event) => {
     const ke = e as KeyboardEvent;
     if (ke.target !== textarea) return;
-    if (ke.isComposing) return; // Leave pinyin/kana composition to the IME.
+    if (composing || ke.isComposing || ke.ctrlKey || ke.altKey || ke.metaKey) {
+      imeKeydown = null;
+      return;
+    }
     if (
       !imeKeydown ||
       ke.code !== imeKeydown.code || // Must be the same physical key.
@@ -202,31 +213,58 @@ export function installWebkitImeFix(
     )
       return;
     if (!isPassthroughSymbol(ke.key)) return; // Accept only half-width ASCII symbols.
+    const nativeData = imeKeydown.nativeData;
     imeKeydown = null; // Consume the marker to prevent repeated handling.
+    if (nativeData === ke.key) return; // xterm already sent this key before keyup.
     commitNow(ke.key); // Send now; shouldSwallow consumes xterm's late duplicate.
   };
 
-  // Attach all three listeners to the textarea's parent in the capture phase. Parent capture runs before xterm's
+  const onCompositionStart = (e: Event) => {
+    if (e.target !== textarea) return;
+    composing = true;
+    imeKeydown = null;
+  };
+  const onCompositionEnd = (e: Event) => {
+    if (e.target !== textarea) return;
+    composing = false;
+    imeKeydown = null;
+  };
+  const onBlur = onCompositionEnd;
+
+  // Attach listeners to the textarea's parent in the capture phase. Parent capture runs before xterm's
   // textarea listener, ensuring the deduplication entry exists whether xterm emits synchronously or later.
   const inputCaptureHost = textarea?.parentElement ?? textarea;
   inputCaptureHost?.addEventListener("input", onInput, true);
   inputCaptureHost?.addEventListener("keydown", onKeyDown, true);
   inputCaptureHost?.addEventListener("keyup", onKeyUp, true);
+  inputCaptureHost?.addEventListener("compositionstart", onCompositionStart, true);
+  inputCaptureHost?.addEventListener("compositionend", onCompositionEnd, true);
+  inputCaptureHost?.addEventListener("blur", onBlur, true);
 
   return {
     shouldSwallow: (data: string) => {
-      if (!pending.length) return false;
-      const now = Date.now();
-      purge(now);
-      const idx = pending.findIndex((p) => p.data === data);
-      if (idx === -1) return false;
-      pending.splice(idx, 1);
-      return true;
+      if (pending.length) {
+        purge(Date.now());
+        const idx = pending.findIndex((p) => p.data === data);
+        if (idx !== -1) {
+          pending.splice(idx, 1);
+          return true;
+        }
+      }
+      // A native send before keyup needs no fallback. Record only data that will actually reach the PTY;
+      // consuming a previous key's late duplicate must leave the current key eligible for fallback.
+      if (imeKeydown && isPassthroughSymbol(data)) imeKeydown.nativeData = data;
+      return false;
     },
     dispose: () => {
       inputCaptureHost?.removeEventListener("input", onInput, true);
       inputCaptureHost?.removeEventListener("keydown", onKeyDown, true);
       inputCaptureHost?.removeEventListener("keyup", onKeyUp, true);
+      inputCaptureHost?.removeEventListener("compositionstart", onCompositionStart, true);
+      inputCaptureHost?.removeEventListener("compositionend", onCompositionEnd, true);
+      inputCaptureHost?.removeEventListener("blur", onBlur, true);
+      imeKeydown = null;
+      composing = false;
       pending.length = 0;
     },
   };

@@ -106,6 +106,7 @@ export function startMirrorSync(): () => void {
   let lastRev = 0;
   /** True while a peer's layout is being written into the store, so that write does not schedule a push. */
   let applying = false;
+  /** Pending debounced push; set only while a local change has not been published yet. */
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   /** True between sending a push and learning its revision. */
@@ -116,6 +117,8 @@ export function startMirrorSync(): () => void {
   let alignAttempt = 0;
 
   const publish = () => {
+    clearTimeout(timer);
+    timer = undefined;
     if (stopped || !store.getState().mirrorEnabled) return;
     const json = currentJson();
     if (json === synced) return;
@@ -232,6 +235,10 @@ export function startMirrorSync(): () => void {
     if (stopped || !store.getState().mirrorEnabled) return;
     if (snap.source === getClientSource()) return; // Our own broadcast.
     if (snap.rev <= lastRev || !snap.state) return;
+    // A local change still inside the debounce is newer than this frame from the user's point of view, but
+    // applying the frame would overwrite it and move the baseline, so it would never be sent. Send it now and
+    // let the service's ordering decide, like any other push in flight.
+    if (timer !== undefined) publish();
     // Our own push has not reported its revision yet, so we cannot tell whether this frame is newer or
     // older than what we just sent. Hold it and decide once the push resolves.
     if (pushing) {

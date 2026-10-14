@@ -52,7 +52,14 @@ export function RightPanel() {
   const search=useMemoryLocation();
   const initialInspectorTab = useRef(inspectorTab);
   useEffect(()=>{const tab=new URLSearchParams(search).get("inspector") ?? initialInspectorTab.current;if((tab==="files"||tab==="info"||tab==="git"||tab==="knowledge")&&useTermStore.getState().inspectorTab!==tab)setInspectorTab(tab);},[search,setInspectorTab]);
+  // Settings and mirror sync can switch the tab without touching the URL. A stale inspector param would
+  // make that tab's link equal to the current URL, so clicking it could never switch back. A missing param
+  // is written too: otherwise the next unrelated navigation falls back to the initial tab above.
+  const previousInspectorTab = useRef(inspectorTab);
+  useEffect(()=>{if(previousInspectorTab.current===inspectorTab)return;previousInspectorTab.current=inspectorTab;const url=new URL(window.location.href);if(url.searchParams.get("inspector")!==inspectorTab){url.searchParams.set("inspector",inspectorTab);memoryNavigate(url.href,true,true);}},[inspectorTab]);
   const tabUrl=(tab:string)=>{const url=new URL(window.location.href);url.searchParams.set("inspector",tab);if(tab==="knowledge"&&!url.searchParams.has("memory"))url.searchParams.set("memory","notebooks");return url.href;};
+  // Switching only the inspector leaves the center page mounted, so an unsaved-draft guard has nothing to protect.
+  const onlyInspectorChanges=(href:string)=>{const next=new URL(href),current=new URL(window.location.href);next.searchParams.delete("inspector");current.searchParams.delete("inspector");return next.href===current.href;};
   const sessions = useTermStore((s) => s.sessions);
   const ephemeralSessions = useTermStore((s) => s.ephemeralSessions);
   const groups = useTermStore((s) => s.groups);
@@ -113,7 +120,7 @@ export function RightPanel() {
             aria-current={inspectorTab===id?"page":undefined}
             key={id}
             className={"insp-tab" + (inspectorTab === id ? " on" : "")}
-            onClick={event=>{if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();memoryNavigate(tabUrl(id));}}
+            onClick={event=>{if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();const href=tabUrl(id);memoryNavigate(href,false,onlyInspectorChanges(href));}}
           >
             <Icon size={13} />
           </a>
@@ -132,7 +139,7 @@ export function RightPanel() {
               {t("panel.noSession")}
             </div>
           ))}
-        {inspectorTab === "git" && <GitTab path={cwd} />}
+        {inspectorTab === "git" && <GitTab path={cwd} session={session} />}
       </div>
     </aside>
   );

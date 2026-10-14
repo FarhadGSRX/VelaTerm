@@ -696,6 +696,32 @@ pub fn land_gitea_pr(
     )
 }
 
+/// Whether the Git panel can open a pull request for the repository at `cwd`: Gitea must be
+/// configured on the same host as `origin`, hold a token, and answer. `reason` is `ok`,
+/// `not_gitea`, `no_token`, or `unreachable` for the panel to explain.
+pub fn git_pr_provider(ctx: &AppCtx, cwd: &str) -> serde_json::Value {
+    if !crate::gitea::relevant(ctx.db(), cwd) {
+        return serde_json::json!({ "provider": null, "available": false, "reason": "not_gitea" });
+    }
+    let (available, reason) = crate::gitea::land_provider_check(ctx.db(), &app_identifier(ctx));
+    serde_json::json!({ "provider": "gitea", "available": available, "reason": reason })
+}
+
+/// Push the current branch and open a Gitea pull request into `base`, the branch the Git panel
+/// compares against.
+pub fn git_open_pull_request(
+    ctx: &AppCtx,
+    cwd: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+) -> Result<crate::gitea::PrOutcome, String> {
+    // `status().branch` is None on a detached HEAD, where there is no branch to push.
+    let head = crate::git::status(cwd).branch.ok_or("Check out a branch before opening a pull request")?;
+    let base_ref = crate::git::compare::full_ref(cwd, base)?;
+    crate::gitea::open_pr(ctx.db(), &app_identifier(ctx), cwd, &head, &base_ref, title, body)
+}
+
 // SSH host history and remembered passwords. These commands are **desktop-only** because Connect Remote is hidden
 // from the remote web UI. Gate them and `crate::ssh_remote` behind the gui feature so headless builds omit them.
 

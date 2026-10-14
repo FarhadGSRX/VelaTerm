@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
   getGitStatus: vi.fn(),
 }));
 
-vi.mock("../../ipc/commands", () => ({ getSessionCwd: mocks.getSessionCwd }));
+vi.mock("../../ipc/commands", () => ({
+  getSessionCwd: mocks.getSessionCwd,
+  gitWatch: () => Promise.resolve({ root: "/repo", supported: true }),
+}));
+vi.mock("../../ipc/events", () => ({ onFsChanged: () => Promise.resolve(() => {}) }));
 vi.mock("../../ipc/info", () => ({ getGitStatus: mocks.getGitStatus }));
 vi.mock("../../i18n", () => ({
   dateLocale: () => "en-US",

@@ -3,6 +3,12 @@
 //!
 //! Trust is rooted in the embedded minisign public key shared with automatic updates, not the manifest
 //! or network. Only signed artifacts enter the cache and they may be verified again before use.
+//!
+//! Releases from 0.2.10 on also publish the binary inside a signed zip (`zip_*` manifest fields). The
+//! headless binary no longer stores its frontend compressed, because Huorong deletes such a file on
+//! write as Trojan/MSIL.ShellLoader.q, so the zip carries the size saving instead: it is what gets
+//! downloaded and uploaded over SSH, and the remote host unpacks it. Older manifests carry only the raw
+//! binary and keep the original path.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -33,7 +39,41 @@ pub struct PlatformEntry {
     pub sha256: String,
     /// Base64 Tauri `.sig` content wrapping a minisign signature file.
     pub signature: String,
+    /// The same binary as the only entry of a signed zip; absent in manifests published before 0.2.10.
+    #[serde(default)]
+    pub zip_url: Option<String>,
+    #[serde(default)]
+    pub zip_sha256: Option<String>,
+    #[serde(default)]
+    pub zip_signature: Option<String>,
 }
+
+impl PlatformEntry {
+    /// The zip artifact as `(url, sha256, signature)` when the manifest publishes all three fields.
+    fn zip(&self) -> Option<(&str, &str, &str)> {
+        match (&self.zip_url, &self.zip_sha256, &self.zip_signature) {
+            (Some(u), Some(h), Some(s)) if !u.is_empty() && !h.is_empty() && !s.is_empty() => {
+                Some((u, h, s))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A verified vela-server ready to be placed on a host.
+#[derive(Debug, Clone)]
+pub struct Supplied {
+    /// Local executable, used for local installs and as the upload fallback.
+    pub bin: PathBuf,
+    /// Lowercase SHA-256 of `bin`, which the remote copy must match.
+    pub sha256: String,
+    /// Zip whose only entry is `bin`, preferred for uploads when present.
+    pub zip: Option<PathBuf>,
+}
+
+/// Upper bound on the unpacked binary. The real one is about 60 MB; this only stops a corrupt or
+/// hostile size field from exhausting memory before the hash check could reject it.
+const MAX_UNPACKED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Map remote OS/architecture to the platform key shared with publish-server.sh and updater_target_key.
 /// os ∈ {linux,macos,windows}，arch ∈ {x86_64,aarch64}。
@@ -59,6 +99,123 @@ fn cache_sig_path(bin: &Path) -> PathBuf {
     let mut p = bin.as_os_str().to_os_string();
     p.push(".sig");
     PathBuf::from(p)
+}
+
+/// Adjacent `vela-server.zip` path holding the signed archive the binary was unpacked from.
+fn cache_zip_path(bin: &Path) -> PathBuf {
+    let mut p = bin.as_os_str().to_os_string();
+    p.push(".zip");
+    PathBuf::from(p)
+}
+
+/// File name of the binary inside the published zip, which is also its name on the remote host.
+pub fn binary_name(platkey: &str) -> &'static str {
+    if platkey.starts_with("windows-") {
+        "vela-server.exe"
+    } else {
+        "vela-server"
+    }
+}
+
+/// Unpack the binary from a published zip. The archive must hold exactly one file, named `name` at
+/// its root, so a repackaged archive cannot smuggle in extra files or paths.
+pub fn unpack_zip(data: &[u8], name: &str) -> Result<Vec<u8>, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(data))
+        .map_err(|e| format!("vela-server zip is unreadable: {e}"))?;
+    if archive.len() != 1 {
+        return Err(format!(
+            "vela-server zip must contain exactly one file, found {}",
+            archive.len()
+        ));
+    }
+    let entry = archive
+        .by_index(0)
+        .map_err(|e| format!("vela-server zip entry is unreadable: {e}"))?;
+    if entry.name() != name {
+        return Err(format!(
+            "vela-server zip holds {:?}, expected {name:?}",
+            entry.name()
+        ));
+    }
+    if entry.size() > MAX_UNPACKED_BYTES {
+        return Err(format!("vela-server zip entry is too large: {} bytes", entry.size()));
+    }
+    let mut out = Vec::with_capacity(entry.size() as usize);
+    // The bound applies to the bytes actually produced as well, not only to the declared size.
+    entry
+        .take(MAX_UNPACKED_BYTES + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| format!("failed to unpack vela-server zip: {e}"))?;
+    if out.len() as u64 > MAX_UNPACKED_BYTES {
+        return Err("vela-server zip entry is too large".to_string());
+    }
+    Ok(out)
+}
+
+/// Write `data` to `path` through a temporary file and rename, so a partial file never appears.
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("failed to create cache dir: {e}"))?;
+    }
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, data).map_err(|e| format!("failed to write cache temp file: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("failed to place cache file: {e}"))
+}
+
+/// Set the Unix executable bit for a consistent local cache, even though the file is uploaded remotely.
+fn mark_executable(_bin: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(_bin) {
+            let mut perm = meta.permissions();
+            perm.set_mode(0o755);
+            let _ = std::fs::set_permissions(_bin, perm);
+        }
+    }
+}
+
+/// Unpack a verified zip next to the cache entry and return the supply. The binary is rewritten only
+/// when its bytes differ, so a cache hit does not touch the disk.
+fn supply_from_zip(bin: &Path, zip_data: &[u8], platkey: &str) -> Result<Supplied, String> {
+    let unpacked = unpack_zip(zip_data, binary_name(platkey))?;
+    let sha256 = sha256_hex(&unpacked);
+    let current = std::fs::read(bin).ok();
+    if current.as_deref() != Some(unpacked.as_slice()) {
+        write_atomic(bin, &unpacked)?;
+    }
+    mark_executable(bin);
+    Ok(Supplied {
+        bin: bin.to_path_buf(),
+        sha256,
+        zip: Some(cache_zip_path(bin)),
+    })
+}
+
+/// Supply a development build named by `VLX_DEV_SERVER_BIN`, which bypasses publication and signing.
+/// A `.zip` is unpacked into the cache's `dev` slot so the zip upload path can be exercised end to end.
+pub fn supply_dev_override(
+    app_data_dir: &Path,
+    path: &Path,
+    platkey: &str,
+) -> Result<Supplied, String> {
+    let data = std::fs::read(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let is_zip = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    if !is_zip {
+        return Ok(Supplied {
+            bin: path.to_path_buf(),
+            sha256: sha256_hex(&data),
+            zip: None,
+        });
+    }
+    let bin = cache_path(app_data_dir, "dev", platkey);
+    write_atomic(&cache_zip_path(&bin), &data)?;
+    supply_from_zip(&bin, &data, platkey)
 }
 
 /// Parse the embedded key as a minisign PublicKey.
@@ -187,26 +344,41 @@ pub fn download(url: &str, on_pct: &dyn Fn(u8)) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-/// Ensure a valid vela-server for the version/platform exists locally and return its path. Reuse a
-/// verified cache entry; otherwise fetch the manifest and artifact, verify signature and SHA-256,
-/// then atomically cache the binary and signature. Cache hits do not call `on_pct`.
+/// Ensure a valid vela-server for the version/platform exists locally and return it. Reuse a verified
+/// cache entry; otherwise fetch the manifest and artifact, verify signature and SHA-256, then
+/// atomically cache it. Cache hits do not call `on_pct`.
+///
+/// A release that publishes a zip is fetched as the zip, unpacked locally, and supplied with it, so
+/// uploads can send the smaller archive. Older releases supply the raw binary only.
 pub fn ensure_supplied(
     app_data_dir: &Path,
     version: &str,
     platkey: &str,
     on_pct: &dyn Fn(u8),
-) -> Result<PathBuf, String> {
+) -> Result<Supplied, String> {
     let bin = cache_path(app_data_dir, version, platkey);
 
-    // Fast path: verify the cached binary with its adjacent signature, avoiding a manifest request.
-    // A valid signature already proves the binary has not changed.
-    if bin.is_file() {
-        if let Ok(data) = std::fs::read(&bin) {
-            if let Ok(sig_b64) = std::fs::read_to_string(cache_sig_path(&bin)) {
-                if verify_signature(&data, sig_b64.trim()).is_ok() {
-                    return Ok(bin);
-                }
+    // Fast paths: verify the cached artifact with its adjacent signature, avoiding a manifest request.
+    // A valid signature already proves the artifact has not changed. The zip comes first because the
+    // binary next to it is derived from it and carries no signature of its own.
+    let zip_path = cache_zip_path(&bin);
+    if let (Ok(data), Ok(sig_b64)) = (
+        std::fs::read(&zip_path),
+        std::fs::read_to_string(cache_sig_path(&zip_path)),
+    ) {
+        if verify_signature(&data, sig_b64.trim()).is_ok() {
+            if let Ok(supplied) = supply_from_zip(&bin, &data, platkey) {
+                return Ok(supplied);
             }
+        }
+    }
+    if let (Ok(data), Ok(sig_b64)) = (std::fs::read(&bin), std::fs::read_to_string(cache_sig_path(&bin))) {
+        if verify_signature(&data, sig_b64.trim()).is_ok() {
+            return Ok(Supplied {
+                sha256: sha256_hex(&data),
+                bin,
+                zip: None,
+            });
         }
     }
 
@@ -223,45 +395,46 @@ pub fn ensure_supplied(
         .get(platkey)
         .ok_or_else(|| format!("server-manifest has no vela-server for platform {platkey} (not published for this platform?)"))?;
 
-    let data = download(&entry.url, on_pct)?;
-    // Verify signature for authenticity/integrity, then compare SHA-256 used by the remote path.
-    verify_signature(&data, &entry.signature)?;
-    let got = sha256_hex(&data);
-    if !got.eq_ignore_ascii_case(&entry.sha256) {
-        return Err(format!(
-            "downloaded content SHA-256 does not match manifest: expected {}, got {got}",
-            entry.sha256
-        ));
+    if let Some((url, sha256, signature)) = entry.zip() {
+        let data = download_verified(url, sha256, signature, on_pct)?;
+        // Unpack before caching the zip, so an archive with the wrong contents is never kept.
+        let supplied = supply_from_zip(&bin, &data, platkey)?;
+        write_atomic(&zip_path, &data)?;
+        std::fs::write(cache_sig_path(&zip_path), signature.trim())
+            .map_err(|e| format!("failed to write cache signature: {e}"))?;
+        return Ok(supplied);
     }
 
-    // Write to a temporary file and rename atomically so partial data cannot appear cached.
-    if let Some(dir) = bin.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("failed to create cache dir: {e}"))?;
-    }
-    let tmp = bin.with_extension("tmp");
-    std::fs::write(&tmp, &data).map_err(|e| format!("failed to write cache temp file: {e}"))?;
-    std::fs::rename(&tmp, &bin).map_err(|e| format!("failed to place cache file: {e}"))?;
+    let data = download_verified(&entry.url, &entry.sha256, &entry.signature, on_pct)?;
+    write_atomic(&bin, &data)?;
     // Store the signature for offline re-verification.
     std::fs::write(cache_sig_path(&bin), entry.signature.trim())
         .map_err(|e| format!("failed to write cache signature: {e}"))?;
-    // Set the Unix executable bit for a consistent local cache, even though the file is uploaded remotely.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&bin) {
-            let mut perm = meta.permissions();
-            perm.set_mode(0o755);
-            let _ = std::fs::set_permissions(&bin, perm);
-        }
-    }
-
-    Ok(bin)
+    mark_executable(&bin);
+    Ok(Supplied {
+        sha256: sha256_hex(&data),
+        bin,
+        zip: None,
+    })
 }
 
-/// Return the cached vela-server and SHA-256 for SSH upload and remote validity checks.
-pub fn cached_sha256(bin: &Path) -> Result<String, String> {
-    let data = std::fs::read(bin).map_err(|e| format!("failed to read cached binary: {e}"))?;
-    Ok(sha256_hex(&data))
+/// Download one artifact, then verify its signature for authenticity and its SHA-256 against the
+/// manifest, which the remote path also relies on.
+fn download_verified(
+    url: &str,
+    sha256: &str,
+    signature: &str,
+    on_pct: &dyn Fn(u8),
+) -> Result<Vec<u8>, String> {
+    let data = download(url, on_pct)?;
+    verify_signature(&data, signature)?;
+    let got = sha256_hex(&data);
+    if !got.eq_ignore_ascii_case(sha256) {
+        return Err(format!(
+            "downloaded content SHA-256 does not match manifest: expected {sha256}, got {got}"
+        ));
+    }
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -300,6 +473,76 @@ mod tests {
         assert_eq!(m.version, "0.1.73");
         let e = m.platforms.get("linux-x86_64").unwrap();
         assert_eq!(e.sha256, "ab");
+    }
+
+    #[test]
+    fn manifest_zip_fields_are_optional() {
+        // Manifests published before 0.2.10 have no zip fields and keep the raw-binary path.
+        let json = r#"{"version":"0.2.9","platforms":{
+            "windows-x86_64":{"url":"u","sha256":"ab","signature":"c2ln"}}}"#;
+        let m: ServerManifest = serde_json::from_str(json).unwrap();
+        assert!(m.platforms["windows-x86_64"].zip().is_none());
+
+        let json = r#"{"version":"0.2.10","platforms":{
+            "windows-x86_64":{"url":"u","sha256":"ab","signature":"c2ln",
+              "zip_url":"z","zip_sha256":"cd","zip_signature":"c2ln"}}}"#;
+        let m: ServerManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(m.platforms["windows-x86_64"].zip(), Some(("z", "cd", "c2ln")));
+    }
+
+    /// Build an in-memory zip from `(name, bytes)` entries.
+    fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in entries {
+            w.start_file(*name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn unpack_zip_accepts_only_the_expected_single_entry() {
+        let body = b"MZ fake vela-server".repeat(100);
+        let z = make_zip(&[("vela-server.exe", &body)]);
+        assert_eq!(unpack_zip(&z, "vela-server.exe").unwrap(), body);
+        // Wrong name, nested path, and extra entries are all rejected.
+        assert!(unpack_zip(&z, "vela-server").is_err());
+        assert!(unpack_zip(&make_zip(&[("bin/vela-server", &body)]), "vela-server").is_err());
+        let two = make_zip(&[("vela-server", &body), ("extra", b"x")]);
+        assert!(unpack_zip(&two, "vela-server").is_err());
+        assert!(unpack_zip(b"not a zip", "vela-server").is_err());
+    }
+
+    #[test]
+    fn binary_name_follows_platform() {
+        assert_eq!(binary_name("windows-x86_64"), "vela-server.exe");
+        assert_eq!(binary_name("windows-aarch64"), "vela-server.exe");
+        assert_eq!(binary_name("linux-x86_64"), "vela-server");
+        assert_eq!(binary_name("darwin-aarch64"), "vela-server");
+    }
+
+    #[test]
+    fn dev_override_unpacks_a_zip_into_the_cache() {
+        let dir = std::env::temp_dir().join(format!("vlx-supply-dev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = b"#!/bin/sh\necho dev\n".to_vec();
+        let zpath = dir.join("vela-server.zip");
+        std::fs::write(&zpath, make_zip(&[("vela-server", &body)])).unwrap();
+
+        let s = supply_dev_override(&dir, &zpath, "linux-x86_64").unwrap();
+        assert_eq!(std::fs::read(&s.bin).unwrap(), body);
+        assert_eq!(s.sha256, sha256_hex(&body));
+        assert!(s.zip.as_ref().unwrap().is_file());
+
+        // A raw path is supplied as-is, with no zip.
+        let raw = supply_dev_override(&dir, &s.bin, "linux-x86_64").unwrap();
+        assert!(raw.zip.is_none());
+        assert_eq!(raw.sha256, s.sha256);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

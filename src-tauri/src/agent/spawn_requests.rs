@@ -263,7 +263,8 @@ fn launch_defaults(app: &AppCtx, conn: &Connection, parent: Option<&Session>, ki
     permission_catalog::validate(kind, permission.as_deref())?;
     let engine = if !kind.supports_chat() { "tui" }
         else if let Some(parent) = parent.filter(|p| p.kind.supports_chat()) { &parent.engine }
-        else { prefs["agentDefaults"][kind.as_str()]["engine"].as_str().unwrap_or("chat") };
+        else { prefs["agentDefaults"][kind.as_str()]["engine"].as_str()
+            .unwrap_or(if matches!(kind, SessionKind::Claude | SessionKind::Codex) { "chat" } else { "tui" }) };
     let _ = app;
     if !matches!(engine, "tui" | "chat") { return Err("Invalid default session engine".into()); }
     Ok((args, permission, engine.into()))

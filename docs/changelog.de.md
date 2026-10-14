@@ -1,3 +1,24 @@
+## v0.2.10 — 2026-10-13
+
+- 🧩 OpenCode v2 wird zusätzlich zu v1 unterstützt, und die Modellliste lädt auch mit OpenCode v2.0.26 korrekt.
+- 🏷️ Der Sitzungskopf zeigt die Version der Agent-CLI; ist eine neuere Version verfügbar, führt die Versionsnummer zur offiziellen Upgrade-Anleitung.
+- 🗂️ Das Git-Panel zeigt bis zu 1.000 geänderte Dateien und bietet an, große Ordner wie `node_modules` zu `.gitignore` hinzuzufügen.
+- 🔤 Das Git-Panel zeigt Dateinamen mit Nicht-ASCII-Zeichen korrekt an, Stagen, Unstagen und Verwerfen wirken genau auf die ausgewählten Dateien, und Konflikte stehen in einer eigenen Gruppe.
+- 📜 Der Git-Verlauf behält beim Aktualisieren den geladenen Bereich, aufgeklappte Einträge und die Scrollposition.
+- 🌿 Der im rechten Panel, in der Statusleiste, im Terminaltitel und in der Seitenleiste angezeigte Branch aktualisiert sich sofort nach einem Branch-Wechsel, ohne Neustart.
+- 📁 Der Dateibaum aktualisiert geöffnete Ordner automatisch und markiert Ordner, die Git-Änderungen enthalten.
+- 🧹 Windows: Selbstaktualisierungen hinterlassen keine Installationsprogramme mehr im Temp-Ordner, und Reste früherer Updates werden entfernt.
+- 🪝 Windows: Codex, Crush, Kiro, Cursor, Kimi, Antigravity, Copilot und Grok melden den Sitzungsstatus direkt an VelaTerm, ohne PowerShell-Skripte.
+- 🖱️ Windows: Vollbild-Terminalprogramme wie vim empfangen Mausklicks und Scrollen; das Mausrad wird nicht mehr in Pfeiltasten umgewandelt.
+- 🕘 zsh-Terminals lesen und schreiben wieder Ihre eigene `~/.zsh_history`, sodass `history` und die Pfeil-nach-oben-Taste auch Befehle aus anderen Terminals zeigen.
+- 🖥️ Neue Claude- und Codex-Sitzungen öffnen sich in der Konversationsansicht; andere Agenten öffnen sich standardmäßig im Terminal.
+- 🚀 `vspawn` akzeptiert `--pi` und `--agent <name>` und kann damit jeden Agenten starten, der Aufgaben übernimmt.
+- ⏱️ Wird die Modellliste nicht innerhalb von 30 Sekunden geladen, erscheint ein Fehler mit Retry.
+- 🗑️ Gespeicherte Voreinstellungen lassen sich unter Einstellungen ▸ Agenten löschen.
+- ⌨️ Der Tooltip der Screenshot-Schaltfläche zeigt das aktuelle Tastenkürzel, und das Symbol lässt sich leichter von Teilen unterscheiden.
+- 🧭 Das rechte Panel wechselt nach dem Öffnen von Wissen wieder zu Info und anderen Tabs.
+- ✍️ macOS: Die Eingabe von `/` im Terminal mit einer Eingabemethode erscheint nicht mehr doppelt.
+
 ## v0.2.9 — 2026-10-07
 
 - ✨ Beim Umbenennen mit KI werden das gewählte Modell und die Denkintensität für jeden Agenten gespeichert.

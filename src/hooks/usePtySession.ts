@@ -862,8 +862,8 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
       }
     };
 
-    // WebKit IME fallback immediately writes committed full-width punctuation and swallows xterm's later
-    // duplicate onData, avoiding delayed/out-of-order delivery.
+    // WebKit IME fallback immediately sends direct punctuation/pass-through symbols. Its onData guard
+    // consumes late duplicates and records native sends that arrive before the keyup fallback.
     const imeFix = isWebkitEngine()
       ? installWebkitImeFix(term, (data) => {
           completion?.input(data);
@@ -883,7 +883,8 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
       // xterm returns the viewport to the bottom on user input, so a previous scroll away no longer
       // holds; read the settled position once xterm has applied it.
       setTimeout(syncViewportIntent, 0);
-      // Swallow xterm's late duplicate of punctuation already sent by the WebKit fallback.
+      // Run on every native input: record symbols already sent before keyup as well as swallowing late
+      // duplicates of punctuation sent by the WebKit fallback.
       if (imeFix?.shouldSwallow(data)) return;
       completion?.input(data);
       ptyWrite(session.id, data).catch(() => {});

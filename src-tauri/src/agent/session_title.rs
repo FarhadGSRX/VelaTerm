@@ -302,7 +302,7 @@ fn build_prompt(messages: &[TranscriptMessage]) -> Result<String, String> {
     Ok(prompt)
 }
 
-fn available_binary(app: &AppCtx, kind: SessionKind, path: Option<&str>) -> Option<String> {
+pub(crate) fn available_binary(app: &AppCtx, kind: SessionKind, path: Option<&str>) -> Option<String> {
     super::executable::resolve(app, kind, path)
         .filter(|bin| super::executable::is_executable_file(std::path::Path::new(bin)))
 }
@@ -345,6 +345,12 @@ fn task_args(kind: SessionKind, raw: Option<&str>) -> Vec<String> {
 }
 
 fn title_command(bin: &str, kind: SessionKind, dir: &WorkDir, args: Option<&str>, env: Option<&str>, cwd: Option<&std::path::Path>) -> Result<(std::process::Command, bool), String> {
+    let schema = json!({"type":"object","additionalProperties":false,"properties":{"title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS}},"required":["title"]});
+    isolated_command(bin, kind, &dir.0, args, env, cwd, &schema)
+}
+
+/// Shared one-shot text adapter. The caller supplies a schema and a private temporary directory.
+pub(crate) fn isolated_command(bin: &str, kind: SessionKind, dir: &std::path::Path, args: Option<&str>, env: Option<&str>, cwd: Option<&std::path::Path>, schema: &Value) -> Result<(std::process::Command, bool), String> {
     let mut command = crate::host::command(bin);
     if let Some(env) = env {
         let vars: std::collections::HashMap<String, String> = serde_json::from_str(env).map_err(|_| "session_title:agent_unavailable")?;
@@ -361,7 +367,7 @@ fn title_command(bin: &str, kind: SessionKind, dir: &WorkDir, args: Option<&str>
                 let raw = inline.clone().or_else(|| inherited.get(i + 1).cloned()).ok_or("session_title:agent_unavailable")?;
                 let source = if raw.trim_start().starts_with('{') { raw } else {
                     let path = std::path::Path::new(&raw);
-                    let path = if path.is_absolute() { path.to_path_buf() } else { cwd.unwrap_or(&dir.0).join(path) };
+                    let path = if path.is_absolute() { path.to_path_buf() } else { cwd.unwrap_or(dir).join(path) };
                     std::fs::read_to_string(path).map_err(|_| "session_title:agent_unavailable")?
                 };
                 let value: Value = serde_json::from_str(&source).map_err(|_| "session_title:agent_unavailable")?;
@@ -375,7 +381,6 @@ fn title_command(bin: &str, kind: SessionKind, dir: &WorkDir, args: Option<&str>
     if kind == SessionKind::Codex { command.arg("exec"); }
     if kind == SessionKind::Opencode { command.arg("run"); }
     command.args(inherited);
-    let schema = json!({"type":"object","additionalProperties":false,"properties":{"title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS}},"required":["title"]});
     let stdin = match kind {
         SessionKind::Claude => {
             command.args(["--print", "--output-format", "json", "--tools", "", "--strict-mcp-config",
@@ -385,7 +390,7 @@ fn title_command(bin: &str, kind: SessionKind, dir: &WorkDir, args: Option<&str>
             true
         }
         SessionKind::Codex => {
-            let schema_path = dir.0.join("schema.json");
+            let schema_path = dir.join("schema.json");
             std::fs::write(&schema_path, schema.to_string()).map_err(|_| "session_title:failed")?;
             command.args(["--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never", "--json",
                 "--disable", "shell_tool", "--disable", "apps", "--disable", "multi_agent", "-c", "project_doc_max_bytes=0",
@@ -433,7 +438,7 @@ fn title_command(bin: &str, kind: SessionKind, dir: &WorkDir, args: Option<&str>
     for key in keys {
         if key.to_string_lossy().starts_with("VLX_") || key == "CODEX_THREAD_ID" { command.env_remove(key); }
     }
-    command.current_dir(cwd.unwrap_or(&dir.0)).env("NO_COLOR", "1");
+    command.current_dir(cwd.unwrap_or(dir)).env("NO_COLOR", "1");
     Ok((command, stdin))
 }
 
@@ -444,7 +449,7 @@ fn command_env(command: &std::process::Command, key: &str) -> Option<String> {
     }
 }
 
-fn answer_text(kind: SessionKind, output: &str) -> Result<(String, Value), String> {
+pub(crate) fn answer_text(kind: SessionKind, output: &str) -> Result<(String, Value), String> {
     if kind == SessionKind::Claude {
         let value: Value = serde_json::from_str(output).map_err(|_| "session_title:invalid")?;
         if value["is_error"] == true { return Err("session_title:failed".into()); }

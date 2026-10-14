@@ -442,10 +442,13 @@ fn apply_signal(record: &mut SessionState, payload: &serde_json::Value) {
         Some("state") => {
             let state = str_at("state");
             let authoritative = bool_at("authoritative");
-            // Every agent but Codex covers its whole turn, so any state from one settles the question.
-            // Codex is the exception because its legacy notification reports only completion; taking that
-            // as full authority would freeze the session on `waiting` for the rest of its life.
-            if record.agent.as_deref() != Some("codex") || authoritative {
+            // Every agent but Codex and Crush covers its whole turn, so any state from one settles the question.
+            // Codex is an exception because its legacy notification reports only completion; taking that
+            // as full authority would freeze the session on `waiting` for the rest of its life. Crush is the
+            // mirror case: its only hook, PreToolUse, reports `working` and nothing else, so latching on it
+            // would discard the screen readings that are its only route back to `waiting` or `asking`.
+            let partial_hooks = matches!(record.agent.as_deref(), Some("codex") | Some("crush"));
+            if !partial_hooks || authoritative {
                 record.authoritative = true;
             }
             if record.agent.as_deref() == Some("codex") && authoritative {
@@ -919,6 +922,31 @@ mod tests {
         feed(&app, "s2", &[json!({ "kind": "agent", "agent": "codex", "state_source": "hooks" })]);
         report_screen(&app, "s2", "desktop", Some("desktop"), screen("working", false, true)).unwrap();
         assert!(snapshot()["s2"].agent_state.is_none(), "codex is never read from its screen");
+    }
+
+    /// Crush's only hook reports `working`. It must not lock the session, or the screen could never bring a
+    /// finished turn back to `waiting` or show a permission prompt.
+    #[test]
+    fn crush_working_hook_leaves_the_screen_in_charge() {
+        let _lock = test_lock();
+        let app = ctx("crush-partial");
+        feed(
+            &app,
+            "s1",
+            &[
+                json!({ "kind": "agent", "agent": "crush" }),
+                json!({ "kind": "state", "state": "working", "authoritative": false }),
+            ],
+        );
+        assert_eq!(snapshot()["s1"].agent_state.as_deref(), Some("working"));
+        assert!(!snapshot()["s1"].authoritative);
+
+        // Let the end-of-turn hold expire so the screen's result is what is displayed.
+        std::thread::sleep(WORKING_HOLD + Duration::from_millis(300));
+        report_screen(&app, "s1", "desktop", Some("desktop"), screen("waiting", true, false)).unwrap();
+        assert_eq!(snapshot()["s1"].agent_state.as_deref(), Some("asking"));
+        report_screen(&app, "s1", "desktop", Some("desktop"), screen("waiting", false, false)).unwrap();
+        assert_eq!(snapshot()["s1"].agent_state.as_deref(), Some("waiting"));
     }
 
     /// A session that has never worked cannot be talked into `waiting` by a quiet screen: a freshly

@@ -107,6 +107,9 @@ export function FormModal({
   validate,
   formatSubmitError,
   onValuesChange,
+  width = 380,
+  secondaryAction,
+  submitDisabled = false,
 }: {
   title: string;
   description?: string;
@@ -124,6 +127,12 @@ export function FormModal({
   formatSubmitError?: (error: unknown) => string;
   /** Persist presentation drafts, for example in a recoverable dialog URL. */
   onValuesChange?: (values: Record<string, string>) => void;
+  /** Optional wider form layout, still constrained to the viewport. */
+  width?: number;
+  /** Leading footer action, disabled together with the form during submission. */
+  secondaryAction?: { label: string; onClick: () => void; danger?: boolean };
+  /** Disable submission while prerequisite data is loading without blocking dismissal. */
+  submitDisabled?: boolean;
 }) {
   const t = useT();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -171,7 +180,7 @@ export function FormModal({
   const validationError = validate?.(values) ?? null;
   const error = validationError ?? submitError;
   const busy = submitting || cancelling;
-  const canSubmit = !busy && !validationError && fields.every(
+  const canSubmit = !submitDisabled && !busy && !validationError && fields.every(
     (f) => !f.required || values[f.key].trim().length > 0,
   );
 
@@ -206,7 +215,7 @@ export function FormModal({
         aria-describedby={description ? descriptionId : undefined}
         aria-busy={busy}
         style={{
-          width: 380,
+          width,
           maxWidth: "calc(100vw - 32px)",
           maxHeight: "calc(100dvh - 32px)",
           overflowY: "auto",
@@ -220,12 +229,20 @@ export function FormModal({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.defaultPrevented) return;
-          if (e.key === "Enter" && e.target instanceof HTMLButtonElement) return;
-          if (e.key === "Enter" && !e.shiftKey) {
+          if (e.key === "Tab") {
+            const nodes = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]') ?? []);
+            const first = nodes[0], last = nodes[nodes.length - 1];
+            if (e.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
+              e.preventDefault(); (last ?? dialogRef.current)?.focus();
+            } else if (!e.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.current)) {
+              e.preventDefault(); (first ?? dialogRef.current)?.focus();
+            }
+          }
+          if (e.key === "Enter" && !e.shiftKey && !(e.target as HTMLElement).closest("button, textarea, a")) {
             e.preventDefault();
             void submit();
           }
-          if (e.key === "Escape") cancel();
+          if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel(); }
         }}
       >
         <div
@@ -331,6 +348,9 @@ export function FormModal({
             marginTop: 18,
           }}
         >
+          {secondaryAction && <button type="button" className="vlx-btn" disabled={busy}
+            style={{ marginRight: "auto", color: secondaryAction.danger ? "var(--status-error)" : undefined }}
+            onClick={secondaryAction.onClick}>{secondaryAction.label}</button>}
           <button className="vlx-btn" onClick={cancel} disabled={cancelling || (submitting && !onCancelSubmit)}>
             {t("common.cancel")}
           </button>

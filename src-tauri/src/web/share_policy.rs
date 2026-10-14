@@ -281,6 +281,7 @@ fn app_command(cmd: &str) -> bool {
             | "chat_attach"
             | "chat_detach"
             | "chat_models"
+            | "agent_version"
             | "chat_commands"
             | "chat_row"
             | "chat_attachment"

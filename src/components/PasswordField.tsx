@@ -2,7 +2,7 @@
 //! The revealed state is local and resets whenever the field unmounts, so a password is never left
 //! visible after the panel closes.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useT } from "../i18n";
 
 /** Default box styling; callers may override or extend it through `inputStyle`. */
@@ -22,21 +22,33 @@ export function PasswordField({
   value,
   placeholder,
   autoFocus,
+  disabled,
+  ariaLabel,
   onChange,
   onKeyDown,
   wrapStyle,
   inputStyle,
+  actions,
+  showLabel,
+  hideLabel,
 }: {
   value: string;
   placeholder?: string;
   autoFocus?: boolean;
+  disabled?: boolean;
+  ariaLabel?: string;
   onChange: (v: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   wrapStyle?: React.CSSProperties;
   inputStyle?: React.CSSProperties;
+  /** Optional action next to the reveal button, such as copying the current value. */
+  actions?: ReactNode;
+  showLabel?: string;
+  hideLabel?: string;
 }) {
   const t = useT();
   const [shown, setShown] = useState(false);
+  const revealLabel = shown ? hideLabel ?? t("connect.hidePassword") : showLabel ?? t("connect.showPassword");
   return (
     <div style={{ position: "relative", ...wrapStyle }}>
       <input
@@ -44,15 +56,19 @@ export function PasswordField({
         value={value}
         placeholder={placeholder}
         autoFocus={autoFocus}
+        disabled={disabled}
+        aria-label={ariaLabel}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
-        style={{ ...baseInputStyle, ...inputStyle, paddingRight: 32 }}
+        style={{ ...baseInputStyle, ...inputStyle, paddingRight: actions ? 64 : 32 }}
       />
+      {actions && <div style={{ position: "absolute", top: 0, bottom: 0, right: 30, display: "flex", alignItems: "center" }}>{actions}</div>}
       <button
         type="button"
+        disabled={disabled}
         onClick={() => setShown((v) => !v)}
-        title={shown ? t("connect.hidePassword") : t("connect.showPassword")}
-        aria-label={shown ? t("connect.hidePassword") : t("connect.showPassword")}
+        title={revealLabel}
+        aria-label={revealLabel}
         style={{
           position: "absolute",
           top: 0,

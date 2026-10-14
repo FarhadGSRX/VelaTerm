@@ -28,6 +28,7 @@ import { attachImages, dataUrl, MAX_IMAGES, MAX_IMAGE_BYTES } from "./attachment
 import { useImageMenu } from "./useImageMenu";
 import { ChatImagePreview } from "./ChatImagePreview";
 import { Markdown } from "./markdown";
+import { ReplyTranslation, SentTranslation, useOriginalMessage } from "../../../translation/Message";
 import { parseAnsweredQuestions, type AnsweredQuestion } from "./questionForm";
 import { ToolBody, toolSummary } from "./toolCards";
 import { runSummaryText, type ToolRow, type TurnFold } from "./toolRuns";
@@ -278,6 +279,7 @@ export function TurnHead({
  * Both start their text on the same left edge, so an answer and the question above it read as one exchange.
  */
 export function MessageBubble({
+  rowId,
   who,
   isUser,
   icon,
@@ -286,6 +288,7 @@ export function MessageBubble({
   images,
   durationMs,
   showHead = true,
+  streaming,
   renderText,
   footnote,
   onRewind,
@@ -296,6 +299,7 @@ export function MessageBubble({
   openRewindToken,
   onRewindMenuOpened,
 }: {
+  rowId?: string;
   who: string;
   isUser: boolean;
   /** The agent's mark, shown in the margin beside its answers. */
@@ -308,6 +312,7 @@ export function MessageBubble({
   durationMs?: number;
   /** Draw the author line. Inside a marked turn the turn's own line already names the speaker. */
   showHead?: boolean;
+  streaming?: boolean;
   /** Draw the body from the raw text instead of Markdown; the archive marks search literals in it. */
   renderText?: (text: string) => ReactNode;
   /** A muted line under the body, such as the tools an archived turn used. */
@@ -323,6 +328,7 @@ export function MessageBubble({
   /** Acknowledge the one-shot request after the target message has opened its menu. */
   onRewindMenuOpened?: (token: number) => void;
 }) {
+  text = useOriginalMessage(rowId, text);
   const t = useT();
   const [rewindMenu, setRewindMenu] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -348,7 +354,8 @@ export function MessageBubble({
         ))}
       </div>
     ) : null;
-  const body = text ? (renderText ? renderText(text) : <Markdown text={text} />) : null;
+  const originalBody = text ? (renderText ? renderText(text) : <Markdown text={text} />) : null;
+  const body = rowId && !isUser ? <ReplyTranslation rowId={rowId} text={text} original={originalBody} streaming={streaming} /> : originalBody;
 
   if (isUser) {
     const rewind =
@@ -394,7 +401,7 @@ export function MessageBubble({
             </div> : null}
             <div className="sv-message-content">
             {editing ? <MessageEditor text={text} images={images} disabled={!!editDisabledReason}
-              onCancel={() => setEditing(false)} onSend={onEditSend} /> : <>{pictures}{body}{footnote}</>}
+              onCancel={() => setEditing(false)} onSend={onEditSend} /> : <>{pictures}{rowId ? <SentTranslation rowId={rowId} original={body} /> : body}{footnote}</>}
             </div>
             {copyMenu}
           </div>

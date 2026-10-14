@@ -15,6 +15,7 @@ pub(crate) mod dispatch;
 // dispatch mints download tickets, so this is reachable from the crate rather than private to web transport.
 pub(crate) mod download;
 pub(crate) mod e2ee;
+mod frontend;
 pub(crate) mod full_access;
 #[cfg(test)]
 mod remote_audit_fixture;
@@ -55,10 +56,6 @@ use std::sync::Arc;
 /// Default listening port, overridable by `web_server_start`.
 const DEFAULT_PORT: u16 = 8799;
 
-/// Frontend build output at `src-tauri/../dist`, read from disk in debug and embedded in release.
-#[derive(rust_embed::Embed)]
-#[folder = "../dist"]
-struct Assets;
 
 /// Context shared by axum handlers.
 #[derive(Clone)]

@@ -7,6 +7,7 @@ import Icons from "../../components/Icons";
 import { Backdrop } from "../../components/Backdrop";
 import { fileIcon } from "./fileIcons";
 import { highlight } from "./highlight";
+import { directoriesToRefresh, reconcileChildren, toNode, updateFileNode, visibleDirectories, type FileNodeT } from "./fileTree";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { FormModal } from "../../components/FormModal";
 import { useT } from "../../i18n";
@@ -15,11 +16,11 @@ import {
   createDir,
   createFile,
   deletePath,
+  fsWatch,
   listDir,
   readFilePreview,
   renamePath,
   revealPath,
-  type DirEntry,
   type FilePreview,
 } from "../../ipc/info";
 import {
@@ -33,35 +34,8 @@ import {
 } from "../../ipc/transfer";
 import { env } from "../../platform";
 import { useTermStore } from "../../store/termStore";
+import { onFsChanged } from "../../ipc/events";
 /* ===================== Files: real tree, preview, and one-level lazy loading ===================== */
-
-interface FileNodeT {
-  name: string;
-  /** Absolute path. */
-  path: string;
-  isDir: boolean;
-  /** Whether this is a dot-prefixed hidden item, omitted when showHidden is off. */
-  isHidden: boolean;
-  badge?: string | null;
-  open?: boolean;
-  /** Whether children have been loaded from the backend. */
-  loaded?: boolean;
-  loading?: boolean;
-  children?: FileNodeT[];
-}
-
-/** Convert a backend DirEntry to a frontend node with an absolute path. */
-function toNode(e: DirEntry, parentPath: string): FileNodeT {
-  return {
-    name: e.name,
-    path: `${parentPath}/${e.name}`,
-    isDir: e.isDir,
-    isHidden: e.isHidden,
-    badge: e.gitBadge,
-    open: false,
-    loaded: false,
-  };
-}
 
 /** Parent of an absolute path, used to target and refresh create/rename operations. */
 function parentPathOf(path: string): string {
@@ -204,6 +178,7 @@ function FileRow({
           <span className="tw">{open ? <Icons.chevD size={13} /> : <Icons.chevR size={13} />}</span>
           <span className="ic">{renderFileIcon(node.name, true, open)}</span>
           <span className="nm">{node.name}</span>
+          {node.badge && <span className={"gb gb-" + node.badge}>{node.badge}</span>}
         </div>
         {open &&
           (node.loading ? (
@@ -271,6 +246,10 @@ function FileRow({
 export function FilesTab({ rootPath, rootName }: { rootPath: string | null; rootName: string | null }) {
   const t = useT();
   const [root, setRoot] = useState<FileNodeT | null>(null);
+  const rootRef = useRef(root);
+  rootRef.current = root;
+  const treeGeneration = useRef(0);
+  const treeRevision = useRef(0);
   const [sel, setSel] = useState<FileNodeT | null>(null);
   const [preview, setPreview] = useState<FilePreview | null>(null);
   // Preview is explicit: clicks only select; the context-menu Preview action loads the bottom pane.
@@ -290,6 +269,7 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
   const [del, setDel] = useState<{ node: FileNodeT; dir: FileNodeT } | null>(null);
   // Dismissible operation error such as a duplicate name or insufficient permission.
   const [err, setErr] = useState<string | null>(null);
+  const [refreshErr, setRefreshErr] = useState<string | null>(null);
   // Quick filter state: filterOn controls visibility; q is the normalized value passed to the tree.
   const [filterOn, setFilterOn] = useState(false);
   const [filter, setFilter] = useState("");
@@ -309,9 +289,12 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
 
   // Rebuild the root and load its first level when the session root changes.
   useEffect(() => {
+    treeGeneration.current++;
     setSel(null);
     setPreview(null);
     setPreviewNode(null);
+    setErr(null);
+    setRefreshErr(null);
     if (!rootPath) {
       setRoot(null);
       return;
@@ -335,8 +318,9 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
         node.loading = false;
         setRoot({ ...node });
       })
-      .catch(() => {
+      .catch((e) => {
         if (cancelled) return;
+        setRefreshErr(String(e));
         node.children = [];
         node.loaded = true;
         node.loading = false;
@@ -347,25 +331,115 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
     };
   }, [rootPath, rootName]);
 
+  // Refresh visible directory facts without replacing expansion, selection, or loaded descendants.
+  //
+  // Where the backend can watch the directory (macOS, Windows), a change event re-reads just the
+  // shown directories it names, and a full re-read runs only every 30 seconds as a safety net that
+  // also renews the watch lease. Elsewhere, or until the lease answers, every shown directory is
+  // re-read every 5 seconds.
+  useEffect(() => {
+    let cancelled = false;
+    let running = false;
+    // Directories named by events that arrived while a read was running; read right after it.
+    let queued: Set<string> | null = null;
+    const sample = async (only?: string[]) => {
+      const current = rootRef.current;
+      if (cancelled || document.hidden || !current || current.path !== rootPath) return;
+      const paths = only ?? visibleDirectories(current);
+      if (!paths.length) return;
+      if (running) {
+        queued = new Set([...(queued ?? []), ...paths]);
+        return;
+      }
+      running = true;
+      const revision = treeRevision.current;
+      try {
+        const results = await Promise.allSettled(paths.map((path) => listDir(path)));
+        if (cancelled || revision !== treeRevision.current) return;
+        setRoot((latest) => {
+          if (!latest || latest.path !== rootPath) return latest;
+          return results.reduce((tree, result, index) => result.status === "fulfilled"
+            ? updateFileNode(tree, paths[index], (node) => reconcileChildren(node, result.value)) : tree, latest);
+        });
+        const failure = results.find((result) => result.status === "rejected");
+        setRefreshErr(failure?.status === "rejected" ? String(failure.reason) : null);
+      } finally {
+        running = false;
+        if (queued && !cancelled) {
+          const next = [...queued];
+          queued = null;
+          void sample(next);
+        }
+      }
+    };
+    const refresh = () => { void sample(); };
+
+    let watchedRoot: string | null = null;
+    let lastFull = Date.now();
+    const renew = () => {
+      if (!rootPath) return;
+      void fsWatch(rootPath)
+        .then((info) => { if (!cancelled) watchedRoot = info.supported ? info.root : null; })
+        .catch(() => { if (!cancelled) watchedRoot = null; });
+    };
+    renew();
+    // Events within a short window are merged so a build writing many files costs one read per
+    // directory, not one per file.
+    let pending: { dirs: Set<string> | null; git: boolean } | null = null;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const unlisten = onFsChanged(({ root, dirs, git }) => {
+      if (cancelled || root !== watchedRoot) return;
+      pending = {
+        dirs: dirs === null || pending?.dirs === null ? null : new Set([...(pending?.dirs ?? []), ...dirs]),
+        git: git || Boolean(pending?.git),
+      };
+      if (debounce) return;
+      debounce = setTimeout(() => {
+        debounce = null;
+        const batch = pending;
+        pending = null;
+        const current = rootRef.current;
+        if (!batch || !current) return;
+        const paths = directoriesToRefresh(current, batch.dirs && [...batch.dirs], batch.git);
+        if (paths.length) void sample(paths);
+      }, 150);
+    });
+    const timer = setInterval(() => {
+      if (watchedRoot && Date.now() - lastFull < 30_000 - 100) return;
+      lastFull = Date.now();
+      if (watchedRoot) renew();
+      refresh();
+    }, 5000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      cancelled = true;
+      if (debounce) clearTimeout(debounce);
+      void unlisten.then((stop) => stop());
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [rootPath, rootName]);
+
   // Toggle a directory, fetching its children before the first expansion.
   const onDir = async (node: FileNodeT) => {
     if (node.loaded) {
-      node.open = !node.open;
-      setRoot((r) => (r ? { ...r } : r));
+      setRoot((r) => r ? updateFileNode(r, node.path, (current) => ({ ...current, open: !current.open })) : r);
       return;
     }
-    node.loading = true;
-    node.open = true;
-    setRoot((r) => (r ? { ...r } : r));
+    const generation = treeGeneration.current;
+    treeRevision.current++;
+    setRoot((r) => r ? updateFileNode(r, node.path, (current) => ({ ...current, loading: true, open: true })) : r);
     try {
       const kids = await listDir(node.path);
-      node.children = kids.map((k) => toNode(k, node.path));
-    } catch {
-      node.children = [];
+      if (generation !== treeGeneration.current) return;
+      setRoot((r) => r ? updateFileNode(r, node.path, (current) => reconcileChildren(current, kids)) : r);
+    } catch (e) {
+      if (generation !== treeGeneration.current) return;
+      setErr(String(e));
+      setRoot((r) => r ? updateFileNode(r, node.path, (current) => ({ ...current, loading: false })) : r);
     }
-    node.loaded = true;
-    node.loading = false;
-    setRoot((r) => (r ? { ...r } : r));
   };
 
   // Clicking a file selects it without previewing; Preview is an explicit context-menu action.
@@ -422,14 +496,15 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
 
   // Reload a directory's immediate children after mutation while keeping it expanded.
   const reloadDir = async (node: FileNodeT) => {
+    const generation = treeGeneration.current;
+    treeRevision.current++;
     try {
-      node.children = (await listDir(node.path)).map((k) => toNode(k, node.path));
-    } catch {
-      node.children = [];
+      const kids = await listDir(node.path);
+      if (generation !== treeGeneration.current) return;
+      setRoot((r) => r ? updateFileNode(r, node.path, (current) => ({ ...reconcileChildren(current, kids), open: true })) : r);
+    } catch (e) {
+      if (generation === treeGeneration.current) setErr(String(e));
     }
-    node.loaded = true;
-    node.open = true;
-    setRoot((r) => (r ? { ...r } : r));
   };
 
   // Upload one at a time rather than in parallel: several concurrent chunk streams on one connection would
@@ -707,6 +782,8 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
   }
 
   const showPreview = !!previewNode;
+  const previewBadge = previewNode ? findNodeByPath(root, previewNode.path)?.badge : null;
+  const visibleError = err ?? refreshErr;
 
   return (
     <div ref={wrapRef} style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
@@ -771,9 +848,9 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
           )}
         </div>
       )}
-      {err && (
-        <div className="files-err" title={err} onClick={() => setErr(null)}>
-          {err}
+      {visibleError && (
+        <div className="files-err" title={visibleError} onClick={() => { setErr(null); setRefreshErr(null); }}>
+          {visibleError}
         </div>
       )}
       <div
@@ -838,7 +915,7 @@ export function FilesTab({ rootPath, rootName }: { rootPath: string | null; root
             <div className="preview-head">
               {renderFileIcon(previewNode.name, false)}
               {previewNode.name}
-              {previewNode.badge && <span className={"gb gb-" + previewNode.badge}>{previewNode.badge}</span>}
+              {previewBadge && <span className={"gb gb-" + previewBadge}>{previewBadge}</span>}
               <button
                 title={t("panel.openInEditorTooltip")}
                 style={{

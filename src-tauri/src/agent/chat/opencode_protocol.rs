@@ -12,7 +12,7 @@
 
 use std::io::Read;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -38,6 +38,9 @@ pub struct Server {
     /// The project directory every request names, so the server answers for this session's project
     /// even when it also hosts another one.
     directory: Option<String>,
+    version: AtomicU8,
+    initialized: AtomicBool,
+    initialization: std::sync::Mutex<()>,
 }
 
 impl Server {
@@ -47,6 +50,9 @@ impl Server {
             base: format!("http://127.0.0.1:{port}"),
             authorization: format!("Basic {credentials}"),
             directory: directory.map(str::to_string),
+            version: AtomicU8::new(1),
+            initialized: AtomicBool::new(false),
+            initialization: std::sync::Mutex::new(()),
         }
     }
 
@@ -54,7 +60,8 @@ impl Server {
         match &self.directory {
             Some(directory) => {
                 let separator = if path.contains('?') { '&' } else { '?' };
-                format!("{}{path}{separator}directory={}", self.base, encode_query(directory))
+                let key = if self.is_v2() { "location%5Bdirectory%5D" } else { "directory" };
+                format!("{}{path}{separator}{key}={}", self.base, encode_query(directory))
             }
             None => format!("{}{path}", self.base),
         }
@@ -69,7 +76,7 @@ impl Server {
                 if body.trim().is_empty() {
                     return Ok(Value::Null);
                 }
-                Ok(serde_json::from_str(&body).unwrap_or(Value::String(body)))
+                serde_json::from_str(&body).map_err(|_| "OpenCode returned an unexpected non-JSON response".to_string())
             }
             Err(ureq::Error::Status(code, response)) => {
                 let raw = response.into_string().unwrap_or_default();
@@ -80,6 +87,34 @@ impl Server {
     }
 
     pub fn get(&self, path: &str) -> Result<Value, String> {
+        self.initialize()?;
+        if self.is_v2() && path == "/provider" {
+            let default = self.get_raw("/api/model/default")?;
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let models = loop {
+                let models = self.get_raw("/api/model")?;
+                if !models.get("data").and_then(Value::as_array).is_some_and(Vec::is_empty)
+                    || std::time::Instant::now() >= deadline { break models; }
+                // Current v2 publishes its model catalogue asynchronously after activation.
+                std::thread::sleep(Duration::from_millis(150));
+            };
+            let providers = self.get_raw("/api/provider")?;
+            return Ok(v2_providers(&models, &default, &providers));
+        }
+        if self.is_v2() && path.starts_with("/session/") && path.ends_with("/message") {
+            return self.v2_messages(path);
+        }
+        let value = self.get_raw(&self.route(path)?)?;
+        if self.is_v2() {
+            let mut value = value.get("data").cloned().unwrap_or(value);
+            if path.starts_with("/session/") {
+                if let Some(directory) = value.pointer("/location/directory").cloned() { value["directory"] = directory; }
+            }
+            Ok(value)
+        } else { Ok(value) }
+    }
+
+    fn get_raw(&self, path: &str) -> Result<Value, String> {
         Self::read_response(
             ureq::get(&self.url(path))
                 .set("Authorization", &self.authorization)
@@ -98,31 +133,72 @@ impl Server {
     }
 
     fn post_with_timeout(&self, path: &str, body: Option<&Value>, timeout: Duration) -> Result<Value, String> {
-        let request = ureq::post(&self.url(path))
+        self.initialize()?;
+        let body = if self.is_v2() { self.v2_body(path, body)? } else { body.cloned().unwrap_or_else(||json!({})) };
+        let request = ureq::post(&self.url(&self.route(path)?))
             .set("Authorization", &self.authorization)
             .set("Content-Type", "application/json")
             .timeout(timeout);
         // Sent as a string: the crate's JSON helpers sit behind a feature this build does not enable.
-        let payload = body.map(Value::to_string).unwrap_or_else(|| "{}".to_string());
-        Self::read_response(request.send_string(&payload))
+        let value = Self::read_response(request.send_string(&body.to_string()))?;
+        Ok(if self.is_v2() { value.get("data").cloned().unwrap_or(value) } else { value })
     }
 
     pub fn delete(&self, path: &str) -> Result<Value, String> {
         Self::read_response(
-            ureq::delete(&self.url(path))
+            ureq::delete(&self.url(&self.route(path)?))
                 .set("Authorization", &self.authorization)
                 .timeout(REQUEST_TIMEOUT)
                 .call(),
         )
     }
 
-    /// Whether the server answers at all. Used while it starts, so failures are expected and cheap.
+    pub fn is_v2(&self) -> bool {
+        self.version.load(Ordering::Relaxed) == 2
+    }
+
+    /// Newer previews activate agents and provider configuration lazily. Health alone does not mean
+    /// those catalogues are ready; use the native wait endpoint only when the peer advertises it.
+    pub fn initialize(&self) -> Result<(),String> {
+        if !self.is_v2() || self.initialized.load(Ordering::Acquire){return Ok(());}
+        let _guard=self.initialization.lock().map_err(|e|e.to_string())?;
+        if self.initialized.load(Ordering::Acquire){return Ok(());}
+        let spec=self.get_raw("/openapi.json")?;
+        if spec.pointer("/paths/~1api~1plugin~1await-activation/post").is_some() {
+            Self::read_response(ureq::post(&self.url("/api/plugin/await-activation"))
+                .set("Authorization",&self.authorization).set("Content-Type","application/json")
+                .timeout(REQUEST_TIMEOUT).send_string("{}"))?;
+        } else if spec.pointer("/paths/~1api~1model~1default/get").is_some() {
+            // Current v2 resolves configuration lazily; resolve the default before listing models.
+            self.get_raw("/api/model/default")?;
+        }
+        self.initialized.store(true,Ordering::Release);
+        Ok(())
+    }
+
+    /// Negotiate using health or server-info JSON, never the frontend's unknown-route HTML fallback.
     pub fn healthy(&self) -> bool {
-        ureq::get(&format!("{}/global/health", self.base))
-            .set("Authorization", &self.authorization)
-            .timeout(Duration::from_secs(2))
-            .call()
-            .is_ok()
+        for (version,path) in [(1,"/global/health"),(2,"/api/health")] {
+            let response = ureq::get(&format!("{}{path}", self.base))
+                .set("Authorization", &self.authorization).timeout(Duration::from_secs(2)).call();
+            if let Ok(value) = Self::read_response(response) {
+                if value.get("healthy").and_then(Value::as_bool) == Some(true) {
+                    self.version.store(version,Ordering::Relaxed);
+                    return true;
+                }
+            }
+        }
+        let response = ureq::get(&format!("{}/api/info", self.base))
+            .set("Authorization", &self.authorization).timeout(Duration::from_secs(2)).call();
+        if let Ok(value) = Self::read_response(response) {
+            if value.get("version").and_then(Value::as_str).is_some_and(|v| !v.is_empty())
+                && value.get("pid").and_then(Value::as_u64).is_some_and(|pid| pid > 0)
+                && value.get("capabilities").is_some_and(Value::is_object) {
+                self.version.store(2,Ordering::Relaxed);
+                return true;
+            }
+        }
+        false
     }
 
     /// Open the event stream. The reader stays open for as long as the server sends events.
@@ -131,13 +207,114 @@ impl Server {
             .timeout_connect(Duration::from_secs(5))
             .timeout_read(Duration::from_secs(45))
             .build()
-            .get(&self.url("/event"))
+            .get(&self.url(if self.is_v2() { "/api/event" } else { "/event" }))
             .set("Authorization", &self.authorization)
             .set("Accept", "text/event-stream")
             .call()
             .map_err(|e| format!("Failed to follow OpenCode's events: {e}"))?;
         Ok(response.into_reader())
     }
+
+    fn route(&self, path: &str) -> Result<String, String> {
+        if !self.is_v2() || path.starts_with("/api/") { return Ok(path.to_string()); }
+        if matches!(path,"/path") {
+            return Err("This OpenCode v2 server does not expose the v1 path API".into());
+        }
+        if path.ends_with("/share") || path.ends_with("/unshare") {
+            return Err("This OpenCode v2 server does not support shared conversation links".into());
+        }
+        let path = if let Some(prefix)=path.strip_suffix("/prompt_async") {format!("{prefix}/prompt")}
+            else if let Some(prefix)=path.strip_suffix("/abort") {format!("{prefix}/interrupt")}
+            else if let Some(prefix)=path.strip_suffix("/summarize") {format!("{prefix}/compact")}
+            else if let Some(prefix)=path.strip_suffix("/unrevert") {format!("{prefix}/revert/clear")}
+            else if let Some(prefix)=path.strip_suffix("/revert") {format!("{prefix}/revert/stage")}
+            else {path.to_string()};
+        Ok(format!("/api{path}"))
+    }
+
+    fn v2_body(&self, path: &str, body: Option<&Value>) -> Result<Value, String> {
+        let native = body.cloned().unwrap_or_else(||json!({}));
+        if path == "/session" {
+            return Ok(json!({"location":{"directory":self.directory.as_deref().ok_or("OpenCode v2 requires a project directory")?}}));
+        }
+        if path.ends_with("/prompt_async") || path.ends_with("/command") {
+            let session_path = path.rsplit_once('/').unwrap().0;
+            // v2 selections belong to the session and are not accepted as prompt fields.
+            if let Some(agent)=native.get("agent") {
+                self.post(&format!("{session_path}/agent"),Some(&json!({"agent":agent})))?;
+            }
+            if let Some(model)=native.get("model") {
+                let model = json!({"id":model["modelID"],"providerID":model["providerID"],
+                    "variant":native.get("variant").and_then(Value::as_str).unwrap_or("default")});
+                self.post(&format!("{session_path}/model"),Some(&json!({"model":model})))?;
+            }
+            if path.ends_with("/command") {
+                return Ok(json!({"id":native["messageID"],"command":native["command"],"arguments":native["arguments"],"delivery":"queue"}));
+            }
+            let parts = native.get("parts").and_then(Value::as_array).cloned().unwrap_or_default();
+            let text = parts.iter().filter(|p|p["type"]=="text").filter_map(|p|p["text"].as_str()).collect::<Vec<_>>().join("\n");
+            let files: Vec<Value> = parts.iter().filter(|p|p["type"]=="file").map(|p|json!({"uri":p["url"],"name":p["filename"]})).collect();
+            let mut value = json!({"id":native["messageID"],"text":text,"delivery":native.get("_delivery").and_then(Value::as_str).unwrap_or("queue")});
+            if !files.is_empty() { value["files"]=json!(files); }
+            return Ok(value);
+        }
+        if path.ends_with("/shell") {
+            let id=native["messageID"].as_str().unwrap_or("").replacen("msg_","evt_",1);
+            return Ok(json!({"id":id,"command":native["command"]}));
+        }
+        if path.ends_with("/summarize") { return Ok(json!({"delivery":"queue"})); }
+        if path.ends_with("/revert") {
+            return Ok(json!({"messageID":native["messageID"],"files":true}));
+        }
+        Ok(native)
+    }
+
+    fn v2_messages(&self, path: &str) -> Result<Value, String> {
+        let session = path.strip_prefix("/session/").and_then(|p|p.strip_suffix("/message")).unwrap_or("");
+        let mut next = format!("/api{path}?limit=100&order=asc");
+        let mut seen = std::collections::HashSet::new();
+        let mut messages = Vec::new();
+        loop {
+            let page = self.get_raw(&next)?;
+            let data = page.get("data").and_then(Value::as_array).ok_or("OpenCode v2 returned invalid message history")?;
+            messages.extend(data.iter().flat_map(|m|super::opencode_v2::messages(session,m))
+                .map(|m|json!({"info":m.info,"parts":m.parts})));
+            let Some(cursor) = page.pointer("/cursor/next").and_then(Value::as_str) else {break};
+            if !seen.insert(cursor.to_string()) { return Err("OpenCode v2 repeated a history cursor".into()); }
+            next = format!("/api{path}?limit=100&cursor={}",encode_query(cursor));
+        }
+        Ok(json!(messages))
+    }
+
+    pub fn permission_reply(&self, session: &str, request: &str, reply: &str) -> Result<Value, String> {
+        let path = if self.is_v2() {format!("/api/session/{}/permission/{}/reply",encode_query(session),encode_query(request))}
+            else {format!("/permission/{}/reply",encode_query(request))};
+        self.post(&path,Some(&json!({"reply":reply})))
+    }
+}
+
+fn v2_providers(models: &Value, default: &Value, providers: &Value) -> Value {
+    let mut groups: std::collections::BTreeMap<String, Value> = Default::default();
+    for provider in providers.get("data").and_then(Value::as_array).into_iter().flatten() {
+        let Some(id)=provider.get("id").and_then(Value::as_str) else {continue};
+        groups.insert(id.to_string(),json!({"id":id,"name":provider.get("name").and_then(Value::as_str).unwrap_or(id),"models":{}}));
+    }
+    for model in models.get("data").and_then(Value::as_array).into_iter().flatten() {
+        if model["enabled"]==false {continue;}
+        let (Some(provider),Some(id))=(model["providerID"].as_str(),model["id"].as_str()) else {continue};
+        let group=groups.entry(provider.to_string()).or_insert_with(||json!({"id":provider,"name":provider,"models":{}}));
+        let mut value=model.clone();
+        let variants: serde_json::Map<String,Value>=model.get("variants").and_then(Value::as_array).into_iter().flatten()
+            .filter_map(|v|Some((v.get("id")?.as_str()?.to_string(),v.clone()))).collect();
+        value["variants"]=json!(variants);
+        group["models"][id]=value;
+    }
+    let connected: Vec<String>=groups.iter().filter(|(_,v)|v["models"].as_object().is_some_and(|m|!m.is_empty())).map(|(id,_)|id.clone()).collect();
+    let mut defaults=serde_json::Map::new();
+    if let (Some(provider),Some(id))=(default.pointer("/data/providerID").and_then(Value::as_str),default.pointer("/data/id").and_then(Value::as_str)) {
+        defaults.insert(provider.into(),json!(id));
+    }
+    json!({"all":groups.into_values().collect::<Vec<_>>(),"connected":connected,"default":defaults})
 }
 
 fn error_text(code: u16, raw: &str) -> String {
@@ -338,7 +515,7 @@ pub fn parse_agents(value: &Value) -> Vec<CollaborationModePreset> {
             let name = agent.get("name").and_then(Value::as_str)?;
             Some(CollaborationModePreset {
                 name: name.to_string(),
-                mode: name.to_string(),
+                mode: agent.get("id").and_then(Value::as_str).unwrap_or(name).to_string(),
                 reasoning_effort: agent.get("variant").and_then(Value::as_str).map(str::to_string),
                 description: agent
                     .get("description")
@@ -654,6 +831,200 @@ pub fn parse_sse_line(line: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mock(responses: Vec<(&'static str,&'static str,Value,&'static str)>) -> (Server,std::thread::JoinHandle<()>) {
+        let listener=loop {
+            let port=10000+(uuid::Uuid::new_v4().as_u128()%39152) as u16;
+            if let Ok(listener)=TcpListener::bind(("127.0.0.1",port)){break listener;}
+        };
+        let port=listener.local_addr().unwrap().port();
+        let server=tiny_http::Server::from_listener(listener,None).unwrap();
+        let handle=std::thread::spawn(move || {
+            for (method,path,expected,response) in responses {
+                let mut request=server.recv_timeout(Duration::from_secs(5)).unwrap().expect("expected request");
+                assert_eq!(request.method().as_str(),method);
+                assert!(request.url().starts_with(path),"unexpected route: {}",request.url());
+                if !expected.is_null() {
+                    let mut body=String::new();request.as_reader().read_to_string(&mut body).unwrap();
+                    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(),expected);
+                }
+                request.respond(tiny_http::Response::from_string(response)).unwrap();
+            }
+        });
+        (Server::new(port,"fixture",Some("/tmp/my project")),handle)
+    }
+
+    #[test]
+    fn current_v2_uses_server_info_and_retries_the_starting_model_catalogue() {
+        let (server,worker)=mock(vec![
+            ("GET","/global/health",Value::Null,"<!DOCTYPE html><html>OpenCode</html>"),
+            ("GET","/api/health",Value::Null,"{\"error\":\"Not Found\"}"),
+            ("GET","/api/info",Value::Null,"{\"version\":\"2.0.26\",\"pid\":123,\"capabilities\":{}}"),
+            ("GET","/openapi.json",Value::Null,"{\"paths\":{\"/api/model/default\":{\"get\":{}}}}"),
+            ("GET","/api/model/default?location%5Bdirectory%5D=",Value::Null,"{\"data\":{\"id\":\"test\",\"providerID\":\"fixture\"}}"),
+            ("GET","/api/agent",Value::Null,"{\"data\":[{\"id\":\"build\",\"name\":\"Build\",\"mode\":\"primary\"}]}"),
+            ("GET","/api/model/default",Value::Null,"{\"data\":{\"id\":\"test\",\"providerID\":\"fixture\"}}"),
+            ("GET","/api/model",Value::Null,"{\"data\":[]}"),
+            ("GET","/api/model",Value::Null,"{\"data\":[{\"id\":\"test\",\"providerID\":\"fixture\",\"name\":\"Test\",\"enabled\":true,\"variants\":[{\"id\":\"high\"}]}]}"),
+            ("GET","/api/provider",Value::Null,"{\"data\":[{\"id\":\"fixture\",\"name\":\"Fixture\"}]}"),
+            ("POST","/api/session/ses_1/model",json!({"model":{"id":"test","providerID":"fixture","variant":"high"}}),"null"),
+        ]);
+        assert!(server.healthy());assert!(server.is_v2());
+        assert_eq!(parse_agents(&server.get("/agent").unwrap())[0].mode,"build");
+        let providers=server.get("/provider").unwrap();
+        let models=parse_models(&providers);
+        assert_eq!(models.len(),1);
+        assert_eq!(models[0].id,"fixture/test");
+        assert_eq!(models[0].effort_levels,vec!["high"]);
+        assert_eq!(default_model(&providers,None).as_deref(),Some("fixture/test"));
+        server.post("/api/session/ses_1/model",Some(&json!({"model":{"id":"test","providerID":"fixture","variant":"high"}}))).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn server_info_requires_a_real_server_response() {
+        for info in ["<!DOCTYPE html><html>OpenCode</html>","{\"version\":\"2.0.26\"}","{\"version\":\"2.0.26\",\"pid\":0,\"capabilities\":{}}"] {
+            let (server,worker)=mock(vec![
+                ("GET","/global/health",Value::Null,"{}"),
+                ("GET","/api/health",Value::Null,"{}"),
+                ("GET","/api/info",Value::Null,info),
+            ]);
+            assert!(!server.healthy());assert!(!server.is_v2());
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn v2_health_rejects_the_html_fallback_and_adapts_native_requests() {
+        let (server,worker)=mock(vec![
+            ("GET","/global/health",Value::Null,"<!DOCTYPE html><html>OpenCode</html>"),
+            ("GET","/api/health",Value::Null,"{\"healthy\":true,\"version\":\"0.0.0-beta-17823\"}"),
+            ("GET","/openapi.json",Value::Null,"{\"paths\":{}}"),
+            ("POST","/api/session?location%5Bdirectory%5D=",json!({"location":{"directory":"/tmp/my project"}}),"{\"data\":{\"id\":\"ses_1\"}}"),
+            ("POST","/api/session/ses_1/agent",json!({"agent":"build"}),"null"),
+            ("POST","/api/session/ses_1/model",json!({"model":{"id":"test","providerID":"fixture","variant":"high"}}),"null"),
+            ("POST","/api/session/ses_1/prompt",json!({"id":"msg_1","text":"Hello","delivery":"steer"}),"{\"data\":{\"id\":\"msg_1\"}}"),
+            ("POST","/api/session/ses_child/permission/per_1/reply",json!({"reply":"always"}),"null"),
+            ("POST","/api/session/ses_1/interrupt",json!({}),"null"),
+            ("POST","/api/session/ses_1/revert/stage",json!({"messageID":"msg_1","files":true}),"null"),
+            ("POST","/api/session/ses_1/revert/clear",json!({}),"null"),
+        ]);
+        assert!(server.healthy());assert!(server.is_v2());
+        assert_eq!(server.post("/session",None).unwrap()["id"],"ses_1");
+        let mut body=prompt_body("msg_1","Hello",&[],Some("build"),Some("fixture/test"),Some("high"));
+        body["_delivery"]=json!("steer");
+        server.post("/session/ses_1/prompt_async",Some(&body)).unwrap();
+        server.permission_reply("ses_child","per_1","always").unwrap();
+        server.post("/session/ses_1/abort",None).unwrap();
+        server.post("/session/ses_1/revert",Some(&json!({"messageID":"msg_1"}))).unwrap();
+        server.post("/session/ses_1/unrevert",None).unwrap();
+        assert!(server.post("/session/ses_1/share",None).unwrap_err().contains("does not support"));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn v1_health_keeps_the_existing_route_and_v2_history_follows_every_page() {
+        let (v1,worker)=mock(vec![("GET","/global/health",Value::Null,"{\"healthy\":true,\"version\":\"1.18.31\"}")]);
+        assert!(v1.healthy());assert!(!v1.is_v2());worker.join().unwrap();
+        let (v2,worker)=mock(vec![
+            ("GET","/api/session/ses_1/message?limit=100&order=asc",Value::Null,"{\"data\":[{\"id\":\"msg_1\",\"type\":\"user\",\"text\":\"first\"}],\"cursor\":{\"next\":\"next+page\"}}"),
+            ("GET","/api/session/ses_1/message?limit=100&cursor=next%2Bpage",Value::Null,"{\"data\":[{\"id\":\"msg_2\",\"type\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"last\"}]}],\"cursor\":{}}"),
+        ]);
+        v2.version.store(2,Ordering::Relaxed);
+        v2.initialized.store(true,Ordering::Relaxed);
+        let messages=v2.get("/session/ses_1/message").unwrap();
+        assert_eq!(messages.as_array().unwrap().len(),2);
+        assert_eq!(messages[1].pointer("/parts/0/text"),Some(&json!("last")));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn newer_v2_waits_for_native_plugin_activation_before_reading_agents() {
+        let (server,worker)=mock(vec![
+            ("GET","/openapi.json",Value::Null,"{\"paths\":{\"/api/plugin/await-activation\":{\"post\":{}}}}"),
+            ("POST","/api/plugin/await-activation",json!({}),""),
+            ("GET","/api/agent",Value::Null,"{\"data\":[{\"id\":\"build\",\"name\":\"Build\",\"mode\":\"primary\"}]}"),
+        ]);
+        server.version.store(2,Ordering::Relaxed);
+        assert_eq!(parse_agents(&server.get("/agent").unwrap())[0].mode,"build");
+        worker.join().unwrap();
+    }
+
+    /// Test peers must use isolated native stores and the local fixture model, with no external API.
+    #[test]
+    #[ignore = "requires isolated real v1/v2 API peers and a local model fixture"]
+    fn real_opencode_v1_v2_protocol_round_trip() {
+        let file=std::env::var("VLX_OPENCODE_TEST_PEERS").expect("isolated test peers required");
+        let peers:Value=serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        for name in ["v1","v2"] {
+            let peer=&peers[name];
+            let server=Server::new(peer["port"].as_u64().unwrap() as u16,peer["password"].as_str().unwrap(),peer["directory"].as_str());
+            assert!(server.healthy());assert_eq!(server.is_v2(),name=="v2");
+            assert!(parse_agents(&server.get("/agent").unwrap()).iter().any(|a|a.mode=="build"));
+            let providers=server.get("/provider").unwrap();
+            let models=parse_models(&providers);
+            assert!(models.iter().any(|m|m.id=="vlx-test/smoke" && m.effort_levels.iter().any(|e|e=="high")));
+            let native=server.post("/session",None).unwrap();
+            let id=native["id"].as_str().unwrap();
+            let reader=server.open_events().unwrap();
+            let (tx,rx)=std::sync::mpsc::channel();
+            let owner=id.to_string();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let mut events=Vec::new();
+                for line in std::io::BufReader::new(reader).lines().map_while(Result::ok) {
+                    let Some(event)=parse_sse_line(&line) else {continue};
+                    let session=event.pointer("/data/sessionID").or_else(||event.pointer("/properties/sessionID"))
+                        .or_else(||event.pointer("/properties/part/sessionID")).or_else(||event.pointer("/properties/info/sessionID"));
+                    if session.and_then(Value::as_str)!=Some(&owner){continue;}
+                    let done=matches!(event["type"].as_str(),Some("session.execution.succeeded"|"session.execution.failed"|"session.idle"))
+                        || event.pointer("/properties/status/type").and_then(Value::as_str)==Some("idle");
+                    events.push(event);
+                    if done{let _=tx.send(events);return;}
+                }
+            });
+            let message_id=new_message_id();
+            server.post(&format!("/session/{id}/prompt_async"),Some(&prompt_body(&message_id,"Protocol fixture",&[],Some("build"),Some("vlx-test/smoke"),Some("high")))).unwrap();
+            let events=rx.recv_timeout(Duration::from_secs(30)).expect("native turn should finish");
+            if server.is_v2(){assert!(events.iter().any(|e|e["type"]=="session.text.delta"));}
+            else {assert!(events.iter().any(|e|e["type"]=="message.part.updated" || e["type"]=="message.part.delta"));}
+            let history=server.get(&format!("/session/{id}/message")).unwrap();
+            assert!(history.as_array().unwrap().iter().any(|m|m.pointer("/info/id").and_then(Value::as_str)==Some(&message_id)));
+            assert!(history.as_array().unwrap().iter().flat_map(|m|m["parts"].as_array().into_iter().flatten()).any(|p|p["text"]=="Protocol fixture reply"));
+            let choice=json!({"id":"smoke","providerID":"vlx-test","variant":"high"});
+            server.post(&format!("/api/session/{id}/model"),Some(&json!({"model":choice}))).unwrap();
+            assert_eq!(server.get(&format!("/session/{id}")).unwrap()["model"],choice);
+            server.post(&format!("/session/{id}/abort"),None).unwrap();
+            if server.is_v2() {
+                let reader=server.open_events().unwrap();
+                let (tx,rx)=std::sync::mpsc::channel();
+                let owner=id.to_string();
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    for line in std::io::BufReader::new(reader).lines().map_while(Result::ok) {
+                        let Some(event)=parse_sse_line(&line) else {continue};
+                        if event.pointer("/data/sessionID").and_then(Value::as_str)!=Some(&owner){continue;}
+                        if matches!(event["type"].as_str(),Some("session.shell.started"|"session.shell.ended")) {
+                            let done=event["type"]=="session.shell.ended";
+                            let _=tx.send(event);
+                            if done{return;}
+                        }
+                    }
+                });
+                let message=new_message_id();
+                std::thread::scope(|scope| {
+                    let shell=scope.spawn(||server.post_turn(&format!("/session/{id}/shell"),Some(&shell_body(&message,"printf fixture; sleep 3; printf late","build",None))));
+                    let started=rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    let shell_id=started.pointer("/data/shell/id").and_then(Value::as_str).unwrap();
+                    server.delete(&format!("/api/shell/{}",encode_query(shell_id))).unwrap();
+                    let ended=rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    assert_eq!(ended["type"],"session.shell.ended");
+                    assert!(!ended.pointer("/data/output/output").and_then(Value::as_str).unwrap_or("").contains("late"));
+                    shell.join().unwrap().unwrap();
+                });
+            }
+        }
+    }
 
     #[test]
     fn requests_name_the_project_directory() {

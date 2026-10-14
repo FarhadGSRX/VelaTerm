@@ -49,6 +49,8 @@ import {
   ImagePasteModeField,
   NotificationField,
 } from "./settingsBehaviorFields";
+import { TranslationSettingsSection } from "../../translation/SettingsSection";
+import { followTranslationLink, navigateTranslation, translationUrl, useTranslationRoute } from "../../translation/navigation";
 
 /** Accent palette; auto follows the light/dark theme. */
 const ACCENT_HEX: Record<string, string> = {
@@ -297,7 +299,7 @@ function AccentPicker({
 }
 
 
-type Cat = "appearance" | "terminal" | "conversation" | "behavior" | "advanced" | "agents" | "shortcuts" | "general";
+type Cat = "appearance" | "terminal" | "conversation" | "translation" | "behavior" | "advanced" | "agents" | "shortcuts" | "general";
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const fonts = useFontCatalog();
@@ -357,7 +359,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setChatFontSize = useTermStore((s) => s.setChatFontSize);
   const setChatLineHeight = useTermStore((s) => s.setChatLineHeight);
 
-  const [cat, setCat] = useState<Cat>("appearance");
+  const route = useTranslationRoute();
+  const legacyTranslation = route.get("settings") === "conversation" && route.get("settingsSection") === "translation";
+  const requestedCategory = legacyTranslation ? "translation" : route.get("settings");
+  const showTranslation = route.get("settingsTranslation") === "1" || requestedCategory === "translation";
+  const [cat, setCat] = useState<Cat>((requestedCategory as Cat) || "appearance");
+  useEffect(() => { if (requestedCategory) setCat(requestedCategory as Cat); }, [requestedCategory]);
+  useEffect(() => { if (legacyTranslation) navigateTranslation(translationUrl({ settings: "translation", settingsSection: null }), true); }, [legacyTranslation]);
   const [skillOn, setSkillOn] = useState<boolean | null>(null);
   const [cliStatus, setCliStatus] = useState<VelaCommandStatus | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
@@ -374,6 +382,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     { key: "appearance", label: t("settings.appearance") },
     { key: "terminal", label: t("settings.catTerminal") },
     { key: "conversation", label: t("settings.chatTypography") },
+    { key: "translation", label: t("translation.title") },
     { key: "behavior", label: t("settings.catBehavior") },
     { key: "advanced", label: t("settings.catAdvanced") },
     { key: "agents", label: t("settings.catAgents") },
@@ -448,8 +457,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Main area: category navigation and content. */}
-        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-          <div
+        <div className="settings-modal-body" style={{ flex: 1, display: "flex", minHeight: 0 }}>
+          <div className="settings-modal-nav"
             style={{
               width: 158,
               flex: "none",
@@ -458,12 +467,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               overflowY: "auto",
             }}
           >
-            {cats.map((c) => {
+            {cats.filter(c => c.key !== "translation" || showTranslation).map((c) => {
               const on = c.key === cat;
               return (
-                <button
+                <a
                   key={c.key}
-                  onClick={() => setCat(c.key)}
+                  href={translationUrl({ settings: c.key, settingsSection: null, settingsTranslation: showTranslation ? "1" : null, translationService: null })}
+                  onClick={(event) => { followTranslationLink(event); if (event.defaultPrevented) setCat(c.key); }}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -478,6 +488,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     background: on ? "var(--accent-soft)" : "transparent",
                     color: on ? "var(--accent)" : "var(--text)",
                     fontWeight: on ? 600 : 500,
+                    textDecoration: "none",
                   }}
                   onMouseEnter={(e) => {
                     if (!on)
@@ -488,7 +499,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   }}
                 >
                   {c.label}
-                </button>
+                </a>
               );
             })}
           </div>
@@ -584,6 +595,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 </Field>
               </>
             )}
+
+            {cat === "translation" && <TranslationSettingsSection />}
 
             {cat === "conversation" && (
               <>
