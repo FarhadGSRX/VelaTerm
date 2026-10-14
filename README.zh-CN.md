@@ -258,6 +258,12 @@ docs/manuals/     用户手册
 
 凡是涉及网络或文件系统的命令都必须写成异步：同步的 Tauri 命令运行在主线程上，会导致界面卡死。
 
+## 致谢
+
+Git 面板提交历史中的提交图，其分道布局移植自 Daksh 的
+[Branch Visualizer](https://github.com/wannabeepolymath/git-branch-Visualizer)，依 MIT 许可证使用。
+原版权声明保留在 `src/layout/RightPanel/git/commitGraph.ts` 中。
+
 ## 许可证
 
 Copyright (c) 2026 VLINX Software。以 [MIT 许可证](LICENSE)发布。

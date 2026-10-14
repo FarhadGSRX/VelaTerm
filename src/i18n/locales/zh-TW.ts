@@ -586,6 +586,8 @@ const zhTW: typeof en = {
   "git.commitNoFiles": "這個提交沒有檔案變更",
   "git.noCommits": "尚未有提交",
   "git.loadMore": "載入更多",
+  "git.allBranches": "所有分支",
+  "git.currentBranch": "目前分支",
   "tree.merge": "合併…",
   "tree.copyWorktreePath": "複製 worktree 路徑",
   "tree.openWorktreeDir": "開啟 worktree 目錄",

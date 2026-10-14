@@ -590,6 +590,8 @@ const en = {
   "git.commitNoFiles": "No file changes in this commit",
   "git.noCommits": "No commits yet",
   "git.loadMore": "Load more",
+  "git.allBranches": "All branches",
+  "git.currentBranch": "Current branch",
   "tree.merge": "Merge…",
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",

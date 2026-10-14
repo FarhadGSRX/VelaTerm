@@ -62,7 +62,8 @@ export function groupChanges(files: ChangedFile[] | null): ChangeGroups {
   return groups;
 }
 
-export function useGitPanel(path: string | null): GitPanelState {
+/** `allBranches` makes the commit count cover every branch, remote, and tag instead of HEAD alone. */
+export function useGitPanel(path: string | null, allBranches = false): GitPanelState {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [files, setFiles] = useState<ChangedFile[] | null>(null);
   const [commitCount, setCommitCount] = useState(0);
@@ -89,7 +90,7 @@ export function useGitPanel(path: string | null): GitPanelState {
     void Promise.allSettled([
       getGitStatus(path),
       gitChangedFiles(path),
-      gitCommitCount(path),
+      gitCommitCount(path, allBranches),
     ]).then(([s, f, c]) => {
       if (cancelled) return;
       const st = s.status === "fulfilled" ? s.value : null;
@@ -107,7 +108,7 @@ export function useGitPanel(path: string | null): GitPanelState {
     return () => {
       cancelled = true;
     };
-  }, [path, tick]);
+  }, [path, tick, allBranches]);
 
   useEffect(() => {
     if (!path) return;

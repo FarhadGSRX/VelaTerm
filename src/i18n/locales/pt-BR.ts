@@ -591,6 +591,8 @@ const ptBR: typeof en = {
   "git.commitNoFiles": "Este commit não altera arquivos",
   "git.noCommits": "Ainda não há commits",
   "git.loadMore": "Carregar mais",
+  "git.allBranches": "Todos os branches",
+  "git.currentBranch": "Branch atual",
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",

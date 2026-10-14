@@ -590,6 +590,8 @@ const de: typeof en = {
   "git.commitNoFiles": "Keine Dateiänderungen in diesem Commit",
   "git.noCommits": "Noch keine Commits",
   "git.loadMore": "Mehr laden",
+  "git.allBranches": "Alle Branches",
+  "git.currentBranch": "Aktueller Branch",
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",

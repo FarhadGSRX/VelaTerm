@@ -627,14 +627,23 @@ svg { display: block; }
 .git-commit-btn:hover:not(:disabled) { background: var(--accent-line); color: var(--bg-0); }
 .git-commit-btn:disabled { opacity: 0.4; cursor: default; }
 
-.git-commit-item { padding: 0 8px 0 6px; }
-.git-commit-row { width: 100%; display: flex; align-items: center; gap: 6px; padding: 4px 4px; border-radius: var(--r-sm); font-size: 11px; text-align: left; }
+.git-commit-item { padding: 0 8px 0 2px; }
+.git-commit-line { display: flex; align-items: stretch; min-width: 0; }
+.git-rail { flex: none; overflow: hidden; }
+.git-rail-cont { position: relative; flex: none; overflow: hidden; }
+.git-rail-cont span { position: absolute; top: 0; bottom: 0; width: 1.5px; }
+.git-commit-row { flex: 1; min-width: 0; height: 22px; display: flex; align-items: center; gap: 6px; padding: 0 4px; border-radius: var(--r-sm); font-size: 11px; text-align: left; }
 .git-commit-row:hover { background: var(--bg-hover); }
 .git-commit-row .tw { width: 14px; flex: none; display: grid; place-items: center; color: var(--text-faint); }
 .git-commit-row .hash { flex: none; font-family: var(--font-mono); font-size: 10px; color: var(--text-faint); }
-.git-commit-row .subj { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-mid); }
-.git-commit-row .when { flex: none; font-size: 10px; color: var(--text-faint); }
-.git-commit-files { padding-left: 20px; }
+.git-commit-row .subj { flex: 1; min-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-mid); }
+.git-commit-row .when { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--text-faint); }
+.git-commit-files { flex: 1; min-width: 0; padding-left: 20px; }
+.git-ref { flex: 0 1 auto; min-width: 36px; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; border-radius: 3px; font-size: 9.5px; line-height: 14px; border: 1px solid var(--border); color: var(--text-dim); }
+.git-ref-head { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); font-weight: 600; }
+.git-ref-branch { color: var(--text-mid); }
+.git-ref-tag { color: var(--yellow); }
+.git-ref-more { flex: none; min-width: 0; color: var(--text-faint); }
 .git-commit-files .git-row-main { padding: 3px 2px; }
 .git-more { display: block; width: calc(100% - 12px); margin: 4px 6px 0; padding: 5px; border-radius: var(--r-sm); color: var(--text-dim); font-size: 10.5px; }
 .git-more:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }

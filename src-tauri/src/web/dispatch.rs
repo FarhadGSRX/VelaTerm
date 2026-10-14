@@ -650,11 +650,15 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
         }
         "git_recent_commits" => to_value(git::recent_commits(&req_str(args, "cwd")?, 5)),
         // Git panel history: a page of commits, one commit's files, and one file's diff inside it.
-        "git_commit_count" => to_value(git::commit_count(&req_str(args, "cwd")?)),
+        "git_commit_count" => to_value(git::commit_count(
+            &req_str(args, "cwd")?,
+            args.get("all").and_then(Value::as_bool).unwrap_or(false),
+        )),
         "git_log_page" => to_value(git::log_page(
             &req_str(args, "cwd")?,
             opt_u64(args, "limit").unwrap_or(30) as usize,
             opt_u64(args, "offset").unwrap_or(0) as usize,
+            args.get("all").and_then(Value::as_bool).unwrap_or(false),
         )),
         "git_commit_files" => to_value(git::commit_files(
             &req_str(args, "cwd")?,

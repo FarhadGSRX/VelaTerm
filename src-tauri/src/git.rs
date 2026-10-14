@@ -1753,11 +1753,20 @@ pub struct CommitInfo {
     pub author: String,
     /// Relative time (%cr), such as "2 days ago".
     pub relative: String,
+    /// Full hash (%H). The history graph joins commits on full hashes, because an abbreviation can
+    /// grow longer between two page loads.
+    pub id: String,
+    /// Full parent hashes (%P), first parent first; empty for a root commit.
+    pub parents: Vec<String>,
+    /// Full ref names pointing at this commit (%D with `--decorate=full`), such as
+    /// "HEAD -> refs/heads/main", "refs/remotes/origin/main" or "tag: refs/tags/v1". Full names are
+    /// what tell a remote branch from a local branch whose name has a slash in it.
+    pub refs: Vec<String>,
 }
 
 /// Return up to `limit` recent commits; non-repositories/empty histories return an empty vector.
 pub fn recent_commits(cwd: &str, limit: usize) -> Vec<CommitInfo> {
-    log_page(cwd, limit.clamp(1, 50), 0)
+    log_page(cwd, limit.clamp(1, 50), 0, false)
 }
 
 /// Resolve repository root, falling back to the supplied directory.
@@ -2221,21 +2230,22 @@ pub fn commit(cwd: &str, message: &str, amend: bool) -> Result<CommitInfo, Strin
     args.push("-m");
     args.push(msg);
     run_git_checked(cwd, &args)?;
-    log_page(cwd, 1, 0)
+    log_page(cwd, 1, 0, false)
         .into_iter()
         .next()
         .ok_or_else(|| "Commit succeeded but could not be read back".to_string())
 }
 
-/// Total commits reachable from HEAD; zero outside a repository or before the first commit.
-pub fn commit_count(cwd: &str) -> u32 {
-    run_git(cwd, &["rev-list", "--count", "HEAD"])
+/// Total commits reachable from HEAD, or from every ref when `all` is set; zero outside a
+/// repository or before the first commit.
+pub fn commit_count(cwd: &str, all: bool) -> u32 {
+    run_git(cwd, &["rev-list", "--count", if all { "--all" } else { "HEAD" }])
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
 }
 
 /// Field separator for commit pretty-printing: a one-line subject cannot contain a unit separator.
-const COMMIT_PRETTY: &str = "--pretty=format:%h\x1f%s\x1f%an\x1f%cr";
+const COMMIT_PRETTY: &str = "--pretty=format:%h\x1f%s\x1f%an\x1f%cr\x1f%H\x1f%P\x1f%D";
 
 /// Parse the unit-separated commit lines produced by [`COMMIT_PRETTY`].
 fn parse_commit_lines(out: &str) -> Vec<CommitInfo> {
@@ -2250,6 +2260,15 @@ fn parse_commit_lines(out: &str) -> Vec<CommitInfo> {
                 subject: f.next().unwrap_or("").to_string(),
                 author: f.next().unwrap_or("").to_string(),
                 relative: f.next().unwrap_or("").to_string(),
+                id: f.next().unwrap_or("").to_string(),
+                parents: f.next().unwrap_or("").split_whitespace().map(String::from).collect(),
+                refs: f
+                    .next()
+                    .unwrap_or("")
+                    .split(", ")
+                    .filter(|r| !r.is_empty())
+                    .map(String::from)
+                    .collect(),
                 hash,
             })
         })
@@ -2258,13 +2277,20 @@ fn parse_commit_lines(out: &str) -> Vec<CommitInfo> {
 
 /// One page of history, newest first. `offset` skips that many commits, so the Git panel can keep
 /// loading older pages; non-repositories and empty histories return an empty vector.
-pub fn log_page(cwd: &str, limit: usize, offset: usize) -> Vec<CommitInfo> {
+///
+/// Topological order keeps every child above its parents, which the history graph needs to draw
+/// its lanes, and `all` widens the walk from HEAD to every branch, remote, and tag.
+pub fn log_page(cwd: &str, limit: usize, offset: usize, all: bool) -> Vec<CommitInfo> {
     if run_git(cwd, &["rev-parse", "--is-inside-work-tree"]).as_deref() != Some("true") {
         return Vec::new();
     }
     let n = limit.clamp(1, 200).to_string();
     let skip = format!("--skip={}", offset.min(1_000_000));
-    match run_git(cwd, &["log", "-n", &n, &skip, COMMIT_PRETTY]) {
+    let mut args = vec!["log", "--topo-order", "--decorate=full", "-n", &n, &skip, COMMIT_PRETTY];
+    if all {
+        args.push("--all");
+    }
+    match run_git(cwd, &args) {
         Some(s) if !s.is_empty() => parse_commit_lines(&s),
         _ => Vec::new(),
     }
@@ -2505,7 +2531,7 @@ mod merge_tests {
         let dir = init_repo();
         let cwd = dir.to_string_lossy().to_string();
         std::fs::write(dir.join("new.txt"), "brand new\n").unwrap();
-        assert_eq!(commit_count(&cwd), 1);
+        assert_eq!(commit_count(&cwd, false), 1);
 
         stage(&cwd, &["new.txt".to_string()]).unwrap();
         let staged = changed_files(&cwd).unwrap();
@@ -2520,7 +2546,7 @@ mod merge_tests {
         stage(&cwd, &["new.txt".to_string()]).unwrap();
         let made = commit(&cwd, "add new.txt", false).unwrap();
         assert_eq!(made.subject, "add new.txt");
-        assert_eq!(commit_count(&cwd), 2);
+        assert_eq!(commit_count(&cwd, false), 2);
         assert!(changed_files(&cwd).unwrap().is_empty(), "committing clears the working tree");
 
         // An empty message is refused before git runs, so no half-made commit can result.
@@ -2617,10 +2643,10 @@ mod merge_tests {
             stage(&cwd, &[format!("f{i}.txt")]).unwrap();
             commit(&cwd, &format!("commit {i}"), false).unwrap();
         }
-        assert_eq!(commit_count(&cwd), 4);
+        assert_eq!(commit_count(&cwd, false), 4);
 
-        let first = log_page(&cwd, 2, 0);
-        let second = log_page(&cwd, 2, 2);
+        let first = log_page(&cwd, 2, 0, false);
+        let second = log_page(&cwd, 2, 2, false);
         assert_eq!(first.len(), 2);
         assert_eq!(second.len(), 2);
         assert_eq!(first[0].subject, "commit 2", "history is newest first");
@@ -2638,6 +2664,36 @@ mod merge_tests {
         let diff = commit_file_diff(&cwd, &first[0].hash, "f2.txt").unwrap();
         assert_eq!(diff.original, "", "a file added by the commit has no parent side");
         assert_eq!(diff.modified, "line 2\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What the history graph reads: full parent hashes to draw edges from, ref names for the
+    /// labels, and the all-branches walk that reaches commits HEAD cannot see.
+    #[test]
+    fn history_graph_fields_and_all_branches() {
+        let dir = init_repo();
+        let cwd = dir.to_string_lossy().to_string();
+        git(&dir, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(dir.join("side.txt"), "side\n").unwrap();
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-q", "-m", "on side"]);
+        git(&dir, &["checkout", "-q", "main"]);
+        git(&dir, &["tag", "v1"]);
+
+        let head = log_page(&cwd, 10, 0, false);
+        assert_eq!(head.len(), 1, "HEAD history leaves the side branch out");
+        assert_eq!(commit_count(&cwd, false), 1);
+        assert_eq!(head[0].id.len(), 40, "the graph joins commits on full hashes");
+        assert!(head[0].parents.is_empty(), "the root commit has no parents");
+        assert!(head[0].refs.iter().any(|r| r == "HEAD -> refs/heads/main"), "refs: {:?}", head[0].refs);
+        assert!(head[0].refs.iter().any(|r| r == "tag: refs/tags/v1"), "refs: {:?}", head[0].refs);
+
+        let all = log_page(&cwd, 10, 0, true);
+        assert_eq!(all.len(), 2, "the all-branches walk reaches the side branch");
+        assert_eq!(commit_count(&cwd, true), 2);
+        assert_eq!(all[0].subject, "on side", "children come before their parents");
+        assert_eq!(all[0].parents, vec![all[1].id.clone()]);
+        assert_eq!(all[0].refs, vec!["refs/heads/side".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

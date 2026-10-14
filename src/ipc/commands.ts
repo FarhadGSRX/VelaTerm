@@ -677,6 +677,12 @@ export interface CommitInfo {
   subject: string;
   author: string;
   relative: string;
+  /** Full hash; the history graph joins commits on it. */
+  id: string;
+  /** Full parent hashes, first parent first; empty for a root commit. */
+  parents: string[];
+  /** Full ref names on this commit: "HEAD -> refs/heads/main", "refs/remotes/origin/main", "tag: refs/tags/v1". */
+  refs: string[];
 }
 
 /** Gets recent commits for cwd's repository; returns empty outside a repository or with no commits. */
@@ -709,14 +715,22 @@ export function gitCommit(cwd: string, message: string, amend = false): Promise<
   return invoke<CommitInfo>("git_commit", { cwd, message, amend });
 }
 
-/** Total commits reachable from HEAD; zero outside a repository or before the first commit. */
-export function gitCommitCount(cwd: string): Promise<number> {
-  return invoke<number>("git_commit_count", { cwd });
+/**
+ * Total commits reachable from HEAD, or from every branch, remote, and tag when `all` is set; zero
+ * outside a repository or before the first commit.
+ */
+export function gitCommitCount(cwd: string, all = false): Promise<number> {
+  return invoke<number>("git_commit_count", { cwd, all });
 }
 
-/** One page of history, newest first. */
-export function gitLogPage(cwd: string, limit: number, offset: number): Promise<CommitInfo[]> {
-  return invoke<CommitInfo[]>("git_log_page", { cwd, limit, offset });
+/** One page of history in topological order, newest first; `all` covers every ref, not just HEAD. */
+export function gitLogPage(
+  cwd: string,
+  limit: number,
+  offset: number,
+  all = false,
+): Promise<CommitInfo[]> {
+  return invoke<CommitInfo[]>("git_log_page", { cwd, limit, offset, all });
 }
 
 /** Files changed by one commit; merge commits return an empty list. */

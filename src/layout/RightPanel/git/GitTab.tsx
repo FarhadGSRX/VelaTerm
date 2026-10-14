@@ -37,7 +37,9 @@ export function GitTab({ path }: { path: string | null }) {
   const t = useT();
   // On a folder holding several repositories, the tab works on the one picked above the branch row.
   const target = useRepoTarget(path);
-  const panel = useGitPanel(target.repoPath);
+  // History follows the current branch unless the user widens it to every branch.
+  const [allBranches, setAllBranches] = useState(false);
+  const panel = useGitPanel(target.repoPath, allBranches);
   const openChanges = useTermStore((s) => s.openChanges);
   const [open, setOpen] = useState(DEFAULT_OPEN);
   // Path awaiting discard confirmation; only ever one row at a time.
@@ -245,8 +247,19 @@ export function GitTab({ path }: { path: string | null }) {
             count={panel.commitCount}
             open={open.commits}
             onToggle={() => toggle("commits")}
+            action={{
+              label: allBranches ? t("git.currentBranch") : t("git.allBranches"),
+              onClick: () => setAllBranches((a) => !a),
+            }}
           >
-            {open.commits && <CommitHistory cwd={cwd} total={panel.commitCount} tick={panel.tick} />}
+            {open.commits && (
+              <CommitHistory
+                cwd={cwd}
+                total={panel.commitCount}
+                tick={panel.tick}
+                allBranches={allBranches}
+              />
+            )}
           </GitSection>
         </>
       )}

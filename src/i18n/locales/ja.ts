@@ -589,6 +589,8 @@ const ja: typeof en = {
   "git.commitNoFiles": "このコミットにファイルの変更はありません",
   "git.noCommits": "コミットがありません",
   "git.loadMore": "さらに読み込む",
+  "git.allBranches": "すべてのブランチ",
+  "git.currentBranch": "現在のブランチ",
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",

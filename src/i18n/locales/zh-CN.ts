@@ -585,6 +585,8 @@ const zhCN: typeof en = {
   "git.commitNoFiles": "这个提交没有文件变化",
   "git.noCommits": "还没有提交",
   "git.loadMore": "加载更多",
+  "git.allBranches": "所有分支",
+  "git.currentBranch": "当前分支",
   "tree.merge": "合并…",
   "tree.copyWorktreePath": "复制 worktree 路径",
   "tree.openWorktreeDir": "打开 worktree 目录",

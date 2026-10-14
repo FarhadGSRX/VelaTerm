@@ -290,6 +290,13 @@ Three conventions matter most in this codebase:
 Any command touching the network or the filesystem must be asynchronous — synchronous Tauri commands
 run on the main thread and freeze the UI.
 
+## Acknowledgements
+
+The commit graph in the Git panel's history uses a lane layout ported from
+[Branch Visualizer](https://github.com/wannabeepolymath/git-branch-Visualizer) by Daksh, used under
+the MIT License. The original copyright notice is kept in
+`src/layout/RightPanel/git/commitGraph.ts`.
+
 ## License
 
 Copyright (c) 2026 VLINX Software. Released under the [MIT License](LICENSE).

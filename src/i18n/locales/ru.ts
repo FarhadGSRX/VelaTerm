@@ -599,6 +599,8 @@ const ru: typeof en = {
   "git.commitNoFiles": "В этом коммите нет изменений файлов",
   "git.noCommits": "Коммитов пока нет",
   "git.loadMore": "Загрузить ещё",
+  "git.allBranches": "Все ветки",
+  "git.currentBranch": "Текущая ветка",
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",

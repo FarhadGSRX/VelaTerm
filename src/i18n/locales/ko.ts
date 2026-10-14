@@ -589,6 +589,8 @@ const ko: typeof en = {
   "git.commitNoFiles": "이 커밋에는 파일 변경이 없습니다",
   "git.noCommits": "아직 커밋이 없습니다",
   "git.loadMore": "더 불러오기",
+  "git.allBranches": "모든 브랜치",
+  "git.currentBranch": "현재 브랜치",
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",

@@ -589,6 +589,8 @@ const vi: typeof en = {
   "git.commitNoFiles": "Commit này không thay đổi tệp nào",
   "git.noCommits": "Chưa có commit nào",
   "git.loadMore": "Tải thêm",
+  "git.allBranches": "Tất cả nhánh",
+  "git.currentBranch": "Nhánh hiện tại",
   "tree.merge": "Hợp nhất…",
   "tree.copyWorktreePath": "Sao chép đường dẫn worktree",
   "tree.openWorktreeDir": "Mở thư mục worktree",
