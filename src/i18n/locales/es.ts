@@ -448,6 +448,9 @@ const es: typeof en = {
   "settings.paneFlush": "Sin borde", // Flush
   "settings.paneCard": "Tarjeta", // Card
   "settings.divider": "Divisor", // Divider
+  "settings.darkStyle": "Estilo oscuro", // Dark style
+  "settings.darkStyleClassic": "Clásico", // Classic
+  "settings.darkStyleAdventureTime": "Adventure Time",
   "settings.terminalScheme": "Colores del terminal",
   "settings.terminalSchemeAuto": "Seguir el tema",
   "settings.dividerSubtle": "Sutil", // Subtle
