@@ -441,6 +441,9 @@ const es: typeof en = {
   "settings.darkTheme": "Tema oscuro", // Dark theme
   "settings.lightTheme": "Tema claro", // Light theme
   "settings.themeClassic": "Clásico", // Classic
+  "settings.terminalScheme": "Colores del terminal", // Terminal colors
+  "settings.terminalSchemeTheme": "Seguir el tema", // Follow theme
+  "settings.terminalSchemeClassicLight": "Claro clásico", // Classic Light
   "settings.accent": "Acento", // Accent
   "settings.accentAuto": "Seguir al tema", // Follow theme
   "settings.density": "Densidad", // Density

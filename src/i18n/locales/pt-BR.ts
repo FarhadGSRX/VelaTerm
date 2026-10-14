@@ -441,6 +441,9 @@ const ptBR: typeof en = {
   "settings.darkTheme": "Tema escuro", // Dark theme
   "settings.lightTheme": "Tema claro", // Light theme
   "settings.themeClassic": "Clássico", // Classic
+  "settings.terminalScheme": "Cores do terminal", // Terminal colors
+  "settings.terminalSchemeTheme": "Seguir o tema", // Follow theme
+  "settings.terminalSchemeClassicLight": "Claro clássico", // Classic Light
   "settings.accent": "Destaque", // Accent
   "settings.accentAuto": "Seguir o tema", // Follow theme
   "settings.density": "Densidade", // Density

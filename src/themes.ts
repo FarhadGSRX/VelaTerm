@@ -178,6 +178,15 @@ export function sanitizeLightStyle(value: unknown): LightStyle {
   return namedTheme("light", value) ? (value as LightThemeName) : "classic";
 }
 
+/** "Terminal colors": follow the mode's theme, or fix the grid to one palette — the classic pair or any theme's. */
+export type TerminalScheme = "theme" | "classic-dark" | "classic-light" | DarkThemeName | LightThemeName;
+
+/** Restore a saved terminal scheme; anything unrecognised follows the theme. */
+export function sanitizeTerminalScheme(value: unknown): TerminalScheme {
+  if (value === "classic-dark" || value === "classic-light") return value;
+  return namedTheme("dark", value) || namedTheme("light", value) ? (value as TerminalScheme) : "theme";
+}
+
 /** Blend `pct`% of `fg` into `bg`, per sRGB channel. Both are #rrggbb. */
 export function mix(fg: string, bg: string, pct: number): string {
   const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);

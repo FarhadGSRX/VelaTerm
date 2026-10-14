@@ -450,6 +450,9 @@ const ru: typeof en = {
   "settings.darkTheme": "Тёмная тема", // Dark theme
   "settings.lightTheme": "Светлая тема", // Light theme
   "settings.themeClassic": "Классическая", // Classic
+  "settings.terminalScheme": "Цвета терминала", // Terminal colors
+  "settings.terminalSchemeTheme": "Как в теме", // Follow theme
+  "settings.terminalSchemeClassicLight": "Классическая светлая", // Classic Light
   "settings.accent": "Акцент", // Accent
   "settings.accentAuto": "Как тема", // Follow theme
   "settings.density": "Плотность", // Density

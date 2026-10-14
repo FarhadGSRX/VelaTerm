@@ -437,6 +437,9 @@ const zhTW: typeof en = {
   "settings.darkTheme": "深色主題", // Dark theme
   "settings.lightTheme": "淺色主題", // Light theme
   "settings.themeClassic": "經典", // Classic
+  "settings.terminalScheme": "終端機配色", // Terminal colors
+  "settings.terminalSchemeTheme": "跟隨主題", // Follow theme
+  "settings.terminalSchemeClassicLight": "經典淺色", // Classic Light
   "settings.accent": "強調色", // Accent
   "settings.accentAuto": "跟隨明暗", // Follow theme
   "settings.density": "密度", // Density

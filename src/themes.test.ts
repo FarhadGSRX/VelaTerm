@@ -2,7 +2,7 @@
 //! terminal for its own mode only, classic removes every token it wrote, and the accent presets take theme hues.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyTheme, applyVisual, xtermTheme, XTERM_THEME, type VisualSettings } from "./theme";
+import { applyTheme, applyVisual, terminalBase, xtermTheme, XTERM_THEME, type VisualSettings } from "./theme";
 import {
   CHROME_TOKENS,
   DARK_THEMES,
@@ -12,11 +12,13 @@ import {
   mix,
   sanitizeDarkStyle,
   sanitizeLightStyle,
+  sanitizeTerminalScheme,
 } from "./themes";
 
 const visual = (overrides: Partial<VisualSettings>): VisualSettings => ({
   darkStyle: "classic",
   lightStyle: "classic",
+  terminalScheme: "theme",
   accent: "auto",
   density: "regular",
   paneStyle: "flush",
@@ -115,5 +117,25 @@ describe("app themes", () => {
     applyTheme("dark", "adventure-time");
     applyVisual(visual({ darkStyle: "adventure-time", accent: "amber" }));
     expect(prop("--accent")).toBe("#efbf38");
+  });
+
+  it("fixes the terminal to any palette while the chrome keeps its theme", () => {
+    expect(sanitizeTerminalScheme("campbell-powershell")).toBe("campbell-powershell");
+    expect(sanitizeTerminalScheme("classic-light")).toBe("classic-light");
+    expect(sanitizeTerminalScheme("toString")).toBe("theme");
+
+    applyTheme("dark", "adventure-time");
+    applyVisual(visual({ darkStyle: "adventure-time", terminalScheme: "campbell-powershell" }));
+    expect(xtermTheme("dark")).toBe(DARK_THEMES["campbell-powershell"].terminal);
+    expect(prop("--bg-xterm")).toBe("#012456");
+    // Documents and conversations keep the theme's own surface.
+    expect(prop("--bg-term")).toBe("#1f1d45");
+    expect(prop("--bg-0")).toBe("#191738");
+
+    // A light palette in a dark app: the grid and agents that pick colors by brightness follow the palette.
+    applyVisual(visual({ darkStyle: "adventure-time", terminalScheme: "solarized-light" }));
+    expect(terminalBase("dark")).toBe("light");
+    applyVisual(visual({ terminalScheme: "classic-dark" }));
+    expect(xtermTheme("light")).toBe(XTERM_THEME.dark);
   });
 });
