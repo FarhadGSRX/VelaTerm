@@ -639,6 +639,17 @@ fn serve_with_app(
             if let Some(tool_signal) = parse_tool_signal(&body) {
                 on_signal(sid.clone(), tool_signal);
             }
+            // A Claude terminal session's Stop can hand it messages sent while it was busy (tell_tui). The
+            // turn then continues rather than ends, so the stop's `waiting` signal is not recorded.
+            if let Some(app) = app.as_ref() {
+                let event = parse_url(&url).map(|(_, _, e)| e).unwrap_or_default();
+                if let Some(reply) = crate::agent::tell_tui::on_hook(app, &sid, &event, &body) {
+                    let json = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .expect("static header");
+                    let _ = request.respond(tiny_http::Response::from_string(reply).with_header(json));
+                    continue;
+                }
+            }
             // A valid event may have no status signal, such as Copilot `boot`, which only captures its ID.
             if let Some(signal) = signal {
                 // Codex callbacks can arrive out of order; drop mid-turn working that lost the race
