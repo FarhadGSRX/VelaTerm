@@ -447,6 +447,8 @@ const ja: typeof en = {
   "settings.paneFlush": "フラット", // Flush
   "settings.paneCard": "カード", // Card
   "settings.divider": "区切り線", // Divider
+  "settings.terminalScheme": "ターミナルの配色",
+  "settings.terminalSchemeAuto": "テーマに合わせる",
   "settings.dividerSubtle": "極細", // Subtle
   "settings.dividerVisible": "表示", // Visible
   "settings.nav": "サイドバー", // Sidebar

@@ -444,6 +444,8 @@ const zhTW: typeof en = {
   "settings.paneFlush": "無縫", // Flush
   "settings.paneCard": "卡片", // Card
   "settings.divider": "分隔線", // Divider
+  "settings.terminalScheme": "終端機配色",
+  "settings.terminalSchemeAuto": "跟隨主題",
   "settings.dividerSubtle": "極細", // Subtle
   "settings.dividerVisible": "可見", // Visible
   "settings.nav": "左欄", // Sidebar

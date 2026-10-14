@@ -9,6 +9,7 @@ import { Backdrop } from "../../components/Backdrop";
 import { CompletionModeField } from "./CompletionModeField";
 import { FontSelect, useFontCatalog } from "./FontSelect";
 import Select, { type SelectOption } from "../../components/Select";
+import { TERMINAL_SCHEMES, type NamedTerminalScheme, type TerminalScheme } from "../../terminal/schemes";
 import {
   getLangChoice,
   LOCALE_NAMES,
@@ -319,6 +320,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const density = useTermStore((s) => s.density);
   const paneStyle = useTermStore((s) => s.paneStyle);
   const dividerStyle = useTermStore((s) => s.dividerStyle);
+  const terminalScheme = useTermStore((s) => s.terminalScheme);
+  const setTerminalScheme = useTermStore((s) => s.setTerminalScheme);
   const navLayout = useTermStore((s) => s.navLayout);
   const setAccent = useTermStore((s) => s.setAccent);
   const setDensity = useTermStore((s) => s.setDensity);
@@ -551,6 +554,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                       ["visible", t("settings.dividerVisible")],
                     ]}
                     onChange={setDividerStyle}
+                  />
+                </Field>
+                <Field label={t("settings.terminalScheme")}>
+                  <Select<TerminalScheme>
+                    value={terminalScheme}
+                    onChange={setTerminalScheme}
+                    options={[
+                      { value: "auto", label: t("settings.terminalSchemeAuto") },
+                      ...(Object.entries(TERMINAL_SCHEMES) as [NamedTerminalScheme, { label: string }][]).map(
+                        ([value, scheme], index) => ({ value, label: scheme.label, separatorBefore: index === 0 }),
+                      ),
+                    ]}
+                    size="sm"
+                    width={160}
+                    menuWidth={172}
+                    align="right"
                   />
                 </Field>
                 <Field label={t("settings.nav")}>

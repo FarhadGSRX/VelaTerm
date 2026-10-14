@@ -447,6 +447,8 @@ const de: typeof en = {
   "settings.paneFlush": "Bündig", // Flush
   "settings.paneCard": "Karte", // Card
   "settings.divider": "Trennlinie", // Divider
+  "settings.terminalScheme": "Terminalfarben",
+  "settings.terminalSchemeAuto": "Design folgen",
   "settings.dividerSubtle": "Dezent", // Subtle
   "settings.dividerVisible": "Sichtbar", // Visible
   "settings.nav": "Seitenleiste", // Sidebar

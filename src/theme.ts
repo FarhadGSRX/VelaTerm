@@ -8,6 +8,7 @@
 import type { ITheme } from "@xterm/xterm";
 import { invoke, isTauri } from "./ipc/transport";
 import { setXtermTheme } from "./terminal/registry";
+import { namedScheme, type TerminalScheme } from "./terminal/schemes";
 
 /** User-selected color-scheme mode; this is the persisted value. */
 export type ThemeMode = "system" | "dark" | "light";
@@ -52,6 +53,8 @@ export interface VisualSettings {
   paneStyle: PaneStyle;
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
+  /** Terminal palette: "auto" follows the light/dark mode with the built-in palettes; a name fixes one scheme. */
+  terminalScheme: TerminalScheme;
   /** UI monospace font. null uses CSS --font-mono from vlinx.css; a value names the primary font and receives a fallback chain. */
   uiFontFamily: string | null;
   /** UI font size in pixels. null follows density without an inline --ui-fs; a value overrides the density size inline. */
@@ -199,9 +202,18 @@ export const XTERM_THEME: Record<ResolvedTheme, ITheme> = {
   },
 };
 
+/** The terminal scheme last applied by applyVisual. Module state so every terminal mount reads the same one. */
+let activeTerminalScheme: TerminalScheme = "auto";
+
 /** Use the same palette for live terminals, newly mounted panes, and recording playback. */
 export function xtermTheme(mode: ThemeMode): ITheme {
-  return XTERM_THEME[resolveTheme(mode)];
+  return namedScheme(activeTerminalScheme)?.theme ?? XTERM_THEME[resolveTheme(mode)];
+}
+
+/** The brightness terminal content is drawn for: a named scheme's own base, otherwise the app's mode. Agents
+ * that pick their colors by light/dark (Claude's `theme` setting) should follow this, not the app chrome. */
+export function terminalBase(mode: ThemeMode): ResolvedTheme {
+  return namedScheme(activeTerminalScheme)?.base ?? resolveTheme(mode);
 }
 
 const STORAGE_KEY = "vlx-theme";
@@ -279,6 +291,13 @@ export function applyVisual(s: VisualSettings) {
   root.dataset.pane = s.paneStyle;
   root.dataset.divider = s.dividerStyle;
   root.dataset.nav = s.navLayout;
+
+  // A named terminal scheme brings its own background; the pane behind xterm follows it so no seam shows.
+  activeTerminalScheme = s.terminalScheme;
+  const scheme = namedScheme(s.terminalScheme);
+  if (scheme) root.style.setProperty("--bg-term", String(scheme.theme.background));
+  else root.style.removeProperty("--bg-term");
+  setXtermTheme(xtermTheme(resolved));
 
   // Write UI font family/size inline on documentElement to override CSS. Inline priority lets font size supersede
   // the --ui-fs tier selected by density, while density still controls line height and spacing. Empty values remove
