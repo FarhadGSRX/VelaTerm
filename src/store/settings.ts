@@ -3,7 +3,6 @@
 //! SettingsModal and the store share types while reducing the size of the main store.
 
 import { pushSetting } from "../ipc/settingsSync";
-import { sanitizeTerminalScheme, type TerminalScheme } from "../terminal/schemes";
 import { DEFAULT_CONVERSATION_FONT_SIZE, DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_LINE_HEIGHT, normalizeTextSize, normalizeTextLineHeight } from "../theme";
 import type {
   AccentChoice,
@@ -123,7 +122,6 @@ export interface PersistedSettings {
   paneStyle: PaneStyle;
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
-  terminalScheme: TerminalScheme;
   inspectorTab: InspectorTab;
   /** Settings-modal section to reopen on. Remembered from the last section the user viewed. */
   settingsTab: SettingsTab;
@@ -274,7 +272,6 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   paneStyle: "flush",
   dividerStyle: "subtle",
   navLayout: "tree",
-  terminalScheme: "auto",
   inspectorTab: "info",
   settingsTab: "appearance",
   favoritePaths: {},
@@ -388,7 +385,6 @@ export function loadSettings(): PersistedSettings {
     const merged = { ...SETTINGS_DEFAULTS, ...parsed };
     // Retired comparison styles and missing preferences use the single supported dark palette.
     merged.darkStyle = "classic";
-    merged.terminalScheme = sanitizeTerminalScheme(parsed.terminalScheme);
     merged.chatFontFamily = typeof merged.chatFontFamily === "string" ? merged.chatFontFamily.trim() || null : null;
     merged.chatFontSize = normalizeTextSize(merged.chatFontSize, DEFAULT_CONVERSATION_FONT_SIZE);
     merged.chatLineHeight = normalizeTextLineHeight(merged.chatLineHeight);
@@ -466,7 +462,6 @@ export const visualOf = (s: PersistedSettings): VisualSettings => ({
   paneStyle: s.paneStyle,
   dividerStyle: s.dividerStyle,
   navLayout: s.navLayout,
-  terminalScheme: s.terminalScheme,
   uiFontFamily: s.uiFontFamily,
   uiFontSize: s.uiFontSize,
   chatFontFamily: s.chatFontFamily,

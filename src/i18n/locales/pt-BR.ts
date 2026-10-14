@@ -448,8 +448,6 @@ const ptBR: typeof en = {
   "settings.paneFlush": "Sem borda", // Flush
   "settings.paneCard": "Cartão", // Card
   "settings.divider": "Divisor", // Divider
-  "settings.terminalScheme": "Cores do terminal",
-  "settings.terminalSchemeAuto": "Seguir o tema",
   "settings.dividerSubtle": "Sutil", // Subtle
   "settings.dividerVisible": "Visível", // Visible
   "settings.nav": "Barra lateral", // Sidebar

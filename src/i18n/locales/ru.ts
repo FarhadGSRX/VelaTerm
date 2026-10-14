@@ -457,8 +457,6 @@ const ru: typeof en = {
   "settings.paneFlush": "Вплотную", // Flush
   "settings.paneCard": "Карточка", // Card
   "settings.divider": "Разделитель", // Divider
-  "settings.terminalScheme": "Цвета терминала",
-  "settings.terminalSchemeAuto": "Как в теме",
   "settings.dividerSubtle": "Тонкий", // Subtle
   "settings.dividerVisible": "Видимый", // Visible
   "settings.nav": "Боковая панель", // Sidebar

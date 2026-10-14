@@ -75,7 +75,7 @@ import { installWebkitImeFix, isWebkitEngine } from "../terminal/imeWebkitFix";
 import { installImeCaret } from "../terminal/imeCaret";
 import { detectAgentScreen, readScreenTail } from "../terminal/screenDetect";
 import { remapGrokDayCanvasToWhite } from "../terminal/grokBgRemap";
-import { fontStack, terminalBase, xtermTheme } from "../theme";
+import { fontStack, resolveTheme, xtermTheme } from "../theme";
 import type { AgentKind, Session } from "../types";
 
 /** Size mode: fit owns the PTY grid; mirror pins the grid and observes it. */
@@ -815,7 +815,7 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
             rows,
             initialPrompt: initialPrompt ?? undefined,
             // Inject UI brightness into Claude settings because Windows ConPTY blocks reliable OSC 11 detection.
-            theme: terminalBase(useTermStore.getState().theme),
+            theme: resolveTheme(useTermStore.getState().theme),
           },
           // PTY output arrives through the binary Channel without JSON and is gated until the grid is set.
           (bytes) => {

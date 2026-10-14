@@ -447,8 +447,6 @@ const vi: typeof en = {
   "settings.paneFlush": "Liền",
   "settings.paneCard": "Thẻ",
   "settings.divider": "Đường phân cách",
-  "settings.terminalScheme": "Màu terminal",
-  "settings.terminalSchemeAuto": "Theo giao diện",
   "settings.dividerSubtle": "Mờ",
   "settings.dividerVisible": "Rõ",
   "settings.nav": "Thanh bên",
