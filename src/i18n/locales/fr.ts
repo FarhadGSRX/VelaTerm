@@ -448,9 +448,6 @@ const fr: typeof en = {
   "settings.paneFlush": "Sans bord", // Flush
   "settings.paneCard": "Carte", // Card
   "settings.divider": "Séparateur", // Divider
-  "settings.darkStyle": "Style sombre", // Dark style
-  "settings.darkStyleClassic": "Classique", // Classic
-  "settings.darkStyleAdventureTime": "Adventure Time",
   "settings.terminalScheme": "Couleurs du terminal",
   "settings.terminalSchemeAuto": "Suivre le thème",
   "settings.dividerSubtle": "Fin", // Subtle

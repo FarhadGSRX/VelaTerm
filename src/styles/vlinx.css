@@ -83,36 +83,6 @@
   --c-mag: oklch(0.74 0.07 320); --c-red: oklch(0.7 0.09 22); --c-green: oklch(0.78 0.08 158);
   --c-dim: var(--text-dim); --c-faint: var(--text-faint);
 }
-/* ---- DARK: Adventure Time ----
-   The AdventureTime terminal palette carried into the chrome. The terminal sits at the palette's base indigo and
-   the frame sinks below it, so the grid reads as the lit surface. Text, hairlines and surfaces are that indigo at
-   other lightnesses; status and accent colors are the palette's ANSI hues lifted to clear small text on indigo,
-   while the terminal grid itself keeps the raw ANSI values (see terminal/schemes.ts). File-icon colors are each
-   accent pulled 40% toward the sidebar, as the classic block reduces chroma. The white washes for hover and
-   active, the shadow, and the vendor marks are inherited from the dark block above. */
-[data-theme="dark"][data-dark-style="adventure-time"] {
-  --bg-0: #191738;                                /* app frame */
-  --bg-1: #191738;                                /* sidebars */
-  --bg-2: #28265a;                                /* raised: tabs, headers */
-  --bg-term: #1f1d45;                             /* Keep the adventure-time scheme's background in sync. */
-  --border: #322f6f;
-  --border-strong: #3f3b8c;
-  --text: #f8dcc0;
-  --text-mid: #a099c2;
-  --text-dim: #6a6293;
-  --text-faint: #4b4478;
-  --text-on-accent: #1f1d45;                      /* Every accent here is light; indigo text stays legible on it. */
-  --accent-green-swatch: #9eff6e;
-  --term-cmd: #f8dcc0;
-  --term-out: #bba79e;
-  --green: #9eff6e; --yellow: #efc11a; --red: #fc5f5a; --cyan: #86c7b5; --mag: #a290df; --blue: #35aedc;
-  --c-blue: #2a729a; --c-yellow: #997d26; --c-cyan: #5a8183; --c-mag: #6b609c; --c-red: #a1424c; --c-green: #69a258;
-}
-/* The four accent presets keep their names and take the palette's nearest hues; amber is the cursor gold. */
-[data-theme="dark"][data-dark-style="adventure-time"][data-accent="green"]  { --accent: #9eff6e; --accent-soft: #9eff6e24; --accent-line: #9eff6e80; }
-[data-theme="dark"][data-dark-style="adventure-time"][data-accent="blue"]   { --accent: #35aedc; --accent-soft: #35aedc29; --accent-line: #35aedc80; }
-[data-theme="dark"][data-dark-style="adventure-time"][data-accent="amber"]  { --accent: #efbf38; --accent-soft: #efbf3829; --accent-line: #efbf3880; }
-[data-theme="dark"][data-dark-style="adventure-time"][data-accent="violet"] { --accent: #a290df; --accent-soft: #a290df29; --accent-line: #a290df80; }
 /* ---- LIGHT ---- */
 [data-theme="light"] {
   --grok-brand-color: #000000;

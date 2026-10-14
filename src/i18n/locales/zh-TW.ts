@@ -444,9 +444,6 @@ const zhTW: typeof en = {
   "settings.paneFlush": "無縫", // Flush
   "settings.paneCard": "卡片", // Card
   "settings.divider": "分隔線", // Divider
-  "settings.darkStyle": "深色樣式", // Dark style
-  "settings.darkStyleClassic": "經典", // Classic
-  "settings.darkStyleAdventureTime": "Adventure Time",
   "settings.terminalScheme": "終端機配色",
   "settings.terminalSchemeAuto": "跟隨主題",
   "settings.dividerSubtle": "極細", // Subtle

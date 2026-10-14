@@ -60,7 +60,6 @@ export function TitleBar() {
   const theme = useTermStore((s) => s.theme);
   const setTheme = useTermStore((s) => s.setTheme);
   const setDarkTheme = useTermStore((s) => s.setDarkTheme);
-  const darkStyle = useTermStore((s) => s.darkStyle);
   const leftCollapsed = useTermStore((s) => s.leftCollapsed);
   const toggleLeft = useTermStore((s) => s.toggleLeft);
   const rightCollapsed = useTermStore((s) => s.rightCollapsed);
@@ -134,8 +133,7 @@ export function TitleBar() {
     backend: string;
   } | null>(null);
   const resolved = resolveTheme(theme);
-  const darkThemeLabel =
-    darkStyle === "adventure-time" ? t("settings.darkStyleAdventureTime") : t("titlebar.themeClassicDark");
+  const darkThemeLabel = t("titlebar.themeClassicDark");
 
   // Compare bundle __APP_VERSION__ from package.json with backend app_version from Cargo.toml at
   // startup. Release scripts update both, but remote deployments or manual edits can drift. Report
@@ -450,9 +448,9 @@ export function TitleBar() {
         <button
           className={theme === "dark" ? "on" : ""}
           aria-pressed={theme === "dark"}
-          title={darkThemeLabel}
-          aria-label={darkThemeLabel}
-          onClick={() => runAfterInitialSettings(() => setDarkTheme(darkStyle))}
+          title={t("titlebar.themeClassicDark")}
+          aria-label={t("titlebar.themeClassicDark")}
+          onClick={() => runAfterInitialSettings(() => setDarkTheme("classic"))}
         >
           <Icons.moon size={14} fill />
         </button>

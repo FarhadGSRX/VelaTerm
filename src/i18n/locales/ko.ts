@@ -447,9 +447,6 @@ const ko: typeof en = {
   "settings.paneFlush": "플랫", // Flush
   "settings.paneCard": "카드", // Card
   "settings.divider": "구분선", // Divider
-  "settings.darkStyle": "다크 스타일", // Dark style
-  "settings.darkStyleClassic": "클래식", // Classic
-  "settings.darkStyleAdventureTime": "Adventure Time",
   "settings.terminalScheme": "터미널 색상",
   "settings.terminalSchemeAuto": "테마 따르기",
   "settings.dividerSubtle": "미세", // Subtle

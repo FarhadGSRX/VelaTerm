@@ -26,7 +26,7 @@ export const TERMINAL_SCHEMES = {
     base: "dark",
     theme: {
       background: "#1f1d45", foreground: "#f8dcc0", cursor: "#efbf38", cursorAccent: "#08080a",
-      selectionBackground: "#706b4e", selectionInactiveBackground: "#4c484a",
+      selectionBackground: "#706b4e", selectionInactiveBackground: "#4a4636",
       black: "#050404", red: "#bd0013", green: "#4ab118", yellow: "#e7741e",
       blue: "#0f4ac6", magenta: "#665993", cyan: "#70a598", white: "#f8dcc0",
       brightBlack: "#4e7cbf", brightRed: "#fc5f5a", brightGreen: "#9eff6e", brightYellow: "#efc11a",

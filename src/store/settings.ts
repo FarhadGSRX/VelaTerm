@@ -4,7 +4,7 @@
 
 import { pushSetting } from "../ipc/settingsSync";
 import { sanitizeTerminalScheme, type TerminalScheme } from "../terminal/schemes";
-import { sanitizeDarkStyle, DEFAULT_CONVERSATION_FONT_SIZE, DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_LINE_HEIGHT, normalizeTextSize, normalizeTextLineHeight } from "../theme";
+import { DEFAULT_CONVERSATION_FONT_SIZE, DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_LINE_HEIGHT, normalizeTextSize, normalizeTextLineHeight } from "../theme";
 import type {
   AccentChoice,
   DarkStyle,
@@ -386,8 +386,8 @@ export function loadSettings(): PersistedSettings {
       defaultSessionEngine?: SessionEngine;
     };
     const merged = { ...SETTINGS_DEFAULTS, ...parsed };
-    // Retired comparison styles, unknown values and missing preferences use the classic dark palette.
-    merged.darkStyle = sanitizeDarkStyle(parsed.darkStyle);
+    // Retired comparison styles and missing preferences use the single supported dark palette.
+    merged.darkStyle = "classic";
     merged.terminalScheme = sanitizeTerminalScheme(parsed.terminalScheme);
     merged.chatFontFamily = typeof merged.chatFontFamily === "string" ? merged.chatFontFamily.trim() || null : null;
     merged.chatFontSize = normalizeTextSize(merged.chatFontSize, DEFAULT_CONVERSATION_FONT_SIZE);

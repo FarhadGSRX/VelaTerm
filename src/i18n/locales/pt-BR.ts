@@ -448,9 +448,6 @@ const ptBR: typeof en = {
   "settings.paneFlush": "Sem borda", // Flush
   "settings.paneCard": "Cartão", // Card
   "settings.divider": "Divisor", // Divider
-  "settings.darkStyle": "Estilo escuro", // Dark style
-  "settings.darkStyleClassic": "Clássico", // Classic
-  "settings.darkStyleAdventureTime": "Adventure Time",
   "settings.terminalScheme": "Cores do terminal",
   "settings.terminalSchemeAuto": "Seguir o tema",
   "settings.dividerSubtle": "Sutil", // Subtle

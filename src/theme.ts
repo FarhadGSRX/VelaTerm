@@ -8,7 +8,7 @@
 import type { ITheme } from "@xterm/xterm";
 import { invoke, isTauri } from "./ipc/transport";
 import { setXtermTheme } from "./terminal/registry";
-import { namedScheme, type NamedTerminalScheme, type TerminalScheme } from "./terminal/schemes";
+import { namedScheme, type TerminalScheme } from "./terminal/schemes";
 
 /** User-selected color-scheme mode; this is the persisted value. */
 export type ThemeMode = "system" | "dark" | "light";
@@ -16,19 +16,8 @@ export type ThemeMode = "system" | "dark" | "light";
 export type ResolvedTheme = "dark" | "light";
 /** Legacy store name, equivalent to ThemeMode. */
 export type Theme = ThemeMode;
-/** Dark palettes. "classic" is the default; each other style recolors the chrome and supplies its own terminal grid. */
-export const DARK_STYLES = ["classic", "adventure-time"] as const;
-export type DarkStyle = (typeof DARK_STYLES)[number];
-
-/** Restore a saved dark style; retired and unknown values fall back to classic. */
-export function sanitizeDarkStyle(value: unknown): DarkStyle {
-  return DARK_STYLES.includes(value as DarkStyle) ? (value as DarkStyle) : "classic";
-}
-
-/** The terminal scheme a dark style paints its grid with when the terminal colors follow the theme. */
-const DARK_STYLE_TERMINAL: Partial<Record<DarkStyle, NamedTerminalScheme>> = {
-  "adventure-time": "adventure-time",
-};
+/** Retained settings field for compatibility with saved dark-style preferences. */
+export type DarkStyle = "classic";
 
 /** Accent color: 'auto' follows the scheme (dark→green, light→blue); other choices are fixed. */
 export type AccentName = "green" | "blue" | "amber" | "violet";
@@ -215,16 +204,10 @@ export const XTERM_THEME: Record<ResolvedTheme, ITheme> = {
 
 /** The terminal scheme last applied by applyVisual. Module state so every terminal mount reads the same one. */
 let activeTerminalScheme: TerminalScheme = "auto";
-/** The dark style last applied. A themed dark style also brings its terminal palette while the scheme is "auto". */
-let activeDarkStyle: DarkStyle = "classic";
 
 /** Use the same palette for live terminals, newly mounted panes, and recording playback. */
 export function xtermTheme(mode: ThemeMode): ITheme {
-  const chosen = namedScheme(activeTerminalScheme);
-  if (chosen) return chosen.theme;
-  const resolved = resolveTheme(mode);
-  const styled = resolved === "dark" ? namedScheme(DARK_STYLE_TERMINAL[activeDarkStyle]) : null;
-  return styled?.theme ?? XTERM_THEME[resolved];
+  return namedScheme(activeTerminalScheme)?.theme ?? XTERM_THEME[resolveTheme(mode)];
 }
 
 /** The brightness terminal content is drawn for: a named scheme's own base, otherwise the app's mode. Agents
@@ -283,7 +266,6 @@ function syncNativeChrome(mode: ThemeMode) {
 /** Apply a scheme: resolve it, write data-theme and color-scheme, persist the mode, and synchronize xterm colors. */
 export function applyTheme(mode: ThemeMode, darkStyle: DarkStyle = "classic") {
   const resolved = resolveTheme(mode);
-  activeDarkStyle = darkStyle;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.darkStyle = darkStyle;
   // color-scheme drives how the user agent renders native in-page controls: checkboxes, radios, selects,
@@ -304,7 +286,6 @@ export function applyVisual(s: VisualSettings) {
   const root = document.documentElement;
   const resolved = (root.dataset.theme as ResolvedTheme) || resolveTheme("system");
   root.dataset.darkStyle = s.darkStyle;
-  activeDarkStyle = s.darkStyle;
   root.dataset.accent = effectiveAccent(s.accent, resolved);
   root.dataset.density = s.density;
   root.dataset.pane = s.paneStyle;

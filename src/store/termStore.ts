@@ -1502,8 +1502,6 @@ interface TermStore {
 
   // Persisted Vlinx appearance settings applied through `data-*` attributes.
   setDarkTheme: (style: DarkStyle) => void;
-  /** Choose the palette dark mode uses, without switching modes. */
-  setDarkStyle: (style: DarkStyle) => void;
   setAccent: (v: AccentChoice) => void;
   setDensity: (v: Density) => void;
   setPaneStyle: (v: PaneStyle) => void;
@@ -4652,11 +4650,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
   setDarkTheme: (style) => {
     set({ darkStyle: style });
     get().setTheme("dark");
-  },
-  setDarkStyle: (style) => {
-    set({ darkStyle: style });
-    applyTheme(get().theme, style);
-    persistAndApplyVisual(get);
   },
   setAccent: (v) => {
     set({ accent: v });
