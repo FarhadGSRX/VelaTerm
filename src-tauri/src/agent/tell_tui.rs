@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS session_tell_pending (
  queued_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS session_tell_pending_target ON session_tell_pending(target_id, queued_at);
+CREATE TABLE IF NOT EXISTS session_tell_delivered (
+ id TEXT PRIMARY KEY REFERENCES session_tells(id) ON DELETE CASCADE,
+ receipt TEXT NOT NULL
+);
 ";
 
 /// Whether an executable name is Claude Code's. The native installer ships `claude` / `claude.exe`; an npm
@@ -75,9 +79,61 @@ fn ensure_claude_in_terminal(app: &AppCtx, target: &str) -> Result<(), String> {
     }
 }
 
+/// One write, so the paste and its Enter are queued together or not at all.
 fn type_in(app: &AppCtx, target: &str, text: &str) -> Result<(), String> {
-    app.pty().write(target, &paste_bytes(text))?;
-    app.pty().write(target, "\r")
+    app.pty().write(target, &format!("{}\r", paste_bytes(text)))
+}
+
+/// The receipt a message already got, so a retry with the same ID reports it instead of delivering again.
+fn delivered_receipt(app: &AppCtx, id: &str) -> Result<Option<&'static str>, String> {
+    let delivered: Option<String> = app
+        .db()
+        .conn
+        .lock()
+        .unwrap()
+        .query_row("SELECT receipt FROM session_tell_delivered WHERE id=?1", [id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(delivered.map(|_| "sent"))
+}
+
+fn mark_delivered(app: &AppCtx, ids: &[String]) {
+    if let Ok(conn) = app.db().conn.lock() {
+        for id in ids {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO session_tell_delivered(id,receipt) VALUES (?1,'sent')",
+                [id],
+            );
+        }
+    }
+}
+
+fn enqueue(app: &AppCtx, target: &str, ids: &[String]) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let conn = app.db().conn.lock().map_err(|_| "The database is unavailable")?;
+    for id in ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO session_tell_pending(id,target_id,queued_at) VALUES (?1,?2,?3)",
+            params![id, target, now],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn is_pending(app: &AppCtx, id: &str) -> Result<bool, String> {
+    Ok(app
+        .db()
+        .conn
+        .lock()
+        .unwrap()
+        .query_row("SELECT 1 FROM session_tell_pending WHERE id=?1", [id], |_| Ok(()))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .is_some())
 }
 
 /// Start a stopped Claude terminal session from the backend, resuming its conversation with `wire` as the
@@ -116,74 +172,74 @@ fn wake(app: &AppCtx, target: &str, wire: &str) -> Result<(), String> {
         false,
         Box::new(|_: &[u8]| true),
     );
-    // The launch consumes the prompt; a spawn that failed or attached instead must not leave it behind.
-    crate::agent::inject::clear_resume_prompt(target);
+    // A launch consumes the prompt. Whatever is left was not delivered by any launch.
+    let unclaimed = crate::agent::inject::clear_resume_prompt(target);
     let spawned = spawned?;
     if spawned.attached {
-        return Err("The target terminal started while the message was being sent. Send again".into());
+        // A tab opened the session at the same moment. If its launch took the message, it is delivered.
+        return if unclaimed {
+            Err("The target terminal started while the message was being sent. Send again".into())
+        } else {
+            Ok(())
+        };
     }
+    // The placeholder subscriber owns the terminal's size, and no real client ever matches it: drop it so the
+    // ownership is released and the first tab to open the session sizes the terminal itself.
+    app.pty().detach(app, target, spawned.sub_id, "vtell");
     let launch = spawned.launch.ok_or("The target terminal has no Claude launch command")?;
     app.pty().write(target, &format!("{launch}\r"))
 }
 
 /// Deliver an already-recorded `session_tells` message to a terminal session.
 pub fn deliver(app: &AppCtx, target: &str, wire: &str, id: &str) -> Result<&'static str, String> {
+    // A retry after an uncertain receipt: report what already happened rather than deliver again.
+    if let Some(receipt) = delivered_receipt(app, id)? {
+        return Ok(receipt);
+    }
+    let ids = [id.to_string()];
     if !app.pty().is_running(target) {
+        // Also covers a message queued while the terminal ran: it goes out with the wake, and only once.
         wake(app, target, wire)?;
+        if let Ok(conn) = app.db().conn.lock() {
+            let _ = conn.execute("DELETE FROM session_tell_pending WHERE id=?1", [id]);
+        }
+        mark_delivered(app, &ids);
         return Ok("sent");
     }
     ensure_claude_in_terminal(app, target)?;
     let state = app.pty().cached_agent_state(target);
-    let already_waiting = {
-        let conn = app.db().conn.lock().unwrap();
-        conn.query_row("SELECT 1 FROM session_tell_pending WHERE id=?1", [id], |_| Ok(()))
-            .optional()
-            .map_err(|e| e.to_string())?
-            .is_some()
-    };
-    if already_waiting {
+    if is_pending(app, id)? {
         // A retry of a message still waiting for its turn to end: report it again rather than re-queue it.
         return Ok(waiting_receipt(state.as_deref()));
     }
     match state.as_deref() {
         Some("waiting") | Some("idle") => {
             type_in(app, target, wire)?;
+            mark_delivered(app, &ids);
             Ok("sent")
         }
         other => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            app.db()
-                .conn
-                .lock()
-                .unwrap()
-                .execute(
-                    "INSERT OR IGNORE INTO session_tell_pending(id,target_id,queued_at) VALUES (?1,?2,?3)",
-                    params![id, target, now],
-                )
-                .map_err(|e| e.to_string())?;
+            enqueue(app, target, &ids)?;
             Ok(waiting_receipt(other))
         }
     }
 }
 
-/// Remove and return a session's waiting messages, oldest first.
-fn take_pending(app: &AppCtx, target: &str) -> Vec<String> {
+/// Remove and return a session's waiting messages as (id, wire), oldest first.
+fn take_pending(app: &AppCtx, target: &str) -> Vec<(String, String)> {
     let Ok(mut conn) = app.db().conn.lock() else {
         return Vec::new();
     };
     let Ok(tx) = conn.transaction() else {
         return Vec::new();
     };
-    let wires: Vec<String> = tx
+    let wires: Vec<(String, String)> = tx
         .prepare(
-            "SELECT t.wire FROM session_tell_pending p JOIN session_tells t ON t.id=p.id
+            "SELECT p.id, t.wire FROM session_tell_pending p JOIN session_tells t ON t.id=p.id
              WHERE p.target_id=?1 ORDER BY p.queued_at, p.id",
         )
         .and_then(|mut stmt| {
-            stmt.query_map([target], |r| r.get::<_, String>(0))?
+            stmt.query_map([target], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
                 .collect::<Result<Vec<_>, _>>()
         })
         .unwrap_or_default();
@@ -220,20 +276,32 @@ fn stop_response(wires: &[String]) -> String {
 pub fn on_hook(app: &AppCtx, target: &str, event: &str, body: &str) -> Option<String> {
     match event {
         "waiting" if is_claude_stop(body) => {
-            let wires = take_pending(app, target);
-            (!wires.is_empty()).then(|| stop_response(&wires))
+            let taken = take_pending(app, target);
+            if taken.is_empty() {
+                return None;
+            }
+            let (ids, wires): (Vec<String>, Vec<String>) = taken.into_iter().unzip();
+            mark_delivered(app, &ids);
+            Some(stop_response(&wires))
         }
         // Idle without a Stop means the turn was interrupted; nothing is mid-turn, so type them in.
         "idle" => {
             if ensure_claude_in_terminal(app, target).is_err() {
                 return None;
             }
-            let wires = take_pending(app, target);
-            if !wires.is_empty() {
+            let taken = take_pending(app, target);
+            if !taken.is_empty() {
                 let app = app.clone();
                 let target = target.to_string();
                 std::thread::spawn(move || {
-                    let _ = type_in(&app, &target, &wires.join("\n\n"));
+                    let (ids, wires): (Vec<String>, Vec<String>) = taken.into_iter().unzip();
+                    // A write that did not go through leaves the messages waiting for the next chance.
+                    match type_in(&app, &target, &wires.join("\n\n")) {
+                        Ok(()) => mark_delivered(&app, &ids),
+                        Err(_) => {
+                            let _ = enqueue(&app, &target, &ids);
+                        }
+                    }
                 });
             }
             None
@@ -245,6 +313,57 @@ pub fn on_hook(app: &AppCtx, target: &str, event: &str, body: &str) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_with_messages(ids: &[&str]) -> AppCtx {
+        let dir = std::env::temp_dir().join(format!("vlx-tell-tui-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = crate::db::Db::open(&dir.join("test.db")).unwrap();
+        let app = AppCtx::Headless(std::sync::Arc::new(crate::host::HeadlessHost::new(dir, db)));
+        let conn = app.db().conn.lock().unwrap();
+        conn.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES ('p','Project','/tmp',0)", []).unwrap();
+        conn.execute("INSERT INTO groups(id,project_id,name,created_at) VALUES ('g','p','Group',0)", []).unwrap();
+        conn.execute(
+            "INSERT INTO sessions(id,project_id,group_id,name,kind,engine,cwd,created_at) VALUES ('t','p','g','T','claude','tui','/tmp',0)",
+            [],
+        )
+        .unwrap();
+        for id in ids {
+            conn.execute(
+                "INSERT INTO session_tells(id,sender_id,target_id,fingerprint,wire,origin) VALUES (?1,'s','t','f',?2,'{}')",
+                params![id, format!("wire {id}")],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        app
+    }
+
+    #[test]
+    fn waiting_messages_come_out_in_order_and_a_failed_paste_puts_them_back() {
+        let app = app_with_messages(&["msg-a", "msg-b"]);
+        enqueue(&app, "t", &["msg-a".into()]).unwrap();
+        enqueue(&app, "t", &["msg-b".into()]).unwrap();
+        let taken = take_pending(&app, "t");
+        assert_eq!(taken.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["msg-a", "msg-b"]);
+        assert_eq!(taken[0].1, "wire msg-a");
+        assert!(take_pending(&app, "t").is_empty(), "taking removes them");
+
+        // What the idle path does when its write fails: the messages wait for the next chance.
+        let (ids, _): (Vec<String>, Vec<String>) = taken.into_iter().unzip();
+        enqueue(&app, "t", &ids).unwrap();
+        assert!(is_pending(&app, "msg-a").unwrap() && is_pending(&app, "msg-b").unwrap());
+    }
+
+    #[test]
+    fn a_delivered_message_answers_its_retry_with_the_original_receipt() {
+        let app = app_with_messages(&["msg-a"]);
+        assert_eq!(delivered_receipt(&app, "msg-a").unwrap(), None);
+        mark_delivered(&app, &["msg-a".into()]);
+        assert_eq!(delivered_receipt(&app, "msg-a").unwrap(), Some("sent"));
+        // Recording it twice is harmless.
+        mark_delivered(&app, &["msg-a".into()]);
+        assert_eq!(delivered_receipt(&app, "msg-a").unwrap(), Some("sent"));
+    }
 
     #[test]
     fn only_claudes_own_executable_counts_as_claude() {

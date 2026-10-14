@@ -1,5 +1,6 @@
 //! Cmd/Ctrl+Tab tab cycling: forward/backward order, wrap-around at both ends, and the no-op below two
-//! open tabs. Tab cannot be a remappable ShortcutAction (shortcutRegistry combos encode single letters
+//! open tabs, plus the shared isTabCycleKey predicate that usePtySession uses to keep the combo from xterm.
+//! Tab cannot be a remappable ShortcutAction (shortcutRegistry combos encode single letters
 //! only), so this is a fixed shortcut next to Cmd+1–9 and is covered here rather than via the registry.
 //!
 //! Stub the Tauri-touching modules so termStore loads under jsdom, mirroring the store's own tests.
@@ -25,7 +26,7 @@ vi.mock("../notify", () => ({
 }));
 
 import { renderHook } from "@testing-library/react";
-import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
+import { isTabCycleKey, useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useTermStore } from "../store/termStore";
 
 /** Dispatch a keydown at the document, where the shortcut listener sits in capture phase. */
@@ -134,5 +135,32 @@ describe("Cmd/Ctrl+Tab tab cycling", () => {
     expect(active()).toBe("a");
     expect(plain.defaultPrevented).toBe(false);
     expect(shifted.defaultPrevented).toBe(false);
+  });
+});
+
+// usePtySession's xterm key handler swallows exactly what isTabCycleKey accepts; dispatching at `document`
+// cannot reach that handler, so the predicate is checked directly.
+describe("isTabCycleKey", () => {
+  const key = (k: string, mods: { ctrl?: boolean; meta?: boolean; shift?: boolean } = {}) =>
+    new KeyboardEvent("keydown", { key: k, ctrlKey: !!mods.ctrl, metaKey: !!mods.meta, shiftKey: !!mods.shift });
+
+  it("claims Cmd/Ctrl(+Shift)+Tab while there are tabs to cycle", () => {
+    seed(["a", "b"], "a");
+    expect(isTabCycleKey(key("Tab", { ctrl: true }))).toBe(true);
+    expect(isTabCycleKey(key("Tab", { meta: true }))).toBe(true);
+    expect(isTabCycleKey(key("Tab", { ctrl: true, shift: true }))).toBe(true);
+  });
+
+  it("leaves the combo to the terminal with fewer than two open tabs", () => {
+    seed(["a"], "a");
+    expect(isTabCycleKey(key("Tab", { ctrl: true }))).toBe(false);
+    seed([], null);
+    expect(isTabCycleKey(key("Tab", { ctrl: true, shift: true }))).toBe(false);
+  });
+
+  it("never claims an unmodified Tab or Shift+Tab", () => {
+    seed(["a", "b"], "a");
+    expect(isTabCycleKey(key("Tab"))).toBe(false);
+    expect(isTabCycleKey(key("Tab", { shift: true }))).toBe(false);
   });
 });

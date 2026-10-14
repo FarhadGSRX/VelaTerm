@@ -61,14 +61,17 @@ describe("closeSession and the unread marker", () => {
     expect(sessionId in useTermStore.getState().notifications).toBe(false);
   });
 
-  it("leaves the session node in the tree, which is why the stale sweep cannot do this job", () => {
-    // Restore the marker and run the ONLY other thing that clears markers: focusReturned's sweep. It
-    // keys off the session having disappeared, and the node survives the kill -- so it does nothing
-    // here. This is what makes the fix belong in closeSession.
-    useTermStore.setState({ notifications: { [sessionId]: Date.now() } });
+  it("leaves the session node in the tree", () => {
+    useTermStore.getState().closeSession(sessionId);
+    expect(useTermStore.getState().sessions.some((s) => s.id === sessionId)).toBe(true);
+  });
+
+  it("cannot rely on the stale sweep, which spares a marker whose node survives", () => {
+    // focusReturned's sweep is the ONLY other thing that clears markers. It keys off the session having
+    // disappeared, and the node survives the kill -- so it does nothing here. This is what makes the fix
+    // belong in closeSession.
     useTermStore.getState().focusReturned();
     expect(sessionId in useTermStore.getState().notifications).toBe(true);
-    expect(useTermStore.getState().sessions.some((s) => s.id === sessionId)).toBe(true);
   });
 
   it("does not disturb other sessions' unread markers", () => {

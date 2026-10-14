@@ -18,6 +18,9 @@
   --font-prose: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --r-sm: 5px; --r-md: 8px; --r-lg: 12px;
   --pane-gap: 3px;
+  /* Behind the terminal grid only. Follows --bg-term, which documents and conversations also use, unless a
+     fixed terminal palette is chosen; then the grid's own background is set here alone. */
+  --bg-xterm: var(--bg-term);
   /* accent (overridden by [data-accent] and set inline by App.jsx) */
   --accent: oklch(0.72 0.15 158);
   --accent-soft: oklch(0.72 0.15 158 / 0.14);
@@ -389,6 +392,7 @@ svg { display: block; }
 /* Fade sessions in when returning from display:none to soften the browser's first full-screen repaint.
    The CSS animation restarts only on visibility changes; it improves appearance, not repaint latency. */
 .term-mount { animation: pane-fade-in .1s ease-out; }
+.pane.term-pane { background: var(--bg-xterm); }
 @keyframes pane-fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* flush (iTerm2 hairline) pane mode — no gaps, no rounded cards */

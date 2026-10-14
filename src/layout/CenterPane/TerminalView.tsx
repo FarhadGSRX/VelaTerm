@@ -258,7 +258,7 @@ export const TerminalView = memo(function TerminalView({
       }}
     >
       <div
-        className={"pane" + (focused ? " focus" : "")}
+        className={"pane term-pane" + (focused ? " focus" : "")}
         // contain:layout confines the display:none -> block reflow to this pane subtree instead of the whole
         // terminal region, reducing switch latency. Apply it to inner .pane rather than .term-mount: ContextMenu
         // is a non-portaled, fixed-position sibling, and containment on .term-mount would change its coordinate
@@ -440,7 +440,7 @@ export const TerminalView = memo(function TerminalView({
                 padding: "3px 10px",
                 borderRadius: 6,
                 border: "1px solid var(--text-faint)",
-                background: "var(--bg-term)",
+                background: "var(--bg-xterm)",
                 color: "var(--text-dim)",
                 fontSize: 12,
                 opacity: 0.9,
@@ -484,7 +484,7 @@ export const TerminalView = memo(function TerminalView({
                 alignItems: "center",
                 justifyContent: "center",
                 pointerEvents: "none",
-                background: "var(--bg-term)",
+                background: "var(--bg-xterm)",
                 color: "var(--text-dim)",
                 fontSize: 13,
                 letterSpacing: 0.5,
