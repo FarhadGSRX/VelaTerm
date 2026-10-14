@@ -447,6 +447,9 @@ const de: typeof en = {
   "settings.paneFlush": "Bündig", // Flush
   "settings.paneCard": "Karte", // Card
   "settings.divider": "Trennlinie", // Divider
+  "settings.darkStyle": "Dunkler Stil", // Dark style
+  "settings.darkStyleClassic": "Klassisch", // Classic
+  "settings.darkStyleAdventureTime": "Adventure Time",
   "settings.terminalScheme": "Terminalfarben",
   "settings.terminalSchemeAuto": "Design folgen",
   "settings.dividerSubtle": "Dezent", // Subtle

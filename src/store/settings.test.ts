@@ -22,6 +22,11 @@ describe("dark palette preference", () => {
     expect(loadSettings().darkStyle).toBe("classic");
   });
 
+  it("keeps a saved Adventure Time dark style", () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ darkStyle: "adventure-time" }));
+    expect(loadSettings().darkStyle).toBe("adventure-time");
+  });
+
   it("selects classic dark and retains it across light mode and hydration", () => {
     const { theme, darkStyle } = useTermStore.getState();
     try {

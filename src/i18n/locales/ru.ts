@@ -457,6 +457,9 @@ const ru: typeof en = {
   "settings.paneFlush": "Вплотную", // Flush
   "settings.paneCard": "Карточка", // Card
   "settings.divider": "Разделитель", // Divider
+  "settings.darkStyle": "Тёмный стиль", // Dark style
+  "settings.darkStyleClassic": "Классический", // Classic
+  "settings.darkStyleAdventureTime": "Adventure Time",
   "settings.terminalScheme": "Цвета терминала",
   "settings.terminalSchemeAuto": "Как в теме",
   "settings.dividerSubtle": "Тонкий", // Subtle

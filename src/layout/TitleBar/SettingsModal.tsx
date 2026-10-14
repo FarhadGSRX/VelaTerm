@@ -32,6 +32,7 @@ import { useTermStore, type TermRenderer } from "../../store/termStore";
 import { DEFAULT_CONVERSATION_FONT_SIZE, DEFAULT_TERMINAL_FONT_SIZE, DEFAULT_TERMINAL_LINE_HEIGHT } from "../../theme";
 import type {
   AccentChoice,
+  DarkStyle,
   Density,
   DividerStyle,
   NavLayout,
@@ -320,6 +321,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const density = useTermStore((s) => s.density);
   const paneStyle = useTermStore((s) => s.paneStyle);
   const dividerStyle = useTermStore((s) => s.dividerStyle);
+  const darkStyle = useTermStore((s) => s.darkStyle);
+  const setDarkStyle = useTermStore((s) => s.setDarkStyle);
   const terminalScheme = useTermStore((s) => s.terminalScheme);
   const setTerminalScheme = useTermStore((s) => s.setTerminalScheme);
   const navLayout = useTermStore((s) => s.navLayout);
@@ -554,6 +557,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                       ["visible", t("settings.dividerVisible")],
                     ]}
                     onChange={setDividerStyle}
+                  />
+                </Field>
+                <Field label={t("settings.darkStyle")}>
+                  <Select<DarkStyle>
+                    value={darkStyle}
+                    onChange={setDarkStyle}
+                    options={[
+                      { value: "classic", label: t("settings.darkStyleClassic") },
+                      { value: "adventure-time", label: t("settings.darkStyleAdventureTime") },
+                    ]}
+                    size="sm"
+                    width={160}
+                    menuWidth={172}
+                    align="right"
                   />
                 </Field>
                 <Field label={t("settings.terminalScheme")}>
