@@ -436,6 +436,12 @@ const en = {
   "settings.agentDefaultViewHint":
     "The view a new session of this agent opens in. Existing sessions keep the view they were created with.",
   "settings.appearance": "Appearance",
+  "settings.darkTheme": "Dark theme",
+  "settings.lightTheme": "Light theme",
+  "settings.themeClassic": "Classic",
+  "settings.terminalScheme": "Terminal colors",
+  "settings.terminalSchemeTheme": "Follow theme",
+  "settings.terminalSchemeClassicLight": "Classic Light",
   "settings.accent": "Accent",
   "settings.accentAuto": "Follow theme",
   "settings.density": "Density",

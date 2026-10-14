@@ -30,6 +30,7 @@ import {
 } from "../ipc/sessionState";
 import type { BackgroundRun } from "../ipc/runs";
 import { flushNow, pushSetting } from "../ipc/settingsSync";
+import type { TerminalScheme } from "../themes";
 import { isTauri } from "../ipc/transport";
 import { env } from "../platform";
 import { genId } from "../genId";
@@ -75,9 +76,10 @@ import {
   applyTheme,
   applyVisual,
   loadTheme,
-  resolveTheme,
+  terminalBase,
   type AccentChoice,
   type DarkStyle,
+  type LightStyle,
   type Density,
   type DividerStyle,
   type InspectorTab,
@@ -1055,6 +1057,8 @@ interface TermStore {
 
   // Vlinx appearance settings, driven by `data-*` attributes and persisted in `vlx-settings`.
   darkStyle: DarkStyle;
+  lightStyle: LightStyle;
+  terminalScheme: TerminalScheme;
   accent: AccentChoice;
   density: Density;
   paneStyle: PaneStyle;
@@ -1500,6 +1504,10 @@ interface TermStore {
 
   // Persisted Vlinx appearance settings applied through `data-*` attributes.
   setDarkTheme: (style: DarkStyle) => void;
+  /** Choose the theme each mode uses, without switching modes. */
+  setDarkStyle: (style: DarkStyle) => void;
+  setLightStyle: (style: LightStyle) => void;
+  setTerminalScheme: (scheme: TerminalScheme) => void;
   setAccent: (v: AccentChoice) => void;
   setDensity: (v: Density) => void;
   setPaneStyle: (v: PaneStyle) => void;
@@ -1718,6 +1726,8 @@ function persistAndApplyVisual(getState: () => TermStore) {
   const s = getState();
   const ps: PersistedSettings = {
     darkStyle: s.darkStyle,
+    lightStyle: s.lightStyle,
+    terminalScheme: s.terminalScheme,
     accent: s.accent,
     density: s.density,
     paneStyle: s.paneStyle,
@@ -1922,7 +1932,8 @@ let lastNotifiedScheme: ResolvedTheme | null = null;
  */
 function notifyAgentsColorScheme(getState: () => TermStore) {
   const s = getState();
-  const resolved = resolveTheme(s.theme);
+  // Claude draws for the terminal it sits in, so a fixed terminal palette's brightness wins over the app's.
+  const resolved = terminalBase(s.theme);
   if (resolved === lastNotifiedScheme) return;
   lastNotifiedScheme = resolved;
   const seq = resolved === "dark" ? "\x1b[?997;1n" : "\x1b[?997;2n";
@@ -4326,14 +4337,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
   toggleBottom: () => set((s) => ({ bottomExpanded: !s.bottomExpanded })),
   toggleTheme: () => {
     const mode: Theme = get().theme === "dark" ? "light" : "dark";
-    applyTheme(mode, get().darkStyle);
+    applyTheme(mode, get().darkStyle, get().lightStyle);
     pushSetting("vlx-theme", mode); // Mirror to backend for cross-shell sharing.
     persistAndApplyVisual(get); // Re-resolve automatic accents and publish `vlx-settings`.
     set({ theme: mode });
     notifyAgentsColorScheme(get);
   },
   setTheme: (mode) => {
-    applyTheme(mode, get().darkStyle);
+    applyTheme(mode, get().darkStyle, get().lightStyle);
     pushSetting("vlx-theme", mode); // Mirror to backend for cross-shell sharing.
     persistAndApplyVisual(get);
     set({ theme: mode });
@@ -4646,6 +4657,21 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set({ darkStyle: style });
     get().setTheme("dark");
   },
+  setDarkStyle: (style) => {
+    set({ darkStyle: style });
+    applyTheme(get().theme, style, get().lightStyle);
+    persistAndApplyVisual(get);
+  },
+  setLightStyle: (style) => {
+    set({ lightStyle: style });
+    applyTheme(get().theme, get().darkStyle, style);
+    persistAndApplyVisual(get);
+  },
+  setTerminalScheme: (scheme) => {
+    set({ terminalScheme: scheme });
+    persistAndApplyVisual(get);
+    notifyAgentsColorScheme(get);
+  },
   setAccent: (v) => {
     set({ accent: v });
     persistAndApplyVisual(get);
@@ -4895,7 +4921,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
     persistAndApplyVisual(get);
   },
   applyAppearance: () => {
-    applyTheme(get().theme, get().darkStyle);
+    applyTheme(get().theme, get().darkStyle, get().lightStyle);
     persistAndApplyVisual(get);
     notifyAgentsColorScheme(get);
   },
@@ -4911,7 +4937,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
       cleanPastedImages: loadCleanPastedImages(),
       recordSessions: loadRecordSessions(),
     });
-    applyTheme(theme, ps.darkStyle);
+    applyTheme(theme, ps.darkStyle, ps.lightStyle);
     applyVisual(visualOf(ps));
     notifyAgentsColorScheme(get);
   },
