@@ -5,6 +5,7 @@
 # tauri.fg.conf.json gives the edition its own product name, identifier (and so its own data dir, lock and
 # credentials), binary name and a disabled updater. VLX_USER_INTEGRATIONS=off leaves the user-global vela command
 # and ~/.claude / ~/.codex skills to the primary install, so the two editions do not overwrite each other's copies.
+# On a machine where VelaTerm fg is the only edition, build with VLX_USER_INTEGRATIONS=on so it manages them itself.
 #
 # Output: src-tauri/target/release/bundle/nsis/VelaTerm fg_<version>_x64-setup.exe
 #
@@ -22,5 +23,5 @@ case "$(uname -s)" in
     fi ;;
 esac
 
-export VLX_USER_INTEGRATIONS=off
+export VLX_USER_INTEGRATIONS="${VLX_USER_INTEGRATIONS:-off}"
 exec pnpm tauri build --config src-tauri/tauri.fg.conf.json --bundles nsis "$@"
