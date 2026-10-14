@@ -16,6 +16,7 @@ import { env, platform } from "../../platform";
 import { useTermStore } from "../../store/termStore";
 import { runAfterInitialSettings } from "../../store/settingsWatch";
 import { resolveTheme } from "../../theme";
+import { namedTheme } from "../../themes";
 import { ShareModal } from "../../components/ShareModal";
 import { AppMenuBar } from "./AppMenuBar";
 import { ConnectRemotePanel } from "./ConnectRemotePanel";
@@ -59,7 +60,7 @@ export function TitleBar() {
   const hotReloadTime = useHotReloadTime();
   const theme = useTermStore((s) => s.theme);
   const setTheme = useTermStore((s) => s.setTheme);
-  const setDarkTheme = useTermStore((s) => s.setDarkTheme);
+  const darkStyle = useTermStore((s) => s.darkStyle);
   const leftCollapsed = useTermStore((s) => s.leftCollapsed);
   const toggleLeft = useTermStore((s) => s.toggleLeft);
   const rightCollapsed = useTermStore((s) => s.rightCollapsed);
@@ -133,7 +134,7 @@ export function TitleBar() {
     backend: string;
   } | null>(null);
   const resolved = resolveTheme(theme);
-  const darkThemeLabel = t("titlebar.themeClassicDark");
+  const darkThemeLabel = namedTheme("dark", darkStyle)?.label ?? t("titlebar.themeClassicDark");
 
   // Compare bundle __APP_VERSION__ from package.json with backend app_version from Cargo.toml at
   // startup. Release scripts update both, but remote deployments or manual edits can drift. Report
@@ -448,9 +449,11 @@ export function TitleBar() {
         <button
           className={theme === "dark" ? "on" : ""}
           aria-pressed={theme === "dark"}
-          title={t("titlebar.themeClassicDark")}
-          aria-label={t("titlebar.themeClassicDark")}
-          onClick={() => runAfterInitialSettings(() => setDarkTheme("classic"))}
+          title={darkThemeLabel}
+          aria-label={darkThemeLabel}
+          // Switching modes keeps the chosen dark theme. Read nothing from this render: the click can be
+          // deferred until saved settings have loaded, and the theme it should keep is the loaded one.
+          onClick={() => runAfterInitialSettings(() => setTheme("dark"))}
         >
           <Icons.moon size={14} fill />
         </button>
