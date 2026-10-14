@@ -53,3 +53,4 @@ pub mod usage_store;
 pub mod permission_state;
 pub mod plan_execute;
 pub mod tell;
+pub mod tell_tui;
