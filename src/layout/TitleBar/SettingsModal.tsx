@@ -9,7 +9,7 @@ import { Backdrop } from "../../components/Backdrop";
 import { CompletionModeField } from "./CompletionModeField";
 import { FontSelect, useFontCatalog } from "./FontSelect";
 import Select, { type SelectOption } from "../../components/Select";
-import { DARK_THEMES, LIGHT_THEMES } from "../../themes";
+import { DARK_THEMES, LIGHT_THEMES, type TerminalScheme } from "../../themes";
 
 /** Classic first, then a mode's named themes by their own names, which are not translated. */
 function themeOptions<T extends string>(themes: Record<string, { label: string }>, classic: string): SelectOption<T>[] {
@@ -325,6 +325,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setDarkStyle = useTermStore((s) => s.setDarkStyle);
   const lightStyle = useTermStore((s) => s.lightStyle);
   const setLightStyle = useTermStore((s) => s.setLightStyle);
+  const terminalScheme = useTermStore((s) => s.terminalScheme);
+  const setTerminalScheme = useTermStore((s) => s.setTerminalScheme);
   const navLayout = useTermStore((s) => s.navLayout);
   const setAccent = useTermStore((s) => s.setAccent);
   const setDensity = useTermStore((s) => s.setDensity);
@@ -532,6 +534,23 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     value={lightStyle}
                     onChange={setLightStyle}
                     options={themeOptions(LIGHT_THEMES, t("settings.themeClassic"))}
+                    size="sm"
+                    width={180}
+                    menuWidth={196}
+                    align="right"
+                  />
+                </Field>
+                <Field label={t("settings.terminalScheme")}>
+                  <Select<TerminalScheme>
+                    value={terminalScheme}
+                    onChange={setTerminalScheme}
+                    options={[
+                      { value: "theme", label: t("settings.terminalSchemeTheme") },
+                      { value: "classic-dark", label: t("titlebar.themeClassicDark"), separatorBefore: true },
+                      { value: "classic-light", label: t("settings.terminalSchemeClassicLight") },
+                      ...themeOptions<TerminalScheme>(DARK_THEMES, "").slice(1),
+                      ...themeOptions<TerminalScheme>(LIGHT_THEMES, "").slice(1),
+                    ]}
                     size="sm"
                     width={180}
                     menuWidth={196}

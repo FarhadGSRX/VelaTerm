@@ -440,6 +440,9 @@ const ja: typeof en = {
   "settings.darkTheme": "ダークテーマ", // Dark theme
   "settings.lightTheme": "ライトテーマ", // Light theme
   "settings.themeClassic": "クラシック", // Classic
+  "settings.terminalScheme": "ターミナルの配色", // Terminal colors
+  "settings.terminalSchemeTheme": "テーマに合わせる", // Follow theme
+  "settings.terminalSchemeClassicLight": "クラシック ライト", // Classic Light
   "settings.accent": "アクセント", // Accent
   "settings.accentAuto": "テーマに従う", // Follow theme
   "settings.density": "密度", // Density

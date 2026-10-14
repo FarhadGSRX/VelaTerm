@@ -440,6 +440,9 @@ const ko: typeof en = {
   "settings.darkTheme": "다크 테마", // Dark theme
   "settings.lightTheme": "라이트 테마", // Light theme
   "settings.themeClassic": "클래식", // Classic
+  "settings.terminalScheme": "터미널 색상", // Terminal colors
+  "settings.terminalSchemeTheme": "테마 따르기", // Follow theme
+  "settings.terminalSchemeClassicLight": "클래식 라이트", // Classic Light
   "settings.accent": "강조색", // Accent
   "settings.accentAuto": "테마 따름", // Follow theme
   "settings.density": "밀도", // Density

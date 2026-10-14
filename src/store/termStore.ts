@@ -30,6 +30,7 @@ import {
 } from "../ipc/sessionState";
 import type { BackgroundRun } from "../ipc/runs";
 import { pushSetting } from "../ipc/settingsSync";
+import type { TerminalScheme } from "../themes";
 import { isTauri } from "../ipc/transport";
 import { env } from "../platform";
 import { genId } from "../genId";
@@ -75,7 +76,7 @@ import {
   applyTheme,
   applyVisual,
   loadTheme,
-  resolveTheme,
+  terminalBase,
   type AccentChoice,
   type DarkStyle,
   type LightStyle,
@@ -1051,6 +1052,7 @@ interface TermStore {
   // Vlinx appearance settings, driven by `data-*` attributes and persisted in `vlx-settings`.
   darkStyle: DarkStyle;
   lightStyle: LightStyle;
+  terminalScheme: TerminalScheme;
   accent: AccentChoice;
   density: Density;
   paneStyle: PaneStyle;
@@ -1494,6 +1496,7 @@ interface TermStore {
   /** Choose the theme each mode uses, without switching modes. */
   setDarkStyle: (style: DarkStyle) => void;
   setLightStyle: (style: LightStyle) => void;
+  setTerminalScheme: (scheme: TerminalScheme) => void;
   setAccent: (v: AccentChoice) => void;
   setDensity: (v: Density) => void;
   setPaneStyle: (v: PaneStyle) => void;
@@ -1705,6 +1708,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
   const ps: PersistedSettings = {
     darkStyle: s.darkStyle,
     lightStyle: s.lightStyle,
+    terminalScheme: s.terminalScheme,
     accent: s.accent,
     density: s.density,
     paneStyle: s.paneStyle,
@@ -1906,7 +1910,8 @@ let lastNotifiedScheme: ResolvedTheme | null = null;
  */
 function notifyAgentsColorScheme(getState: () => TermStore) {
   const s = getState();
-  const resolved = resolveTheme(s.theme);
+  // Claude draws for the terminal it sits in, so a fixed terminal palette's brightness wins over the app's.
+  const resolved = terminalBase(s.theme);
   if (resolved === lastNotifiedScheme) return;
   lastNotifiedScheme = resolved;
   const seq = resolved === "dark" ? "\x1b[?997;1n" : "\x1b[?997;2n";
@@ -4623,6 +4628,11 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set({ lightStyle: style });
     applyTheme(get().theme, get().darkStyle, style);
     persistAndApplyVisual(get);
+  },
+  setTerminalScheme: (scheme) => {
+    set({ terminalScheme: scheme });
+    persistAndApplyVisual(get);
+    notifyAgentsColorScheme(get);
   },
   setAccent: (v) => {
     set({ accent: v });

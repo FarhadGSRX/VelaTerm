@@ -440,6 +440,9 @@ const de: typeof en = {
   "settings.darkTheme": "Dunkles Design", // Dark theme
   "settings.lightTheme": "Helles Design", // Light theme
   "settings.themeClassic": "Klassisch", // Classic
+  "settings.terminalScheme": "Terminalfarben", // Terminal colors
+  "settings.terminalSchemeTheme": "Design folgen", // Follow theme
+  "settings.terminalSchemeClassicLight": "Klassisch hell", // Classic Light
   "settings.accent": "Akzent", // Accent
   "settings.accentAuto": "Thema folgen", // Follow theme
   "settings.density": "Dichte", // Density

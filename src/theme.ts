@@ -8,7 +8,15 @@
 import type { ITheme } from "@xterm/xterm";
 import { invoke, isTauri } from "./ipc/transport";
 import { setXtermTheme } from "./terminal/registry";
-import { accentTokens, chromeTokens, namedTheme, type DarkStyle, type LightStyle, type ThemeDef } from "./themes";
+import {
+  accentTokens,
+  chromeTokens,
+  namedTheme,
+  type DarkStyle,
+  type LightStyle,
+  type TerminalScheme,
+  type ThemeDef,
+} from "./themes";
 
 /** User-selected color-scheme mode; this is the persisted value. */
 export type ThemeMode = "system" | "dark" | "light";
@@ -38,6 +46,8 @@ export interface VisualSettings {
   darkStyle: DarkStyle;
   /** Theme used in light mode: "classic" or a named light theme. */
   lightStyle: LightStyle;
+  /** Terminal palette: "theme" follows the mode's theme; anything else fixes the grid to that palette. */
+  terminalScheme: TerminalScheme;
   accent: AccentChoice;
   density: Density;
   paneStyle: PaneStyle;
@@ -193,16 +203,32 @@ export const XTERM_THEME: Record<ResolvedTheme, ITheme> = {
 /** Themes last applied for each mode. Module state so every terminal mount and the chrome read the same ones. */
 let activeDarkStyle: DarkStyle = "classic";
 let activeLightStyle: LightStyle = "classic";
+let activeTerminalScheme: TerminalScheme = "theme";
 
 /** The named theme painting a resolved mode, or null when that mode uses the classic look. */
 function activeTheme(resolved: ResolvedTheme): ThemeDef | null {
   return namedTheme(resolved, resolved === "dark" ? activeDarkStyle : activeLightStyle);
 }
 
+/** The fixed terminal palette and the brightness it is drawn for, or null while the terminal follows the theme. */
+function terminalOverride(): { theme: ITheme; base: ResolvedTheme } | null {
+  if (activeTerminalScheme === "theme") return null;
+  if (activeTerminalScheme === "classic-dark") return { theme: XTERM_THEME.dark, base: "dark" };
+  if (activeTerminalScheme === "classic-light") return { theme: XTERM_THEME.light, base: "light" };
+  const named = namedTheme("dark", activeTerminalScheme) ?? namedTheme("light", activeTerminalScheme);
+  return named ? { theme: named.terminal, base: named.base } : null;
+}
+
 /** Use the same palette for live terminals, newly mounted panes, and recording playback. */
 export function xtermTheme(mode: ThemeMode): ITheme {
   const resolved = resolveTheme(mode);
-  return activeTheme(resolved)?.terminal ?? XTERM_THEME[resolved];
+  return terminalOverride()?.theme ?? activeTheme(resolved)?.terminal ?? XTERM_THEME[resolved];
+}
+
+/** The brightness terminal content is drawn for: a fixed palette's own, otherwise the mode's. Agents that pick
+ * their colors by light/dark (Claude's `theme` setting) should follow this rather than the app chrome. */
+export function terminalBase(mode: ThemeMode): ResolvedTheme {
+  return terminalOverride()?.base ?? resolveTheme(mode);
 }
 
 /** Inline custom properties written by the last applyThemeChrome, so switching back to classic removes them. */
@@ -220,9 +246,11 @@ function applyThemeChrome(resolved: ResolvedTheme) {
   for (const prop of appliedChromeProps) root.style.removeProperty(prop);
   appliedChromeProps = [];
   const theme = activeTheme(resolved);
-  if (!theme) return;
   const hue = (root.dataset.accent as AccentName | undefined) ?? effectiveAccent("auto", resolved);
-  const tokens = { ...chromeTokens(theme), ...accentTokens(theme, hue) };
+  const tokens: Record<string, string> = theme ? { ...chromeTokens(theme), ...accentTokens(theme, hue) } : {};
+  // A fixed terminal palette brings its own background; the pane behind xterm follows it so no seam shows.
+  const fixed = terminalOverride();
+  if (fixed) tokens["--bg-term"] = String(fixed.theme.background);
   for (const [prop, value] of Object.entries(tokens)) {
     root.style.setProperty(prop, value);
     appliedChromeProps.push(prop);
@@ -302,6 +330,7 @@ export function applyVisual(s: VisualSettings) {
   const resolved = (root.dataset.theme as ResolvedTheme) || resolveTheme("system");
   activeDarkStyle = s.darkStyle;
   activeLightStyle = s.lightStyle;
+  activeTerminalScheme = s.terminalScheme;
   root.dataset.accent = effectiveAccent(s.accent, resolved);
   // The accent picks which of the theme's hues the accent tokens take, so repaint after it is known.
   applyThemeChrome(resolved);
