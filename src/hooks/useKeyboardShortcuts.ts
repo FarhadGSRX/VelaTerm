@@ -34,6 +34,16 @@ import {
   type ShortcutAction,
 } from "./shortcutRegistry";
 
+/**
+ * Whether `e` is Cmd/Ctrl(+Shift)+Tab with at least two open tabs to cycle. Below two tabs cycling is a
+ * no-op, so the combo stays unconsumed: the global handler leaves it alone and usePtySession lets xterm
+ * deliver it to the shell as before. Either modifier is accepted on every platform, the way a browser's
+ * Ctrl+Tab is, so this deliberately does not use the platform-exclusive hasMod.
+ */
+export function isTabCycleKey(e: KeyboardEvent): boolean {
+  return (e.metaKey || e.ctrlKey) && e.key === "Tab" && useTermStore.getState().openTabs.length > 1;
+}
+
 export function useKeyboardShortcuts() {
   useEffect(() => {
     // Zero-based Cmd+1–9 tab index, with layout/IME-independent e.code fallback; otherwise -1.
@@ -59,20 +69,14 @@ export function useKeyboardShortcuts() {
       // ── Fixed shortcut 2: Cmd+Tab cycles open tabs, Shift reverses, both directions wrap ──
       // Plain next/previous over the visible `openTabs` order, not most-recently-used; `liveTabs` is a
       // background pool and never part of the cycle. usePtySession blocks the combo from xterm so the
-      // shell does not also receive HT/CBT.
-      // The modifier is tested here rather than at the top: upstream removed the early `if (!mod) return`
-      // and pushed the check down into each branch, so an unguarded Tab would swallow the plain Tab the
-      // shell needs for completion. Deliberately NOT hasMod, which is platform-exclusive (Cmd xor Ctrl):
-      // tab cycling accepts either modifier on every platform, the way a browser's Ctrl+Tab does.
-      if ((e.metaKey || e.ctrlKey) && e.key === "Tab") {
+      // shell does not also receive HT/CBT; both sides gate on isTabCycleKey.
+      if (isTabCycleKey(e)) {
         const { openTabs, activeTabId, setActiveTab } = useTermStore.getState();
-        if (openTabs.length > 1) {
-          e.preventDefault();
-          // Clamp an unknown active tab to 0 so either direction still lands in range.
-          const from = Math.max(0, openTabs.indexOf(activeTabId ?? ""));
-          const step = e.shiftKey ? -1 : 1;
-          setActiveTab(openTabs[(from + step + openTabs.length) % openTabs.length]);
-        }
+        e.preventDefault();
+        // Clamp an unknown active tab to 0 so either direction still lands in range.
+        const from = Math.max(0, openTabs.indexOf(activeTabId ?? ""));
+        const step = e.shiftKey ? -1 : 1;
+        setActiveTab(openTabs[(from + step + openTabs.length) % openTabs.length]);
         return;
       }
 

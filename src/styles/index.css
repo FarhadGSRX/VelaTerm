@@ -80,7 +80,7 @@ body {
    keeps every wrapped line on the overlay's background, and xterm sizes the textarea from the same
    bounds. The inline line-height of one cell stays, so wrapped lines align with terminal rows. */
 .xterm .composition-view {
-  background: var(--bg-term);
+  background: var(--bg-xterm);
   color: var(--text);
   right: 0;
   height: auto !important;

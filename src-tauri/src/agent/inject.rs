@@ -281,8 +281,9 @@ pub(crate) fn set_resume_prompt(sid: &str, prompt: &str) {
     resume_prompts().lock().unwrap_or_else(|e| e.into_inner()).insert(sid.to_string(), prompt.to_string());
 }
 
-pub(crate) fn clear_resume_prompt(sid: &str) {
-    resume_prompts().lock().unwrap_or_else(|e| e.into_inner()).remove(sid);
+/** Drop a registered prompt. Returns whether it was still there, i.e. no launch consumed it. */
+pub(crate) fn clear_resume_prompt(sid: &str) -> bool {
+    resume_prompts().lock().unwrap_or_else(|e| e.into_inner()).remove(sid).is_some()
 }
 
 fn take_resume_prompt(sid: &str) -> Option<String> {

@@ -195,6 +195,12 @@ export function mix(fg: string, bg: string, pct: number): string {
     .join("")}`;
 }
 
+/** WCAG contrast ratio between two #rrggbb colors. */
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 /** WCAG relative luminance of #rrggbb. */
 function luminance(hex: string): number {
   const [r, g, b] = [0, 1, 2].map((i) => {
@@ -245,7 +251,7 @@ export function accentTokens(theme: ThemeDef, hue: AccentHue): Record<string, st
   };
   const accent = theme.accents?.[hue] ?? fallback[hue];
   const soft = theme.base === "dark" ? "29" : "24";
-  // Light accents take the palette's darkest color as text, dark ones its lightest.
+  // Text on an accent is whichever end of the palette contrasts with it more.
   const [darkest, lightest] = theme.base === "dark"
     ? [theme.terminal.background, theme.terminal.foreground]
     : [theme.terminal.foreground, theme.terminal.background];
@@ -254,6 +260,6 @@ export function accentTokens(theme: ThemeDef, hue: AccentHue): Record<string, st
     "--accent-soft": `${accent}${soft}`,
     "--accent-line": `${accent}80`,
     "--accent-green-swatch": hue === "green" ? accent : chrome["--green"],
-    "--text-on-accent": luminance(accent) > 0.4 ? darkest : lightest,
+    "--text-on-accent": contrast(accent, darkest) >= contrast(accent, lightest) ? darkest : lightest,
   };
 }

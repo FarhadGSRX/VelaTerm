@@ -29,6 +29,7 @@ import { SESSION_DRAG_MIME, SESSION_MULTI_DRAG_MIME } from "../CenterPane/paneDr
 import { DEFAULT_BINDINGS, formatCombo } from "../../hooks/shortcutRegistry";
 import { treeKeyAction, type KeyNavRow } from "./treeKeyNav";
 import { focusTerminal } from "../../terminal/registry";
+import { focusComposer } from "../CenterPane/session/composerFocus";
 import { useGitBranch } from "../../hooks/useGitBranch";
 import { stripControlChars, useCtrlCharGuard } from "../../hooks/textInputGuards";
 import { setProjectCollection } from "../../store/projectCollections";
@@ -276,6 +277,18 @@ const SessionRow = memo(function SessionRow(p: SessionRowProps) {
     </div>
   );
 });
+
+/** Hand the keyboard to a session's own input: its composer for a chat-engine session, which has no
+ * xterm, and its terminal otherwise. Waits a frame so a session that was just opened is displayed, and its
+ * chat pane mounted, before focusing; an element under display:none cannot take focus. */
+function focusSessionInput(id: string) {
+  requestAnimationFrame(() => {
+    const { sessions, ephemeralSessions } = useTermStore.getState();
+    const session = ephemeralSessions[id] ?? sessions.find((s) => s.id === id);
+    if (session?.engine === "chat") focusComposer(id);
+    else focusTerminal(id);
+  });
+}
 
 export function ProjectTree(h: TreeHandlers) {
   const t = useT();
@@ -913,7 +926,7 @@ export function ProjectTree(h: TreeHandlers) {
       e.preventDefault();
       e.stopPropagation();
       const { activeSessionId } = useTermStore.getState();
-      if (activeSessionId) focusTerminal(activeSessionId);
+      if (activeSessionId) focusSessionInput(activeSessionId);
       return;
     }
     const action = treeKeyAction(navRows, cursorIndex, e.key);
@@ -936,9 +949,9 @@ export function ProjectTree(h: TreeHandlers) {
     }
     activateNode({ id: row.id, kind: row.kind }, row.kind === "session", false);
     // Enter means "go to this session", so focus must follow even when it is ALREADY active --
-    // TerminalView only grabs focus on the transition into active, so re-selecting the current
-    // session would otherwise leave the keyboard stranded in the tree.
-    if (row.kind === "session") focusTerminal(row.id);
+    // TerminalView only grabs focus on the transition into active, and ChatPane never does, so
+    // re-selecting the session would otherwise leave the keyboard stranded in the tree.
+    if (row.kind === "session") focusSessionInput(row.id);
   };
 
   // Entering the tree with nothing current starts at the active session when it is on screen, so
@@ -1593,6 +1606,10 @@ export function ProjectTree(h: TreeHandlers) {
               aria-expanded={navRows[vi.index].expandable ? navRows[vi.index].expanded : undefined}
               aria-selected={selectedIds.has(rows[vi.index].id)}
               data-cursor={rows[vi.index].id === cursorId ? "true" : undefined}
+              // A click puts the keyboard cursor on its row, so Enter after it acts on what was clicked
+              // rather than on wherever the arrows last left off. Capture phase, because the chevron
+              // stops its click from bubbling. Selection itself stays with the row's own handlers.
+              onClickCapture={() => setCursorId(rows[vi.index].id)}
               style={{
                 position: "absolute",
                 top: vi.start,

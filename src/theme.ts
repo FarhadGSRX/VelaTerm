@@ -261,8 +261,9 @@ function applyThemeChrome(resolved: ResolvedTheme) {
   const hue = (root.dataset.accent as AccentName | undefined) ?? effectiveAccent("auto", resolved);
   const tokens: Record<string, string> = theme ? { ...chromeTokens(theme), ...accentTokens(theme, hue) } : {};
   // A fixed terminal palette brings its own background; the pane behind xterm follows it so no seam shows.
+  // Only that pane: --bg-term itself stays the theme's, since documents and conversations also paint with it.
   const fixed = terminalOverride();
-  if (fixed) tokens["--bg-term"] = String(fixed.theme.background);
+  if (fixed) tokens["--bg-xterm"] = String(fixed.theme.background);
   for (const [prop, value] of Object.entries(tokens)) {
     root.style.setProperty(prop, value);
     appliedChromeProps.push(prop);

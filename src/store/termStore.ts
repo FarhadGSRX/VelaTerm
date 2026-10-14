@@ -18,6 +18,7 @@ import {
   spawnRequest,
   retrySpawn,
   type SpawnReceipt,
+  listShells,
   type ShellOption,
   type UsageSnapshot,
 } from "../ipc/commands";
@@ -1087,8 +1088,10 @@ interface TermStore {
   defaultShell: string;
   /** Default shell path/name for local-agent sessions; empty means the platform default. */
   agentShell: string;
-  /** Platform shells discovered once at startup for the inline selector. */
+  /** Platform shells discovered at startup for the inline selector, re-read when the default shell changes. */
   shells: ShellOption[];
+  /** Detects available shells and caches them in `shells`; on failure the list is left as is. */
+  loadShells: () => Promise<void>;
   /** Interface monospace font, or `null` for the default stack. */
   uiFontFamily: string | null;
   /** Interface font size in pixels, or `null` to follow density. */
@@ -4847,13 +4850,19 @@ export const useTermStore = create<TermStore>((set, get) => ({
     persistAndApplyVisual(get);
     // The backend reads this from app_settings at spawn time, so the debounced write has to start now rather
     // than 400 ms from now; the same reason `locateAndSaveAgentPath` flushes before restarting a session.
-    void flushNow();
+    // The backend also marks `isDefault` on the shell list from this value, and the terminal header names a
+    // session without an explicit shell after that entry, so re-read the list once the write has landed.
+    void flushNow().then(() => get().loadShells());
   },
   setAgentShell: (v) => {
     set({ agentShell: v });
     persistAndApplyVisual(get);
     void flushNow();
   },
+  loadShells: () =>
+    listShells()
+      .then((shells) => set({ shells }))
+      .catch(() => {}),
   setUiFontFamily: (v) => {
     set({ uiFontFamily: v && v.trim() ? v.trim() : null });
     persistAndApplyVisual(get);

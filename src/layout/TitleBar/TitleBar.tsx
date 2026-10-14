@@ -60,7 +60,6 @@ export function TitleBar() {
   const hotReloadTime = useHotReloadTime();
   const theme = useTermStore((s) => s.theme);
   const setTheme = useTermStore((s) => s.setTheme);
-  const setDarkTheme = useTermStore((s) => s.setDarkTheme);
   const darkStyle = useTermStore((s) => s.darkStyle);
   const leftCollapsed = useTermStore((s) => s.leftCollapsed);
   const toggleLeft = useTermStore((s) => s.toggleLeft);
@@ -452,7 +451,9 @@ export function TitleBar() {
           aria-pressed={theme === "dark"}
           title={darkThemeLabel}
           aria-label={darkThemeLabel}
-          onClick={() => runAfterInitialSettings(() => setDarkTheme(darkStyle))}
+          // Switching modes keeps the chosen dark theme. Read nothing from this render: the click can be
+          // deferred until saved settings have loaded, and the theme it should keep is the loaded one.
+          onClick={() => runAfterInitialSettings(() => setTheme("dark"))}
         >
           <Icons.moon size={14} fill />
         </button>

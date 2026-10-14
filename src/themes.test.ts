@@ -61,13 +61,29 @@ describe("app themes", () => {
     expect(mix("#ffffff", "#000000", 50)).toBe("#808080");
   });
 
-  it("puts legible text on every accent", () => {
+  it("puts the more legible end of the palette on every accent", () => {
+    const ratio = (a: string, b: string) => {
+      const lum = (hex: string) =>
+        [0, 1, 2]
+          .map((i) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255)
+          .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+          .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    for (const theme of [...Object.values(DARK_THEMES), ...Object.values(LIGHT_THEMES)]) {
+      for (const hue of ["green", "blue", "amber", "violet"] as const) {
+        const tokens = accentTokens(theme, hue);
+        const other =
+          tokens["--text-on-accent"] === theme.terminal.background ? theme.terminal.foreground : theme.terminal.background;
+        expect(ratio(tokens["--accent"], tokens["--text-on-accent"])).toBeGreaterThanOrEqual(
+          ratio(tokens["--accent"], other),
+        );
+      }
+    }
+    // Adventure Time's violet is mid-tone: indigo on it reads at about 5.8:1, cream only about 2.1:1.
     const at = DARK_THEMES["adventure-time"];
-    expect(accentTokens(at, "green")["--accent"]).toBe("#9eff6e");
-    // A light lime accent takes the dark indigo as text, a deep blue one takes the light foreground.
-    expect(accentTokens(at, "green")["--text-on-accent"]).toBe(at.terminal.background);
-    const campbell = DARK_THEMES["campbell-powershell"];
-    expect(accentTokens(campbell, "blue")["--text-on-accent"]).toBe(campbell.terminal.foreground);
+    expect(accentTokens(at, "violet")["--text-on-accent"]).toBe(at.terminal.background);
   });
 
   it("paints the chrome and the terminal in its own mode and removes everything for classic", () => {
@@ -109,7 +125,9 @@ describe("app themes", () => {
     applyTheme("dark", "adventure-time");
     applyVisual(visual({ darkStyle: "adventure-time", terminalScheme: "campbell-powershell" }));
     expect(xtermTheme("dark")).toBe(DARK_THEMES["campbell-powershell"].terminal);
-    expect(prop("--bg-term")).toBe("#012456");
+    expect(prop("--bg-xterm")).toBe("#012456");
+    // Documents and conversations keep the theme's own surface.
+    expect(prop("--bg-term")).toBe("#1f1d45");
     expect(prop("--bg-0")).toBe("#191738");
 
     // A light palette in a dark app: the grid and agents that pick colors by brightness follow the palette.
