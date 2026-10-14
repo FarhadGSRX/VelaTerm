@@ -259,6 +259,8 @@ export function accentTokens(theme: ThemeDef, hue: AccentHue): Record<string, st
     "--accent": accent,
     "--accent-soft": `${accent}${soft}`,
     "--accent-line": `${accent}80`,
+    // Selected-row tint; read as var(--accent-dim, …) where a stock-green rgba fallback would otherwise show.
+    "--accent-dim": `${accent}1f`,
     "--accent-green-swatch": hue === "green" ? accent : chrome["--green"],
     "--text-on-accent": contrast(accent, darkest) >= contrast(accent, lightest) ? darkest : lightest,
   };

@@ -92,6 +92,7 @@ describe("app themes", () => {
     expect(document.documentElement.dataset.darkStyle).toBe("adventure-time");
     expect(prop("--bg-term")).toBe("#1f1d45");
     expect(prop("--accent")).toBe("#9eff6e");
+    expect(prop("--accent-dim")).toBe("#9eff6e1f");
     expect(xtermTheme("dark")).toBe(DARK_THEMES["adventure-time"].terminal);
     // Light mode keeps its own theme, classic here.
     expect(xtermTheme("light")).toBe(XTERM_THEME.light);
@@ -100,6 +101,7 @@ describe("app themes", () => {
     applyVisual(visual({}));
     for (const token of CHROME_TOKENS) expect(prop(token)).toBe("");
     expect(prop("--accent")).toBe("");
+    expect(prop("--accent-dim")).toBe("");
     expect(xtermTheme("dark")).toBe(XTERM_THEME.dark);
   });
 
