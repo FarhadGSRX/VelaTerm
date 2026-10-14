@@ -458,6 +458,7 @@ const vi: typeof en = {
   "settings.tabMulti": "Nhiều",
   "settings.maxLiveTabs": "Giới hạn nền",
   "settings.defaultShell": "Shell mặc định",
+  "settings.agentShell": "Shell tác nhân",
   "settings.spawnConfirm": "Xác nhận trước khi tạo phiên",
   "settings.usageAuto": "Tự động làm mới mức sử dụng",
   "settings.usageRefresh": "Làm mới mức sử dụng",

@@ -458,6 +458,7 @@ const de: typeof en = {
   "settings.tabMulti": "Mehrere", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "Standard-Shell", // Default shell
+  "settings.agentShell": "Agent-Shell", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh

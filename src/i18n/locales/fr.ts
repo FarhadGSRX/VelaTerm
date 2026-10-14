@@ -459,6 +459,7 @@ const fr: typeof en = {
   "settings.tabMulti": "Multiples", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "Shell par défaut", // Default shell
+  "settings.agentShell": "Shell de l'agent", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh

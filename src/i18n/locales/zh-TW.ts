@@ -455,6 +455,7 @@ const zhTW: typeof en = {
   "settings.tabMulti": "多分頁", // Multi
   "settings.maxLiveTabs": "背景保活上限", // Background limit
   "settings.defaultShell": "預設 Shell", // Default shell
+  "settings.agentShell": "代理 Shell", // Agent shell
   "settings.spawnConfirm": "派生前確認", // Confirm before spawn
   "settings.usageAuto": "額度自動刷新", // Usage auto-refresh
   "settings.usageRefresh": "額度刷新", // Usage refresh

@@ -459,6 +459,7 @@ const ptBR: typeof en = {
   "settings.tabMulti": "Múltiplas", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "Shell padrão", // Default shell
+  "settings.agentShell": "Shell do agente", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh

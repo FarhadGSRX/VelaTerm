@@ -454,6 +454,7 @@ const zhCN: typeof en = {
   "settings.tabMulti": "多标签",
   "settings.maxLiveTabs": "后台保活上限",
   "settings.defaultShell": "默认 Shell",
+  "settings.agentShell": "智能体 Shell",
   "settings.spawnConfirm": "派生前确认",
   "settings.usageAuto": "额度自动刷新",
   "settings.usageRefresh": "额度刷新",

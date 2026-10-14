@@ -458,6 +458,7 @@ const ja: typeof en = {
   "settings.tabMulti": "マルチ", // Multi
   "settings.maxLiveTabs": "Background limit", // Background limit
   "settings.defaultShell": "既定のシェル", // Default shell
+  "settings.agentShell": "エージェントのシェル", // Agent shell
   "settings.spawnConfirm": "Confirm before spawn", // Confirm before spawn
   "settings.usageAuto": "Usage auto-refresh", // Usage auto-refresh
   "settings.usageRefresh": "Usage refresh", // Usage refresh

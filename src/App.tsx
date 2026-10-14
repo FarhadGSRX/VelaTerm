@@ -20,7 +20,6 @@ import { RightPanel } from "./layout/RightPanel/RightPanel";
 import { StatusBar } from "./layout/StatusBar/StatusBar";
 import { TitleBar } from "./layout/TitleBar/TitleBar";
 import { runMenuAction } from "./layout/TitleBar/appMenuActions";
-import { listShells } from "./ipc/commands";
 import {
   onMenuAction,
   onPresetsChanged,
@@ -129,9 +128,7 @@ function App() {
     // Detect and cache available shells here for the inline selector. Module-level detection would
     // race WebSocket connection before remote login completes. On failure, leave an empty list so the
     // selector hides automatically.
-    void listShells()
-      .then((shells) => useTermStore.setState({ shells }))
-      .catch(() => {});
+    void useTermStore.getState().loadShells();
     // Reconcile cross-shell preferences with the shared backend as authority, applying differences once
     // and seeding missing backend keys from local values. Enable outbound sync only afterward. The same
     // helper handles the runtime broadcast below, so startup and mid-run reconciliation cannot drift.

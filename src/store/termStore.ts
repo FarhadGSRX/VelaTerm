@@ -18,6 +18,7 @@ import {
   spawnRequest,
   retrySpawn,
   type SpawnReceipt,
+  listShells,
   type ShellOption,
   type UsageSnapshot,
 } from "../ipc/commands";
@@ -29,7 +30,7 @@ import {
   type SessionStateBatch,
 } from "../ipc/sessionState";
 import type { BackgroundRun } from "../ipc/runs";
-import { pushSetting } from "../ipc/settingsSync";
+import { flushNow, pushSetting } from "../ipc/settingsSync";
 import { isTauri } from "../ipc/transport";
 import { env } from "../platform";
 import { genId } from "../genId";
@@ -1070,10 +1071,14 @@ interface TermStore {
   dynamicStatusFilter: boolean;
   /** Configurable limit for background live tabs. */
   maxLiveTabs: number;
-  /** Default shell path/name for scratch terminals; empty means system default. Explicit creation flows may override it. */
+  /** Default shell path/name for Terminal sessions; empty means system default. Explicit creation flows may override it. */
   defaultShell: string;
-  /** Platform shells discovered once at startup for the inline selector. */
+  /** Default shell path/name for local-agent sessions; empty means the platform default. */
+  agentShell: string;
+  /** Platform shells discovered at startup for the inline selector, re-read when the default shell changes. */
   shells: ShellOption[];
+  /** Detects available shells and caches them in `shells`; on failure the list is left as is. */
+  loadShells: () => Promise<void>;
   /** Interface monospace font, or `null` for the default stack. */
   uiFontFamily: string | null;
   /** Interface font size in pixels, or `null` to follow density. */
@@ -1549,6 +1554,7 @@ interface TermStore {
   setMaxLiveTabs: (v: number) => void;
   /** Sets the persisted default terminal shell; empty means system default. */
   setDefaultShell: (v: string) => void;
+  setAgentShell: (v: string) => void;
   /** Interface font family; empty or `null` uses the default stack. */
   setUiFontFamily: (v: string | null) => void;
   /** Interface font size in pixels; `null` follows density. */
@@ -1714,6 +1720,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     dynamicStatusFilter: s.dynamicStatusFilter,
     maxLiveTabs: s.maxLiveTabs,
     defaultShell: s.defaultShell,
+    agentShell: s.agentShell,
     uiFontFamily: s.uiFontFamily,
     uiFontSize: s.uiFontSize,
     termFontFamily: s.termFontFamily,
@@ -4758,7 +4765,21 @@ export const useTermStore = create<TermStore>((set, get) => ({
   setDefaultShell: (v) => {
     set({ defaultShell: v });
     persistAndApplyVisual(get);
+    // The backend reads this from app_settings at spawn time, so the debounced write has to start now rather
+    // than 400 ms from now; the same reason `locateAndSaveAgentPath` flushes before restarting a session.
+    // The backend also marks `isDefault` on the shell list from this value, and the terminal header names a
+    // session without an explicit shell after that entry, so re-read the list once the write has landed.
+    void flushNow().then(() => get().loadShells());
   },
+  setAgentShell: (v) => {
+    set({ agentShell: v });
+    persistAndApplyVisual(get);
+    void flushNow();
+  },
+  loadShells: () =>
+    listShells()
+      .then((shells) => set({ shells }))
+      .catch(() => {}),
   setUiFontFamily: (v) => {
     set({ uiFontFamily: v && v.trim() ? v.trim() : null });
     persistAndApplyVisual(get);
