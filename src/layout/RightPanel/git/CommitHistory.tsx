@@ -8,7 +8,7 @@
 //! History is loaded on demand rather than with the rest of the tab: a repository can hold hundreds
 //! of thousands of commits, and the tab polls every few seconds.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Icons from "../../../components/Icons";
 import { statusLetter } from "../../../components/diff/changeStatus";
 import { useT } from "../../../i18n";
@@ -218,14 +218,51 @@ export function CommitHistory({
   const graph = useMemo(() => layoutGraph(commits), [commits]);
   const geo = railGeometry(graph.maxLanes);
 
-  // Load the first page when the section mounts, and start over when the repository changes or the
-  // panel refreshes. Committing shifts the whole history by one, so keeping the old rows would both
-  // hide the new commit and make "Load more" re-append a row that is already on screen.
+  // Rows on screen, read by the refresh below without making it re-run on every page load.
+  const shownRef = useRef(commits);
+  shownRef.current = commits;
+
+  // Load the first page when the section mounts, and start over when the repository or the branch scope
+  // changes: those are a different history, so nothing on screen carries over.
   useEffect(() => {
     setCommits([]);
     setExpanded(null);
     loadPage(0);
-  }, [cwd, loadPage, tick]);
+  }, [loadPage]);
+
+  // A panel refresh (polled every few seconds) reloads in the background. Committing shifts the whole
+  // history by one, so the rows are fetched again from the top, as many as are shown, rather than kept or
+  // appended — but the list is not emptied first, and an unchanged history leaves the state untouched, so
+  // the graph does not blink, an expanded commit stays open, and pages loaded with "Load more" survive.
+  const refreshSeq = useRef(0);
+  useEffect(() => {
+    if (tick === 0 || shownRef.current.length === 0) return;
+    const seq = ++refreshSeq.current;
+    gitLogPage(cwd, Math.max(shownRef.current.length, PAGE), 0, allBranches)
+      .then((rows) => {
+        if (seq !== refreshSeq.current) return;
+        const shown = shownRef.current;
+        // Refs move on push and fetch, and relative times age, without the hashes changing.
+        const same =
+          rows.length === shown.length &&
+          rows.every(
+            (c, i) =>
+              c.id === shown[i].id &&
+              c.relative === shown[i].relative &&
+              c.refs.join("|") === shown[i].refs.join("|"),
+          );
+        if (!same) {
+          setCommits(rows);
+          setExpanded((open) => (open && rows.some((c) => c.hash === open) ? open : null));
+        }
+        setErr("");
+      })
+      .catch((e) => {
+        if (seq === refreshSeq.current) setErr(String(e));
+      });
+    // Only a refresh tick re-runs this; repository and scope changes are the reset above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick]);
 
   if (err) return <div className="insp-empty git-err">{err}</div>;
   if (commits.length === 0) {
@@ -246,7 +283,8 @@ export function CommitHistory({
                 className="git-commit-row"
                 onClick={() => setExpanded(open ? null : c.hash)}
                 aria-expanded={open}
-                title={`${c.hash} · ${c.author}`}
+                // The subject is usually cut off in this narrow panel, so the tooltip leads with it in full.
+                title={`${c.subject}\n${c.hash} · ${c.author} · ${c.relative}`}
               >
                 <span className="tw">
                   {open ? <Icons.chevD size={11} /> : <Icons.chevR size={11} />}
