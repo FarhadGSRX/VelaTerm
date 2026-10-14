@@ -46,6 +46,13 @@ fn is_claude_executable(name: &str) -> bool {
     name == "claude" || name == "claude.exe"
 }
 
+/// Whether a running Claude is at its prompt, from its last reported state. Every turn starts with a
+/// prompt-submit hook that reports `working`, and the state is dropped when the terminal exits, so a Claude
+/// that has reported nothing since its terminal started has not begun a turn: it is waiting for input.
+fn ready_for_input(state: Option<&str>) -> bool {
+    matches!(state, None | Some("waiting") | Some("idle"))
+}
+
 /// The receipt for a message that cannot be typed in right now, from the target's last reported state.
 fn waiting_receipt(state: Option<&str>) -> &'static str {
     if state == Some("asking") {
@@ -231,21 +238,28 @@ pub fn deliver(app: &AppCtx, target: &str, wire: &str, id: &str) -> Result<&'sta
     }
     ensure_claude_in_terminal(app, target)?;
     let state = app.pty().cached_agent_state(target);
-    if is_pending(app, id)? {
-        // A retry of a message still waiting for its turn to end: report it again rather than re-queue it.
+    if !ready_for_input(state.as_deref()) {
+        // A retry of a message still waiting for its turn to end is reported again rather than re-queued.
+        if !is_pending(app, id)? {
+            enqueue(app, target, &ids)?;
+        }
         return Ok(waiting_receipt(state.as_deref()));
     }
-    match state.as_deref() {
-        Some("waiting") | Some("idle") => {
-            type_in(app, target, wire)?;
-            mark_delivered(app, &ids);
-            Ok("sent")
-        }
-        other => {
-            enqueue(app, target, &ids)?;
-            Ok(waiting_receipt(other))
-        }
+    // Claude is at its prompt: type in everything still waiting for it, oldest first, with this message. A
+    // message queued while it was busy is otherwise held until its next turn ends, and a session that went
+    // idle before the message was queued sends no further idle notice to deliver it.
+    let waiting = take_pending(app, target);
+    let earlier: Vec<String> = waiting.iter().map(|(queued, _)| queued.clone()).filter(|queued| queued != id).collect();
+    let mut wires: Vec<String> = waiting.into_iter().filter(|(queued, _)| queued != id).map(|(_, w)| w).collect();
+    wires.push(wire.to_string());
+    if let Err(error) = type_in(app, target, &wires.join("\n\n")) {
+        let _ = enqueue(app, target, &earlier);
+        return Err(error);
     }
+    let mut all = earlier;
+    all.push(id.to_string());
+    mark_delivered(app, &all);
+    Ok("sent")
 }
 
 /// Remove and return a session's waiting messages as (id, wire), oldest first.
@@ -396,6 +410,15 @@ mod tests {
         assert!(!is_claude_executable("pwsh.exe"));
         assert!(!is_claude_executable("node.exe"));
         assert!(!is_claude_executable("claude-helper.exe"));
+    }
+
+    #[test]
+    fn a_claude_that_has_not_started_a_turn_is_ready_for_input() {
+        assert!(ready_for_input(None));
+        assert!(ready_for_input(Some("waiting")));
+        assert!(ready_for_input(Some("idle")));
+        assert!(!ready_for_input(Some("working")));
+        assert!(!ready_for_input(Some("asking")));
     }
 
     #[test]
