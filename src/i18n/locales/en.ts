@@ -446,6 +446,8 @@ const en = {
   "settings.paneFlush": "Flush",
   "settings.paneCard": "Card",
   "settings.divider": "Divider",
+  "settings.terminalScheme": "Terminal colors",
+  "settings.terminalSchemeAuto": "Follow theme",
   "settings.dividerSubtle": "Subtle",
   "settings.dividerVisible": "Visible",
   "settings.nav": "Sidebar",

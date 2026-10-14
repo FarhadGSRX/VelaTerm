@@ -30,6 +30,7 @@ import {
 } from "../ipc/sessionState";
 import type { BackgroundRun } from "../ipc/runs";
 import { flushNow, pushSetting } from "../ipc/settingsSync";
+import type { TerminalScheme } from "../terminal/schemes";
 import { isTauri } from "../ipc/transport";
 import { env } from "../platform";
 import { genId } from "../genId";
@@ -75,7 +76,7 @@ import {
   applyTheme,
   applyVisual,
   loadTheme,
-  resolveTheme,
+  terminalBase,
   type AccentChoice,
   type DarkStyle,
   type Density,
@@ -1060,6 +1061,7 @@ interface TermStore {
   paneStyle: PaneStyle;
   dividerStyle: DividerStyle;
   navLayout: NavLayout;
+  terminalScheme: TerminalScheme;
   inspectorTab: InspectorTab;
   settingsTab: SettingsTab;
   /** Files pinned to the top of the file tree, keyed by project ID. */
@@ -1504,6 +1506,7 @@ interface TermStore {
   setDensity: (v: Density) => void;
   setPaneStyle: (v: PaneStyle) => void;
   setDividerStyle: (v: DividerStyle) => void;
+  setTerminalScheme: (v: TerminalScheme) => void;
   setNavLayout: (v: NavLayout) => void;
   setInspectorTab: (v: InspectorTab) => void;
   setSettingsTab: (v: SettingsTab) => void;
@@ -1723,6 +1726,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     paneStyle: s.paneStyle,
     dividerStyle: s.dividerStyle,
     navLayout: s.navLayout,
+    terminalScheme: s.terminalScheme,
     inspectorTab: s.inspectorTab,
     settingsTab: s.settingsTab,
     favoritePaths: s.favoritePaths,
@@ -1922,7 +1926,8 @@ let lastNotifiedScheme: ResolvedTheme | null = null;
  */
 function notifyAgentsColorScheme(getState: () => TermStore) {
   const s = getState();
-  const resolved = resolveTheme(s.theme);
+  // Claude draws for the terminal it sits in, so a named terminal scheme's brightness wins over the app's.
+  const resolved = terminalBase(s.theme);
   if (resolved === lastNotifiedScheme) return;
   lastNotifiedScheme = resolved;
   const seq = resolved === "dark" ? "\x1b[?997;1n" : "\x1b[?997;2n";
@@ -4661,6 +4666,11 @@ export const useTermStore = create<TermStore>((set, get) => ({
   setDividerStyle: (v) => {
     set({ dividerStyle: v });
     persistAndApplyVisual(get);
+  },
+  setTerminalScheme: (v) => {
+    set({ terminalScheme: v });
+    persistAndApplyVisual(get);
+    notifyAgentsColorScheme(get);
   },
   setNavLayout: (v) => {
     set({ navLayout: v });

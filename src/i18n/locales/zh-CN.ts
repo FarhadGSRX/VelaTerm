@@ -443,6 +443,8 @@ const zhCN: typeof en = {
   "settings.paneFlush": "无缝",
   "settings.paneCard": "卡片",
   "settings.divider": "分隔条",
+  "settings.terminalScheme": "终端配色",
+  "settings.terminalSchemeAuto": "跟随主题",
   "settings.dividerSubtle": "极细",
   "settings.dividerVisible": "可见",
   "settings.nav": "左栏",
