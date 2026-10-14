@@ -187,7 +187,30 @@ fn wake(app: &AppCtx, target: &str, wire: &str) -> Result<(), String> {
     // ownership is released and the first tab to open the session sizes the terminal itself.
     app.pty().detach(app, target, spawned.sub_id, "vtell");
     let launch = spawned.launch.ok_or("The target terminal has no Claude launch command")?;
-    app.pty().write(target, &format!("{launch}\r"))
+    app.pty().write(target, &format!("{launch}\r"))?;
+    confirm_woken(app, target)
+}
+
+/// How long a wake waits for the resumed Claude to take its message.
+const WAKE_CONFIRM: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Wait until the woken Claude has read the message. Typing the launch command only proves the shell got it:
+/// Claude can still exit at once (a launch argument it rejects, a missing binary), leaving a bare shell. A
+/// resumed Claude submits its launch prompt as its first turn, and that turn's prompt-submit hook reports the
+/// session working, so that is the receipt. Anything else is an error, and the message is not recorded as
+/// delivered.
+fn confirm_woken(app: &AppCtx, target: &str) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + WAKE_CONFIRM;
+    while std::time::Instant::now() < deadline {
+        if !app.pty().is_running(target) {
+            return Err("The woken terminal closed before Claude read the message".into());
+        }
+        if app.pty().cached_agent_state(target).as_deref() == Some("working") {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    Err("Claude did not take the message in the woken terminal. Open the session to see why".into())
 }
 
 /// Deliver an already-recorded `session_tells` message to a terminal session.

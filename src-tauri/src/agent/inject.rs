@@ -965,7 +965,7 @@ pub fn prepare_with_args_capabilities(
             launch: None,
         },
         SessionKind::Claude => {
-            // Claude: `claude [--resume <id>] --settings <value> ["$VLX_INIT_PROMPT"]`.
+            // Claude: `claude [--resume <id>] --settings <value> [-- "$VLX_INIT_PROMPT"]`.
             // The initial prompt is the final positional argument.
             let settings = value_ref(shell, CLAUDE_SETTINGS_ENV);
             let base = match resume {
@@ -985,8 +985,11 @@ pub fn prepare_with_args_capabilities(
                 Some(message) => init_prompt_suffix(shell, None, Some(&message), &mut env),
                 None => init_prompt_suffix(shell, resume, init_prompt, &mut env),
             };
-            // Custom arguments follow built-in flags and precede the positional prompt.
+            // Custom arguments follow built-in flags and precede the positional prompt. `--` ends option
+            // parsing first: a custom argument list that ends in an option taking several values (such as
+            // `--channels <entries...>`) would otherwise take the prompt as one more of them.
             let extra = extra_args_fragment(extra_args);
+            let prompt = if prompt.is_empty() { prompt } else { format!(" --{prompt}") };
             AgentSpawn {
                 env,
                 launch: Some(launch(
@@ -3074,7 +3077,7 @@ mod tests {
         // The environment-backed prompt is the final positional argument.
         assert_launch_inner(
             &a.launch.unwrap(),
-            "claude --settings \"$VLX_CLAUDE_SETTINGS\" \"$VLX_INIT_PROMPT\"",
+            "claude --settings \"$VLX_CLAUDE_SETTINGS\" -- \"$VLX_INIT_PROMPT\"",
         );
         // Store the trimmed original in `VLX_INIT_PROMPT`, never in the command literal.
         let (_, v) = a
@@ -3124,7 +3127,7 @@ mod tests {
         );
         assert_launch_inner(
             &a.launch.unwrap(),
-            "claude --settings \"$VLX_CLAUDE_SETTINGS\" \"$VLX_INIT_PROMPT\"",
+            "claude --settings \"$VLX_CLAUDE_SETTINGS\" -- \"$VLX_INIT_PROMPT\"",
         );
         let (_, v) = a.env.iter().find(|(k, _)| k == INIT_PROMPT_ENV).unwrap();
         assert_eq!(v, "line1\nwith spaces \"quotes\" $(whoami) `id`");
@@ -3145,7 +3148,7 @@ mod tests {
         );
         assert_launch_inner(
             &a.launch.unwrap(),
-            "claude --settings $($env:VLX_CLAUDE_SETTINGS -replace '\"', '\\\"') \"$env:VLX_INIT_PROMPT\"",
+            "claude --settings $($env:VLX_CLAUDE_SETTINGS -replace '\"', '\\\"') -- \"$env:VLX_INIT_PROMPT\"",
         );
     }
 
@@ -3242,8 +3245,33 @@ mod tests {
         );
         assert_launch_inner(
             &a.launch.unwrap(),
-            "claude --settings \"$VLX_CLAUDE_SETTINGS\" --model opus \"$VLX_INIT_PROMPT\"",
+            "claude --settings \"$VLX_CLAUDE_SETTINGS\" --model opus -- \"$VLX_INIT_PROMPT\"",
         );
+    }
+
+    #[test]
+    fn a_trailing_option_with_several_values_cannot_take_the_prompt() {
+        // `--channels` accepts several entries; without `--` the prompt became one of them.
+        let a = prepare_with_args(
+            SessionKind::Claude,
+            "/bin/zsh",
+            "/exe",
+            &ep(),
+            "s",
+            None,
+            false,
+            Some("Fix the login"),
+            Some("--channels plugin:session-mesh@session-mesh"),
+            None,
+            None,
+        );
+        assert_launch_inner(
+            &a.launch.unwrap(),
+            "claude --settings \"$VLX_CLAUDE_SETTINGS\" --channels plugin:session-mesh@session-mesh -- \"$VLX_INIT_PROMPT\"",
+        );
+        // Without a prompt there is nothing to protect, and no separator.
+        let b = prepare_with_args(SessionKind::Claude, "/bin/zsh", "/exe", &ep(), "s", None, false, None, Some("--channels x"), None, None);
+        assert!(!b.launch.unwrap().contains(" -- "));
     }
 
     #[test]
@@ -3256,7 +3284,7 @@ mod tests {
         let woken = resume("wake-s");
         assert_launch_inner(
             woken.launch.as_ref().unwrap(),
-            "claude --resume 019e8662-62f8-7a01-a144-e26a07a5e5bb --settings \"$VLX_CLAUDE_SETTINGS\" \"$VLX_INIT_PROMPT\"",
+            "claude --resume 019e8662-62f8-7a01-a144-e26a07a5e5bb --settings \"$VLX_CLAUDE_SETTINGS\" -- \"$VLX_INIT_PROMPT\"",
         );
         assert!(woken.env.iter().any(|(k, v)| k == INIT_PROMPT_ENV && v.ends_with("hello")));
         // Taken once: the next resume of the same session starts without a prompt again.
