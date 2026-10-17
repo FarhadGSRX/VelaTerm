@@ -2,18 +2,18 @@
 name: vspawn-tree
 description: >-
   Same as /vspawn, but **opens a dedicated git worktree for the child session** (equivalent to vspawn --worktree).
-  Only use when the user explicitly invokes /vspawn-tree or $vspawn-tree; never auto-trigger. This is a real session run by its
+  Use when the user asks, or when a captain or lead agent needs a real crew session for delegated work. This is a real session run by its
   own process in the vlx-term left-panel tree — not an in-process sub-agent, and not a background Task. Available only
   inside vlx-term-hosted sessions.
 argument-hint: "[--plan-execute] [--review|--no-review] [--review-agent <agent>] [--review-model <model>] [--review-effort <level>] [--split-tasks] [--worktree-mode <shared|each>] [--plan-agent <agent>] [--plan-model <model>] [--plan-effort <level>] [--exec-agent <agent>] [--exec-model <model>] [--exec-effort <level>] [--cwd <path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] <task>"
-disable-model-invocation: true
 allowed-tools: Bash(vspawn-tree:*)
 ---
 
 # /vspawn-tree
 
-The user **explicitly invoked `/vspawn-tree` (Claude) or `$vspawn-tree` (Codex)** to request spawning a **standalone
-child session** under the current **vlx-term** session,
+This skill runs when the user invokes `/vspawn-tree` (Claude) or `$vspawn-tree` (Codex), or when an agent (such as
+a captain or lead delegating to its crew) decides to spawn a **standalone child session** under the current
+**vlx-term** session,
 passing the task in as its first message. The only difference from `/vspawn`: it **opens a dedicated git worktree
 for the child session** (a separate workspace/branch), suited to cases where you don't want to pollute the current
 workspace and want the child task to run on an isolated branch.

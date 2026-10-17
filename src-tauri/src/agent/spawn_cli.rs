@@ -680,6 +680,16 @@ mod tests {
         assert!(!rendered.contains("allowed-tools:"));
     }
 
+    #[test]
+    fn spawn_skills_allow_model_invocation() {
+        // Captain and lead agents spawn their crew with vspawn, so the model must be able to call it.
+        for name in ["vspawn", "vspawn-tree"] {
+            let (_, content) = SKILLS.iter().find(|(n, _)| *n == name).unwrap();
+            assert!(!content.contains("disable-model-invocation:"), "{name} must stay model-invocable");
+            assert!(!content.contains("never auto-trigger"), "{name} description still forbids agents");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn knowledge_command_preserves_arguments() {
