@@ -2164,6 +2164,16 @@ pub(crate) fn parse_wsl_distros(stdout: &[u8]) -> Vec<String> {
 fn wsl_distros() -> Vec<String> {
     use std::os::windows::process::CommandExt;
 
+    // WSL registers each distribution as a subkey of Lxss. With none registered there is nothing to list, and
+    // Windows keeps an inbox wsl.exe stub after WSL is uninstalled that answers any invocation with an install
+    // prompt in its own window, so probing it would raise that prompt on every shell enumeration.
+    let registered = windows_registry::CURRENT_USER
+        .open(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
+        .and_then(|key| key.keys().map(|mut names| names.next().is_some()))
+        .unwrap_or(false);
+    if !registered {
+        return Vec::new();
+    }
     // Avoid flashing a console window while probing shells during application startup.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let output = std::process::Command::new("wsl.exe")
