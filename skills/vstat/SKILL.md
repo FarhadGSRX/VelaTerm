@@ -47,6 +47,9 @@ the session has not reported yet, which usually means it is still starting.
   means the task is finished, or the agent gave up; read its conversation with `vrefer` to tell which.
 - `background`: its turn has ended, but work that turn started (a background task or a `vrun` command) is
   still running. The agent usually resumes on its own when that work finishes, so the task is not done.
+- In `--json`, `stateSince` is the Unix time the session entered its current state, and `alive` says
+  whether a process is running behind it. A session stopped with `vstop` reads `waiting` with
+  `alive: false`.
 
 ## Notes
 

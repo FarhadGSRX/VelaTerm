@@ -28,6 +28,9 @@ pub struct StatusRow {
     pub state: AgentState,
     /// Unix seconds when this state was recorded, for showing how long it has been that way.
     pub updated_at: i64,
+    /// Unix seconds when the session entered this state. Unlike `updated_at`, a re-report of the same
+    /// state leaves it alone, so it says how long a session has really been idle.
+    pub state_since: i64,
 }
 
 #[derive(Default)]
@@ -109,17 +112,17 @@ impl StatusWatch {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        let changed = inner
-            .states
-            .get(session_id)
-            .map(|prev| prev.state != state)
-            .unwrap_or(true);
+        let prev = inner.states.get(session_id);
+        let changed = prev.map(|prev| prev.state != state).unwrap_or(true);
+        let now = now_secs();
+        let state_since = prev.filter(|_| !changed).map(|prev| prev.state_since).unwrap_or(now);
         inner.states.insert(
             session_id.to_string(),
             StatusRow {
                 session_id: session_id.to_string(),
                 state,
-                updated_at: now_secs(),
+                updated_at: now,
+                state_since,
             },
         );
         if changed {
@@ -199,6 +202,19 @@ mod tests {
         watch.record("a", AgentState::Waiting);
         let (after_change, _) = watch.snapshot();
         assert!(after_change > after_first);
+    }
+
+    #[test]
+    fn state_since_survives_a_re_report_and_moves_on_a_change() {
+        let watch = StatusWatch::new();
+        watch.record("a", AgentState::Waiting);
+        // Backdate the entry so a re-report in the same second would still show if it reset the clock.
+        watch.inner.lock().unwrap().states.get_mut("a").unwrap().state_since = 5;
+        watch.record("a", AgentState::Waiting);
+        let since = |w: &StatusWatch| w.snapshot().1.iter().find(|r| r.session_id == "a").unwrap().state_since;
+        assert_eq!(since(&watch), 5, "the same state again is not a new state");
+        watch.record("a", AgentState::Working);
+        assert!(since(&watch) > 5, "a different state starts its own clock");
     }
 
     #[test]

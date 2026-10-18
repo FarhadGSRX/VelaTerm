@@ -947,8 +947,10 @@ fn render_stat(value: &serde_json::Value) -> String {
     }
     for s in sessions {
         let state = display_state(s);
+        // How long it has been in this state; an older backend without `stateSince` only has `updatedAt`.
         let age = s
-            .get("updatedAt")
+            .get("stateSince")
+            .or_else(|| s.get("updatedAt"))
             .and_then(|v| v.as_i64())
             .map(|t| ago(now - t))
             .unwrap_or_else(|| "-".to_string());

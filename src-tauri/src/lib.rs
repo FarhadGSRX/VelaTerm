@@ -381,6 +381,12 @@ pub fn run_tell(args: &[String]) -> ! {
     agent::tell::run_cli(args)
 }
 
+/// Hidden `--stop` entry used by the PATH `vstop` shim. POST `/stop` to stop another session's process
+/// the way the sidebar's Kill does, then exit.
+pub fn run_stop(args: &[String]) -> ! {
+    agent::stop::run_cli(args)
+}
+
 pub fn run_flow(args: &[String]) -> ! {
     agent::plan_execute::run_cli(args)
 }

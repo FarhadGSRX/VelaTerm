@@ -521,6 +521,16 @@ fn serve_with_app(
             }
             continue;
         }
+        if url == "/stop" {
+            if let Some(app) = &app {
+                let app = app.clone();
+                let token = token.to_string();
+                std::thread::spawn(move || super::stop::handle(app, request, token));
+            } else {
+                let _ = request.respond(tiny_http::Response::empty(404));
+            }
+            continue;
+        }
         if url == "/plan-execute" {
             if let Some(app) = &app {
                 let app = app.clone();
@@ -1695,6 +1705,7 @@ fn handle_stat(app: &AppCtx, req: StatRequest) -> (u16, String) {
                 // A session that has never reported is not the same as one that reported idle.
                 "state": row.map(|r| r.state),
                 "updatedAt": row.map(|r| r.updated_at),
+                "stateSince": row.map(|r| r.state_since),
                 // The recorded state outlives the process: a PTY that exits settles to `waiting`. Report
                 // whether a terminal or chat process is actually running, so a dead session reads as one.
                 "alive": app.pty().is_running(id) || app.chat().is_alive(id),

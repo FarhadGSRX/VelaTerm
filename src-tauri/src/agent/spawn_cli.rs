@@ -1,5 +1,5 @@
 //! Installation and discovery of built-in command shims and their companion skills (`vspawn`,
-//! `vspawn-tree`, `vopen`, `vrefer`, `vsearch`, `vask`, `vself`, `vflow`, `vtell`, and `vkb`).
+//! `vspawn-tree`, `vopen`, `vrefer`, `vsearch`, `vask`, `vself`, `vflow`, `vtell`, `vstop`, and `vkb`).
 //!
 //! At startup VelaTerm installs thin shims under the application data `bin/` directory and prepends it
 //! to each session shell's PATH, allowing `vspawn "task"`, `vopen <file>`, `vrefer <session>`, and
@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 /// Built-in `(command name, main-program subcommand arguments)` shims. `vspawn` creates a child session
 /// without a worktree, `vspawn-tree` forces `--worktree`, `vopen` opens a document or browser tab,
 /// `vrefer` reads another session's conversation, `vsearch` searches across every session, `vstat` reports which sessions are busy, and `vkb` queries code
-/// and the knowledge base. `vtell` sends session messages and execution reports, and
+/// and the knowledge base. `vtell` sends session messages and execution reports, `vstop` stops an idle
+/// session's process, and
 /// `vrun` starts a long-running command and waits for it, so its completion reaches whoever started it.
 ///
 /// Unique `v`-prefixed names avoid shadowing system commands such as Vim's `/usr/bin/view`, so simply
@@ -30,6 +31,7 @@ const SHIMS: &[(&str, &str)] = &[
     ("vkb", "--knowledge"),
     ("vflow", "--flow"),
     ("vtell", "--tell"),
+    ("vstop", "--stop"),
     ("vrun", "--run"),
 ];
 
@@ -69,6 +71,7 @@ const SKILLS: &[(&str, &str)] = &[
     ("vself", include_str!("../../../skills/vself/SKILL.md")),
     ("vflow", include_str!("../../../skills/vflow/SKILL.md")),
     ("vtell", include_str!("../../../skills/vtell/SKILL.md")),
+    ("vstop", include_str!("../../../skills/vstop/SKILL.md")),
     ("vkb", include_str!("../../../skills/vkb/SKILL.md")),
 ];
 
@@ -682,8 +685,9 @@ mod tests {
 
     #[test]
     fn spawn_skills_allow_model_invocation() {
-        // Captain and lead agents spawn their crew with vspawn, so the model must be able to call it.
-        for name in ["vspawn", "vspawn-tree"] {
+        // Captain and lead agents spawn their crew with vspawn and park idle sessions with vstop, so the
+        // model must be able to call them.
+        for name in ["vspawn", "vspawn-tree", "vstop"] {
             let (_, content) = SKILLS.iter().find(|(n, _)| *n == name).unwrap();
             assert!(!content.contains("disable-model-invocation:"), "{name} must stay model-invocable");
             assert!(!content.contains("never auto-trigger"), "{name} description still forbids agents");

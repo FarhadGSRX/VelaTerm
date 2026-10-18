@@ -42,7 +42,7 @@ pub(super) fn session(app: &AppCtx, id: &str) -> Result<Session, String> {
         .ok_or_else(|| "The session is missing or archived".into())
 }
 
-fn resolve(app: &AppCtx, reference: &str) -> Result<String, String> {
+pub(super) fn resolve(app: &AppCtx, reference: &str) -> Result<String, String> {
     match repo::resolve_session_ref(&app.db().conn.lock().unwrap(), reference)? {
         repo::SessionRefMatch::One(id) => Ok(id),
         repo::SessionRefMatch::None => Err("Target session not found".into()),
