@@ -9,4 +9,4 @@ This is fg's VelaTerm fork, and its Workspace. fg's notes are in `_ws/` (`workli
 ## F-Co
 
 - Room: #ws-velaterm
-- Lead: evo/velaterm-evo
+- Lead: evo/velaterm-lead
