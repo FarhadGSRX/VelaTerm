@@ -1,11 +1,35 @@
 # Changelog
 
-> Created: 2026-07-09 16:10 · Updated: 2026-10-14 14:27
+> Created: 2026-07-09 16:10 · Updated: 2026-10-18
 
 All notable changes to VelaTerm are documented here, newest first.
 v0.1.91 is the first public release; earlier version numbers were internal iterations and are not covered.
 
 ---
+
+## v0.2.11 — 2026-10-18
+
+- 🧪 Experimental HTML previews open beside conversations or in tabs, refresh as files change, and offer source, console and version controls; native and cross-platform acceptance testing is pending.
+- 📜 Large conversations load older messages in pages and expand long content on demand, while Claude and Codex live conversations avoid duplicate messages and tools.
+- 🔎 Global search refreshes changed conversations faster, resumes indexing after interruptions, and skips unreadable conversations while their files remain unchanged.
+- 📊 The Info panel's files changed count opens a list of this turn's edited files with available added and removed line counts.
+- 🗂️ Archived conversations follow their original projects, groups and parent sessions in compact rows, with collapsible projects and Expand all / Collapse all controls.
+- 🧩 Codex account plugin skills appear in completion suggestions, and completion menus support arrow-key selection.
+- ⌨️ Windows and Linux: Ctrl+Shift+C copies selected terminal text, with a configurable shortcut in Settings ▸ Shortcuts.
+- 🧹 Claude terminal sessions no longer reopen the cleared conversation after `/clear` or when switching to conversation view.
+- 📏 The Info panel shows the model's context limit for OpenCode conversations.
+- 🌐 Translation adds key-free Bing Translator, compact language settings, and translation before resending edited Claude and Codex messages.
+- 🔤 Existing translations remain visible after changing the translation engine or model and can be translated again.
+- ⏱️ `vrun` reports progress every 180 seconds with exit code 75, supports continued waiting with `--wait`, and protects running tasks from reuse of the same label.
+- 🧵 Claude replies triggered by completed background tasks have their own task summary and conversation boundary, including in history.
+- ⚠️ Switching between terminal and conversation views asks for confirmation while background tasks are running.
+- 🏠 Sessions with no working directory or a missing directory start in your home directory in both views.
+- 🪟 Windows: opening VelaTerm or the connection panel no longer prompts to install WSL when no distributions are registered.
+- 🔐 Failed remote logins count toward the retry limit even when the connection closes during password verification.
+- 🏷️ Agent version badges show an explicit `Update: vX` link when a newer CLI version is available.
+- 🔵 Background task indicators stay steadily cyan, and pane headers leave status dots to tabs and the sidebar.
+- ✍️ Conversation input borders are clearer, with an outer focus outline, and dark-theme Info panel values match their labels' brightness.
+- 🌿 Clone project buttons use a branch icon with a project marker.
 
 ## v0.2.10 — 2026-10-13
 

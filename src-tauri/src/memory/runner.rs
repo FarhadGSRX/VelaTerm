@@ -213,7 +213,19 @@ pub fn start(
         crate::db::repo::get_session(&conn, session_id)?.ok_or("memory_not_found")?
     };
     let agent_id = session.agent_session_id.as_deref().unwrap_or("");
-    let content = match crate::agent::transcript::read(session.kind, agent_id) {
+    let indexed_content=if !agent_id.is_empty() && crate::agent::history_store::prose::supported(session.kind) {
+        let cancel=std::sync::atomic::AtomicBool::new(false);
+        match crate::agent::history_store::event_stream::complete(app,session_id,&cancel) {
+            Ok(branch)=>crate::agent::history_store::prose::Prose::new(branch,&cancel)?.memory_source(MAX_SOURCE_CHARS,&cancel)?,
+            // Preserve the existing recording fallback when no native source exists. A changed,
+            // incomplete or unsupported source still fails explicitly instead of changing evidence.
+            Err(error) if error.starts_with("source_missing:")=>None,
+            Err(error)=>return Err(error),
+        }
+    } else {None};
+    let content = match indexed_content {
+        Some(content)=>content,
+        None=>match crate::agent::transcript::read(session.kind, agent_id) {
         Ok(messages) if messages.iter().any(|m| !m.text.trim().is_empty()) => messages
             .iter()
             .enumerate()
@@ -250,6 +262,7 @@ pub fn start(
                 "Terminal recording (visible screen text; may include repeated redraws):\n\n{text}"
             )
         }
+        },
     };
     if content.chars().count() > MAX_SOURCE_CHARS {
         return Err("memory_source_too_large".into());

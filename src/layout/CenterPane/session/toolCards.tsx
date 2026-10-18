@@ -50,6 +50,42 @@ export function diffFiles(diff: string): string[] {
 }
 
 /**
+ * HTML pages a tool call wrote, as absolute paths, for the artifact cards under it.
+ *
+ * Covers Claude Code's Write/Edit/MultiEdit, Codex's per-file changes and its turn diff. Relative paths
+ * (a diff's headers) resolve against the session's working directory; without one they are skipped.
+ */
+export function artifactPaths(tool: string | undefined, input: unknown, cwd?: string): string[] {
+  const candidates: string[] = [];
+  switch (tool) {
+    case "Write":
+    case "Edit":
+    case "MultiEdit": {
+      const path = str(input, "file_path");
+      if (path) candidates.push(path);
+      break;
+    }
+    case "FileChange":
+      for (const change of arr(input, "changes") ?? []) {
+        const path = str(change, "path");
+        if (path) candidates.push(path);
+      }
+      break;
+    case "Diff":
+      candidates.push(...diffFiles(str(input, "diff") ?? ""));
+      break;
+  }
+  const out: string[] = [];
+  for (const path of candidates) {
+    if (!/\.html?$/i.test(path)) continue;
+    const absolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
+    const full = absolute ? path : cwd ? `${cwd.replace(/[\\/]+$/, "")}/${path}` : null;
+    if (full && !out.includes(full)) out.push(full);
+  }
+  return out;
+}
+
+/**
  * The one line shown beside the tool name on a collapsed card.
  *
  * Returns undefined when the tool has nothing worth summarizing, in which case the card shows only its name.

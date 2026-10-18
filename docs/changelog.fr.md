@@ -1,3 +1,27 @@
+## v0.2.11 — 2026-10-18
+
+- 🧪 Les aperçus HTML expérimentaux s’ouvrent à côté des conversations ou dans des onglets, s’actualisent avec les fichiers et proposent source, console et versions ; la validation native et multiplateforme reste à effectuer.
+- 📜 Les longues conversations chargent les anciens messages par pages et développent les contenus longs à la demande, sans doublons de messages ou d’outils dans les conversations Claude et Codex en direct.
+- 🔎 La recherche globale actualise plus vite les conversations modifiées, reprend l’indexation après une interruption et ignore les conversations illisibles tant que leurs fichiers ne changent pas.
+- 📊 Le nombre de fichiers modifiés du panneau Info ouvre la liste des fichiers édités pendant ce tour, avec les nombres de lignes ajoutées et supprimées lorsqu’ils sont disponibles.
+- 🗂️ Les conversations archivées suivent leurs projets, groupes et sessions parentes d’origine dans des lignes compactes, avec des projets repliables et des commandes pour tout développer ou replier.
+- 🧩 Les compétences des plugins du compte Codex apparaissent dans les suggestions de complétion, dont les menus se parcourent avec les flèches.
+- ⌨️ Sous Windows et Linux, Ctrl+Maj+C copie le texte sélectionné dans le terminal et peut être modifié dans Paramètres ▸ Raccourcis.
+- 🧹 Après `/clear` dans le terminal Claude, rouvrir la session ou passer à la vue conversation ne reprend plus la conversation effacée.
+- 📏 Le panneau Info affiche la limite de contexte du modèle pour les conversations OpenCode.
+- 🌐 La traduction ajoute Bing Translator sans clé API, des réglages de langue compacts et la traduction avant le renvoi des messages modifiés dans Claude et Codex.
+- 🔤 Les traductions existantes restent visibles après un changement de moteur ou de modèle et peuvent être retraduites.
+- ⏱️ `vrun` rapporte sa progression toutes les 180 secondes avec le code de sortie 75, permet de poursuivre l’attente avec `--wait` et protège les tâches actives contre la réutilisation de leur nom.
+- 🧵 Les réponses de Claude déclenchées par la fin d’une tâche en arrière-plan ont leur propre résumé de tâche et séparation de conversation, y compris dans l’historique.
+- ⚠️ Le passage entre les vues terminal et conversation demande confirmation lorsque des tâches s’exécutent en arrière-plan.
+- 🏠 Les sessions sans dossier de travail ou dont le dossier a disparu démarrent dans le dossier personnel dans les deux vues.
+- 🪟 Sous Windows, VelaTerm et le panneau de connexion ne proposent plus d’installer WSL lorsqu’aucune distribution n’est enregistrée.
+- 🔐 Les échecs de connexion à distance comptent dans la limite des tentatives même si la connexion se ferme pendant la vérification du mot de passe.
+- 🏷️ Les badges de version des agents affichent un lien explicite `Update: vX` lorsqu’une nouvelle version du CLI est disponible.
+- 🔵 Les indicateurs de tâches en arrière-plan restent cyan sans clignoter, et les points d’état sont conservés dans les onglets et la barre latérale plutôt que dans les titres des volets.
+- ✍️ La bordure de saisie des conversations est plus nette, avec un contour externe au focus, et les valeurs du panneau Info ont la même luminosité que leurs libellés dans le thème sombre.
+- 🌿 Les boutons de clonage de projet utilisent une icône de branche avec un repère de projet.
+
 ## v0.2.10 — 2026-10-13
 
 - 🧩 OpenCode v2 est pris en charge en plus de v1, et la liste des modèles se charge correctement avec OpenCode v2.0.26.

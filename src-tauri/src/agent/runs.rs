@@ -3,8 +3,8 @@
 //!
 //! `vrun` leaves the work in its own process session and records it under `<data dir>/runs/<label>/`: the
 //! PID, the log, the exit code once it ends, and a `meta.json` naming the session that started it. That
-//! directory, not memory, is the source of truth. The waiting half of `vrun` can time out and exit while
-//! the work goes on, and VelaTerm itself can restart in the middle of an hour-long build, so the registry
+//! directory, not memory, is the source of truth. The waiting half of `vrun` can time out or stop to
+//! report progress and exit while the work goes on, and VelaTerm itself can restart in the middle of an hour-long build, so the registry
 //! is rebuilt by scanning it: whenever `vrun` announces a start or a finish, and on a short poll that
 //! notices work ending with nobody left to announce it.
 //!
@@ -30,7 +30,14 @@ pub struct RunMeta {
     pub command: Vec<String>,
     /// Milliseconds since the epoch.
     pub started_at: u64,
+    /// The supervisor waiting on the command; it leads the run's process group.
     pub pid: u32,
+    /// When waiting gives up, in milliseconds since the epoch; absent when no `-t` limit was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<u64>,
+    /// Seconds between progress reports, counted from the start. Absent in records older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<u64>,
 }
 
 pub const META_FILE: &str = "meta.json";
@@ -84,13 +91,13 @@ fn runs_dir(app: &AppCtx) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn alive(pid: u32) -> bool {
+pub(crate) fn alive(pid: u32) -> bool {
     // Signal 0 checks for existence without touching the process.
     pid != 0 && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0
 }
 
 #[cfg(windows)]
-fn alive(pid: u32) -> bool {
+pub(crate) fn alive(pid: u32) -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     // STILL_ACTIVE: the exit code a process reports until it has exited.
@@ -105,7 +112,7 @@ fn alive(pid: u32) -> bool {
 }
 
 /// A label names a directory under `runs/`, so it may not reach outside it.
-fn valid_label(label: &str) -> bool {
+pub(crate) fn valid_label(label: &str) -> bool {
     !label.trim().is_empty() && !label.contains('/') && !label.contains('\\') && label != "." && label != ".."
 }
 
@@ -247,8 +254,9 @@ pub fn log_tail(app: &AppCtx, label: &str) -> Result<serde_json::Value, String> 
 
 /// Stop a live run and everything it started.
 ///
-/// `vrun` starts the work as the leader of its own process group, so the whole group is signalled: a
-/// build script's compiler children would otherwise outlive it.
+/// `vrun` starts the work under a supervisor that leads its own process group, so the whole group is
+/// signalled: a build script's compiler children would otherwise outlive it. The supervisor ignores the
+/// signal long enough to record how the command ended.
 pub fn stop(app: &AppCtx, label: &str) -> Result<(), String> {
     if !valid_label(label) {
         return Err("Invalid run label".to_string());
@@ -313,7 +321,7 @@ mod tests {
     fn record(runs: &Path, label: &str, session_id: &str, pid: u32, started_at: u64) {
         let dir = runs.join(label);
         std::fs::create_dir_all(&dir).unwrap();
-        let meta = RunMeta { session_id: session_id.into(), command: vec!["sleep".into(), "60".into()], started_at, pid };
+        let meta = RunMeta { session_id: session_id.into(), command: vec!["sleep".into(), "60".into()], started_at, pid, deadline: None, interval: None };
         std::fs::write(dir.join(META_FILE), serde_json::to_string(&meta).unwrap()).unwrap();
         std::fs::write(dir.join("log"), "line one\nline two\n").unwrap();
     }

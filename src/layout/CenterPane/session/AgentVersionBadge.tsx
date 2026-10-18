@@ -56,16 +56,14 @@ export function AgentVersionBadge({ session, hidden }: { session: Session; hidde
   const versionTitle = data?.version
     ? t(data.running ? "agentVersion.running" : "agentVersion.installed", data.version)
     : t("agentVersion.unavailable");
-  const title = [
-    versionTitle,
-    updateVersion ? t(updateUrl ? "agentVersion.upgrade" : "agentVersion.update", updateVersion) : null,
-    failed ? t("agentVersion.checkFailed") : null,
-  ].filter(Boolean).join("\n");
+  const title = [versionTitle, failed ? t("agentVersion.checkFailed") : null].filter(Boolean).join("\n");
 
+  // The available update stays visible beside the version; without official instructions it is plain text.
   return <span className="sv-agent-version" role="status" aria-label={t("agentVersion.label")}>
-    {updateUrl ? <a
-      className="sv-agent-version-current sv-agent-version-update" href={updateUrl} target="_blank" rel="noopener noreferrer"
-      title={title}
-    >{version}</a> : <span className="sv-agent-version-current" title={title}>{version}</span>}
+    <span className="sv-agent-version-current" title={title}>{version}</span>
+    {updateVersion && (updateUrl ? <a
+      className="sv-agent-version-update" href={updateUrl} target="_blank" rel="noopener noreferrer"
+      title={t("agentVersion.upgrade", updateVersion)}
+    >{t("agentVersion.update", updateVersion)}</a> : <span className="sv-agent-version-update">{t("agentVersion.update", updateVersion)}</span>)}
   </span>;
 }

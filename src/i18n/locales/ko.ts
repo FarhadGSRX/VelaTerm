@@ -5,8 +5,15 @@ import type en from "./en";
 const ko: typeof en = {
   "panel.averageOutput": "평균 출력 속도",
   "panel.averageOutputHint": "측정된 응답 시간을 기준으로 추정한 초당 출력 토큰 수입니다. 보고된 추론 토큰을 포함하며, 도구 실행 시간과 사용자 대기 시간은 제외합니다. 사용량과 측정 시간을 신뢰할 수 있게 대응시킬 수 없으면 표시하지 않습니다. 모델 자체의 디코딩 속도를 나타내는 값은 아닙니다.",
+  "panel.turnStats": "턴 통계",
+  "panel.fileCount": (n: number) => `파일 ${n}개`,
+  "panel.showChangedFiles": "이번 턴에서 변경된 파일 보기",
+  "panel.noFilesChanged": "이번 턴에서 편집된 파일이 없습니다.",
+  "panel.shellEditsNotListed": "셸 명령으로 변경한 내용은 목록에 표시되지 않습니다.",
   "translation.swap": "언어 바꾸기",
   "translation.openai": "OpenAI 호환",
+  "translation.bing": "Bing 번역(API 키 불필요)",
+  "translation.bingHint": "Bing의 무료 번역을 사용합니다. API 키나 Microsoft 계정이 필요하지 않습니다.",
   "translation.google": "Google 번역(API 키 불필요)",
   "translation.googleHint": "Google의 무료 번역을 사용합니다. API 키나 Google 계정이 필요하지 않습니다.",
   "translation.rateLimited": "번역 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
@@ -293,6 +300,8 @@ const ko: typeof en = {
   "memory.collections": "보관된 세션",
   "memory.collectionConversation": "대화",
   "memory.collectionEmptyEntries": "이 대화에는 아직 지식 항목이 없습니다.",
+  "memory.collapseAllProjects": "모든 프로젝트 접기",
+  "memory.expandAllProjects": "모든 프로젝트 펼치기",
   "memory.title": "지식 베이스",
   "memory.add": "지식 베이스에 추가",
   "memory.intro": "프로젝트와 세션별로 지식을 정리합니다. 저장된 항목은 원본 변경에 따라 자동으로 갱신되지 않으며 직접 편집할 수 있습니다.",
@@ -879,6 +888,7 @@ const ko: typeof en = {
   "settings.scSplitDown": "아래쪽 분할", // Split down
   "settings.scSearch": "터미널에서 찾기", // Find in terminal
   "settings.scGlobalSearch": "모든 세션 검색", // Search all sessions
+  "settings.scCopyTerminal": "터미널 선택 내용 복사", // Copy terminal selection
   "settings.scSelectAllTerminal": "터미널에서 모두 선택", // Select all in terminal
   "settings.scSaveDoc": "문서 저장", // Save document
   "settings.scRecording": "키를 누르세요…", // Press keys…
@@ -1324,6 +1334,7 @@ const ko: typeof en = {
   "search.includeArchived": "보관 세션 포함", // Include archived
   "search.includeArchivedHint": "보관된 세션도 검색에 포함 (기본은 꺼짐)", // Also search archived sessions (off by default)
   "search.searching": "검색 중…", // Searching…
+  "search.progress": (sessions, bytes) => `검색 중… 세션 ${sessions}개 확인 · ${bytes} 읽음`,
   "search.noResults": "일치하는 항목이 없습니다", // No matches found
   "search.sessionCount": (n) => `세션 ${n}개`, // n sessions
   "search.matchCount": (n) => `일치 ${n}건`, // n matches
@@ -1930,6 +1941,7 @@ const ko: typeof en = {
   "skills.vspawn": "하위 세션을 만들어 작업을 맡깁니다.",
   "skills.vspawnTree": "독립된 워크트리를 사용하는 하위 세션을 만듭니다.",
   "skills.vopen": "파일이나 웹 페이지를 VelaTerm에서 엽니다.",
+  "skills.vartifact": "시각적인 결과물을 세션 옆에 실시간 HTML 페이지로 보여 줍니다.", // Show visual work as a live HTML page beside the conversation.
   "skills.vrefer": "다른 세션의 대화 내용을 읽습니다.",
   "skills.vask": "다른 세션에 관해 질문하고 간결한 답변을 받습니다.",
   "skills.vsearch": "모든 세션의 대화 내용을 검색합니다.",
@@ -1948,6 +1960,7 @@ const ko: typeof en = {
   "session.showTerminal": "터미널 보기",
   "session.switchTitle": "보기를 전환하면 에이전트가 다시 시작됩니다",
   "session.switchBody": "진행 중인 턴이 중단됩니다. 대화 내용은 그대로 유지됩니다.",
+  "session.switchBodyBackground": "에이전트가 시작한 백그라운드 작업이 중단될 수 있으며, 작업이 끝나도 에이전트에게 알림이 가지 않습니다. 대화 내용은 그대로 유지됩니다.",
   "session.switchConfirm": "전환",
   "session.terminalViewHint": "여기를 클릭하면 터미널 보기로 돌아갈 수 있습니다.",
   "session.loading": "대화를 읽는 중…",
@@ -2093,6 +2106,7 @@ const ko: typeof en = {
   "chat.compaction.manual": "컨텍스트를 압축했습니다",
   "chat.compaction.auto": "컨텍스트를 자동으로 압축했습니다",
   "chat.compaction.from": (tokens: string) => `압축 전 ${tokens} 토큰`,
+  "chat.wake.label": "백그라운드 작업 종료",
   // N steps
   "chat.subagent.steps": (n: number) => `${n}단계`,
   "chat.subagent.tokens": (tokens: string) => `${tokens} 토큰`,
@@ -2384,6 +2398,76 @@ const ko: typeof en = {
   "chat.antigravity.textOnly": "Antigravity 대화 보기는 현재 텍스트 메시지만 지원합니다.",
   "chat.antigravity.permissionsHint": "승인이 필요한 도구는 Antigravity 설정에서 미리 허용하거나 터미널 보기에서 사용해야 합니다.",
   "chat.antigravity.settingsHint": "모델, 추론 강도 또는 권한은 턴 사이에 변경하세요.",
+  "chat.history.imageDownloadRequired": "이 이미지는 여기에서 열 수 없습니다. 원본을 다운로드하여 확인하세요.",
+  "chat.history.readBody": "전체 내용 읽기",
+  "chat.history.selectDetail": "파일 또는 필드 선택",
+  "chat.history.part": "부분",
+  "chat.history.copyPart": "이 부분 복사",
+
+  "chat.history.searchMore": "결과 더 보기",
+  "chat.history.indexing": "기록을 인덱싱하는 중입니다",
+  "chat.history.newer": "이후 메시지 불러오기",
+
+  "chat.history.copyComplete": "전체 내용 복사",
+  "chat.history.downloadComplete": "전체 내용 다운로드",
+  "chat.history.unavailable": "이 세션의 기록 상세 정보를 사용할 수 없습니다.",
+  "chat.history.openViewer": "상세 보기를 열어 전체 내용을 확인하세요.",
+  "chat.history.copyBusy": "전체 내용을 복사하고 있습니다.",
+  "chat.history.clipboardLimit": "이 내용은 클립보드 용량 제한을 초과합니다. 전체 파일을 다운로드하세요.",
+  "chat.history.contentChanged": "전송 중 내용이 변경되었습니다. 다시 불러오세요.",
+  "export.preparing": "세션 내보내기를 준비하고 있습니다…",
+  "chat.history.windowLimit": "이 메시지는 표시 한도를 초과합니다. 전체 내용을 읽거나 다운로드하세요.",
+
+  "chat.history.incomplete": "기록이 불완전하거나 아직 색인을 만드는 중입니다. 원본에 접근할 수 있게 되면 다시 시도하세요.",
+  "chat.history.indexBusy": "다른 프로세스에서 기록 색인을 사용하고 있습니다. 잠시 후 다시 시도하세요.",
+  "chat.history.unsupported": "일부 기록 형식은 지원되지 않습니다. 원본 내용은 보존되어 있습니다.",
+  "chat.history.canceled": "기록 읽기가 취소되었습니다.",
+  "chat.history.pagedRequired": "페이지별 기록 보기나 상세 내용 뷰어에서 이 내용을 읽으세요.",
+  "chat.history.sourceMissing": "기록 원본이 없거나 접근할 수 없습니다.",
+  "chat.history.updateServer": "대화 기록을 안전하게 읽으려면 서버를 업데이트하세요.",
+  "chat.history.storagePressure": "기록 저장 공간이 부족하거나 사용할 수 없습니다. 공간을 확보한 후 다시 시도하세요. 에이전트 제어 기능은 계속 사용할 수 있습니다.",
+
+  "artifact.preview": "미리보기", // Preview
+  "artifact.source": "소스", // Source
+  "artifact.split": "분할", // Split
+  "artifact.live": "실시간", // Live
+  "artifact.liveTitle": "파일이 바뀌면 자동으로 다시 불러옵니다", // Reloads automatically when the file changes
+  "artifact.offline": "오프라인", // Offline
+  "artifact.offlineTitle": "이 페이지는 인터넷에서 아무것도 불러올 수 없습니다. 클릭하면 이 파일에 한해 허용합니다.", // This page cannot load anything from the internet. Click to allow it for this file.
+  "artifact.online": "온라인", // Online
+  "artifact.onlineTitle": "이 페이지는 인터넷에서 파일을 불러올 수 있습니다. 클릭하면 다시 차단합니다.", // This page can load files from the internet. Click to block them again.
+  "artifact.netBlocked": (n: number) => `이 페이지가 인터넷에서 파일 ${n}개를 불러오려고 해서 차단했습니다.`, // This page tried to load ${n} files from the internet. They were blocked.
+  "artifact.allowForFile": "이 파일 허용", // Allow for this file
+  "artifact.errorCount": (n: number) => `오류 ${n}개`, // ${n} errors
+  "artifact.warningCount": (n: number) => `경고 ${n}개`, // ${n} warnings
+  "artifact.console": "콘솔", // Console
+  "artifact.consoleEmpty": "오류나 경고가 없습니다.", // No errors or warnings.
+  "artifact.clearConsole": "지우기", // Clear
+  "artifact.closeConsole": "콘솔 닫기", // Close console
+  "artifact.sendToSession": "세션으로 보내기", // Send to session
+  "artifact.sendToSessionTitle": "이 페이지를 작성한 세션의 입력란에 오류를 넣습니다", // Put these errors in the message box of the session that wrote this page
+  "artifact.fileGone": "이 파일을 더 이상 사용할 수 없습니다", // This file is no longer available
+  "artifact.fileGoneBody": (name: string) => `${name} 파일이 이동되었거나 삭제되었습니다. 새 위치에서 다시 열거나 이 탭을 닫으세요.`, // ${name} was moved or deleted. Open it again from its new location, or close this tab.
+  "artifact.reload": "다시 불러오기", // Reload
+  "artifact.openInBrowser": "브라우저에서 열기", // Open in browser
+  "artifact.viewportFit": "탭에 맞추기", // Fit to tab
+  "artifact.viewportDesktop": "데스크톱", // Desktop
+  "artifact.viewportTablet": "태블릿", // Tablet
+  "artifact.viewportPhone": "휴대폰", // Phone
+  "artifact.goToSession": "세션으로 이동", // Go to session
+  "artifact.versionTitle": (n: number, time: string) => `버전 ${n} · ${time}`, // Version ${n} · ${time}
+  "artifact.viewingVersion": (n: number, time: string) => `버전 ${n}을(를) 보고 있습니다(${time}에 저장)`, // Viewing version ${n}, saved ${time}
+  "artifact.restoreVersion": "이 버전으로 복원", // Restore this version
+  "artifact.backToLatest": "최신 버전으로 돌아가기", // Back to latest
+  "artifact.restoreBody": (n: number) => `파일이 버전 ${n}의 내용으로 바뀝니다. 현재 내용은 버전 기록에 남습니다.`, // The file will be replaced with version ${n}. Its current content stays in the version history.
+  "artifact.restore": "복원", // Restore
+  "artifact.restoreFailed": "이 버전을 복원하지 못했습니다. 다시 시도해 주세요.", // The version could not be restored. Please try again.
+  "artifact.openAsTab": "탭에서 열기", // Open as tab
+  "artifact.closePanel": "미리보기 닫기", // Close preview
+  "artifact.cardOpen": "열기", // Open
+  "artifact.cardOpenTitle": "이 세션 옆에 열기", // Open beside this session
+  "artifact.cardKind": "HTML 페이지", // HTML page
+  "artifact.frameTitle": (name: string) => `${name} 미리보기`, // Preview of ${name}
 };
 
 export default ko;

@@ -18,15 +18,18 @@ import Icons from "../../components/Icons";
 import { useT } from "../../i18n";
 import {
   readAgentTranscript,
-  searchSessionContent,
+  startContentSearch, contentSearchPage, cancelContentSearch,
+  type ContentSearchPage,
   type SearchMatch,
   type SearchScope,
   type SessionSearchHit,
   type TranscriptMessage,
 } from "../../ipc/commands";
+import { fmtBytes } from "../../format";
 import type { Session } from "../../types";
 import { highlightMatches } from "../sessionViewers/highlight";
 import { SessionContentViewer } from "../sessionViewers/SessionContentViewer";
+import { hasPagedHistoryKind } from "../sessionViewers/pagedHistory";
 import { fmtTsShort, KindIcon, locationOf } from "../sessionViewers/sessionMeta";
 import { assistantLabel } from "../sessionViewers/TranscriptViewer";
 
@@ -39,6 +42,12 @@ export interface ContentSearch {
   setQuery: (q: string) => void;
   results: SessionSearchHit[];
   loading: boolean;
+  error: string | null;
+  page: ContentSearchPage | null;
+  next: () => void;
+  previous: () => void;
+  retry: () => void;
+  cancel: () => void;
 }
 
 /**
@@ -52,36 +61,70 @@ export function useContentSearch(scope: SearchScope, externalQuery?: string): Co
   const query = externalQuery ?? internalQuery;
   const [results, setResults] = useState<SessionSearchHit[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState<ContentSearchPage | null>(null);
+  const [retryCount, setRetry] = useState(0);
+  const job = useRef<string | null>(null);
   const reqId = useRef(0);
 
   useEffect(() => {
-    const q = query.trim();
+    const q = query.trim();const id = ++reqId.current;
+    setResults([]);setPage(null);setError(null);
     if (!q) {
       setResults([]);
       setLoading(false);
       return;
     }
     setLoading(true);
-    const id = ++reqId.current;
-    const handle = setTimeout(() => {
-      searchSessionContent(q, scope)
-        .then((r) => {
-          if (id === reqId.current) {
-            setResults(r);
-            setLoading(false);
-          }
-        })
-        .catch(() => {
-          if (id === reqId.current) {
-            setResults([]);
-            setLoading(false);
-          }
-        });
-    }, DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-  }, [query, scope]);
+    let owned: string | undefined;let disposed=false;let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (disposed || !owned) return;
+      try {
+        const result=await contentSearchPage(owned);
+        if (disposed || id!==reqId.current) return;
+        setPage(result);
+        if (result.status === "pending") timer=setTimeout(() => void poll(),250);
+        else {setResults(result.hits ?? []);setLoading(false);}
+      } catch (reason) {if (!disposed && id===reqId.current) {setError(String(reason));setLoading(false);}}
+    };
+    timer=setTimeout(() => {
+      void startContentSearch(q,scope).then(result => {
+        owned=result.jobId;
+        if (disposed || id!==reqId.current) {void cancelContentSearch(owned).catch(()=>{});return;}
+        job.current=owned;setPage(result);void poll();
+      }).catch(reason => {if (!disposed && id===reqId.current) {setError(String(reason));setLoading(false);}});
+    },DEBOUNCE_MS);
+    return () => {disposed=true;clearTimeout(timer);if (job.current===owned) job.current=null;
+      if (owned) void cancelContentSearch(owned).catch(()=>{});};
+  }, [query, scope,retryCount]);
+  const move=async (cursor?: number,before?: number) => {
+    const owner=job.current;if (!owner || loading) return;const id=++reqId.current;setLoading(true);setError(null);
+    try {const result=await contentSearchPage(owner,cursor,before);
+      if (id!==reqId.current || job.current!==owner) return;
+      setPage(result);setResults(result.hits ?? []);setLoading(false);
+    } catch (reason) {if (id===reqId.current) {setError(String(reason));setLoading(false);}}
+  };
+  const cancel=() => {++reqId.current;const owner=job.current;job.current=null;setLoading(false);
+    if (owner) void cancelContentSearch(owner).catch(()=>{});};
+  return { query, setQuery, results, loading,error,page,
+    next:()=>{if (page?.nextCursor!=null) void move(page.nextCursor);},
+    previous:()=>{if (page?.previousCursor!=null) void move(undefined,page.previousCursor);},
+    retry:()=>setRetry(value=>value+1),cancel };
+}
 
-  return { query, setQuery, results, loading };
+/** Each host uses the same bounded page controls and exposes failures and cancellation. */
+export function ContentSearchControls({search}:{search:ContentSearch}) {
+  const t=useT();if (!search.query.trim()) return null;
+  return <div style={{display:"flex",gap:8,alignItems:"center",padding:"6px 10px",borderBottom:"1px solid var(--border)",flexShrink:0}}>
+    {search.error ? <><span role="alert" style={{flex:1,overflowWrap:"anywhere"}}>{search.error}</span>
+      <button type="button" className="vlx-btn" onClick={search.retry}>{t("common.retry")}</button></> :
+      <span role="status" style={{flex:1,color:"var(--text-muted)"}}>{search.loading
+        ? t("search.progress",search.page?.scannedSessions ?? 0,fmtBytes(search.page?.scannedBytes ?? 0))
+        : search.page?.totalSessions!==undefined ? t("search.summary",search.page.totalMatches ?? 0,search.page.totalSessions) : ""}</span>}
+    {search.loading && <button type="button" className="vlx-btn" onClick={search.cancel}>{t("common.cancel")}</button>}
+    <button type="button" className="vlx-btn" disabled={search.loading || search.page?.previousCursor==null} onClick={search.previous}>{t("common.prev")}</button>
+    <button type="button" className="vlx-btn" disabled={search.loading || search.page?.nextCursor==null} onClick={search.next}>{t("common.next")}</button>
+  </div>;
 }
 
 /** Centered message used for empty states. */
@@ -225,6 +268,7 @@ function roleAndTime(
   if (fm.hit.source === "recording") {
     return { role: t("search.roleTerminal"), ts: "" };
   }
+  if (fm.match.role) return {role:fm.match.role === "user" ? t("archive.you") : assistantLabel(fm.hit.kind),ts:fmtTsShort(fm.match.timestamp)};
   const msgs = cache.get(fm.sessionId);
   const mi = fm.match.messageIndex;
   if (msgs && mi != null && mi >= 0 && mi < msgs.length) {
@@ -283,7 +327,7 @@ export function SearchConsole({
   // When results change, cache transcripts for matching conversation sessions for both rows and preview.
   useEffect(() => {
     for (const hit of results) {
-      if (hit.source === "transcript") ensure(hit.sessionId);
+      if (hit.source === "transcript" && !hasPagedHistoryKind(hit.kind)) ensure(hit.sessionId);
     }
   }, [results, ensure]);
 
@@ -632,6 +676,8 @@ const Preview = memo(function Preview({
   }
 
   // Transcript hits render cached records, showing loading until available.
+  if (hasPagedHistoryKind(sess.kind)) return <SessionContentViewer session={sess} source="transcript"
+    highlightTerms={active.match.matched} scrollToMessageIndex={active.match.messageIndex ?? undefined} scrollToRowId={active.match.rowId} />;
   const msgs = cache.get(active.sessionId);
   if (msgs === undefined) {
     return <CenterMessage text={t("archive.loadingTranscript")} />;

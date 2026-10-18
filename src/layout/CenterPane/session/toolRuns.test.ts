@@ -220,6 +220,24 @@ describe("foldAgentTurns", () => {
     expect(out.rows[1].head?.fold).toEqual({ id: "r1", steps: 2, collapsed: true });
   });
 
+  it("starts a new turn where a background task woke the agent, so each prompt keeps its own answer", () => {
+    const wake = (id: string): ChatRow => ({ kind: "wake", id, summary: "Background command \"ci\" failed" });
+    const entries = markAgentTurns(groupToolRuns([
+      user("u1"),
+      tool("t1", "Bash"),
+      assistant("a1", "started the watcher"),
+      wake("w1"),
+      tool("t2", "Read"),
+      assistant("a2", "CI failed"),
+      wake("w2"),
+      assistant("a3", "rerun is green"),
+    ]));
+    expect(entries.filter((entry) => entry.head).map((entry) => entry.id)).toEqual(["t1", "t2", "a3"]);
+    const out = foldAgentTurns(entries, () => true);
+    expect(shape(out.rows)).toEqual(["row:u1", "row:a1", "row:w1", "row:a2", "row:w2", "row:a3"]);
+    expect(out.turns.map((turn) => turn.id)).toEqual(["t1", "t2"]);
+  });
+
   it("leaves answered questions visible", () => {
     const entries = markAgentTurns(groupToolRuns([user("u1"), tool("q1", "AskUserQuestion"), tool("t1", "Read"), assistant("a1")]));
     const out = foldAgentTurns(entries, () => true);

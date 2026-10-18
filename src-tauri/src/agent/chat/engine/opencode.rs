@@ -456,6 +456,7 @@ pub(super) fn handle_event(app: &AppCtx, session_id: &str, proc: &Arc<ChatProces
 
 fn buffer_child_event(proc: &ChatProcess, child: &str, event: Value) {
     let mut pending = proc.codex_pending_child_events.lock().unwrap();
+    if proc.bounded_protocol {super::runtime::pending_child(&mut pending,child,"",event);return;}
     if !pending.contains_key(child) && pending.len() >= MAX_PENDING_CHILDREN {
         return;
     }

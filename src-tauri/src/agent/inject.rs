@@ -120,6 +120,7 @@ fn hook_url_at(port: u16, token: &str, sid: &str, event: &str) -> String {
 /// - Stop → waiting
 /// - Notification(permission_prompt|elicitation_dialog) → asking
 /// - Notification(idle_prompt) → idle (silently corrects the state to waiting without a notification)
+/// - SessionEnd(clear) → cleared (no state change; unbinds the conversation `/clear` discarded)
 pub fn build_claude_settings(ep: &HookEndpoint, sid: &str) -> String {
     build_claude_settings_at(ep.port, &ep.token, sid)
 }
@@ -132,6 +133,7 @@ fn build_claude_settings_at(port: u16, token: &str, sid: &str) -> String {
     // Claude's idle_prompt maps to a silent waiting state: correct the state without displaying a
     // "replied" notification, because the agent is idle and awaiting input rather than just finishing.
     let idle = hook_url_at(port, token, sid, "idle");
+    let cleared = hook_url_at(port, token, sid, "cleared");
     serde_json::json!({
         "hooks": {
             // A submitted prompt starts processing.
@@ -147,7 +149,11 @@ fn build_claude_settings_at(port: u16, token: &str, sid: &str) -> String {
                   "hooks": [{ "type": "http", "url": asking }] },
                 { "matcher": "idle_prompt",
                   "hooks": [{ "type": "http", "url": idle }] }
-            ]
+            ],
+            // `/clear` ends the current conversation and opens one whose ID arrives only with the next
+            // prompt. SessionStart would name it at once, but Claude skips HTTP hooks on SessionStart, so
+            // the end of the old one is what tells the backend to stop pointing at it.
+            "SessionEnd": [{ "matcher": "clear", "hooks": [{ "type": "http", "url": cleared }] }]
         }
     })
     .to_string()
@@ -1929,6 +1935,14 @@ mod tests {
         assert_eq!(
             v["hooks"]["Notification"][1]["hooks"][0]["url"],
             "http://127.0.0.1:51234/hook/sid-1?t=tok-abc&e=idle"
+        );
+        // Only a `/clear` ending reports cleared; quitting the TUI keeps the conversation bound.
+        let end = &v["hooks"]["SessionEnd"][0];
+        assert_eq!(end["matcher"], "clear");
+        assert_eq!(end["hooks"][0]["type"], "http");
+        assert_eq!(
+            end["hooks"][0]["url"],
+            "http://127.0.0.1:51234/hook/sid-1?t=tok-abc&e=cleared"
         );
     }
 

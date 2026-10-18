@@ -481,9 +481,7 @@ fn current_tool(proc: &Arc<ChatProcess>, event: &Value) -> Option<String> {
 
 fn tool_args(proc: &Arc<ChatProcess>, id: &str, delta: &str) -> String {
     let mut state = proc.pi.lock().unwrap();
-    let entry = state.args.entry(id.to_string()).or_default();
-    entry.push_str(delta);
-    entry.clone()
+    super::runtime::append(proc,&mut state.args,id,delta)
 }
 
 fn tool_name(proc: &ChatProcess, id: &str, explicit: Option<&str>) -> String {
@@ -653,12 +651,12 @@ pub(super) fn dispatch(
     images: &[ChatImage],
 ) -> Result<(), String> {
     let id = proc.request_id("prompt");
-    proc.write(&wire::prompt(&id, text, images))
+    proc.write_source(|writer|super::outgoing_wire::pi(writer,&id,"prompt",text,images))
 }
 
 pub(super) fn steer(proc: &Arc<ChatProcess>, text: &str, images: &[ChatImage]) -> Result<(), String> {
     let id = proc.request_id("steer");
-    proc.write(&wire::steer(&id, text, images))
+    proc.write_source(|writer|super::outgoing_wire::pi(writer,&id,"steer",text,images))
 }
 
 pub(super) fn abort(proc: &Arc<ChatProcess>) -> Result<(), String> {
@@ -735,11 +733,13 @@ pub(super) fn respond_extension_ui(
         .lock()
         .unwrap()
         .requests
-        .remove(request_id)
+        .get(request_id)
+        .cloned()
         .ok_or("That permission request is no longer waiting for an answer")?;
-    proc.permissions.lock().unwrap().remove(request_id);
     let response = wire::extension_response(&request, allow);
     proc.write(&response)?;
+    proc.pi.lock().unwrap().requests.remove(request_id);
+    proc.permissions.lock().unwrap().remove(request_id);
     emit(app, session_id, json!({"type":"permissionResolved","id":request_id}));
     if !proc.permissions.lock().unwrap().is_empty() {
         return Ok(());
@@ -759,14 +759,15 @@ pub(super) fn approve_pending(app: &AppCtx, session_id: &str, proc: &Arc<ChatPro
         .lock()
         .unwrap()
         .requests
-        .drain()
+        .iter().map(|(id,request)|(id.clone(),request.clone()))
         .collect();
     if requests.is_empty() {
         return;
     }
     for (id, request) in &requests {
         let response = wire::extension_response(request, true);
-        let _ = proc.write(&response);
+        if proc.write(&response).is_err() {continue;}
+        proc.pi.lock().unwrap().requests.remove(id);
         proc.permissions.lock().unwrap().remove(id);
         emit(app, session_id, json!({"type":"permissionResolved","id":id}));
     }

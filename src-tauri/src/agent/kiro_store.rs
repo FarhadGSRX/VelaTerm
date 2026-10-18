@@ -1,8 +1,8 @@
 //! Verified native Kiro text history. No CLI execution, source writes, or inferred tool schemas.
 //! Provenance: T7 round-1/2 structure audits (SQLite conversations_v2 and paired JSONL v1).
 
-mod snapshot;
-mod parse;
+pub(crate) mod snapshot;
+pub(crate) mod parse;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};

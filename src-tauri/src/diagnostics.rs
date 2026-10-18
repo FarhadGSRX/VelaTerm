@@ -464,6 +464,8 @@ pub fn safe_fields(data: &Value) -> Value {
                     | "kb_conflict" | "kb_exists" | "kb_invalid_path" | "kb_invalid" | "kb_io"
                     | "kb_too_large" | "kb_not_found" | "kb_unavailable" | "kb_encoding"
                     | "kb_empty_import" | "kb_incomplete_import" | "kb_move_incomplete"
+                    | "detail_unavailable" | "source_changed" | "source_missing" | "index_incomplete"
+                    | "unsupported_record" | "cursor_expired" | "detail_requires_paging" | "index_busy"
             ),
             "step" => matches!(
                 s,
@@ -987,6 +989,28 @@ impl HttpRequest {
             "native_http",
             json!({"requestId":self.id,"method":self.method,"path":self.path,"statusCode":status,"success":result.is_ok(),"durationMs":self.started.elapsed().as_millis() as u64}),
         );
+        result
+    }
+
+    /// A failed source must close the chunked response without its successful end marker.
+    /// The standard encoder finalizes on Drop even after a source error.
+    pub fn respond_stream<R:io::Read>(mut self,response:tiny_http::Response<R>) -> io::Result<()> {
+        let status=response.status_code().0;
+        let mut output=self.inner.take().expect("request not yet answered").into_writer();
+        let result=(|| {
+            write!(output,"HTTP/1.1 {} {}\r\n",status,response.status_code().default_reason_phrase())?;
+            for header in response.headers() {write!(output,"{}: {}\r\n",header.field,header.value)?;}
+            write!(output,"X-Request-Id: {}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",self.id)?;
+            output.flush()?;
+            let mut source=response.into_reader();let mut block=[0;32*1024];
+            loop {
+                let count=source.read(&mut block)?;
+                if count==0 {output.write_all(b"0\r\n\r\n")?;return output.flush();}
+                write!(output,"{count:x}\r\n")?;output.write_all(&block[..count])?;output.write_all(b"\r\n")?;output.flush()?;
+            }
+        })();
+        record(if result.is_ok() {"INFO"} else {"WARN"},"native_http",
+            json!({"requestId":self.id,"method":self.method,"path":self.path,"statusCode":status,"success":result.is_ok(),"durationMs":self.started.elapsed().as_millis() as u64}));
         result
     }
 }

@@ -2,7 +2,7 @@
 //! opens. jsdom reports every box as zero-sized, so the clamp is simulated through the two properties
 //! the component measures.
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen,waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { QueuedMessageText } from "./QueuedMessageText";
@@ -29,47 +29,50 @@ function stubLinesBox(overflow: boolean) {
   };
 }
 
-/** jsdom implements neither method of the native dialog, so both are recorded here. */
-function stubDialog() {
-  const showModal = vi.fn();
-  const close = vi.fn();
-  const previous = {
-    showModal: Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "showModal"),
-    close: Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close"),
-  };
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: showModal });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: close });
-  return {
-    showModal,
-    restore: () => {
-      for (const [method, descriptor] of Object.entries(previous)) {
-        if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, method, descriptor);
-        else Reflect.deleteProperty(HTMLDialogElement.prototype, method);
-      }
-    },
-  };
-}
-
 afterEach(cleanup);
 
 it("opens a long queued message in a dialog instead of drawing all of it", () => {
   const restoreLines = stubLinesBox(true);
-  const dialog = stubDialog();
   const text = "An instruction long enough that it cannot be drawn in the composer";
   const view = render(<QueuedMessageText text={text} disabled={false} onEdit={() => {}} />);
   try {
     fireEvent.click(screen.getByRole("button", { name: "View full message" }));
-    expect(dialog.showModal).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog",{name:"View full message"}).getAttribute("aria-modal")).toBe("true");
     expect(document.querySelector(".sv-queue-preview-body")?.textContent).toBe(text);
 
     fireEvent.click(document.querySelector<HTMLButtonElement>(".sv-queue-preview-close")!);
     expect(document.querySelector(".sv-queue-preview")).toBeNull();
   } finally {
-    // Unmount while the dialog stubs are still installed: the component closes its dialog on cleanup.
     view.unmount();
-    dialog.restore();
     restoreLines();
   }
+});
+
+it("reads only an explicitly opened queued part and replaces it when paging",async()=>{
+  const first="雪😀".repeat(4000);
+  const loadPart=vi.fn(async(sequence:number)=>({text:sequence===0?first:"Complete final part",chunkSequence:sequence,contentRevision:"saved",eof:sequence===1,sizeBytes:28_019}));
+  render(<QueuedMessageText text="Short original preview" disabled={false} onEdit={()=>{}} loadPart={loadPart}/>);
+  expect(loadPart).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button",{name:"View full message"}));
+  await waitFor(()=>expect(document.querySelector(".sv-queue-preview-body")?.textContent).toBe(first));
+  expect(loadPart).toHaveBeenCalledTimes(1);
+  const nodes=[...document.querySelectorAll(".sv-queue-preview-body span")];
+  expect(nodes.length).toBeGreaterThan(1);expect(nodes.every(node=>new TextEncoder().encode(node.textContent??"").byteLength<=4096)).toBe(true);
+  fireEvent.click(screen.getByRole("button",{name:"Next"}));
+  await waitFor(()=>expect(document.querySelector(".sv-queue-preview-body")?.textContent).toBe("Complete final part"));
+  expect(document.querySelector(".sv-queue-preview-body")?.textContent).not.toContain(first);
+  expect(loadPart).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("button",{name:"Next"})).toBeNull();
+});
+
+it("aborts a queued read when its preview closes",async()=>{
+  let signal:AbortSignal|undefined;
+  const loadPart=vi.fn((_sequence:number,current:AbortSignal)=>{signal=current;return new Promise<never>(()=>{});});
+  render(<QueuedMessageText text="Preview" disabled={false} onEdit={()=>{}} loadPart={loadPart}/>);
+  fireEvent.click(screen.getByRole("button",{name:"View full message"}));
+  expect(signal?.aborted).toBe(false);
+  fireEvent.click(screen.getByRole("button",{name:"Close"}));
+  expect(signal?.aborted).toBe(true);expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 it("leaves a short queued message without a view button and still opens its editor", () => {

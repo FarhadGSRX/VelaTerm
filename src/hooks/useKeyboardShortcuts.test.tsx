@@ -13,8 +13,12 @@ const state = vi.hoisted(() => ({
   projects: [], groups: [], sessions: [], inspectTarget: null, selection: [],
 }));
 
-const terminalRegistry = vi.hoisted(() => ({ getTerminal: vi.fn(), selectAll: vi.fn() }));
+const terminalRegistry = vi.hoisted(() => ({
+  getTerminal: vi.fn(), selectAll: vi.fn(), hasSelection: vi.fn(), getSelection: vi.fn(),
+}));
 vi.mock("../terminal/registry", () => terminalRegistry);
+const clipboard = vi.hoisted(() => ({ copyText: vi.fn(() => Promise.resolve()) }));
+vi.mock("../ipc/info", () => clipboard);
 vi.mock("../platform", () => ({ env: { isBrowser: true, isRemoteWindow: false } }));
 vi.mock("../ipc/transport", () => ({ isTauri: false }));
 vi.mock("../store/termStore", () => ({ useTermStore: { getState: () => state } }));
@@ -29,6 +33,8 @@ beforeEach(async () => {
   state.taskTabs = {};
   state.shortcutOverrides = {};
   terminalRegistry.getTerminal.mockReset();
+  terminalRegistry.hasSelection.mockReset();
+  terminalRegistry.getSelection.mockReset();
   window.history.replaceState(null, "", "/");
   const { useKeyboardShortcuts } = await import("./useKeyboardShortcuts");
   renderHook(() => useKeyboardShortcuts());
@@ -126,6 +132,45 @@ it("does not select terminal output during composition or after another handler 
   canceled.preventDefault();
   textarea.dispatchEvent(canceled);
   expect(terminalRegistry.selectAll).not.toHaveBeenCalled();
+});
+
+it("copies the focused terminal selection with Ctrl+Shift+C and leaves Ctrl+C to the shell", () => {
+  const textarea = focusedTerminal();
+  const terminalInput = vi.fn();
+  textarea.addEventListener("keydown", terminalInput);
+  terminalRegistry.hasSelection.mockReturnValue(true);
+  terminalRegistry.getSelection.mockReturnValue("selected text");
+  expect(press("C", { ctrlKey: true, shiftKey: true }, textarea).defaultPrevented).toBe(true);
+  expect(clipboard.copyText).toHaveBeenCalledExactlyOnceWith("selected text");
+  expect(terminalInput).not.toHaveBeenCalled();
+
+  // Plain Ctrl+C is still the interrupt, selection or not.
+  expect(press("c", { ctrlKey: true }, textarea).defaultPrevented).toBe(false);
+  expect(terminalInput).toHaveBeenCalledOnce();
+  expect(clipboard.copyText).toHaveBeenCalledOnce();
+});
+
+it("lets the copy shortcut through when nothing is selected, so a Ctrl+C rebinding still interrupts", () => {
+  const textarea = focusedTerminal();
+  const terminalInput = vi.fn();
+  textarea.addEventListener("keydown", terminalInput);
+  state.shortcutOverrides = { copyTerminal: "mod+c" };
+  terminalRegistry.hasSelection.mockReturnValue(false);
+  expect(press("c", { ctrlKey: true }, textarea).defaultPrevented).toBe(false);
+  expect(terminalInput).toHaveBeenCalledOnce();
+  terminalRegistry.hasSelection.mockReturnValue(true);
+  terminalRegistry.getSelection.mockReturnValue("x");
+  expect(press("c", { ctrlKey: true }, textarea).defaultPrevented).toBe(true);
+  expect(clipboard.copyText).toHaveBeenCalledExactlyOnceWith("x");
+});
+
+it("does not copy from a terminal while a document tab is active", () => {
+  const textarea = focusedTerminal();
+  state.activeTabId = "doc-1";
+  state.docTabs = { "doc-1": {} };
+  terminalRegistry.hasSelection.mockReturnValue(true);
+  expect(press("C", { ctrlKey: true, shiftKey: true }, textarea).defaultPrevented).toBe(false);
+  expect(clipboard.copyText).not.toHaveBeenCalled();
 });
 
 it("leaves Ctrl+D and unrelated Cmd chords alone while retaining other browser bindings", () => {

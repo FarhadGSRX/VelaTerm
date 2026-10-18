@@ -22,7 +22,7 @@ use crate::models::SessionKind;
 use super::resume;
 
 /// One conversation message after merging adjacent rows of the same role.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptMessage {
     /// "user" | "assistant"
@@ -165,37 +165,40 @@ fn grok_context_info(agent_session_id: &str) -> Result<AgentContextInfo, String>
 
 /// Reads the model and current context from OpenCode's own store.
 ///
-/// OpenCode does not record the model's context window, so `context_limit` stays zero: the panel shows
-/// the used count and leaves the overflow meter off rather than guessing a capacity.
+/// OpenCode does not record the model's context window, so the limit comes from the catalogue the CLI
+/// cached on disk. A model missing from it keeps `context_limit` at zero: the panel shows the used count
+/// and leaves the overflow meter off rather than guessing a capacity.
 fn opencode_context_info(session_id: &str) -> Result<AgentContextInfo, String> {
-    let messages = crate::agent::opencode_store::messages(session_id)?;
-    let last = messages
-        .iter()
-        .rev()
-        .find(|m| {
-            m.info.get("role").and_then(Value::as_str) == Some("assistant")
-                && m.info
-                    .pointer("/tokens/total")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|n| n > 0)
-        })
-        .ok_or("OpenCode session has no recorded usage yet")?;
-    let context_tokens = last.info.get("tokens").and_then(|tokens| {
+    let path=crate::agent::opencode_store::db_path().ok_or("OpenCode's data directory could not be located")?;
+    let conn=crate::agent::history_store::sqlite_source::open(&path)?;
+    // The bounded reader covers OpenCode's original tables; a session kept in its v2 store is read
+    // through the store module, which enforces the same aggregate byte budget.
+    let last=match crate::agent::history_store::sqlite_source::last_open_code_usage(&conn,session_id) {
+        Err(error) if error=="OpenCode has no recorded session" => crate::agent::opencode_store::messages(session_id)?.into_iter().rev()
+            .find(|m|m.info["role"]=="assistant" && m.info.pointer("/tokens/total").and_then(Value::as_u64).is_some_and(|n|n>0))
+            .map(|m|m.info).ok_or("OpenCode session has no recorded usage yet")?,
+        result=>result?,
+    };
+    let context_tokens = last.get("tokens").and_then(|tokens| {
         let input = tokens.get("input").and_then(Value::as_u64).unwrap_or(0);
         let read = tokens.pointer("/cache/read").and_then(Value::as_u64).unwrap_or(0);
         let write = tokens.pointer("/cache/write").and_then(Value::as_u64).unwrap_or(0);
         (input + read + write > 0).then_some(input + read + write)
     });
     let model = last
-        .info
         .get("modelID")
         .and_then(Value::as_str)
         .filter(|m| !m.is_empty())
         .map(str::to_string);
+    let provider = last.get("providerID").and_then(Value::as_str).filter(|p| !p.is_empty());
+    let context_limit = model
+        .as_deref()
+        .and_then(|id| crate::agent::opencode_models::cached_context_window(provider, id))
+        .unwrap_or(0);
     Ok(AgentContextInfo {
         model,
         context_tokens,
-        context_limit: 0,
+        context_limit,
         current_tool: None,
     })
 }
@@ -780,11 +783,11 @@ fn last_codex_rate_limits(text: &str) -> Option<CodexUsage> {
 }
 
 /// One parsed row, the smallest unit before merging.
-struct Piece {
-    role: &'static str,
-    text: String,
-    timestamp: Option<String>,
-    tools: Vec<String>,
+pub(crate) struct Piece {
+    pub(crate) role: &'static str,
+    pub(crate) text: String,
+    pub(crate) timestamp: Option<String>,
+    pub(crate) tools: Vec<String>,
 }
 
 /// Locates a session's Claude transcript or Codex rollout. Returns None when absent or unsupported. Global search
@@ -810,7 +813,7 @@ pub fn read_at(kind: SessionKind, path: &Path) -> Result<Vec<TranscriptMessage>,
         SessionKind::Grok => parse_grok_file(path),
         SessionKind::Pi | SessionKind::Omp => parse_pi_file(path),
         SessionKind::Antigravity => {
-            let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read transcript: {e}"))?;
+            let content = crate::agent::history_store::compat::read_path(path)?;
             Ok(merge(antigravity_pieces(&content).into_iter()))
         }
         _ => Err("Transcript parsing is not supported for this session kind".to_string()),
@@ -821,15 +824,15 @@ pub fn read_at(kind: SessionKind, path: &Path) -> Result<Vec<TranscriptMessage>,
 /// tree; thinking, tool results and local commands are not part of the prose the archive shows.
 fn parse_pi_file(path: &Path) -> Result<Vec<TranscriptMessage>, String> {
     let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read transcript: {e}"))?;
+        crate::agent::history_store::compat::read_path(path)?;
     Ok(merge(pi_pieces(&content).into_iter()))
 }
 
-fn pi_pieces(content: &str) -> Vec<Piece> {
+pub(crate) fn pi_pieces(content: &str) -> Vec<Piece> {
     event_pieces(crate::agent::export::pi_events(content))
 }
 
-fn antigravity_pieces(content: &str) -> Vec<Piece> {
+pub(crate) fn antigravity_pieces(content: &str) -> Vec<Piece> {
     event_pieces(crate::agent::chat::antigravity_protocol::events(content))
 }
 
@@ -863,7 +866,7 @@ fn event_pieces(events: Vec<crate::agent::export::Event>) -> Vec<Piece> {
                 timestamp: ts,
                 tools: vec![name],
             }),
-            Event::Thinking { .. } | Event::ToolResult { .. } | Event::Command { .. } => None,
+            Event::Thinking { .. } | Event::ToolResult { .. } | Event::Command { .. } | Event::Wake { .. } => None,
         })
         .collect()
 }
@@ -875,7 +878,7 @@ fn parse_file(
     parse_line: impl Fn(&str) -> Option<Piece>,
 ) -> Result<Vec<TranscriptMessage>, String> {
     let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read transcript: {e}"))?;
+        crate::agent::history_store::compat::read_path(path)?;
     let pieces = content.lines().filter_map(|l| parse_line(l));
     Ok(merge(pieces))
 }
@@ -949,7 +952,7 @@ pub fn read(kind: SessionKind, agent_session_id: &str) -> Result<Vec<TranscriptM
 /// omitted; tool-call names are attached to the surrounding assistant turn.
 fn parse_grok_file(path: &Path) -> Result<Vec<TranscriptMessage>, String> {
     let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read transcript: {e}"))?;
+        crate::agent::history_store::compat::read_path(path)?;
     Ok(parse_grok_updates(&content))
 }
 
@@ -1016,6 +1019,20 @@ fn parse_grok_updates(content: &str) -> Vec<TranscriptMessage> {
     }
     out.retain(|message| !message.text.trim().is_empty() || !message.tools.is_empty());
     out
+}
+
+/// One bounded projection, preserving the ACP stream's role and chunk concatenation.
+pub(crate) fn grok_pieces(value:&Value) -> Vec<Piece> {
+    if value["method"]!="session/update" {return Vec::new();}
+    let update=&value["params"]["update"];let timestamp=grok_timestamp(value);
+    let role=match update["sessionUpdate"].as_str() {
+        Some("user_message_chunk")=>"user",Some("agent_message_chunk"|"tool_call")=>"assistant",_=>return Vec::new(),
+    };
+    if update["sessionUpdate"]=="tool_call" {
+        let name=update.pointer("/_meta/x.ai~1tool/name").and_then(Value::as_str).map(str::trim).filter(|name|!name.is_empty()).unwrap_or("tool");
+        return vec![Piece {role,text:String::new(),timestamp,tools:vec![name.into()]}];
+    }
+    update["content"]["text"].as_str().filter(|text|!text.is_empty()).map(|text|Piece {role,text:text.into(),timestamp,tools:Vec::new()}).into_iter().collect()
 }
 
 fn append_grok_text(
@@ -1139,7 +1156,7 @@ pub(super) fn is_injected_context(text: &str) -> bool {
 }
 
 /// Parses one Claude transcript line, returning None for irrelevant rows.
-fn parse_claude_line(line: &str) -> Option<Piece> {
+pub(crate) fn parse_claude_line(line: &str) -> Option<Piece> {
     let v: Value = serde_json::from_str(line).ok()?;
     // Sidechain and injected-meta messages are not part of the main conversation.
     if v.get("isSidechain")
@@ -1229,7 +1246,7 @@ fn parse_claude_line(line: &str) -> Option<Piece> {
 }
 
 /// Parses one Codex rollout line, returning None for irrelevant rows.
-fn parse_codex_line(line: &str) -> Option<Piece> {
+pub(crate) fn parse_codex_line(line: &str) -> Option<Piece> {
     let v: Value = serde_json::from_str(line).ok()?;
     if v.get("type").and_then(Value::as_str) != Some("response_item") {
         return None;

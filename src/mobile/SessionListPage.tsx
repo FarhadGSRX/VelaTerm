@@ -55,7 +55,7 @@ const STATUS_CHIPS: {
   { st: "working", color: "var(--status-working)", pulse: true, labelKey: "tree.filterWorking" },
   { st: "asking", color: "var(--status-asking)", pulse: true, labelKey: "tree.filterAsking" },
   { st: "waiting", color: "var(--status-waiting)", pulse: false, labelKey: "tree.filterWaiting" },
-  { st: "background", color: "var(--status-background)", pulse: true, labelKey: "tree.filterBackground" },
+  { st: "background", color: "var(--status-background)", pulse: false, labelKey: "tree.filterBackground" },
 ];
 
 function StatusChips() {

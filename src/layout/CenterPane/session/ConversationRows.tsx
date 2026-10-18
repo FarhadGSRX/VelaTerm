@@ -18,8 +18,10 @@ import {
   ToolCard,
   ToolRunCard,
   TurnHead,
+  WakeRow,
 } from "./rows";
 import type { DisplayRow, TurnFold } from "./toolRuns";
+import { DeferredBody } from "./DeferredContents";
 
 /** A user message edited before it is sent again from a rewind. */
 export interface MessageReplacement {
@@ -167,7 +169,7 @@ export function Row({
       );
     }
     case "reasoning":
-      return <ReasoningRow text={row.text} />;
+      return <><ReasoningRow text={row.text} /><DeferredBody row={row} /></>;
     case "error":
       return <ErrorRow message={row.message} />;
     case "command":
@@ -176,6 +178,8 @@ export function Row({
       return <ShellRow row={row} onCancel={onCancelShell} />;
     case "notice":
       return <NoticeRow message={row.message} />;
+    case "wake":
+      return <WakeRow summary={row.summary} at={row.at} />;
     case "compaction":
       return (
         <CompactionRow
@@ -190,13 +194,14 @@ export function Row({
           who={row.origin ? messageSenderName(row.origin, t) : t("archive.you")}
           icon={row.origin ? kindIconEl(row.origin.agent, 14) : undefined}
           isUser
-          footnote={feedback}
           rowId={row.id}
           text={row.text}
+          copyAvailable={!row.bodyAvailable}
           images={row.images}
           at={row.at}
           onRewind={onRewind ? (scope) => onRewind(row.id, scope) : undefined}
-          onEditSend={onRewind ? (text, images) => onRewind(row.id, "conversation", { text, images }) : undefined}
+          onEditSend={onRewind && !row.bodyAvailable ? (text, images) => onRewind(row.id, "conversation", { text, images }) : undefined}
+          footnote={<><DeferredBody row={row} />{feedback}</>}
           rewindDisabledReason={rewindDisabledReason || (rewindScopes?.length ? undefined : t("chat.rewind.unsupported"))}
           editDisabledReason={rewindDisabledReason || (rewindScopes?.includes("conversation") ? undefined : t("chat.rewind.unsupported"))}
           rewindScopes={rewindScopes}
@@ -216,6 +221,7 @@ export function Row({
           at={row.at}
           durationMs={row.durationMs}
           showHead={!headless}
+          footnote={<DeferredBody row={row} />}
         />
       );
   }

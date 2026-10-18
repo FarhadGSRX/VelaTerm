@@ -153,20 +153,6 @@ CREATE TABLE IF NOT EXISTS agent_presets (
   created_at      INTEGER NOT NULL
 );
 
--- Freshness bookkeeping for the global search index. Each session/track records how far indexing has
--- progressed and when it last ran for incremental updates and staleness checks; see the search module.
--- init_search_index creates the FTS virtual table separately with fallback, because missing FTS5/trigram
--- support must not prevent application startup.
-CREATE TABLE IF NOT EXISTS search_index_state (
-  session_id    TEXT    NOT NULL,
-  source        TEXT    NOT NULL,            -- 'transcript' | 'recording'
-  indexed_len   INTEGER NOT NULL DEFAULT 0,  -- Recording byte offset or transcript file length at indexing
-  indexed_mtime INTEGER,                     -- Source-file mtime in seconds for change detection
-  indexed_at    INTEGER NOT NULL,
-  source_path   TEXT,                        -- Resolved transcript path; skips directory walks on refresh
-  PRIMARY KEY (session_id, source)
-);
-CREATE INDEX IF NOT EXISTS idx_search_state_session ON search_index_state(session_id);
 CREATE TABLE IF NOT EXISTS chat_codex_settings (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   service_tier TEXT,
@@ -204,51 +190,6 @@ CREATE INDEX IF NOT EXISTS idx_orch_runs_parent ON orch_runs(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_orch_agents_session ON orch_agents(session_id);
 "#;
 
-/// Creation statement for the `session_fts` virtual full-text index using a trigram tokenizer for substring/CJK
-/// search with case- and diacritic-insensitive matching.
-///
-/// One FTS row represents one locatable content fragment: a transcript message with `message_index` anchor or a
-/// recording line with `ordinal`. `text` is the only indexed column; all others are stored UNINDEXED and returned
-/// with matches for navigation and display.
-///
-/// Created separately from `SCHEMA` by [`crate::db::init_search_index`] with graceful fallback. trigram requires
-/// SQLite ≥3.34 and bundled rusqlite (≈3.46) normally satisfies it. If a build lacks support, table creation logs
-/// one English error and disables search without affecting the main application.
-pub const SESSION_FTS_DDL: &str = r#"
-CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(
-  text,
-  session_id    UNINDEXED,
-  source        UNINDEXED,
-  message_index UNINDEXED,
-  ordinal       UNINDEXED,
-  role          UNINDEXED,
-  ts            UNINDEXED,
-  tokenize = 'trigram remove_diacritics 1'
-);
-CREATE TABLE IF NOT EXISTS chat_codex_settings (
-  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-  service_tier TEXT,
-  personality TEXT
-);
-"#;
-
-/// Word-level companion index to `session_fts`. Each row shares its rowid with the `session_fts` row it
-/// mirrors, so a word hit joins back to the fragment's text and anchors without duplicating them.
-///
-/// `words` holds the fragment text with U+200B (zero-width space) inserted at jieba word boundaries. The
-/// unicode61 tokenizer treats U+200B as a separator, so CJK runs split into dictionary words instead of one
-/// token per run, while Latin identifiers still split on punctuation as usual. Porter stemming folds English
-/// inflections (spawned/spawning -> spawn). Stripping the U+200B characters restores the original text, which
-/// lets `highlight()` output map straight back onto it for snippets and matched literals.
-///
-/// Created together with `session_fts` by [`crate::db::init_search_index`]; see `search/tokenize.rs`.
-pub const SESSION_WORDS_DDL: &str = r#"
-CREATE VIRTUAL TABLE IF NOT EXISTS session_words USING fts5(
-  words,
-  session_id    UNINDEXED,
-  tokenize = 'porter unicode61 remove_diacritics 1'
-);
-"#;
 // Do **not** place idx_sessions_parent here. SCHEMA runs before migrate(), when legacy sessions tables do not yet
 // have parent_session_id (migrate adds it via ALTER), so index creation would fail with "no such column". Create
 // it at the end of migrate() after the column exists; see db/mod.rs.

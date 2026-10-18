@@ -192,7 +192,7 @@ pub fn settings(app: &AppCtx, editable: bool) -> Result<Value, String> {
     Ok(json!({"config":config,"services":services,"agents":agents,"editable":editable,
         "conversationKinds":super::super::launch_options::catalog().into_iter().filter(|s|s.id.supports_chat()).map(|s|json!({"id":s.id,"label":s.label})).collect::<Vec<_>>(),
         "languages":LANGUAGES.iter().map(|(code,name)|json!({"code":code,"name":name})).collect::<Vec<_>>(),
-        "engines":["agent","api","google"],"protocols":["openai"],"displays":["original","translation","both","immersive"]}))
+        "engines":["agent","api","google","bing"],"protocols":["openai"],"displays":["original","translation","both","immersive"]}))
 }
 
 pub fn enable(app: &AppCtx, enabled: bool) -> Result<(), String> {
@@ -214,7 +214,7 @@ pub fn save(app: &AppCtx, value: &Value) -> Result<(), String> {
     let model = value["model"].as_str().unwrap_or_default().trim();
     let effort = value["effort"].as_str().unwrap_or_default().trim();
     let service = value["serviceId"].as_str().unwrap_or_default();
-    if !["agent","api","google"].contains(&engine) || model.len()>256 || effort.len()>256 { return Err("translation:configuration".into()); }
+    if !["agent","api","google","bing"].contains(&engine) || model.len()>256 || effort.len()>256 { return Err("translation:configuration".into()); }
     if !agent.is_empty() && !AGENTS.iter().any(|s|s.as_str()==agent) { return Err("translation:agent".into()); }
     if !agent.is_empty() {
         super::super::launch_options::apply(SessionKind::from_db(agent),None,Some(model),Some(effort)).map_err(|_|"translation:configuration")?;

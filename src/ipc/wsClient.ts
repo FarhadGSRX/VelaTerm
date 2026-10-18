@@ -40,6 +40,7 @@ import { genId } from "../genId";
 import { handshakeFailureReason, mapBackendError, type HandshakeFailure } from "./backendError";
 import { recordRequestError } from "./reqLog";
 import { apiUrl, shareBasePath } from "./shareBase";
+import { acceptsHistoryProtocol, historyProtocolError, requiresHistoryProtocol } from "./historyCapability";
 import type { PtySpawnArgs, PtySpawnResult } from "./transport";
 
 type EventCb = (payload: unknown) => void;
@@ -220,6 +221,8 @@ class WsClient {
    * whenever a spawn result is processed.
    */
   private source: string | null = null;
+  private historyProtocol: unknown = null;
+  private readonly historyHelloWaiters = new Set<() => void>();
   private connectPromise: Promise<void> | null = null;
   /** Consecutive reconnect failures; reset on success and used for backoff and the banner. */
   private reconnectAttempts = 0;
@@ -427,6 +430,7 @@ class WsClient {
       // e2ee_ready then failed to decrypt and was reported as an authentication failure.
       this.supersede(this.ws);
       this.ws = ws;
+      this.historyProtocol = null;
       ws.onopen = () => {
         if (this.ws !== ws) {
           ws.close();
@@ -459,6 +463,8 @@ class WsClient {
         // drives reconnection. Reacting here would clear the new connection's keys mid-handshake.
         if (this.ws !== ws) return;
         this.ws = null;
+        this.historyProtocol = null;
+        for (const wake of this.historyHelloWaiters) wake();
         this.connectPromise = null;
         // Reset E2EE state so the next connection uses a fresh handshake and ephemeral key.
         this.e2eeReady = false;
@@ -554,6 +560,8 @@ class WsClient {
    *  the teardown that handler would have performed happens here: close it if it is still live and
    *  fail its in-flight requests, which will never receive a reply on the new connection. */
   private supersede(prev: WebSocket | null) {
+    this.historyProtocol = null;
+    for (const wake of this.historyHelloWaiters) wake();
     if (!prev) return;
     if (
       prev.readyState === WebSocket.OPEN ||
@@ -721,6 +729,8 @@ class WsClient {
     } else if (msg.t === "hello") {
       // The first frame supplies this connection's source ID; replace it after reconnection.
       this.source = String(msg.source ?? "");
+      this.historyProtocol = msg.historyProtocol ?? 0;
+      for (const wake of this.historyHelloWaiters) wake();
     } else if (msg.t === "reply") {
       const p = this.pending.get(msg.id as number);
       if (!p) return;
@@ -762,6 +772,17 @@ class WsClient {
   /** Send an ID-bearing request and return its response promise. */
   private async request(partial: Record<string, unknown>): Promise<unknown> {
     await this.ensure();
+    if (partial.t === "invoke" && requiresHistoryProtocol(String(partial.cmd))) {
+      const socket = this.ws;
+      if (this.historyProtocol === null) await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout>;
+        const wake = () => { clearTimeout(timer); this.historyHelloWaiters.delete(wake); resolve(); };
+        this.historyHelloWaiters.add(wake);
+        timer = setTimeout(wake, 5000);
+      });
+      if (socket !== this.ws || !socket || socket.readyState !== WebSocket.OPEN) throw new TransportError(t("transport.wsDisconnected"));
+      if (!acceptsHistoryProtocol(this.historyProtocol)) throw historyProtocolError();
+    }
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });

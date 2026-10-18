@@ -1452,7 +1452,7 @@ export function ProjectTree(h: TreeHandlers) {
             {t("tree.openProject")}
           </button>
           <button className="empty-action" onClick={() => setCloneModalOpen(true)}>
-            <Icons.git size={14} />
+            <Icons.projectClone size={14} />
             {t("tree.cloneProject")}
           </button>
           <a className="empty-action" href={collectionDialogUrl("create")} onClick={event => {

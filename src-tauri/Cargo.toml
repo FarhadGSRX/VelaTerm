@@ -1,6 +1,6 @@
 [package]
 name = "velaterm"
-version = "0.2.10"
+version = "0.2.11"
 description = "VelaTerm multi-session terminal manager"
 authors = ["vlinx"]
 edition = "2021"
@@ -100,7 +100,7 @@ ureq = "2"
 # Tauri and Electron sidecar share the implementation. Linux omits secret-service/dbus and uses fallback.
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 portable-pty = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "blob", "functions"] }
 uuid = { version = "1", features = ["v4"] }
 # Server audit-log timestamps use local `yyyy-MM-dd HH:mm:ss` date and time.
 time = { version = "0.3", features = ["local-offset"] }
@@ -150,6 +150,8 @@ dirs = "6"
 crypto_box = { version = "0.9", features = ["std"] }
 # Base64 for E2EE text frames; binary PTY frames remain raw.
 base64 = "0.22"
+# Bounded historical image thumbnails share the existing image version, without unrelated codecs.
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # Cross-platform process-tree CPU/memory sampling uses sysinfo native APIs rather than external ps. Enable
 # only `system`, pin the version for reproducibility, and omit unrelated disk/network/component/user features.
 sysinfo = { version = "=0.33.1", default-features = false, features = ["system"] }

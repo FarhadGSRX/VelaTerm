@@ -1,3 +1,27 @@
+## v0.2.11 — 2026-10-18
+
+- 🧪 Experimentelle HTML-Vorschauen öffnen sich neben Unterhaltungen oder in Tabs, aktualisieren sich bei Dateiänderungen und bieten Quelltext, Konsole und Versionsfunktionen; die native und plattformübergreifende Abnahme steht noch aus.
+- 📜 Lange Unterhaltungen laden ältere Nachrichten seitenweise und lange Inhalte bei Bedarf, während Claude und Codex Nachrichten und Werkzeuge im laufenden Gespräch ohne Duplikate anzeigen.
+- 🔎 Die globale Suche aktualisiert geänderte Unterhaltungen schneller, setzt die Indizierung nach Unterbrechungen fort und überspringt unlesbare Unterhaltungen, solange deren Dateien unverändert bleiben.
+- 📊 Die Anzahl geänderter Dateien im Infobereich öffnet eine Liste der in diesem Durchgang bearbeiteten Dateien mit verfügbaren Zahlen hinzugefügter und entfernter Zeilen.
+- 🗂️ Archivierte Unterhaltungen erscheinen in kompakten Zeilen entsprechend ihren ursprünglichen Projekten, Gruppen und übergeordneten Sitzungen, mit einklappbaren Projekten und Funktionen zum vollständigen Ein- und Ausklappen.
+- 🧩 Plugin-Skills des Codex-Kontos erscheinen in den Vervollständigungsvorschlägen, deren Menüs sich mit den Pfeiltasten bedienen lassen.
+- ⌨️ Unter Windows und Linux kopiert Strg+Umschalt+C markierten Terminaltext; das Kürzel lässt sich unter Einstellungen ▸ Tastenkürzel ändern.
+- 🧹 Nach `/clear` im Claude-Terminal wird die gelöschte Unterhaltung beim erneuten Öffnen oder beim Wechsel zur Gesprächsansicht nicht mehr fortgesetzt.
+- 📏 Der Infobereich zeigt bei OpenCode-Unterhaltungen das Kontextlimit des Modells.
+- 🌐 Die Übersetzung bietet Bing Translator ohne API-Schlüssel, kompakte Spracheinstellungen und die Übersetzung bearbeiteter Claude- und Codex-Nachrichten vor dem erneuten Senden.
+- 🔤 Vorhandene Übersetzungen bleiben nach einem Wechsel von Übersetzungsdienst oder Modell sichtbar und können erneut übersetzt werden.
+- ⏱️ `vrun` meldet alle 180 Sekunden den Fortschritt mit Exit-Code 75, setzt das Warten mit `--wait` fort und schützt laufende Aufgaben vor der Wiederverwendung desselben Namens.
+- 🧵 Claude-Antworten nach Abschluss einer Hintergrundaufgabe erhalten eine eigene Aufgabenübersicht und Gesprächsgrenze, auch im Verlauf.
+- ⚠️ Beim Wechsel zwischen Terminal- und Gesprächsansicht wird um Bestätigung gebeten, wenn Hintergrundaufgaben laufen.
+- 🏠 Sitzungen ohne Arbeitsverzeichnis oder mit nicht mehr vorhandenem Verzeichnis starten in beiden Ansichten im persönlichen Ordner.
+- 🪟 Unter Windows fordern weder der Start von VelaTerm noch das Verbindungsfenster zur WSL-Installation auf, wenn keine Distribution registriert ist.
+- 🔐 Fehlgeschlagene Fernanmeldungen zählen auch dann zum Versuchslimit, wenn die Verbindung während der Passwortprüfung geschlossen wird.
+- 🏷️ Versionsanzeigen der Agenten zeigen bei einer neueren CLI-Version einen ausdrücklichen Link `Update: vX`.
+- 🔵 Anzeigen für Hintergrundaufgaben leuchten dauerhaft cyan, und Statuspunkte bleiben in Tabs und Seitenleiste statt in den Überschriften der Teilfenster.
+- ✍️ Das Eingabefeld für Unterhaltungen hat einen deutlicheren Rand mit äußerer Fokuslinie, und Werte im dunklen Infobereich sind so hell wie ihre Beschriftungen.
+- 🌿 Schaltflächen zum Klonen von Projekten verwenden ein Branch-Symbol mit Projektmarkierung.
+
 ## v0.2.10 — 2026-10-13
 
 - 🧩 OpenCode v2 wird zusätzlich zu v1 unterstützt, und die Modellliste lädt auch mit OpenCode v2.0.26 korrekt.

@@ -48,6 +48,8 @@ const FORWARD_REQUEST: &[&str] = &[
 const FORWARD_RESPONSE: &[&str] = &[
     "content-type", "content-disposition", "content-range", "accept-ranges", "etag", "cache-control",
     "last-modified", "x-request-id",
+    // Artifact previews depend on their policy headers; dropping them in transit would let a page go online.
+    "content-security-policy", "x-content-type-options", "referrer-policy", "access-control-allow-origin",
 ];
 
 /// An account session on the relay for one grant, renewed from the device credential when it expires.

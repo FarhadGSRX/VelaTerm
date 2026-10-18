@@ -20,7 +20,7 @@ import type { SessionSearchHit } from "../../ipc/commands";
 import { useTermStore } from "../../store/termStore";
 import { findNext } from "../../terminal/registry";
 import type { Session } from "../../types";
-import { SearchConsole, summarizeResults, useContentSearch, useSearchNav } from "./searchKit";
+import { ContentSearchControls, SearchConsole, summarizeResults, useContentSearch, useSearchNav } from "./searchKit";
 
 export function GlobalSearch() {
   const t = useT();
@@ -35,7 +35,8 @@ export function GlobalSearch() {
 
   // Archived sessions are excluded by default. Remounting the panel resets this toggle.
   const [includeArchived, setIncludeArchived] = useState(false);
-  const { query, setQuery, results, loading } = useContentSearch(includeArchived ? "all" : "live");
+  const search = useContentSearch(includeArchived ? "all" : "live");
+  const { query, setQuery, results, loading } = search;
   const nav = useSearchNav(results);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -54,7 +55,9 @@ export function GlobalSearch() {
   }, [liveSessions, archivedSessions]);
 
   const close = () => setGlobalSearchOpen(false);
-  const { totalMatches, sessions, locatable } = summarizeResults(results);
+  const { locatable } = summarizeResults(results);
+  const totalMatches=search.page?.totalMatches ?? 0;
+  const sessions=search.page?.totalSessions ?? 0;
 
   // For a live terminal session, try to jump to the match; its 5,000-line scrollback may not contain it.
   const isLiveTerminal = (hit: SessionSearchHit) =>
@@ -175,6 +178,7 @@ export function GlobalSearch() {
         </div>
 
         {/* Main area: two-pane search console. */}
+        <ContentSearchControls search={search} />
         <SearchConsole
           nav={nav}
           results={results}

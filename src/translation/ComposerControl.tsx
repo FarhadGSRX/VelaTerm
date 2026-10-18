@@ -40,11 +40,9 @@ export function TranslationComposerControl() {
     finally { setBusy(false); }
   };
   const cfg = state.settings.config;
-  const configured = cfg.engine === "google" || (cfg.engine === "api" ? state.settings.services.some(s => s.id === cfg.serviceId) : state.settings.agents.some(s => s.id === cfg.agent && s.available));
+  const configured = cfg.engine === "google" || cfg.engine === "bing" || (cfg.engine === "api" ? state.settings.services.some(s => s.id === cfg.serviceId) : state.settings.agents.some(s => s.id === cfg.agent && s.available));
   const languages = state.settings.languages.map(language => ({ value: language.code, label: language.name }));
   const sourceLanguages = [{ value: "auto", label: t("translation.auto") }, ...languages];
-  const languageName = (code: string) => state.settings!.languages.find(language => language.code === code)?.name ?? code;
-  const direction = prefs.target ? `${prefs.source === "auto" ? t("translation.auto") : languageName(prefs.source)} → ${languageName(prefs.target)}` : t("translation.languages");
   const toggleTranslation = (checked: boolean) => { void save({ outgoing: checked, replies: checked }); };
   const missingLanguage = (prefs.outgoing && !prefs.target) || (prefs.replies && !prefs.replyTarget);
   const canSwap = (reply: boolean) => reply ? prefs.replySource !== "auto" && !!prefs.replyTarget : prefs.source !== "auto" && !!prefs.target;
@@ -58,7 +56,7 @@ export function TranslationComposerControl() {
       <input type="checkbox" role="switch" aria-label={t("translation.title")} checked={prefs.outgoing || prefs.replies} disabled={busy} onChange={e => toggleTranslation(e.target.checked)} />
       <span>{t("translation.title")}</span>
     </label>
-    <a className="sv-chip translation-direction" ref={anchor} href={href} onClick={followTranslationLink} aria-expanded={open} title={t("translation.languages")}><span>{direction}</span><Icons.chevD size={12} /></a>
+    <a className="icon-btn translation-settings-button" ref={anchor} href={href} onClick={followTranslationLink} aria-expanded={open} aria-haspopup="dialog" aria-label={t("translation.languages")} title={t("translation.languages")}><Icons.gear size={14} /></a>
     {!open && error && <span className="translation-composer-notice translation-hint" role="alert">{error}</span>}
     {!open && !error && missingLanguage && <span className="translation-composer-notice translation-hint" role="status"><a href={href} onClick={followTranslationLink}>{t("translation.chooseTarget")}</a></span>}
     {!open && !error && !missingLanguage && !configured && (prefs.outgoing || prefs.replies) && <span className="translation-composer-notice translation-hint" role="status"><a href={settingsTranslationUrl()} onClick={followTranslationLink}>{t("translation.configure")}</a></span>}

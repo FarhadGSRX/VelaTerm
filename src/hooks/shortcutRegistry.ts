@@ -24,6 +24,7 @@ export type ShortcutAction =
   | "splitDown"
   | "search"
   | "globalSearch"
+  | "copyTerminal"
   | "selectAllTerminal"
   | "saveDoc";
 
@@ -38,6 +39,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   "closePane",
   "search",
   "globalSearch",
+  "copyTerminal",
   "selectAllTerminal",
   "saveDoc",
 ];
@@ -95,6 +97,7 @@ export const DEFAULT_BINDINGS: Record<ShortcutAction, string> =
         splitDown: "mod+shift+d",
         search: "mod+f",
         globalSearch: "mod+shift+f",
+        copyTerminal: "mod+c",
         // Use native macOS selection while leaving Ctrl+A available to terminal applications.
         selectAllTerminal: "mod+a",
         saveDoc: "mod+s",
@@ -109,6 +112,8 @@ export const DEFAULT_BINDINGS: Record<ShortcutAction, string> =
         splitDown: IS_MAC ? "cmd+shift+d" : "mod+alt+e",
         search: "mod+alt+f",
         globalSearch: "mod+alt+g",
+        // Plain Ctrl+C stays the shell interrupt; Ctrl+Shift+C matches Windows Terminal and GNOME Terminal.
+        copyTerminal: "mod+shift+c",
         // Keep plain Ctrl+A available to terminal applications unless explicitly rebound.
         selectAllTerminal: "mod+shift+a",
         saveDoc: "mod+s",

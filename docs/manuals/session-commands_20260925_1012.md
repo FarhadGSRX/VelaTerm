@@ -2,7 +2,7 @@
 
 Created: 2026-09-25 10:12
 
-Updated: 2026-10-13 14:42
+Updated: 2026-10-18 09:28
 
 > VelaTerm adds a set of short commands to every session it starts. You and your agents use them to start other sessions, open files, read and search other conversations, check which sessions are busy, send messages between sessions, and wait for long commands. This chapter is a reference for each command and for the matching agent skills.
 
@@ -147,15 +147,18 @@ Sends a message to another session. Without message arguments, the text is read 
 ## 9. vrun
 
 ```text
-vrun [-t <seconds>] <label> <command> [arguments...]
+vrun [-t <seconds>] [-i <seconds>] <label> <command> [arguments...]
+vrun --wait [-t <seconds>] [-i <seconds>] <label>
 vrun --status <label>
 ```
 
 Starts a command, waits until it finishes, and then prints the exit code, the elapsed time and the end of its log. The command's exit code is passed through. `vrun` is meant for long builds and tests: an agent that runs them with `vrun` learns the result as soon as it is available.
 
-- `-t <seconds>` sets how long `vrun` waits (default 1800). When the time runs out, `vrun` exits with code 124 and the command keeps running.
-- `--status <label>` reports on a command started earlier with that label.
-- While a command runs, the session keeps its "working" status. In the terminal view, a "Background commands" row above the terminal lists running commands with "Log" and "Stop"; see [Terminal Usage](terminal-usage_20260709_2041.md) §6.1.
+- `-i <seconds>` sets the progress-report interval (default 180, that is, every three minutes). At each interval, counted from the start of the command, `vrun` prints the elapsed time and the end of the log and exits with code 75; the command keeps running. An agent is woken at each report, so it can report progress on time.
+- `--wait <label>` waits again for a command that is still running, on the same report schedule. `-i` given here replaces the interval. If the command has already finished, `--wait` prints its result at once.
+- `-t <seconds>` sets a limit on waiting. There is no limit by default. When the limit is reached, `vrun` exits with code 124 and the command keeps running; `vrun --wait <label>` then continues without a limit. A `-t` given with `--wait` counts from now.
+- `--status <label>` reports on a command started earlier with that label. A running label cannot be reused for another command; use `--wait` or choose another label.
+- While a command runs, the session shows a background status when the agent is idle. In the terminal view, a "Background commands" row above the terminal lists running commands with "Log" and "Stop"; see [Terminal Usage](terminal-usage_20260709_2041.md) §6.1.
 
 ## 10. vkb
 

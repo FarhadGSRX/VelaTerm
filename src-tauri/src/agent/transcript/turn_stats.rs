@@ -28,12 +28,79 @@ pub struct TurnStats {
     pub tools_used: Option<u32>,
     /// Successful, explicitly recorded file edits, not the working tree's pre-existing changes.
     pub files_touched: Option<u32>,
+    /// The files behind `files_touched`, sorted by path.
+    pub changed_files: Option<Vec<ChangedFile>>,
     pub context_tokens: Option<u64>,
     pub context_limit: Option<u64>,
     pub context_percent: Option<f64>,
     /// Estimated output throughput over measured response time, including reported reasoning.
     pub generation_tokens_per_second: Option<f64>,
 }
+/// One file the turn edited, with the lines its recorded edits added and removed. The counts are summed
+/// over every edit to the file, and both are absent when any of those edits recorded nothing countable.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFile {
+    /// As the agent wrote it: absolute, or relative to the session folder.
+    pub path: String,
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+/// Lines added and removed by one edit, or by every edit to one file; `None` when not countable.
+type Lines = Option<(u32, u32)>;
+
+/// Records one successful edit, keeping a file's counts unknown once any of its edits is.
+fn add_file(files: &mut HashMap<String, Lines>, path: String, lines: Lines) {
+    files
+        .entry(path)
+        .and_modify(|sum| *sum = sum.zip(lines).map(|(a, b)| (a.0 + b.0, a.1 + b.1)))
+        .or_insert(lines);
+}
+
+fn changed_list(files: &HashMap<String, Lines>) -> Vec<ChangedFile> {
+    let mut list: Vec<ChangedFile> = files
+        .iter()
+        .map(|(path, lines)| ChangedFile {
+            path: path.clone(),
+            additions: lines.map(|l| l.0),
+            deletions: lines.map(|l| l.1),
+        })
+        .collect();
+    list.sort_by(|a, b| a.path.cmp(&b.path));
+    list
+}
+
+/// Counts `+` and `-` lines of a diff body, skipping unified-diff file headers.
+fn diff_lines<'a>(lines: impl Iterator<Item = &'a str>) -> (u32, u32) {
+    lines.fold((0, 0), |(added, removed), line| {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            (added + 1, removed)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            (added, removed + 1)
+        } else {
+            (added, removed)
+        }
+    })
+}
+
+/// Claude's own record of an Edit/Write result: hunks for a change, full content for a new file.
+fn claude_result_lines(result: Option<&Value>) -> Lines {
+    let result = result?;
+    let hunks = result.get("structuredPatch")?.as_array()?;
+    if result.get("type").and_then(Value::as_str) == Some("create") {
+        let content = result.get("content")?.as_str()?;
+        return Some((content.lines().count() as u32, 0));
+    }
+    Some(diff_lines(
+        hunks
+            .iter()
+            .filter_map(|h| h.get("lines").and_then(Value::as_array))
+            .flatten()
+            .filter_map(Value::as_str),
+    ))
+}
+
 impl TurnStats {
     pub fn with_context(&mut self, context: &AgentContextInfo) {
         self.model = context.model.clone();
@@ -114,8 +181,8 @@ struct Accounting {
     messages: HashMap<String, Usage>,
     turn_messages: HashSet<String>,
     tools: HashSet<String>,
-    pending_files: HashMap<String, Vec<String>>,
-    files: HashSet<String>,
+    pending_files: HashMap<String, Vec<(String, Lines)>>,
+    files: HashMap<String, Lines>,
     session: Option<Usage>,
     baseline: Option<Usage>,
     turn: Option<Usage>,
@@ -158,17 +225,25 @@ impl Accounting {
         };
         let blocks = message.get("content").and_then(Value::as_array);
         if v.get("type").and_then(Value::as_str) == Some("user") {
-            for block in blocks.into_iter().flatten() {
-                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
-                    continue;
-                }
+            let results: Vec<&Value> = blocks
+                .into_iter()
+                .flatten()
+                .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+                .collect();
+            // The row-level `toolUseResult` belongs to the row's tool result, so it is only
+            // attributable when the row carries exactly one.
+            let recorded = (results.len() == 1).then(|| v.get("toolUseResult")).flatten();
+            for block in results {
                 let id = block
                     .get("tool_use_id")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                if let Some(paths) = self.pending_files.remove(id) {
+                if let Some(edits) = self.pending_files.remove(id) {
                     if block.get("is_error").and_then(Value::as_bool) != Some(true) {
-                        self.files.extend(paths);
+                        let lines = claude_result_lines(recorded);
+                        for (path, _) in edits {
+                            add_file(&mut self.files, path, lines);
+                        }
                     }
                 }
             }
@@ -213,7 +288,7 @@ impl Accounting {
             let name = block.get("name").and_then(Value::as_str).unwrap_or("");
             if super::is_edit_tool(name) {
                 if let Some(path) = block.get("input").and_then(super::tool_file_path) {
-                    self.pending_files.insert(call_id, vec![path]);
+                    self.pending_files.insert(call_id, vec![(path, None)]);
                 }
             }
         }
@@ -284,29 +359,40 @@ impl Accounting {
                 return;
             }
             let name = p.get("name").and_then(Value::as_str).unwrap_or("");
+            let raw = p
+                .get("input")
+                .or_else(|| p.get("arguments"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
             if name.rsplit('.').next() == Some("apply_patch") {
-                let raw = p
-                    .get("input")
-                    .or_else(|| p.get("arguments"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
                 let args = serde_json::from_str::<Value>(raw).ok();
                 let patch = args
                     .as_ref()
                     .and_then(|a| a.get("patch").and_then(Value::as_str))
                     .unwrap_or(raw);
-                self.pending_files.insert(id, patch_paths(patch));
+                self.pending_files.insert(id, patch_edits(patch));
+            } else if name == "exec" && raw.contains("apply_patch") {
+                let edits = patch_edits(&code_mode_patches(raw));
+                if !edits.is_empty() {
+                    self.pending_files.insert(id, edits);
+                }
             }
         }
         if matches!(kind, "function_call_output" | "custom_tool_call_output") {
             let id = p.get("call_id").and_then(Value::as_str).unwrap_or("");
-            if let Some(paths) = self.pending_files.remove(id) {
-                let output = p.get("output").and_then(Value::as_str).unwrap_or("");
-                if output.contains("Success. Updated the following files:")
-                    || output.contains("\"exit_code\":0")
-                    || output.contains("\"exit_code\": 0")
+            if let Some(edits) = self.pending_files.remove(id) {
+                let output = codex_output_text(p.get("output"));
+                // A code-mode cell that throws reports "Script failed"; a completed cell applied
+                // every patch it ran, since a failed patch throws.
+                if output.starts_with("Script completed")
+                    || !output.starts_with("Script ")
+                        && (output.contains("Success. Updated the following files:")
+                            || output.contains("\"exit_code\":0")
+                            || output.contains("\"exit_code\": 0"))
                 {
-                    self.files.extend(paths);
+                    for (path, lines) in edits {
+                        add_file(&mut self.files, path, lines);
+                    }
                 }
             }
         }
@@ -324,27 +410,84 @@ impl Accounting {
             session_tokens: self.session.map(Usage::total),
             tools_used: self.has_turn.then_some(self.tools.len() as u32),
             files_touched: self.has_turn.then_some(self.files.len() as u32),
+            changed_files: self.has_turn.then(|| changed_list(&self.files)),
             ..TurnStats::default()
         }
     }
 }
-fn patch_paths(patch: &str) -> Vec<String> {
-    patch
-        .lines()
-        .filter_map(|line| {
-            [
-                "*** Update File: ",
-                "*** Add File: ",
-                "*** Delete File: ",
-                "*** Move to: ",
-            ]
+/// Tool output as text: older CLIs store a string, code-mode cells a list of `input_text` items.
+fn codex_output_text(output: Option<&Value>) -> String {
+    match output {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(items)) => items
             .iter()
-            .find_map(|prefix| line.strip_prefix(prefix))
-        })
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(str::to_string)
-        .collect()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// The files an apply_patch body touches, each with the `+`/`-` lines of its section. A deleted file's
+/// removed lines are not in the patch, and a moved file's hunks belong to its destination, so the
+/// deleted and the moved-away paths carry no counts.
+fn patch_edits(patch: &str) -> Vec<(String, Lines)> {
+    let mut edits: Vec<(String, Lines)> = Vec::new();
+    for line in patch.lines() {
+        let header = |prefix: &str| line.strip_prefix(prefix).map(str::trim).filter(|p| !p.is_empty());
+        if let Some(path) = header("*** Update File: ").or_else(|| header("*** Add File: ")) {
+            edits.push((path.to_string(), Some((0, 0))));
+        } else if let Some(path) = header("*** Delete File: ") {
+            edits.push((path.to_string(), None));
+        } else if let Some(path) = header("*** Move to: ") {
+            if let Some(source) = edits.last_mut() {
+                let lines = source.1.take();
+                edits.push((path.to_string(), lines));
+            }
+        } else if line.starts_with("***") {
+            continue;
+        } else if let Some((_, Some(lines))) = edits.last_mut() {
+            if line.starts_with('+') {
+                lines.0 += 1;
+            } else if line.starts_with('-') {
+                lines.1 += 1;
+            }
+        }
+    }
+    edits
+}
+
+/// Patch bodies from a code-mode cell, which runs apply_patch from JavaScript, so each patch is a string
+/// literal in the script source, passed directly or through a variable. Double-quoted literals decode as
+/// JSON strings and template literals are taken as written; anything else falls back to undoing `\n`
+/// escapes across the whole source.
+fn code_mode_patches(source: &str) -> String {
+    let mut patches = Vec::new();
+    for (at, _) in source.match_indices("*** Begin Patch") {
+        let Some(quote) = source[..at].chars().next_back().filter(|c| matches!(c, '"' | '`')) else {
+            continue;
+        };
+        let rest = &source[at - 1..];
+        let mut escaped = false;
+        let end = rest.char_indices().skip(1).find_map(|(i, c)| {
+            let close = !escaped && c == quote;
+            escaped = !escaped && c == '\\';
+            close.then_some(i)
+        });
+        let Some(end) = end else { continue };
+        if quote == '"' {
+            if let Ok(text) = serde_json::from_str::<String>(&rest[..=end]) {
+                patches.push(text);
+            }
+        } else {
+            patches.push(rest[1..end].replace("\\`", "`"));
+        }
+    }
+    if patches.is_empty() {
+        source.replace("\\n", "\n")
+    } else {
+        patches.join("\n")
+    }
 }
 
 #[derive(Default)]
@@ -362,20 +505,22 @@ static CACHE: OnceLock<Mutex<HashMap<String, Cached>>> = OnceLock::new();
 /// created/completed window, so no stream interception is needed: the last user message marks the
 /// turn, and each assistant message under it is one step of that turn.
 fn opencode_stats_from_messages(messages: &[OpencodeMessage]) -> TurnStats {
-    let turn_id = messages
+    let last_user = messages
         .iter()
-        .rev()
-        .find(|m| m.info.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|m| m.info.get("id").and_then(Value::as_str));
+        .rposition(|m| m.info.get("role").and_then(Value::as_str) == Some("user"));
+    let turn_id = last_user.and_then(|i| messages[i].info.get("id").and_then(Value::as_str));
     let mut session = Usage::default();
     let mut session_known = false;
     let mut turn = Usage::default();
     let mut turn_known = false;
     let mut tools: HashSet<String> = HashSet::new();
-    let mut files: HashSet<String> = HashSet::new();
+    // Edit and write calls carry exact line counts. Snapshot patches also catch shell edits but miss
+    // files outside the snapshot repository or ignored by it, so they only add files the calls missed.
+    let mut files: HashMap<String, Lines> = HashMap::new();
+    let mut patched: HashSet<String> = HashSet::new();
     let mut generated_tokens = 0u64;
     let mut generated_ms = 0u64;
-    for message in messages {
+    for (index, message) in messages.iter().enumerate() {
         let info = &message.info;
         if info.get("role").and_then(Value::as_str) != Some("assistant") {
             continue;
@@ -386,8 +531,13 @@ fn opencode_stats_from_messages(messages: &[OpencodeMessage]) -> TurnStats {
             session.add(usage);
             session_known = true;
         }
-        let in_turn =
-            turn_id.is_none_or(|id| info.get("parentID").and_then(Value::as_str) == Some(id));
+        // The legacy store links each step to its user message. The v2 store records no parent but
+        // keeps messages in order, so there a step belongs to the turn when it follows the last user
+        // message.
+        let in_turn = match info.get("parentID").and_then(Value::as_str) {
+            Some(parent) => turn_id.is_none_or(|id| parent == id),
+            None => last_user.is_none_or(|i| index > i),
+        };
         if !in_turn {
             continue;
         }
@@ -407,17 +557,23 @@ fn opencode_stats_from_messages(messages: &[OpencodeMessage]) -> TurnStats {
                         .unwrap_or("tool")
                         .to_string();
                     tools.insert(id);
+                    if let Some((path, lines)) = opencode_edit(part) {
+                        add_file(&mut files, path, lines);
+                    }
                 }
                 Some("patch") => {
                     for file in part.get("files").and_then(Value::as_array).into_iter().flatten() {
                         if let Some(path) = file.as_str() {
-                            files.insert(path.to_string());
+                            patched.insert(path.to_string());
                         }
                     }
                 }
                 _ => {}
             }
         }
+    }
+    for path in patched {
+        files.entry(path).or_insert(None);
     }
     TurnStats {
         tokens: turn_known.then_some(turn.output),
@@ -429,10 +585,34 @@ fn opencode_stats_from_messages(messages: &[OpencodeMessage]) -> TurnStats {
         session_tokens: session_known.then_some(session.total()),
         tools_used: turn_known.then_some(tools.len() as u32),
         files_touched: turn_known.then_some(files.len() as u32),
+        changed_files: turn_known.then(|| changed_list(&files)),
         generation_tokens_per_second: (generated_ms > 0 && generated_tokens > 0)
             .then(|| generated_tokens as f64 * 1000.0 / generated_ms as f64),
         ..TurnStats::default()
     }
+}
+
+/// A completed OpenCode edit or write call: its file, and the lines OpenCode measured for an edit or
+/// counted for a write that created the file. Overwriting an existing file records no diff.
+fn opencode_edit(part: &Value) -> Option<(String, Lines)> {
+    let tool = part.get("tool").and_then(Value::as_str)?;
+    let state = part.get("state")?;
+    if !matches!(tool, "edit" | "write") || state.get("status").and_then(Value::as_str) != Some("completed") {
+        return None;
+    }
+    let input = state.get("input")?;
+    let path = input.get("filePath").and_then(Value::as_str)?.to_string();
+    let metadata = state.get("metadata");
+    let lines = if tool == "edit" {
+        let diff = metadata.and_then(|m| m.get("filediff"));
+        let count = |key: &str| diff.and_then(|d| d.get(key)).and_then(Value::as_u64).map(|n| n as u32);
+        count("additions").zip(count("deletions"))
+    } else if metadata.and_then(|m| m.get("exists")).and_then(Value::as_bool) == Some(false) {
+        input.get("content").and_then(Value::as_str).map(|c| (c.lines().count() as u32, 0))
+    } else {
+        None
+    };
+    Some((path, lines))
 }
 
 /// OpenCode's `tokens` object: uncached input, output, reasoning, and the cache read/write pair. Input
@@ -502,8 +682,8 @@ struct PiAccounting {
     messages: HashMap<String, Usage>,
     turn_messages: HashSet<String>,
     tools: HashSet<String>,
-    pending_files: HashMap<String, Vec<String>>,
-    files: HashSet<String>,
+    pending_files: HashMap<String, Vec<(String, Lines)>>,
+    files: HashMap<String, Lines>,
     session: Option<Usage>,
     turn: Option<Usage>,
     generated_ms: u64,
@@ -580,7 +760,7 @@ impl PiAccounting {
             let name = block.get("name").and_then(Value::as_str).unwrap_or("");
             if is_pi_edit_tool(name) {
                 if let Some(path) = block.get("arguments").and_then(super::tool_file_path) {
-                    self.pending_files.insert(call_id.to_string(), vec![path]);
+                    self.pending_files.insert(call_id.to_string(), vec![(path, None)]);
                 }
             }
         }
@@ -590,11 +770,20 @@ impl PiAccounting {
             .get("toolCallId")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let Some(paths) = self.pending_files.remove(call_id) else {
+        let Some(edits) = self.pending_files.remove(call_id) else {
             return;
         };
         if message.get("isError").and_then(Value::as_bool) != Some(true) {
-            self.files.extend(paths);
+            // Pi records a unified patch, OMP a diff whose changed lines start `+12|` / `-12|`.
+            // Writes record neither, since they may have replaced an existing file.
+            let details = message.get("details");
+            let lines = details
+                .and_then(|d| d.get("patch").or_else(|| d.get("diff")))
+                .and_then(Value::as_str)
+                .map(|diff| diff_lines(diff.lines()));
+            for (path, _) in edits {
+                add_file(&mut self.files, path, lines);
+            }
         }
     }
     fn snapshot(&self) -> TurnStats {
@@ -610,6 +799,7 @@ impl PiAccounting {
             session_tokens: self.session.map(Usage::total),
             tools_used: self.has_turn.then_some(self.tools.len() as u32),
             files_touched: self.has_turn.then_some(self.files.len() as u32),
+            changed_files: self.has_turn.then(|| changed_list(&self.files)),
             generation_tokens_per_second: (self.generated_ms > 0 && self.generated_tokens > 0)
                 .then(|| self.generated_tokens as f64 * 1000.0 / self.generated_ms as f64),
             ..TurnStats::default()
@@ -813,6 +1003,11 @@ fn parse(text: &str, kind: SessionKind) -> TurnStats {
     accounting.snapshot()
 }
 
+#[cfg(test)]
+fn changed_file(path: &str, lines: Lines) -> ChangedFile {
+    ChangedFile { path: path.to_string(), additions: lines.map(|l| l.0), deletions: lines.map(|l| l.1) }
+}
+
 /// Mirrors the file reader for a Pi or OMP recording: only the active branch is accounted.
 #[cfg(test)]
 fn pi_parse(text: &str) -> TurnStats {
@@ -916,6 +1111,63 @@ mod tests {
         assert_eq!(accounting.snapshot().files_touched, Some(0));
         accounting.consume(&json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c","output":"Success. Updated the following files:\nM a.ts\nA b.ts"}}).to_string(), SessionKind::Codex);
         assert_eq!(accounting.snapshot().files_touched, Some(2));
+        assert_eq!(accounting.snapshot().changed_files, Some(vec![changed_file("a.ts", Some((0, 0))), changed_file("b.ts", Some((0, 0)))]));
+    }
+    #[test]
+    fn codex_code_mode_patches_count_only_when_the_cell_completes() {
+        // The cell source holds the patch as a JS string literal with `\n` escapes, as recorded.
+        let source = "text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: /r/b.ts\\n@@\\n-x\\n+y\\n*** Add File: /r/a.ts\\n+z\\n*** End Patch\\n\"));\n";
+        let call = |id: &str| json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":id,"input":source}});
+        let output = |id: &str, head: &str| json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":id,"output":[{"type":"input_text","text":format!("{head}\nWall time 0.1 seconds\nOutput:\n")},{"type":"input_text","text":"{\"exit_code\":0}"}]}});
+        let text = lines(vec![
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"t"}}),
+            call("failed"),
+            output("failed", "Script failed"),
+            json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"read","input":"text(await tools.exec_command({cmd:\"cat a.ts\"}));"}}),
+            output("read", "Script completed"),
+        ]);
+        let mut stats = parse(&text, SessionKind::Codex);
+        assert_eq!(stats.files_touched, Some(0)); // A failed cell, and a cell that patches nothing.
+        stats = parse(&format!("{text}\n{}\n{}", call("ok"), output("ok", "Script completed")), SessionKind::Codex);
+        assert_eq!(stats.files_touched, Some(2));
+        assert_eq!(stats.changed_files, Some(vec![changed_file("/r/a.ts", Some((1, 0))), changed_file("/r/b.ts", Some((1, 1)))]));
+    }
+    #[test]
+    fn codex_patch_lines_follow_each_section_and_decode_the_cell_literal() {
+        // `\\n` inside a patched line is source text, not a line break, once the literal is decoded.
+        let source = r#"await tools.apply_patch("*** Begin Patch\n*** Update File: a.ts\n@@\n-old\n+let s = \"x\\ny\";\n+next\n*** Update File: b.ts\n*** Move to: c.ts\n@@\n-1\n+2\n*** Delete File: d.ts\n*** End Patch");"#;
+        let edits = patch_edits(&code_mode_patches(source));
+        assert_eq!(edits, vec![
+            ("a.ts".to_string(), Some((2, 1))),
+            ("b.ts".to_string(), None),
+            ("c.ts".to_string(), Some((1, 1))),
+            ("d.ts".to_string(), None),
+        ]);
+        // A patch held in a variable is found the same way.
+        assert_eq!(patch_edits(&code_mode_patches("const p = \"*** Begin Patch\\n*** Add File: e.ts\\n+1\\n+2\\n*** End Patch\";\nawait tools.apply_patch(p);")), vec![("e.ts".to_string(), Some((2, 0)))]);
+    }
+    #[test]
+    fn claude_lines_come_from_the_recorded_patch_and_sum_per_file() {
+        let edit = |id: &str, name: &str, path: &str| json!({"type":"assistant","message":{"id":id,"content":[{"type":"tool_use","id":id,"name":name,"input":{"file_path":path}}]}});
+        let result = |id: &str, recorded: Value| json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":id,"content":"ok"}]},"toolUseResult":recorded});
+        let hunk = |lines: Vec<&str>| json!({"structuredPatch":[{"oldStart":1,"lines":lines}]});
+        let text = lines(vec![
+            json!({"type":"user","message":{"content":"go"}}),
+            edit("e1", "Edit", "/r/a.ts"),
+            result("e1", hunk(vec![" keep", "-old", "+new", "+more"])),
+            edit("e2", "Edit", "/r/a.ts"),
+            result("e2", hunk(vec!["-gone"])),
+            edit("w1", "Write", "/r/new.ts"),
+            result("w1", json!({"type":"create","content":"1\n2\n3\n","structuredPatch":[]})),
+            edit("n1", "NotebookEdit", "/r/book.ipynb"),
+            result("n1", json!({"cell_id":"c"})),
+        ]);
+        let stats = parse(&text, SessionKind::Claude);
+        assert_eq!(stats.changed_files, Some(vec![
+            changed_file("/r/a.ts", Some((2, 2))),
+            changed_file("/r/book.ipynb", None),
+            changed_file("/r/new.ts", Some((3, 0))),
+        ]));
     }
     #[test]
     fn missing_usage_and_zero_input_have_no_invented_ratios() {
@@ -957,10 +1209,12 @@ mod tests {
             json!({"type":"message","id":"a2","parentId":"u2","message":{"role":"assistant","model":"deepseek-flash","usage":{"input":50,"output":10,"cacheRead":100,"cacheWrite":0},"duration":2000.0,"content":[
                 {"type":"toolCall","id":"c1","name":"edit","arguments":{"path":"a.ts"}},
                 {"type":"toolCall","id":"c2","name":"write","arguments":{"path":"b.ts"}}]}}),
-            json!({"type":"message","id":"r1","parentId":"a2","message":{"role":"toolResult","toolCallId":"c1","toolName":"edit","isError":false}}),
+            json!({"type":"message","id":"r1","parentId":"a2","message":{"role":"toolResult","toolCallId":"c1","toolName":"edit","isError":false,
+                "details":{"patch":"--- a.ts\n+++ a.ts\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n+more"}}}),
             json!({"type":"message","id":"r2","parentId":"r1","message":{"role":"toolResult","toolCallId":"c2","toolName":"write","isError":true}}),
         ]);
         let stats = pi_parse(&text);
+        assert_eq!(stats.changed_files, Some(vec![changed_file("a.ts", Some((2, 1)))]));
         assert_eq!(stats.input_tokens, Some(150));
         assert_eq!(stats.tokens, Some(10));
         assert_eq!(stats.total_tokens, Some(160));
@@ -1182,6 +1436,45 @@ mod file_tests {
         assert_eq!(stats.files_touched, Some(1));
         assert!((stats.cache_hit_percent.unwrap() - 90.0 / 110.0 * 100.0).abs() < 0.001);
         assert!((stats.generation_tokens_per_second.unwrap() - 90.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn opencode_lines_come_from_edit_calls_and_patches_add_the_files_they_missed() {
+        let tool = |tool: &str, path: &str, metadata: Value| serde_json::json!({"type": "tool", "callID": path, "tool": tool,
+            "state": {"status": "completed", "input": {"filePath": path, "content": "1\n2\n"}, "metadata": metadata}});
+        let messages = vec![
+            OpencodeMessage { info: serde_json::json!({"id": "u", "role": "user"}), parts: vec![] },
+            OpencodeMessage {
+                info: serde_json::json!({"id": "a", "role": "assistant", "parentID": "u", "tokens": {"total": 2, "input": 1, "output": 1}}),
+                parts: vec![
+                    tool("edit", "/r/a.ts", serde_json::json!({"filediff": {"additions": 4, "deletions": 1}})),
+                    tool("write", "/r/new.ts", serde_json::json!({"exists": false})),
+                    tool("write", "/r/old.ts", serde_json::json!({"exists": true})),
+                    serde_json::json!({"type": "patch", "files": ["/r/a.ts", "/r/shell.ts"]}),
+                ],
+            },
+        ];
+        let stats = opencode_stats_from_messages(&messages);
+        assert_eq!(stats.changed_files, Some(vec![
+            changed_file("/r/a.ts", Some((4, 1))),
+            changed_file("/r/new.ts", Some((2, 0))),
+            changed_file("/r/old.ts", None),
+            changed_file("/r/shell.ts", None),
+        ]));
+    }
+
+    #[test]
+    fn opencode_v2_messages_without_parents_join_the_turn_after_the_last_user_message() {
+        let user = |id: &str| OpencodeMessage { info: serde_json::json!({"id": id, "role": "user"}), parts: vec![] };
+        let step = |id: &str, out: u64, path: &str| OpencodeMessage {
+            info: serde_json::json!({"id": id, "role": "assistant", "tokens": {"total": 1 + out, "input": 1, "output": out}}),
+            parts: vec![serde_json::json!({"type": "tool", "callID": id, "tool": "edit",
+                "state": {"status": "completed", "input": {"filePath": path}, "metadata": {"filediff": {"additions": 1, "deletions": 0}}}})],
+        };
+        let stats = opencode_stats_from_messages(&[user("u1"), step("a1", 10, "/r/old.ts"), user("u2"), step("a2", 20, "/r/a.ts"), step("a3", 30, "/r/a.ts")]);
+        assert_eq!(stats.tokens, Some(50));
+        assert_eq!(stats.session_tokens, Some(63));
+        assert_eq!(stats.changed_files, Some(vec![changed_file("/r/a.ts", Some((2, 0)))]));
     }
 
     /// Opt-in read-only validation against a locally selected provider transcript. Only numeric

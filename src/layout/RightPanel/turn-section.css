@@ -27,3 +27,28 @@
 .turn-section .turn-metric .m-k { color: var(--text-dim); font-size: 11px; }
 .turn-section .turn-metric .m-v { color: var(--text); font-size: 11.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .turn-status { margin: 2px 0 0; color: var(--text-faint); font-size: 11px; line-height: 1.5; }
+/* The changed-file count opens the list in place of the statistics; it reads as a link, with a hover
+   background sized to its content rather than the whole grid cell. */
+.turn-section .turn-metric .turn-files-link { align-self: flex-start; display: inline-flex; align-items: center; gap: 3px; margin: -2px -6px; padding: 2px 6px; border-radius: 4px; color: var(--accent); cursor: pointer; }
+.turn-section .turn-files-link:hover { background: var(--bg-hover); }
+.turn-section .turn-files-link:focus-visible { outline: 1px solid var(--accent-line); outline-offset: 1px; }
+.turn-section .turn-files-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.turn-section .turn-back { display: inline-flex; align-items: center; gap: 5px; margin-left: -6px; padding: 3px 8px 3px 5px; border: 1px solid transparent; border-radius: 5px; color: var(--text-mid); font-size: 11px; cursor: pointer; }
+.turn-section .turn-back svg { transform: rotate(180deg); }
+.turn-section .turn-back:hover { background: var(--bg-hover); border-color: var(--border); color: var(--text); }
+.turn-section .turn-files-count { display: inline-flex; align-items: center; gap: 8px; color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.turn-section .turn-lines { flex: none; display: inline-flex; gap: 5px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.turn-section .turn-lines .plus { color: var(--green); }
+.turn-section .turn-lines .minus { color: var(--red); }
+/* Nine rows, then the list scrolls with the app scrollbar. The list itself extends into the section
+   padding so row highlights keep their inset without the negative margins that would make a scrolling
+   box overflow sideways. */
+.turn-section .turn-file-list { list-style: none; margin: 0 -6px; padding: 0; max-height: calc(var(--turn-file-row) * 9); overflow-y: auto; overflow-x: hidden; --turn-file-row: 24px; }
+.turn-section .turn-file { width: 100%; height: var(--turn-file-row); padding: 0 6px; display: flex; align-items: center; gap: 7px; min-width: 0; border-radius: 4px; font-size: 11.5px; text-align: left; color: var(--text); cursor: pointer; }
+.turn-section .turn-file:hover:not(:disabled) { background: var(--bg-hover); }
+.turn-section .turn-file:disabled { cursor: default; }
+.turn-section .turn-file-icon { flex: none; display: grid; place-items: center; }
+.turn-section .turn-file-name { flex: none; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-section .turn-file-dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: 10.5px; }
+.turn-section .turn-files-empty { margin: 10px 0 2px; color: var(--text-mid); font-size: 11.5px; }
+.turn-section .turn-files .turn-status { margin-top: 8px; }

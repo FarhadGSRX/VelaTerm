@@ -62,6 +62,8 @@ const SKILLS: &[(&str, &str)] = &[
         include_str!("../../../skills/vspawn-tree/SKILL.md"),
     ),
     ("vopen", include_str!("../../../skills/vopen/SKILL.md")),
+    // Companion of `vopen`, not a command of its own: it tells agents to show visual work as an HTML page.
+    ("vartifact", include_str!("../../../skills/vartifact/SKILL.md")),
     ("vrefer", include_str!("../../../skills/vrefer/SKILL.md")),
     ("vsearch", include_str!("../../../skills/vsearch/SKILL.md")),
     ("vask", include_str!("../../../skills/vask/SKILL.md")),

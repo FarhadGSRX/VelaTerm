@@ -2,9 +2,9 @@
 name: vopen
 description: >-
   Open a file or URL in the vlx-term center pane (mirrors the `vopen` command). Markdown opens in a WYSIWYG editor,
-  images in the built-in image viewer, other files in the source-code editor (with automatic syntax highlighting by
-  language), and http/https URLs in a built-in browser tab. Only use when the user explicitly invokes /vopen or $vopen; never
-  auto-trigger. Available only inside vlx-term-hosted local sessions.
+  images in the built-in image viewer, HTML pages in a live sandboxed preview, other files in the source-code editor
+  (with automatic syntax highlighting by language), and http/https URLs in a built-in browser tab. Only use when the
+  user explicitly invokes /vopen or $vopen; never auto-trigger. Available only inside vlx-term-hosted local sessions.
 argument-hint: "<file|url>..."
 disable-model-invocation: true
 allowed-tools: Bash(vopen:*)
@@ -16,7 +16,9 @@ The user **explicitly invoked `/vopen` (Claude) or `$vopen` (Codex)** to request
 **vlx-term** center pane, with exactly the same effect
 as typing `vopen <file>` in the terminal: it opens a document tab in the center pane, routed automatically by type
 (markdown WYSIWYG / image viewer / code editor with syntax highlighting), while http/https URLs open a built-in
-browser tab. The document tab sits alongside the terminal tabs and won't displace the current session.
+browser tab. The document tab sits alongside the terminal tabs and won't displace the current session. An HTML
+page (`.html`, `.htm`) opens as a live preview that reloads on every save; opened from a conversation, it appears
+in a panel beside that conversation instead of a tab.
 
 User input:
 

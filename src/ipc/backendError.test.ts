@@ -13,6 +13,15 @@ vi.mock("../i18n", () => ({
 import { handshakeFailureReason, isAgentNotInstalledError, mapBackendError } from "./backendError";
 
 describe("mapBackendError", () => {
+  it("localizes history errors while retaining the code used for revision recovery", () => {
+    expect(mapBackendError("source_changed: Original path and system error")).toBe("source_changed: chat.history.contentChanged");
+    expect(mapBackendError("cursor_expired: Session generation changed")).toBe("cursor_expired: chat.history.contentChanged");
+    expect(mapBackendError("index_incomplete: Unconfirmed branch")).toBe("index_incomplete: chat.history.incomplete");
+    expect(mapBackendError("read_canceled")).toBe("read_canceled: chat.history.canceled");
+    expect(mapBackendError("storage_pressure: Private native location")).toBe("storage_pressure: chat.history.storagePressure");
+    expect(mapBackendError("image_requires_download: Excessive dimensions")).toBe("image_requires_download: chat.history.imageDownloadRequired");
+    expect(mapBackendError(mapBackendError("index_busy: Another reader"))).toBe("index_busy: chat.history.indexBusy");
+  });
   it("maps the command gate code to its i18n key with the command as detail", () => {
     expect(mapBackendError("remote_cmd_forbidden:web_server_start")).toBe(
       "transport.remoteCmdForbidden|web_server_start",

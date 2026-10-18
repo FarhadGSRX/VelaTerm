@@ -98,6 +98,7 @@ pub fn launch_args(
         "--output-format".into(),
         "stream-json".into(),
         "--include-partial-messages".into(),
+        "--replay-user-messages".into(),
         "--permission-prompt-tool".into(),
         "stdio".into(),
         "--thinking".into(),
@@ -693,6 +694,26 @@ pub fn permission_response(
         json!({"behavior":"deny","message":message.unwrap_or("Denied by user")})
     };
     json!({"type":"control_response","response":{"subtype":"success","request_id":request_id,"response":inner}})
+}
+
+/// Write an allow response without constructing an owned copy of the original tool arguments.
+pub fn write_permission_original<W:std::io::Write>(
+    writer:&mut W,
+    request_id:&str,
+    updated_permissions:Option<&Value>,
+    original:impl FnOnce(&mut W)->Result<(),String>,
+) -> Result<(),String> {
+    let write=|writer:&mut W,bytes:&[u8]|writer.write_all(bytes).map_err(|error|format!("Failed to send to the agent: {error}"));
+    write(writer,b"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":")?;
+    serde_json::to_writer(&mut *writer,request_id).map_err(|error|format!("Failed to send to the agent: {error}"))?;
+    write(writer,b",\"response\":{\"behavior\":\"allow\",\"updatedInput\":")?;
+    original(writer)?;
+    if let Some(updates)=updated_permissions.filter(|value|value.as_array().is_some_and(|items|!items.is_empty())) {
+        write(writer,b",\"updatedPermissions\":")?;
+        serde_json::to_writer(&mut *writer,updates).map_err(|error|format!("Failed to send to the agent: {error}"))?;
+    }
+    write(writer,b"}}}\n")?;
+    writer.flush().map_err(|error|format!("Failed to send to the agent: {error}"))
 }
 
 #[cfg(test)]

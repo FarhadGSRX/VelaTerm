@@ -22,9 +22,11 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it("toggles sending and reply translation together without navigation and opens languages only from the direction link", async () => {
+it("toggles sending and reply translation together and opens languages from a compact settings link", async () => {
   render(<TranslationComposerControl />);
   expect(screen.getByText("Translation")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Translation languages" }).textContent).toBe("");
+  expect(screen.queryByText("Auto-detect → English")).toBeNull();
   fireEvent.click(screen.getByRole("switch", { name: "Translation" }));
   await waitFor(() => expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ outgoing: false, replies: false, target: "en" })));
   expect(window.location.search).toBe(""); expect(screen.queryByRole("dialog")).toBeNull();
@@ -159,8 +161,9 @@ it("retains saved directions through off/on and displays the next conversation's
   mocks.state = { ...mocks.state!, sessionId: "another", value: { ...mocks.state!.value!, preferences: { ...mocks.state!.value!.preferences, outgoing: false, replies: false, target: "de" } } };
   rerender(<TranslationComposerControl />);
   expect(toggle.checked).toBe(false);
-  expect(screen.getByTitle("Translation languages").textContent).toContain("Deutsch");
   expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("link", { name: "Translation languages" }));
+  expect(screen.getByRole("combobox", { name: "Target language" }).textContent).toContain("Deutsch");
 });
 
 it("pairs complete Markdown blocks and copies both documents without splitting their structure", async () => {
@@ -189,6 +192,27 @@ it("pairs complete Markdown blocks and copies both documents without splitting t
   expect(container.querySelectorAll(".translation-reply-blocks > div")).toHaveLength(2);
   fireEvent.click(screen.getByRole("button", { name: "Copy original and translation" }));
   await waitFor(() => expect(mocks.copy).toHaveBeenLastCalledWith("First line.\nSecond line.\n\nErste Zeile.\nZweite Zeile.", { reportFailure: true }));
+});
+
+it("keeps an earlier translation visible after the engine configuration changes and offers a fresh one", () => {
+  const text = "Hello";
+  mocks.state!.value!.version = 2; mocks.state!.value!.generation = 3;
+  mocks.state!.value!.replies = [{ id: "reply", original: text, source: "en", target: "de", version: 1, generation: 1, state: "ready", error: null,
+    result: { sourceLanguage: "en", formatVersion: 2, pairs: [{ original: text, translation: "Hallo" }] } }];
+  const { container } = render(<ReplyTranslation rowId="reply" text={text} original={<div>{text}</div>} />);
+  expect(container.querySelector(".translation-pair-target")?.textContent).toBe("Hallo");
+  expect(screen.getByText("This translation uses earlier text, language settings or an engine configuration.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Retry translation" })).toBeTruthy();
+});
+
+it("hides an earlier translation once the reply target language changes", () => {
+  const text = "Hello";
+  mocks.state!.value!.preferences.replyTarget = "en";
+  mocks.state!.value!.replies = [{ id: "reply", original: text, source: "en", target: "de", version: 1, generation: 1, state: "ready", error: null,
+    result: { sourceLanguage: "en", formatVersion: 2, pairs: [{ original: text, translation: "Hallo" }] } }];
+  const { container } = render(<ReplyTranslation rowId="reply" text={text} original={<div>{text}</div>} />);
+  expect(container.querySelector(".translation-pairs")).toBeNull();
+  expect(screen.getByRole("button", { name: "Translation" })).toBeTruthy();
 });
 
 it("confirms copying only after clipboard success and reports failures without a success message", async () => {

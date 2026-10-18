@@ -17,9 +17,11 @@ export interface MemorySessionGroup { id: string; name: string; kind: "session" 
 export interface MemoryProjectGroup { id: string; name: string; kind: "project" | "unknown" | "manual" | "legacy"; count: number; sessions: MemorySessionGroup[] }
 export interface MemoryList { projects: MemoryProjectGroup[]; selectedSessionId: string | null; entries: MemorySummary[]; total: number; pageSize: number; tags: string[]; fuzzy?: boolean }
 /** One archived root session inside a Collections project group. */
-export interface MemoryCollectionSession { id: string; name: string; kind: string; count: number; archivedAt: number | null; groupPath: string[] }
+/** One archived session. `parentId` names the archived parent it nests under; roots carry their group
+ *  chain as parallel `groupIds` / `groupPath`, descendants carry empty arrays. */
+export interface MemoryCollectionSession { id: string; name: string; kind: string; count: number; archivedAt: number | null; parentId: string | null; groupIds: string[]; groupPath: string[] }
 export interface MemoryCollectionProject { id: string; name: string; kind: "project" | "unknown"; count: number; sessions: MemoryCollectionSession[] }
-/** Archived sessions grouped by their original project, plus the complete session objects for viewers. */
+/** Archived sessions, descendants included, grouped by their original project, plus the complete session objects for viewers. */
 export interface MemoryCollections { projects: MemoryCollectionProject[]; sessions: Session[] }
 export interface MemoryJob {
   id: string; sourceId: string; sessionName: string; agent: string; agentLabel: string; model: string; effort: string; status: string; stage: string;

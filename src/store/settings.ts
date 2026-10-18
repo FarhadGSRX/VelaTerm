@@ -209,6 +209,9 @@ export interface PersistedSettings {
   /** Whether the Info panel's Resources section shows the whole-machine group. Off hides those rows and
    * stops sampling the machine, leaving only this session's own CPU and memory. */
   showSystemResources: boolean;
+  /** Whether the Info panel's This turn section shows the turn's changed files instead of its statistics.
+   * The choice sticks across turns and sessions until the user switches back. */
+  turnFilesView: boolean;
   /** Info panel sections the user collapsed, as a sparse map of section id to `true`. A missing id means
    * the section is open, so the map stays empty until someone collapses something. */
   infoCollapsed: Record<string, boolean>;
@@ -295,6 +298,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   sessionTitlePrefs: {},
   referSummary: { enabled: false, agent: "claude", model: "", effort: "" },
   showSystemResources: true,
+  turnFilesView: false,
   infoCollapsed: {},
   composerInlineChips: DEFAULT_COMPOSER_INLINE_CHIPS,
   composerInlineChipsRevision: COMPOSER_INLINE_CHIPS_REVISION,
@@ -386,6 +390,7 @@ export function loadSettings(): PersistedSettings {
       parsed.infoCollapsed && typeof parsed.infoCollapsed === "object" && !Array.isArray(parsed.infoCollapsed)
         ? Object.fromEntries(Object.entries(parsed.infoCollapsed).filter(([, closed]) => closed === true))
         : {};
+    merged.turnFilesView = merged.turnFilesView === true;
     merged.planExecutePrefs = sanitizePlanExecutePrefs(parsed.planExecutePrefs);
     merged.memoryPrefs = sanitizeLaunchChoice(parsed.memoryPrefs);
     merged.sessionTitlePrefs = sanitizeSessionTitlePrefs(parsed.sessionTitlePrefs);

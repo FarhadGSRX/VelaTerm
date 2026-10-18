@@ -1,13 +1,20 @@
 //! Session-context export flow shared by the sidebar context menu and the knowledge-base Collections view:
 //! - Desktop: choose a path in the system Save As dialog, then let the backend generate and write the file.
-//! - Browser: obtain generated content from the backend and trigger a local download through a Blob.
+//! - Browser: generate the file on the backend and download it through an authorized HTTP ticket.
 //! Filenames follow the global `title_YYYYMMDD_HHmm.md` convention. Failures produce a non-disruptive system notification.
 
 import { t } from "./i18n";
-import { exportSessionContext } from "./ipc/commands";
+import { chatExportContext } from "./ipc/chat";
 import { platform } from "./platform";
 import { notify } from "./notify";
 import type { Session } from "./types";
+
+export interface ExportProgress {name: string; controller: AbortController;}
+let progress: readonly ExportProgress[]=[];
+const progressListeners=new Set<()=>void>();
+export const exportProgressSnapshot=()=>progress;
+export function subscribeExportProgress(listener:()=>void) {progressListeners.add(listener);return ()=>{progressListeners.delete(listener);};}
+function updateProgress(next:readonly ExportProgress[]) {progress=next;for (const listener of progressListeners) listener();}
 
 /** Whether context can be exported: a local agent session with a parseable transcript (Claude/Codex with a captured ID). */
 export function canExportContext(s: Pick<Session, "kind" | "agentSessionId">): boolean {
@@ -41,28 +48,30 @@ export async function exportSessionToFile(
 ): Promise<void> {
   const { stamp, human } = nowParts();
   const fileName = `${safeName(session.name)}_${t("export.contextSuffix")}_${stamp}.md`;
+  let controller:AbortController | undefined;
   try {
+    let destination:string | undefined;
     if (platform.env.isTauri || platform.env.isElectron) {
       const dest = await platform.dialog.saveFile({
         defaultPath: fileName,
         filters: [{ name: "Markdown", extensions: ["md"] }],
       });
       if (!dest) return; // User canceled.
-      await exportSessionContext(session.id, dest, human);
-      return;
+      destination=dest;
     }
-    // Browser: download generated content to the user's machine, not the server.
-    const content = await exportSessionContext(session.id, undefined, human);
-    const blob = new Blob([content ?? ""], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
+    controller=new AbortController();updateProgress([...progress,{name:session.name,controller}]);
+    const url = await chatExportContext(session.id, human, destination, controller.signal);
+    if (destination) return;
+    if (!url) throw new Error(t("chat.history.unavailable"));
     const a = document.createElement("a");
     a.href = url;
     a.download = fileName;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
   } catch (e) {
-    void notify(null, t("export.failedTitle"), String(e));
+    if (!controller?.signal.aborted) void notify(null, t("export.failedTitle"), String(e));
+  } finally {
+    if (controller) updateProgress(progress.filter(item=>item.controller!==controller));
   }
 }

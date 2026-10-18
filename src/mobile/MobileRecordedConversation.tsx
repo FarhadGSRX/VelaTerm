@@ -2,15 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import Icons from "../components/Icons";
 import { useT } from "../i18n";
 import { ptyWrite, readAgentChat, type ChatEvent } from "../ipc/commands";
-import { MessageBubble, ReasoningRow, ShellRow, ToolCard } from "../layout/CenterPane/session/rows";
+import { MessageBubble, ReasoningRow, ShellRow, ToolCard, WakeRow } from "../layout/CenterPane/session/rows";
 import { assistantLabel } from "../layout/sessionViewers/TranscriptViewer";
 import type { Session } from "../types";
+import { hasPagedHistory } from "../layout/sessionViewers/pagedHistory";
+import { PagedConversation } from "../layout/sessionViewers/PagedConversation";
 import "../layout/CenterPane/session/session-view.css";
 
 /** Reads the running terminal's recording without acquiring its PTY or starting a chat engine. */
 export function MobileRecordedConversation({ session, cwd }: { session: Session; cwd?: string }) {
   const t = useT();
   const readOnly = session.kind === "kiro";
+  const paged=hasPagedHistory(session);
   const [rows, setRows] = useState<ChatEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -22,6 +25,7 @@ export function MobileRecordedConversation({ session, cwd }: { session: Session;
   const follow = useRef(true);
   const sendingRef = useRef(false);
   useEffect(() => {
+    if (paged) {setLoading(false);setError(null);return;}
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
@@ -35,7 +39,7 @@ export function MobileRecordedConversation({ session, cwd }: { session: Session;
     };
     void refresh();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [session.id, retry]);
+  }, [session.id, retry, paged]);
   useEffect(() => {
     if (follow.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
   }, [rows]);
@@ -52,7 +56,7 @@ export function MobileRecordedConversation({ session, cwd }: { session: Session;
     finally { sendingRef.current = false; setSending(false); }
   };
   return <div className="m-recorded sv">
-    <div className="m-recorded-scroll" ref={scroll} onScroll={() => {
+    {paged ? <div style={{position:"relative",flex:1,minHeight:0}}><PagedConversation session={session} cwd={cwd} mobile /></div> : <div className="m-recorded-scroll" ref={scroll} onScroll={() => {
       const el = scroll.current;
       if (el) follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     }}>
@@ -62,8 +66,9 @@ export function MobileRecordedConversation({ session, cwd }: { session: Session;
       {rows.map(row => row.kind === "tool" ? <ToolCard key={row.index} name={row.tool} input={row.input} output={row.output} isError={row.isError} running={row.pending} cwd={cwd} />
         : row.kind === "thinking" ? <ReasoningRow key={row.index} text={row.text ?? ""} />
         : row.kind === "user" && row.shell ? <ShellRow key={row.index} row={row.shell} />
+        : row.kind === "wake" ? <WakeRow key={row.index} summary={row.text ?? ""} at={row.timestamp ?? undefined} />
         : <MessageBubble key={row.index} who={row.kind === "user" ? t("archive.you") : assistantLabel(session.kind)} isUser={row.kind === "user"} text={row.text ?? ""} at={row.timestamp ?? undefined} />)}
-    </div>
+    </div>}
     {!readOnly && <form className="m-recorded-composer" onSubmit={e => { e.preventDefault(); void send(); }}>
       {sendError && <p role="alert">{t("chat.submission.failed")}: {sendError}</p>}
       <div className="m-recorded-input">

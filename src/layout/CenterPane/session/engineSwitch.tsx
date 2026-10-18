@@ -3,7 +3,9 @@
 //! The terminal view and the conversation view are not two readings of one process: the terminal runs the
 //! agent's own interface, the conversation runs it as a protocol peer. Switching therefore stops one and
 //! starts the other. The conversation survives — both engines write the same record and pick it back up —
-//! but a turn in flight does not, so a working agent is asked about first and an idle one is simply moved.
+//! but a turn in flight does not, and neither does the agent's watch over the background tasks it started:
+//! they belong to the process being stopped. So a working agent, or one still waiting on its background
+//! tasks, is asked about first, and an idle one is simply moved.
 
 import { useRef, useState } from "react";
 
@@ -33,7 +35,7 @@ export function useEngineSwitch(session: Session) {
   };
 
   const switchTo = (engine: SessionEngine) => {
-    if (status === "working") setAsking(engine);
+    if (status === "working" || status === "background") setAsking(engine);
     else apply(engine);
   };
 
@@ -61,7 +63,9 @@ export function useEngineSwitch(session: Session) {
         >
           <div className="quit-head">
             <div className="quit-title">{t("session.switchTitle")}</div>
-            <div className="quit-body">{t("session.switchBody")}</div>
+            <div className="quit-body">
+              {t(status === "background" ? "session.switchBodyBackground" : "session.switchBody")}
+            </div>
           </div>
           <div className="quit-foot">
             <button className="quit-btn ghost" onClick={() => setAsking(null)}>

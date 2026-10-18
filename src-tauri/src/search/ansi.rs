@@ -28,6 +28,23 @@ enum StripState {
     StringSeq { esc_pending: bool },
 }
 
+/// Consume escape bytes and report whether a byte reaches the visible-text handler.
+fn visible(state:&mut StripState,b:u8) -> bool {
+    let mut printable=false;
+    *state=match std::mem::replace(state,StripState::Ground) {
+        StripState::Ground=>if b==0x1b {StripState::Esc} else {printable=true;StripState::Ground},
+        StripState::Esc=>match b {
+            b'['=>StripState::Csi,b']'|b'P'|b'_'|b'^'|b'X'=>StripState::StringSeq {esc_pending:false},
+            b'('|b')'|b'*'|b'+'|b'-'|b'.'|b'/'|b' '|b'#'|b'%'=>StripState::EscIntermediate,
+            0x1b=>StripState::Esc,_=>StripState::Ground,
+        },
+        StripState::Csi=>if (0x40..=0x7e).contains(&b) {StripState::Ground} else {StripState::Csi},
+        StripState::EscIntermediate=>StripState::Ground,
+        StripState::StringSeq {esc_pending}=>if esc_pending && b==b'\\' || !esc_pending && b==0x07 {StripState::Ground}
+            else {StripState::StringSeq {esc_pending:b==0x1b}},
+    };printable
+}
+
 impl AnsiStripper {
     pub fn new() -> Self {
         Self {
@@ -40,55 +57,7 @@ impl AnsiStripper {
     /// Feed bytes and invoke `on_line` for every completed line.
     pub fn feed(&mut self, bytes: &[u8], on_line: &mut impl FnMut(&str)) {
         for &b in bytes {
-            self.state = match std::mem::replace(&mut self.state, StripState::Ground) {
-                StripState::Ground => {
-                    self.ground(b, on_line);
-                    // ground() selects Esc for ESC and otherwise remains Ground.
-                    if b == 0x1b {
-                        StripState::Esc
-                    } else {
-                        StripState::Ground
-                    }
-                }
-                StripState::Esc => match b {
-                    b'[' => StripState::Csi,
-                    b']' | b'P' | b'_' | b'^' | b'X' => {
-                        StripState::StringSeq { esc_pending: false }
-                    }
-                    // Character-set and other intermediate introducers consume one more byte.
-                    b'(' | b')' | b'*' | b'+' | b'-' | b'.' | b'/' | b' ' | b'#' | b'%' => {
-                        StripState::EscIntermediate
-                    }
-                    0x1b => StripState::Esc,
-                    // Consume single-byte ESC sequences such as ESC M, 7, 8, or =.
-                    _ => StripState::Ground,
-                },
-                StripState::Csi => {
-                    if (0x40..=0x7e).contains(&b) {
-                        StripState::Ground
-                    } else {
-                        StripState::Csi
-                    }
-                }
-                StripState::EscIntermediate => StripState::Ground,
-                StripState::StringSeq { esc_pending } => {
-                    if esc_pending {
-                        if b == b'\\' {
-                            StripState::Ground
-                        } else {
-                            StripState::StringSeq {
-                                esc_pending: b == 0x1b,
-                            }
-                        }
-                    } else if b == 0x07 {
-                        StripState::Ground
-                    } else {
-                        StripState::StringSeq {
-                            esc_pending: b == 0x1b,
-                        }
-                    }
-                }
-            };
+            if visible(&mut self.state,b) {self.ground(b,on_line);}
         }
     }
 
@@ -165,7 +134,6 @@ mod tests {
         lines
     }
 
-    /// Consume SGR colors and cursor CSI, leaving visible text only.
     #[test]
     fn strip_removes_sgr_and_cursor_csi() {
         let lines = strip_lines(&[b"\x1b[31mred\x1b[0m \x1b[2Knormal\n"]);

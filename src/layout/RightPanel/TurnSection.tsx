@@ -1,9 +1,13 @@
 //! Turn accounting is owned by the backend. This component only formats the current snapshot.
 import { useEffect, useRef, useState } from "react";
+import Icons from "../../components/Icons";
 import { fmtTokens } from "../../format";
 import { useT } from "../../i18n";
-import { agentTurnStats, type AgentTurnStats } from "../../ipc/commands";
+import { agentTurnStats, type AgentTurnStats, type TurnChangedFile } from "../../ipc/commands";
+import { detectFlavor, isAbsolutePath, joinPath } from "../../remote/serverPath";
+import { useTermStore } from "../../store/termStore";
 import type { Session } from "../../types";
+import { fileIcon } from "./fileIcons";
 import { Section } from "./parts";
 import "./turn-section.css";
 
@@ -11,11 +15,95 @@ const tokens = (value: number | null | undefined) => value == null ? "—" : fmt
 const contextTokens = (value: number | null | undefined) => value != null && value >= 1000 && value < 1_000_000
   ? `${(value / 1000).toFixed(1)}k` : tokens(value);
 
-export function TurnStatsView({ stats, state = "ready" }: {
+/** Where a recorded path lives: the absolute path to open, plus the name and the muted folder to show. */
+function changedFile(path: string, cwd: string | null | undefined) {
+  const flavor = detectFlavor(cwd || path);
+  const absolute = isAbsolutePath(path, flavor) ? path : cwd ? joinPath(cwd, path, flavor) : null;
+  let shown = path;
+  if (cwd && absolute) {
+    const root = cwd.replace(/[\\/]+$/, "");
+    const rest = absolute.slice(root.length);
+    if (absolute.startsWith(root) && /^[\\/]/.test(rest)) shown = rest.slice(1);
+  }
+  const cut = Math.max(shown.lastIndexOf("/"), shown.lastIndexOf("\\"));
+  return { path, absolute, shown, name: shown.slice(cut + 1), dir: cut > 0 ? shown.slice(0, cut) : "" };
+}
+
+/** One row per file, in the order shown. An agent may name the same file absolutely and relative to
+ *  the session folder within one turn, so rows merge on the resolved path and their counts add up. */
+function fileRows(files: TurnChangedFile[], cwd: string | null | undefined) {
+  const rows = new Map<string, ReturnType<typeof changedFile> & { additions: number | null; deletions: number | null }>();
+  for (const f of files) {
+    const file = changedFile(f.path, cwd);
+    const key = file.absolute ?? file.path;
+    const seen = rows.get(key);
+    if (!seen) rows.set(key, { ...file, additions: f.additions, deletions: f.deletions });
+    else if (seen.additions == null || seen.deletions == null || f.additions == null || f.deletions == null) {
+      seen.additions = null;
+      seen.deletions = null;
+    } else {
+      seen.additions += f.additions;
+      seen.deletions += f.deletions;
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.shown < b.shown ? -1 : a.shown > b.shown ? 1 : 0);
+}
+
+/** Added and removed lines, or nothing when they are not known. */
+function LineCounts({ additions, deletions }: { additions: number | null; deletions: number | null }) {
+  if (additions == null || deletions == null) return null;
+  return <span className="turn-lines"><span className="plus">+{additions}</span><span className="minus">−{deletions}</span></span>;
+}
+
+/** The turn's changed files, in place of the statistics until the user goes back. */
+function ChangedFiles({ files, cwd, onBack }: { files: TurnChangedFile[]; cwd?: string | null; onBack: () => void }) {
+  const t = useT();
+  const openDocTab = useTermStore((s) => s.openDocTab);
+  const rows = fileRows(files, cwd);
+  // Totals only when every file is countable, so a partial sum never passes for the whole turn.
+  const counted = rows.length > 0 && rows.every((f) => f.additions != null && f.deletions != null);
+  const sum = (key: "additions" | "deletions") => rows.reduce((n, f) => n + (f[key] ?? 0), 0);
+  return <div className="turn-files">
+    <div className="turn-files-bar">
+      <button type="button" className="turn-back" onClick={onBack}>
+        <Icons.chevR size={11} /><span>{t("panel.turnStats")}</span>
+      </button>
+      <span className="turn-files-count">
+        <span>{t("panel.fileCount", rows.length)}</span>
+        {counted && <LineCounts additions={sum("additions")} deletions={sum("deletions")} />}
+      </span>
+    </div>
+    {rows.length === 0
+      ? <p className="turn-files-empty">{t("panel.noFilesChanged")}</p>
+      : <ul className="turn-file-list">
+        {rows.map((file) => {
+          const spec = fileIcon(file.name, false);
+          const FileIcon = Icons[spec.icon];
+          return <li key={file.absolute ?? file.path}>
+            <button type="button" className="turn-file" title={file.absolute ?? file.path}
+              disabled={!file.absolute} onClick={() => file.absolute && openDocTab(file.absolute)}>
+              <span className="turn-file-icon" style={{ color: spec.color }}><FileIcon size={14} /></span>
+              <span className="turn-file-name">{file.name}</span>
+              <span className="turn-file-dir">{file.dir}</span>
+              <LineCounts additions={file.additions} deletions={file.deletions} />
+            </button>
+          </li>;
+        })}
+      </ul>}
+    <p className="turn-status">{t("panel.shellEditsNotListed")}</p>
+  </div>;
+}
+
+export function TurnStatsView({ stats, state = "ready", cwd }: {
   stats: AgentTurnStats | null;
   state?: "loading" | "waiting" | "error" | "ready";
+  /** Session folder: shortens the changed-file paths and resolves relative ones. */
+  cwd?: string | null;
 }) {
   const t = useT();
+  const filesView = useTermStore((s) => s.turnFilesView);
+  const setFilesView = useTermStore((s) => s.setTurnFilesView);
+  const files = stats?.changedFiles;
   const percent = stats?.contextPercent;
   const tone = percent != null && percent >= 90 ? "crit" : percent != null && percent >= 70 ? "warn" : "ok";
   const context = `${contextTokens(stats?.contextTokens)} / ${contextTokens(stats?.contextLimit)}`;
@@ -28,6 +116,13 @@ export function TurnStatsView({ stats, state = "ready" }: {
     || stats?.cacheHitPercent != null || rate != null || stats?.filesTouched != null;
   const hasSession = stats?.sessionTokens != null;
   const hasData = model != null || hasContext || hasTurn || hasSession;
+  // The remembered choice yields to the statistics while there is no list to show, such as before the
+  // first reading or for an agent that does not record its edits.
+  if (filesView && files) {
+    return <Section id="turn" title="This turn" className="turn-section" ariaLabel="This turn" busy={state === "loading"}>
+      <ChangedFiles files={files} cwd={cwd} onBack={() => setFilesView(false)} />
+    </Section>;
+  }
   return <Section id="turn" title="This turn" className="turn-section" ariaLabel="This turn" busy={state === "loading"}>
     {model != null && (
       <div className="kv" title="Model named by the most recent context reading from this session.">
@@ -76,7 +171,13 @@ export function TurnStatsView({ stats, state = "ready" }: {
             <span className="m-v">{rate == null ? "—" : `${rate.toFixed(1)} tok/s`}</span>
           </div>
           <div className="turn-metric" title="Distinct paths from successful, explicitly recorded file edits. Shell edits and child-agent changes may not be reported.">
-            <span className="m-k">files changed</span><span className="m-v">{stats?.filesTouched == null ? "—" : String(stats.filesTouched)}</span>
+            <span className="m-k">files changed</span>
+            {files
+              ? <button type="button" className="m-v turn-files-link" title={t("panel.showChangedFiles")}
+                aria-label={t("panel.showChangedFiles")} onClick={() => setFilesView(true)}>
+                {fileRows(files, cwd).length}<Icons.chevR size={10} />
+              </button>
+              : <span className="m-v">{stats?.filesTouched == null ? "—" : String(stats.filesTouched)}</span>}
           </div>
         </div>
       </div>
@@ -97,8 +198,11 @@ export function TurnStatsView({ stats, state = "ready" }: {
   </Section>;
 }
 
-export function TurnSection({ session, agentState, currentTool }: {
-  session: Session; agentState?: string | null; currentTool?: string | null;
+export function TurnSection({ session, cwd, agentState, currentTool }: {
+  session: Session;
+  /** Effective session folder, falling back to the project root like the rest of the Info panel. */
+  cwd?: string | null;
+  agentState?: string | null; currentTool?: string | null;
 }) {
   const [stats, setStats] = useState<AgentTurnStats | null>(null);
   const [state, setState] = useState<"loading" | "waiting" | "error" | "ready">("loading");
@@ -126,5 +230,5 @@ export function TurnSection({ session, agentState, currentTool }: {
     void sample();
     return () => { cancelled = true; clearTimeout(timer); };
   }, [session.id, session.agentSessionId, agentState, currentTool]);
-  return <TurnStatsView stats={stats} state={state} />;
+  return <TurnStatsView stats={stats} state={state} cwd={cwd ?? session.cwd} />;
 }

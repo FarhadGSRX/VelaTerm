@@ -48,6 +48,8 @@ const Icons: Record<string, IconComponent> = {
   project: I([r("path", { key: 1, d: "M8 13.5H4.5a2 2 0 01-2-2v-7a2 2 0 012-2h7a2 2 0 012 2v3" }), r("path", { key: 2, d: "M2.5 6h11" }), r("circle", { key: 3, cx: 4.6, cy: 4.3, r: 0.4, fill: "currentColor", stroke: "none" }), projectMarker]),
   projectPlus: I([r("path", { key: 1, d: "M8 13.5H3.5A1.5 1.5 0 012 12V4A1.5 1.5 0 013.5 2.5h2.8l1.2 1.8h5A1.5 1.5 0 0114 5.8V7" }), r("path", { key: 2, d: "M6.5 7v3M5 8.5h3" }), projectMarker]),
   projectOpen: I([r("path", { key: 1, d: "M2 4A1.5 1.5 0 013.5 2.5h2.8l1.2 1.8h5A1.5 1.5 0 0114 5.8" }), r("path", { key: 2, d: "M8 13.5H3.5a1 1 0 01-1-.74L2.2 6.3h11.3" }), projectMarker]),
+  // Clone: the branch glyph lifted clear of the corner so the blue project marker fits beside it.
+  projectClone: I([r("circle", { key: 1, cx: 4.5, cy: 3, r: 1.5 }), r("circle", { key: 2, cx: 4.5, cy: 12.5, r: 1.5 }), r("circle", { key: 3, cx: 11, cy: 5, r: 1.5 }), r("path", { key: 5, d: "M4.5 4.5v6.5M4.5 7.5h2.5A2.5 2.5 0 009.5 5" }), projectMarker]),
   terminal: I([r("rect", { key: 1, x: 2, y: 3, width: 12, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M4.8 6.5L6.8 8l-2 1.5M8.5 9.7h2.7" })]),
   bot: I([r("rect", { key: 1, x: 3, y: 5.5, width: 10, height: 7, rx: 2 }), r("path", { key: 2, d: "M8 3v2.5M5.5 8.6h.01M10.5 8.6h.01" }), r("path", { key: 3, d: "M3 9.2H1.8M14.2 9.2H13" })]),
   file: I([r("path", { key: 1, d: "M4 2.5h5L12 5.5V13a.5.5 0 01-.5.5h-7A.5.5 0 014 13z" }), r("path", { key: 2, d: "M8.8 2.6V5.5H11.7" })]),
@@ -104,6 +106,13 @@ const Icons: Record<string, IconComponent> = {
   archive: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 2.6, rx: 0.6 }), r("path", { key: 2, d: "M3.6 5.6h8.8V12a1 1 0 01-1 1H4.6a1 1 0 01-1-1z" }), r("path", { key: 3, d: "M6.5 8h3" })]),
   connect: I([r("path", { key: 1, d: "M2 8h5.5" }), r("path", { key: 2, d: "M5.5 5.5L8 8 5.5 10.5" }), r("rect", { key: 3, x: 10, y: 3, width: 4, height: 10, rx: 1 })]),
   monitor: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 8, rx: 1.5 }), r("path", { key: 2, d: "M6 13.5h4M8 11v2.5" })]),
+  // Artifact preview: the tab icon, Split mode, device viewports, fit-to-area, and the offline shield.
+  appWindow: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M2.5 6h11M4.6 4.5h.01M6.2 4.5h.01" })]),
+  columns: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M8 3v10" })]),
+  tablet: I([r("rect", { key: 1, x: 3.5, y: 2, width: 9, height: 12, rx: 1.5 }), r("path", { key: 2, d: "M7.2 12h1.6" })]),
+  phone: I([r("rect", { key: 1, x: 5, y: 2, width: 6, height: 12, rx: 1.3 }), r("path", { key: 2, d: "M7.4 12h1.2" })]),
+  fit: I(r("path", { key: 1, d: "M2.5 6V3.5a1 1 0 011-1H6M10 2.5h2.5a1 1 0 011 1V6M13.5 10v2.5a1 1 0 01-1 1H10M6 13.5H3.5a1 1 0 01-1-1V10" })),
+  shield: I(r("path", { key: 1, d: "M8 2.3l4.8 1.8v3.6c0 3-2 5.2-4.8 6-2.8-.8-4.8-3-4.8-6V4.1z" })),
   download: I([r("path", { key: 1, d: "M8 2.5V10M4.8 7.2L8 10.4l3.2-3.2" }), r("path", { key: 2, d: "M3 11.2v1.3a1 1 0 001 1h8a1 1 0 001-1v-1.3" })]),
   // Mirror of download: same tray, arrow pointing up and out.
   upload: I([r("path", { key: 1, d: "M8 10.4V2.9M4.8 6.1L8 2.9l3.2 3.2" }), r("path", { key: 2, d: "M3 11.2v1.3a1 1 0 001 1h8a1 1 0 001-1v-1.3" })]),

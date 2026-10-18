@@ -459,7 +459,7 @@ pub fn delete_node(ctx: &AppCtx, kind: NodeKind, id: &str) -> Result<(), String>
     };
     if !hard_deleted.is_empty() {
         // Clear the shared full-text index regardless of which client initiated deletion.
-        let _ = crate::search::index::drop_sessions(ctx.db(), &hard_deleted);
+        let _ = crate::search::corpus::drop_sessions(ctx, &hard_deleted);
         // Drop the authoritative session records too. They deliberately outlive a process exit — an
         // agent that finished and left an unread result behind must stay marked — so removal from the
         // tree is the only thing that clears one. The in-memory status view goes with them, so `vstat`
@@ -838,9 +838,8 @@ pub fn search_session_content(
     query: &str,
     scope: Option<&str>,
 ) -> Result<Vec<crate::search::SessionSearchHit>, String> {
-    let recordings_dir = ctx.data_dir()?.join("recordings");
     let scope = crate::search::SearchScope::from_arg(scope.unwrap_or("live"));
-    crate::search::search_sessions(ctx.db(), &recordings_dir, query, scope)
+    crate::search::jobs::legacy(ctx, query, scope, None)
 }
 
 /// Session-content search optionally restricted to one already resolved session ID.
@@ -850,10 +849,8 @@ pub fn search_session_content_in(
     scope: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<Vec<crate::search::SessionSearchHit>, String> {
-    let recordings_dir = ctx.data_dir()?.join("recordings");
     let scope = crate::search::SearchScope::from_arg(scope.unwrap_or("live"));
-    // Pass &Db rather than a locked connection; search refreshes outside the lock and writes in short transactions.
-    crate::search::search_sessions_in(ctx.db(), &recordings_dir, query, scope, session_id)
+    crate::search::jobs::legacy(ctx, query, scope, session_id)
 }
 
 /// Reads an agent transcript for the archive-panel viewer.
@@ -862,6 +859,24 @@ pub fn read_agent_transcript(
     session_id: &str,
 ) -> Result<Vec<crate::agent::transcript::TranscriptMessage>, String> {
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
+    if crate::agent::history_store::prose::supported(kind) {
+        let branch=crate::agent::history_store::api::prepare(ctx,session_id)?;
+        let conn=branch.store.connect()?;let mut ready=branch.error.is_none();let mut total=0u64;
+        for source in &branch.sources {
+            let (water,status):(u64,String)=conn.query_row("SELECT indexed_bytes,status FROM sources WHERE id=?1 AND generation=?2",
+                rusqlite::params![source.id,source.generation],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|e|e.to_string())?;
+            ready&=status=="complete" || source.segment.end_byte.is_some_and(|end|water>=end);
+            total=total.saturating_add(source.segment.end_byte.unwrap_or(source.size));
+        }
+        if ready {
+            let cancel=std::sync::atomic::AtomicBool::new(false);
+            let prose=crate::agent::history_store::prose::Prose::new(branch,&cancel)?;
+            return prose.collect_bounded(0,prose.total,crate::agent::history_store::limits::PAGE_BYTES,&cancel);
+        }
+        if total>crate::agent::history_store::limits::PAGE_BYTES as u64 {
+            return Err(crate::agent::history_store::compat::UPGRADE.into());
+        }
+    }
     crate::agent::transcript::read(kind, &agent_id)
 }
 
@@ -987,13 +1002,12 @@ pub fn chat_start(
     }
     // A session created under a project usually has no directory of its own; it runs in the project's.
     // The terminal path applies this fallback in the frontend, so the engine must apply it here or the
-    // agent inherits the backend's own working directory and reads the wrong files.
-    let cwd = session
-        .cwd
-        .as_deref()
-        .filter(|c| !c.trim().is_empty())
-        .map(str::to_string)
-        .or(project_root);
+    // agent inherits the backend's own working directory and reads the wrong files. With neither, or with a
+    // directory that no longer exists, it runs in home exactly as a terminal does; OpenCode v2 cannot open a
+    // session without a directory at all.
+    let cwd = crate::host::spawn_dir(
+        session.cwd.as_deref().filter(|c| !c.trim().is_empty()).or(project_root.as_deref()),
+    );
     let bin = crate::agent::executable::for_session(ctx, &session);
     let mut selection = session_settings::resolve(ctx, &session)?;
     if model.is_some() {
@@ -1692,7 +1706,7 @@ pub fn chat_snapshot(
     chat_snapshot_window(ctx, session_id, None)
 }
 
-pub fn chat_snapshot_window(
+pub fn chat_snapshot_control(
     ctx: &AppCtx,
     session_id: &str,
     window: Option<&crate::agent::chat::engine::ChatWindow>,
@@ -1714,6 +1728,15 @@ pub fn chat_snapshot_window(
             snapshot.chrome = Some(session_settings::chrome(&conn, session_id)?);
         }
     }
+    Ok(snapshot)
+}
+
+pub fn chat_snapshot_window(
+    ctx: &AppCtx,
+    session_id: &str,
+    window: Option<&crate::agent::chat::engine::ChatWindow>,
+) -> Result<crate::agent::chat::engine::ChatSnapshot, String> {
+    let mut snapshot = chat_snapshot_control(ctx, session_id, window)?;
     // No process has run this conversation since the backend started, so the engine holds no timeline for
     // it. The agent's own recording still does. Reading it here means a reopened session shows what was
     // said before anything else happens — and keeps showing it when the agent cannot be started at all,
@@ -1726,6 +1749,7 @@ pub fn chat_snapshot_window(
         if let Some((kind, id)) = session.and_then(|s| s.agent_session_id.map(|id| (s.kind, id))) {
             match crate::agent::chat::history::replay(kind, &id) {
                 Ok(rows) => snapshot.rows = rows,
+                Err(e) if e.starts_with("detail_requires_paging:") => return Err(e),
                 // A recording that is gone, or a thread Codex never wrote, is the same empty pane as before.
                 Err(e) => crate::diagnostic_warn!("chat: no history replayed for {id}: {e}"),
             }
@@ -1773,7 +1797,7 @@ pub fn chat_row(
 ) -> Result<serde_json::Value, String> {
     if ctx
         .chat()
-        .snapshot_window(session_id, Some(&Default::default()))
+        .snapshot_window(session_id, Some(&crate::agent::chat::engine::ChatWindow {control_only:true,..Default::default()}))
         .pid
         .is_some()
     {
@@ -1813,8 +1837,10 @@ pub fn chat_rewind_preview(
     ctx: &AppCtx,
     session_id: &str,
     row_id: &str,
+    history_generation:Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    ctx.chat().rewind_preview(session_id, row_id)
+    if let Some(generation)=history_generation {ctx.chat().rewind_indexed_preview(ctx,session_id,row_id,generation)}
+    else {ctx.chat().rewind_preview(session_id, row_id)}
 }
 
 /// Rewind conversation state, Claude file checkpoints, or both from one visible user message.
@@ -1823,11 +1849,13 @@ pub fn chat_rewind(
     session_id: &str,
     row_id: &str,
     scope: &str,
+    history_generation:Option<&str>,
 ) -> Result<serde_json::Value, String> {
     if crate::security::session_active(session_id) {
         return Err("security_audit_owns_conversation".into());
     }
-    let result = ctx.chat().rewind(ctx, session_id, row_id, scope)?;
+    let result = if let Some(generation)=history_generation {ctx.chat().rewind_indexed(ctx,session_id,row_id,scope,generation)?}
+        else {ctx.chat().rewind(ctx, session_id, row_id, scope)?};
     crate::agent::chat::auto_continue::cancel(ctx, session_id);
     Ok(result)
 }
@@ -1895,6 +1923,10 @@ pub fn agent_context_info(
         return Ok(info);
     }
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
+    if kind==SessionKind::Kiro {
+        let context=crate::agent::history_store::context::kiro(ctx,session_id)?;
+        return Ok(crate::agent::transcript::AgentContextInfo {model:context.model,context_tokens:None,context_limit:context.limit.unwrap_or(0),current_tool:None});
+    }
     let mut info = crate::agent::transcript::context_info(kind, &agent_id)?;
     // Pi and OMP leave the limit to their catalogue; the running process answers with the catalogue the
     // CLI actually uses, which is fresher than the copy it cached on disk.
@@ -1915,7 +1947,7 @@ pub fn agent_turn_stats(
     session_id: &str,
 ) -> Result<crate::agent::transcript::TurnStats, String> {
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
-    if kind == SessionKind::Kiro { return crate::agent::kiro_info::turn_stats(&agent_id); }
+    if kind==SessionKind::Kiro {return Ok(crate::agent::kiro_info::from_context(crate::agent::history_store::context::kiro(ctx,session_id)?));}
     let mut stats = crate::agent::transcript::current_turn_stats(kind, &agent_id)?;
     if let Ok(context) = agent_context_info(ctx, session_id) {
         stats.with_context(&context);

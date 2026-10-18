@@ -126,7 +126,7 @@ mod tests {
         {
             let mut turn = proc.turn.lock().unwrap();
             turn.running = true; turn.interrupted = true;
-            turn.waiting.push(QueuedMessage { id:"next".into(), text:"followup".into(), images:Vec::new() });
+            turn.waiting.push(QueuedMessage { id:"next".into(), text:"followup".into(), images:Vec::new(),original:None });
         }
         handle_line(&app, "s", &proc, &json!({"event":"result","result":{"status":"ERROR","error":"context canceled","response":""}}).to_string());
         assert_eq!(proc.turn.lock().unwrap().waiting.len(), 1);
@@ -141,7 +141,7 @@ mod tests {
         {
             let mut turn = proc.turn.lock().unwrap();
             turn.interrupted = true;
-            turn.waiting.push(QueuedMessage { id:"next".into(), text:"followup".into(), images:Vec::new() });
+            turn.waiting.push(QueuedMessage { id:"next".into(), text:"followup".into(), images:Vec::new(),original:None });
         }
         let (next, release) = restart_state(Some(proc.clone()));
         assert!(release.load(Ordering::Relaxed));

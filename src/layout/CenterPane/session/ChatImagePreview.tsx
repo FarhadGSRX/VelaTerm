@@ -1,44 +1,46 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { useSuspendNativeViews } from "../../../hooks/nativeViewSuspend";
-import { useBackdropDismiss } from "../../../hooks/useBackdropDismiss";
+import { Backdrop } from "../../../components/Backdrop";
 import { useImageMenu } from "./useImageMenu";
 import { useT } from "../../../i18n";
 
 /** Display the attachment's original bytes outside the transcript's clipped, virtualized layout. */
-export function ChatImagePreview({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+export function ChatImagePreview({ src, alt, onClose,original,loadOriginal }: { src: string; alt: string; onClose: () => void;original?:()=>Promise<string>;loadOriginal?:(signal?:AbortSignal)=>Promise<string> }) {
   const t = useT();
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState(true);
   const [failed, setFailed] = useState(false);
-  const { onContextMenu, imageMenu } = useImageMenu(src, () => setFit(false));
-  const backdrop = useBackdropDismiss(onClose);
-  useSuspendNativeViews();
+  const [fullSrc,setFullSrc]=useState<string|null>(()=>loadOriginal ? null:src);
+  const [readError,setReadError]=useState<string|null>(null);
+  const { onContextMenu, imageMenu } = useImageMenu(fullSrc??src, () => setFit(false),original);
+  useEffect(()=>{
+    if (!loadOriginal) return;
+    const controller=new AbortController();
+    let disposed=false;
+    void loadOriginal(controller.signal).then(value=>{if (!disposed) setFullSrc(value);}).catch(cause=>{if (!disposed) setReadError(String(cause));});
+    return ()=>{disposed=true;controller.abort();};
+  },[loadOriginal]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     const previousFocus = document.activeElement;
-    dialog?.showModal();
+    dialog?.focus();
     return () => {
-      dialog?.close();
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
     };
   }, []);
 
   return createPortal(
-    <dialog
+    <Backdrop onClose={onClose}><div
       ref={dialogRef}
-      className="sv-image-preview"
+      className="sv-image-preview sv-image-preview-panel"
+      role="dialog"
+      aria-modal="true"
+      tabIndex={-1}
       aria-label={alt || t("crepe.image")}
-      {...backdrop}
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      onKeyDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {event.stopPropagation();if (event.key==="Escape") onClose();}}
     >
-      <div className="sv-image-preview-panel">
         <div className="sv-image-preview-toolbar">
           <button type="button" aria-pressed={fit} onClick={() => setFit(true)}>
             {t("doc.imgFit")}
@@ -51,15 +53,14 @@ export function ChatImagePreview({ src, alt, onClose }: { src: string; alt: stri
           </button>
         </div>
         <div className={`sv-image-preview-body${fit ? " is-fit" : ""}`}>
-          {failed ? (
+          {readError ? <span role="alert">{readError}</span> : fullSrc===null ? <span role="status">{t("common.loading")}</span> : failed ? (
             <span role="alert">{t("doc.imgDecodeFailed")}</span>
           ) : (
-            <img src={src} alt={alt} onContextMenu={onContextMenu} onError={() => setFailed(true)} />
+            <img src={fullSrc} alt={alt} onContextMenu={onContextMenu} onError={() => setFailed(true)} />
           )}
         </div>
-      </div>
       {imageMenu}
-    </dialog>,
+    </div></Backdrop>,
     document.body,
   );
 }

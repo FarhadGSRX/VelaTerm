@@ -31,6 +31,17 @@ fn google_configuration_needs_no_service_or_agent_and_survives_reload() {
 }
 
 #[test]
+fn bing_configuration_needs_no_service_or_agent_and_survives_reload() {
+    let (dir,app,_sid)=fixture();
+    assert!(config::settings(&app,true).unwrap()["engines"].as_array().unwrap().contains(&json!("bing")));
+    config::save(&app,&json!({"engine":"bing"})).unwrap();
+    let cfg=config::read_config(&app.db().conn.lock().unwrap()).unwrap();
+    assert!(engine_ready(&app,&cfg).is_ok());assert!(cfg.agent.is_empty());assert!(cfg.service_id.is_empty());
+    let reopened=crate::db::Db::open(&dir.0.join("test.db")).unwrap();
+    assert_eq!(config::read_config(&reopened.conn.lock().unwrap()).unwrap().engine,"bing");
+}
+
+#[test]
 #[ignore = "Explicit live check of the anonymous Google endpoint; never runs in the default suite."]
 fn google_live_translation_preserves_structure_and_reuses_cache() {
     let (_dir,app,_sid)=fixture();config::save(&app,&json!({"engine":"google"})).unwrap();
@@ -45,6 +56,23 @@ fn google_live_translation_preserves_structure_and_reuses_cache() {
     let test=translate(&app,&cfg,"en","de","Connection test.","connection-test-google").unwrap();
     assert!(!test.translated().trim().is_empty());assert_ne!(test.translated(),"Connection test.");
     println!("Google live check: {} / {}",first.source_language,test.translated());
+}
+
+#[test]
+#[ignore = "Explicit live check of the anonymous Bing endpoint; never runs in the default suite."]
+fn bing_live_translation_preserves_structure_and_reuses_cache() {
+    let (_dir,app,_sid)=fixture();config::save(&app,&json!({"engine":"bing"})).unwrap();
+    let cfg=config::read_config(&app.db().conn.lock().unwrap()).unwrap();
+    let original="# 你好世界\n\n请保留 `request_id` 和 https://example.com/a?q=1&x=2。\n```rs\nlet x = 1;\n```\n";
+    let first=translate(&app,&cfg,"auto","en",original,"live-bing").unwrap();
+    assert_eq!(first.source_language,"zh-CN");assert_ne!(first.translated(),original);
+    assert_eq!(first.pairs.iter().map(|p|p.original.as_str()).collect::<Vec<_>>().join("\n"),original);
+    assert!(first.translated().contains("`request_id`"));assert!(first.translated().contains("https://example.com/a?q=1&x=2"));
+    assert!(first.translated().contains("```rs\nlet x = 1;\n```"));
+    let second=translate(&app,&cfg,"auto","en",original,"live-bing-cache").unwrap();assert_eq!(first.translated(),second.translated());
+    let test=translate(&app,&cfg,"en","de","Connection test.","connection-test-bing").unwrap();
+    assert!(!test.translated().trim().is_empty());assert_ne!(test.translated(),"Connection test.");
+    println!("Bing live check: {} / {}",first.source_language,test.translated());
 }
 
 #[test]

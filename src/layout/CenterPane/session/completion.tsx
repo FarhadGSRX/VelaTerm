@@ -80,6 +80,18 @@ export function mentionDir(query: string): string {
   return slash < 0 ? "" : query.slice(0, slash + 1);
 }
 
+/**
+ * Commands whose name starts with the query, then plugin skills whose own part does: Codex names a plugin
+ * skill `plugin:skill`, and `$excel` should still reach `spreadsheets:excel-live-control`.
+ */
+function matchCommands(commands: ChatCommand[], query: string): ChatCommand[] {
+  const own = (name: string) => name.slice(name.lastIndexOf(":") + 1);
+  const named = commands.filter((c) => c.name.toLowerCase().startsWith(query));
+  const plugin = commands.filter((c) =>
+    !c.name.toLowerCase().startsWith(query) && c.name.includes(":") && own(c.name).toLowerCase().startsWith(query));
+  return [...named, ...plugin];
+}
+
 /** Quote a path only when it needs quoting, so the ordinary case stays readable. */
 function quotePath(path: string): string {
   return /[\s"]/.test(path) ? `"${path.replace(/"/g, '\\"')}"` : path;
@@ -173,9 +185,7 @@ export function buildSuggestions({
     const start = before.lastIndexOf("$");
     const query = dollar[1].toLowerCase();
     return take(
-      commands
-        .filter((c) => c.invocation && (start === 0 || c.invocation === "$")
-          && c.name.toLowerCase().startsWith(query))
+      matchCommands(commands.filter((c) => c.invocation && (start === 0 || c.invocation === "$")), query)
         .map((c) => {
           const end = caret + (draft.slice(caret).match(/^[^\s$]*/)?.[0].length ?? 0);
           const suffix = draft.slice(end);
@@ -200,9 +210,9 @@ export function buildSuggestions({
     // Local commands come first. A same-named skill remains accessible through `$`.
     const seen = new Set<string>();
     return take(
-      commands
+      matchCommands(commands, query)
         .filter((c) => {
-          if (!c.name.toLowerCase().startsWith(query) || seen.has(c.name)) return false;
+          if (seen.has(c.name)) return false;
           seen.add(c.name);
           return true;
         })

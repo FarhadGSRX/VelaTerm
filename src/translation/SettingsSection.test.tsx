@@ -17,7 +17,7 @@ beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
   vi.clearAllMocks(); window.history.replaceState(null, "", "/?settings=translation");
   mocks.settings = { config: { enabled: false, conversationKinds: ["claude", "codex"], engine: "agent", agent: "", model: "", effort: "", serviceId: "", version: 1, generation: 1, enabledSince: 0 }, editable: true, conversationKinds: [{ id: "claude", label: "Claude" }, { id: "codex", label: "Codex" }],
-    agents: [{ id: "codex", label: "Codex", available: true, acceptsTask: true, supportsPlanExecute: true, supportsReferSummary: true, effortFlag: "model_reasoning_effort", effortLevels: [] }], services: [], languages: [], engines: ["agent", "api", "google"], protocols: ["openai"], displays: ["original", "translation", "both", "immersive"] };
+    agents: [{ id: "codex", label: "Codex", available: true, acceptsTask: true, supportsPlanExecute: true, supportsReferSummary: true, effortFlag: "model_reasoning_effort", effortLevels: [] }], services: [], languages: [], engines: ["agent", "api", "google", "bing"], protocols: ["openai"], displays: ["original", "translation", "both", "immersive"] };
   mocks.refresh.mockResolvedValue(mocks.settings); mocks.invoke.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -85,6 +85,26 @@ it("saves Google without credentials and tests the saved selection", async () =>
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "Test connection" }).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
   await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("translation_save", { config: expect.objectContaining({ engine: "google", agent: "", serviceId: "", enabled: false }) }));
+  await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Test connection" }).disabled).toBe(false));
+  mocks.invoke.mockRejectedValueOnce(new Error("translation:http:429"));
+  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Too many translation requests. Please try again later."));
+  expect(mocks.invoke).toHaveBeenLastCalledWith("translation_test");
+});
+
+it("saves Bing without credentials and tests the saved selection", async () => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "translation_save") mocks.settings!.config = args.config;
+  });
+  render(<TranslationSettingsSection />);
+  fireEvent.click(screen.getByRole("combobox", { name: "Translation engine" }));
+  fireEvent.click(screen.getByRole("option", { name: "Bing Translator (no API key)" }));
+  expect(screen.getByText("Free translation with Bing. No API key or Microsoft account required.")).toBeTruthy();
+  expect(screen.queryByRole("combobox", { name: "Agent" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Saved service" })).toBeNull();
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Test connection" }).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("translation_save", { config: expect.objectContaining({ engine: "bing", agent: "", serviceId: "", enabled: false }) }));
   await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Test connection" }).disabled).toBe(false));
   mocks.invoke.mockRejectedValueOnce(new Error("translation:http:429"));
   fireEvent.click(screen.getByRole("button", { name: "Test connection" }));

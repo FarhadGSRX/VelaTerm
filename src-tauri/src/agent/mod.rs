@@ -18,6 +18,7 @@ pub mod gitbash;
 pub mod grok;
 pub mod headless;
 pub mod history;
+pub mod history_store;
 pub mod hook_bridge;
 pub mod inject;
 pub mod install;

@@ -68,6 +68,7 @@ it("does not report no results before history is loaded or after a paging failur
 it("searches deferred tool output and nested details without expanding cards", async () => {
   vi.mocked(loadChatTool).mockResolvedValueOnce({ kind: "tool", id: "deferred", name: "Bash", input: {}, status: "completed", isError: false, output: "remote needle", children: [{ kind: "tool", id: "child", name: "Read", input: {}, status: "completed", isError: false, detailAvailable: true }] }).mockResolvedValueOnce({ kind: "tool", id: "child", name: "Read", input: {}, status: "completed", isError: false, output: "nested needle" });
   render(<ChatSearch entries={[{ kind: "row", id: "deferred", row: { kind: "tool", id: "deferred", name: "Bash", input: {}, status: "completed", isError: false, detailAvailable: true } }]} onLocate={vi.fn()} onClose={vi.fn()} />);
+  expect(loadChatTool).not.toHaveBeenCalled();
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "needle" } });
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("2/2"));
   expect(loadChatTool).toHaveBeenCalledTimes(2);

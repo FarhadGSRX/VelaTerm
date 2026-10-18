@@ -1,3 +1,27 @@
+## v0.2.11 — 2026-10-18
+
+- 🧪 Bản xem trước HTML thử nghiệm mở cạnh cuộc hội thoại hoặc trong thẻ, cập nhật khi tệp thay đổi và có thao tác với mã nguồn, bảng điều khiển và phiên bản; việc nghiệm thu trên ứng dụng gốc và các nền tảng vẫn chưa hoàn tất.
+- 📜 Hội thoại dài tải các tin nhắn cũ theo trang và mở rộng nội dung dài khi cần, còn hội thoại trực tiếp của Claude và Codex không còn hiển thị trùng tin nhắn hay công cụ.
+- 🔎 Tìm kiếm toàn cục cập nhật hội thoại đã thay đổi nhanh hơn, tiếp tục lập chỉ mục sau gián đoạn và bỏ qua hội thoại không đọc được khi tệp gốc chưa thay đổi.
+- 📊 Nhấn vào số tệp thay đổi trong bảng Info sẽ mở danh sách tệp đã sửa trong lượt này cùng số dòng thêm và xóa nếu có dữ liệu.
+- 🗂️ Hội thoại lưu trữ hiển thị thành các hàng gọn theo dự án, nhóm và phiên cha ban đầu, có thể thu gọn từng dự án hoặc mở rộng và thu gọn tất cả.
+- 🧩 Kỹ năng từ plugin của tài khoản Codex xuất hiện trong gợi ý hoàn thành và có thể dùng phím mũi tên để chọn trong menu.
+- ⌨️ Trên Windows và Linux, Ctrl+Shift+C sao chép văn bản đã chọn trong terminal và có thể đổi tại Cài đặt ▸ Phím tắt.
+- 🧹 Sau khi chạy `/clear` trong terminal Claude, mở lại phiên hoặc chuyển sang chế độ hội thoại sẽ không khôi phục cuộc hội thoại đã xóa.
+- 📏 Bảng Info hiển thị giới hạn ngữ cảnh của mô hình cho hội thoại OpenCode.
+- 🌐 Tính năng dịch bổ sung Bing Translator không cần khóa API, cài đặt ngôn ngữ gọn hơn và dịch trước khi gửi lại tin nhắn đã chỉnh sửa trong Claude và Codex.
+- 🔤 Bản dịch hiện có vẫn hiển thị sau khi đổi công cụ hoặc mô hình dịch và có thể được dịch lại.
+- ⏱️ `vrun` báo tiến độ mỗi 180 giây với mã thoát 75, cho phép chờ tiếp bằng `--wait` và ngăn dùng lại nhãn của tác vụ đang chạy.
+- 🧵 Phản hồi Claude được kích hoạt khi tác vụ nền hoàn tất có bản tóm tắt tác vụ và ranh giới hội thoại riêng, kể cả trong lịch sử.
+- ⚠️ Chuyển giữa chế độ terminal và hội thoại sẽ yêu cầu xác nhận khi có tác vụ nền đang chạy.
+- 🏠 Phiên chưa có thư mục làm việc hoặc có thư mục không còn tồn tại sẽ khởi động trong thư mục chính ở cả hai chế độ.
+- 🪟 Trên Windows, khởi động VelaTerm hoặc mở bảng kết nối không còn yêu cầu cài WSL khi chưa đăng ký bản phân phối nào.
+- 🔐 Các lần đăng nhập từ xa thất bại vẫn tính vào giới hạn thử lại dù kết nối đóng trong khi xác minh mật khẩu.
+- 🏷️ Huy hiệu phiên bản của tác nhân hiển thị rõ liên kết `Update: vX` khi có phiên bản CLI mới hơn.
+- 🔵 Chỉ báo tác vụ nền luôn sáng màu lục lam, còn chấm trạng thái được giữ ở thẻ và thanh bên thay vì tiêu đề ngăn.
+- ✍️ Viền ô nhập hội thoại rõ hơn và có đường bao ngoài khi được chọn, còn giá trị trong bảng Info của giao diện tối có độ sáng bằng nhãn.
+- 🌿 Nút sao chép dự án dùng biểu tượng nhánh kèm dấu dự án.
+
 ## v0.2.10 — 2026-10-13
 
 - 🧩 Hỗ trợ OpenCode v2 bên cạnh v1, và danh sách mô hình tải đúng với OpenCode v2.0.26.

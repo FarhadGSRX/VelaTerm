@@ -1,4 +1,4 @@
-//! A single session pane in the Vlinx UI: pane header (status, title, branch, split, close) plus the real xterm.
+//! A single session pane in the Vlinx UI: pane header (title, branch, split, close) plus the real xterm.
 //! Active panes are shown while background panes remain alive under display:none, preserving xterm and PTY.
 //! `area` positions the pane within the terminal region as a percentage rectangle.
 
@@ -7,7 +7,6 @@ import { createPortal } from "react-dom";
 
 import Icons from "../../components/Icons";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
-import { StatusIndicator } from "../../components/StatusIndicator";
 import { AGENT_KIND_LABEL, kindIconEl } from "../sessionViewers/sessionMeta";
 import { useT } from "../../i18n";
 import { TermScrollbar } from "./TermScrollbar";
@@ -45,7 +44,7 @@ import {
   redrawTerminal,
   selectAll,
 } from "../../terminal/registry";
-import { effectiveStatus, supportsChatEngine, type Session } from "../../types";
+import { supportsChatEngine, type Session } from "../../types";
 import { useEngineSwitch } from "./session/engineSwitch";
 
 // Platform-specific terminal search hint: Cmd+F on macOS shells, Ctrl+Alt+F on Windows/Linux and
@@ -93,11 +92,6 @@ export const TerminalView = memo(function TerminalView({
   // Subscribe only to whether this is the current session. With memoization, switching rerenders only the
   // terminal being left and the terminal being entered; other mounted background terminals remain untouched.
   const isActive = useTermStore((s) => s.activeSessionId === session.id);
-  // Subscribe to the derived status string rather than the runtime object. Every set changes object identity
-  // and would rerender TerminalView even without a value change; Object.is naturally deduplicates strings.
-  const status = useTermStore((s) => effectiveStatus(s.runtimes[session.id]));
-  // Unread notifications follow Tab and project-tree semantics and clear after two seconds of viewing.
-  const unread = useTermStore((s) => session.id in s.notifications);
   const isAgent = session.kind !== "terminal";
   const branch = useGitBranch(cwd ?? null);
   // Poll for the installation path during one-click install. Keep this on TerminalView because the card unmounts when hidden.
@@ -271,7 +265,7 @@ export const TerminalView = memo(function TerminalView({
             stays clickable and the user can split at any time; the close button is disabled while there
             is only one pane. The split shortcuts (⌘D/⌘⇧D, or Ctrl+Alt+D/E elsewhere) split as well. */}
         <div className="pane-head">
-          {/* The kind icon and status dot reuse the same shared components as the tabs and the sidebar tree, keeping all three consistent. */}
+          {/* The tab and the sidebar tree already show the session status, so the pane header carries no status dot. */}
           <span
             style={{
               color: isAgent ? "var(--text-secondary)" : "var(--text-dim)",
@@ -282,7 +276,6 @@ export const TerminalView = memo(function TerminalView({
             {kindIconEl(session.kind, 13)}
           </span>
           <span className="pt">{session.name}</span>
-          <StatusIndicator status={status} unread={unread} />
           {branch && (
             <span className="branch">
               <Icons.branch size={11} />

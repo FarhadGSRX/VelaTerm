@@ -3,6 +3,7 @@
 #![cfg_attr(not(feature = "gui"), allow(dead_code))]
 
 mod agent;
+mod artifact;
 // Undoes the AppImage launcher's environment rewrite for child processes on Linux.
 pub mod appimage;
 // Built-in browser tabs require desktop Tauri child windows and are absent from the minimal server.
@@ -633,6 +634,22 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
         .plugin(tauri_plugin_process::init())
         // System-wide screenshot hotkey; the accelerator is registered in setup from app_settings.
         .plugin(screenshot::plugin())
+        // Artifact previews: a sandboxed iframe loads vlxart://localhost/<grant>/<path>, which Windows exposes as
+        // http(s)://vlxart.localhost. Files are read on the blocking pool, never on the main thread.
+        .register_asynchronous_uri_scheme_protocol("vlxart", |_ctx, request, responder| {
+            let path = request.uri().path().trim_start_matches('/').to_string();
+            tauri::async_runtime::spawn_blocking(move || {
+                let served = artifact::serve(&path);
+                let mut response = tauri::http::Response::builder().status(served.status);
+                for (name, value) in served.headers {
+                    response = response.header(name, value);
+                }
+                match response.body(served.body) {
+                    Ok(response) => responder.respond(response),
+                    Err(_) => responder.respond(tauri::http::Response::builder().status(500).body(Vec::new()).unwrap()),
+                }
+            });
+        })
         .manage(screenshot::ScreenshotState::default())
         .manage(PtyManager::new())
         .manage(agent::chat::engine::ChatManager::new())

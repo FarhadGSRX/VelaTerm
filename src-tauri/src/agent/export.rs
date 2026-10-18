@@ -74,6 +74,14 @@ pub(crate) enum Event {
         text: String,
         ts: Option<String>,
     },
+    /// A background task finished while the agent was idle, and its notification started a new turn.
+    ///
+    /// Nobody typed it, so it is not a user message; but the reply that follows answers it, not the last
+    /// thing the person said. `summary` is the notification's own one-line account of the task.
+    Wake {
+        summary: String,
+        ts: Option<String>,
+    },
 }
 
 /// Locate a session recording by type and export its complete context as Markdown. Return Err for a
@@ -144,7 +152,7 @@ enum Sec {
     Assistant,
 }
 
-fn render(
+pub(crate) fn render(
     events: &[Event],
     session_name: &str,
     kind: &str,
@@ -158,8 +166,9 @@ fn render(
 
     for ev in events {
         // The export is the conversation. What a slash command printed back into the session belongs to
-        // the moment it was typed, not to the record of what was said.
-        if matches!(ev, Event::Command { .. }) {
+        // the moment it was typed, not to the record of what was said. Nor was a background task's wake-up
+        // said by anyone; the export already left task notifications out before they had rows of their own.
+        if matches!(ev, Event::Command { .. } | Event::Wake { .. }) {
             continue;
         }
         match ev {
@@ -224,7 +233,7 @@ fn render(
                         title.push_str("**");
                         blocks.push(format!("{title}\n\n{}", fenced("", text)));
                     }
-                    Event::User { .. } | Event::Shell { .. } | Event::Command { .. } => unreachable!(),
+                    Event::User { .. } | Event::Shell { .. } | Event::Command { .. } | Event::Wake { .. } => unreachable!(),
                 }
             }
         }
@@ -308,7 +317,10 @@ fn fenced(lang: &str, text: &str) -> String {
 // ─────────────────────────── Claude parsing ───────────────────────────
 
 /// What the CLI records as the assistant's reply to a command it answered itself, such as `/effort`.
-const NO_RESPONSE_PLACEHOLDER: &str = "No response requested.";
+pub(crate) const NO_RESPONSE_PLACEHOLDER: &str = "No response requested.";
+
+/// How Claude opens the message it records when a finished background task wakes the agent.
+const TASK_NOTIFICATION: &str = "<task-notification>";
 
 /// The text a locally answered slash command printed, or None for a row carrying anything else.
 ///
@@ -511,6 +523,13 @@ pub(crate) fn claude_identified_events(content: &str) -> Vec<(Event,Option<Strin
 /// Append a genuine user message, discarding empty text and injected blocks.
 fn push_user_text(out: &mut Vec<Event>, text: &str, ts: Option<String>) {
     let text = text.trim();
+    // Only a notification recorded as a message of its own opened a turn. One that arrives while the
+    // agent is busy is recorded as a queued attachment instead and never reaches this point.
+    if text.starts_with(TASK_NOTIFICATION) {
+        let summary = between(text, "<summary>", "</summary>").unwrap_or_default();
+        out.push(Event::Wake { summary, ts });
+        return;
+    }
     if text.is_empty() || is_injected_context(text) {
         return;
     }

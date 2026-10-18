@@ -29,7 +29,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it("shows only the selected CLI version and puts available updates in its tooltip", async () => {
+it("shows the selected CLI version and a visible update link to official instructions", async () => {
   let release!: (value: AgentVersion) => void;
   vi.mocked(agentVersion).mockResolvedValueOnce(installed)
     .mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
@@ -38,10 +38,11 @@ it("shows only the selected CLI version and puts available updates in its toolti
   expect(screen.getByTitle("Installed version: 1.9.0")).toBeTruthy();
   expect(screen.queryByRole("link")).toBeNull();
   await act(async () => release({ ...installed, latestVersion: "1.10.0", updateAvailable: true, checkStatus: "checked" }));
-  const link = screen.getByRole("link", { name: "v1.9.0" });
+  const link = screen.getByRole("link", { name: "Update: v1.10.0" });
   expect(link.getAttribute("href")).toBe(installed.docsUrl);
-  expect(link.getAttribute("title")).toBe("Installed version: 1.9.0\nVersion 1.10.0 is available. Open the official upgrade instructions.");
-  expect(screen.getByRole("status").textContent).toBe("v1.9.0");
+  expect(link.getAttribute("title")).toBe("Version 1.10.0 is available. Open the official upgrade instructions.");
+  expect(screen.getByTitle("Installed version: 1.9.0")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("v1.9.0Update: v1.10.0");
   expect(agentVersion).toHaveBeenNthCalledWith(2, "one", true);
 });
 
@@ -57,6 +58,13 @@ it("keeps the current version and reports a failed release check", async () => {
   render(<AgentVersionBadge session={session} hidden={false} />);
   await screen.findByTitle("Installed version: 1.9.0\nUnable to check for updates.", { normalizer: value => value });
   expect(screen.getByRole("status").textContent).toBe("v1.9.0");
+  expect(screen.queryByRole("link")).toBeNull();
+});
+
+it("still shows the update when no official instructions are known", async () => {
+  vi.mocked(agentVersion).mockResolvedValue({ ...installed, docsUrl: null, latestVersion: "1.10.0", updateAvailable: true, checkStatus: "checked" });
+  render(<AgentVersionBadge session={session} hidden={false} />);
+  await screen.findByText("Update: v1.10.0");
   expect(screen.queryByRole("link")).toBeNull();
 });
 

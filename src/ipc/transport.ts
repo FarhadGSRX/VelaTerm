@@ -15,6 +15,8 @@ import { recordRequestError } from "./reqLog";
 import { safeCommand, safeError, diagnosticOperation } from "./diagnosticSafety";
 import { apiUrl } from "./shareBase";
 import { wsClient, bytesToB64 } from "./wsClient";
+import { acceptsHistoryProtocol, historyProtocolError, requiresHistoryProtocol } from "./historyCapability";
+import { mapBackendError } from "./backendError";
 import type { SessionKind } from "../types";
 
 /** Whether this is a Tauri WebView rather than browser remote access. Remote-connection windows are physically
@@ -161,6 +163,9 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
     if (tracked) diagnosticEvent("request", { requestId, command: safeCommand(cmd), status: "success", clientDurationMs: Math.round(performance.now() - started) });
     return result;
   }).catch((err) => {
+    const raw = err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
+    const localized = raw === undefined ? undefined : mapBackendError(raw);
+    if (raw !== localized) err = err instanceof Error ? new Error(localized) : localized;
     if (tracked) diagnosticEvent("request", { requestId, command: safeCommand(cmd), status: "failed", errorCode: safeError(err), clientDurationMs: Math.round(performance.now() - started) });
     // User-canceled clone is handled control flow, not a global error; cleanup failures return another error.
     const message = String(err);
@@ -181,6 +186,20 @@ export function diagnosticEvent(event: "request" | "shell_switch" | "restart" | 
     .catch(() => {}).finally(() => { pendingDiagnostics--; });
 }
 
+let desktopHistoryProtocol: Promise<void> | undefined;
+
+function requireDesktopHistoryProtocol(): Promise<void> {
+  // A new command is safe to probe: an old dispatcher rejects its name without reading history.
+  // Never probe chat_snapshot with a new flag that an older backend could silently ignore.
+  return desktopHistoryProtocol ??= tauriInvoke<{ historyProtocol?: number }>("desktop_call", { cmd: "chat_capabilities", args: {} })
+    .then(result => { if (!acceptsHistoryProtocol(result?.historyProtocol)) throw historyProtocolError(); })
+    .catch(error => {
+      if (/Unknown command: chat_capabilities|history_protocol_unsupported:/.test(String(error))) throw historyProtocolError();
+      desktopHistoryProtocol = undefined;
+      throw error;
+    });
+}
+
 function invokeInner<T>(cmd: string, args?: Record<string, unknown>, diagnostic?: { requestId: string; operationId?: string }): Promise<T> {
   if (cmd === "open_account_remote_window" && (window as unknown as {__VLX_ELECTRON__?:boolean}).__VLX_ELECTRON__) {
     // Electron cannot use the Tauri command: ask the sidecar for the relay URL over the existing
@@ -198,6 +217,11 @@ function invokeInner<T>(cmd: string, args?: Record<string, unknown>, diagnostic?
   }
   // Browser/remote continues through WebSocket and web/dispatch.rs.
   if (!isTauri) return wsClient.invoke<T>(cmd, args, diagnostic);
+  if (requiresHistoryProtocol(cmd)) {
+    return requireDesktopHistoryProtocol().then(() => tauriInvoke<T>("desktop_call", {
+      cmd, args: args ?? {}, diagnosticRequestId: diagnostic?.requestId, diagnosticOperationId: diagnostic?.operationId,
+    }));
+  }
   // Desktop invokes whitelisted native commands directly and routes everything else through desktop_call.
   return DIRECT_DESKTOP_CMDS.has(cmd)
     ? tauriInvoke<T>(cmd, diagnostic ? { ...args, diagnosticRequestId: diagnostic.requestId, diagnosticOperationId: diagnostic.operationId } : args)

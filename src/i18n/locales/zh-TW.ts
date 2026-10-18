@@ -5,8 +5,15 @@ import type en from "./en";
 const zhTW: typeof en = {
   "panel.averageOutput": "平均輸出速度",
   "panel.averageOutputHint": "依測得的回應時間估算每秒輸出的 token 數，包含智慧體回報的推理 token，不計工具執行和等待使用者的時間。用量與計時無法可靠對應時，不顯示數值。此指標並非模型的純解碼速度。",
+  "panel.turnStats": "本輪統計",
+  "panel.fileCount": (n: number) => `${n} 個檔案`,
+  "panel.showChangedFiles": "檢視本輪修改的檔案",
+  "panel.noFilesChanged": "本輪沒有編輯任何檔案。",
+  "panel.shellEditsNotListed": "透過 Shell 指令所做的修改不會列出。",
   "translation.swap": "交換語言",
   "translation.openai": "OpenAI 相容介面",
+  "translation.bing": "Bing 翻譯（免 API 金鑰）",
+  "translation.bingHint": "使用 Bing 免費翻譯，無需 API 金鑰或 Microsoft 帳戶。",
   "translation.google": "Google 翻譯（免 API 金鑰）",
   "translation.googleHint": "使用 Google 免費翻譯，無需 API 金鑰或 Google 帳戶。",
   "translation.rateLimited": "翻譯請求過於頻繁，請稍後再試。",
@@ -293,6 +300,8 @@ const zhTW: typeof en = {
   "memory.collections": "已封存會話",
   "memory.collectionConversation": "對話",
   "memory.collectionEmptyEntries": "這段對話還沒有知識條目。",
+  "memory.collapseAllProjects": "收合所有專案",
+  "memory.expandAllProjects": "展開所有專案",
   "memory.title": "知識庫",
   "memory.add": "整理至知識庫",
   "memory.intro": "依專案和工作階段整理知識。條目產生後獨立儲存，不隨來源變更自動更新，可手動編輯。",
@@ -869,6 +878,7 @@ const zhTW: typeof en = {
   "settings.scSplitDown": "向下分割", // Split down
   "settings.scSearch": "在終端機中搜尋", // Find in terminal
   "settings.scGlobalSearch": "搜尋所有會話", // Search all sessions
+  "settings.scCopyTerminal": "複製終端機選取內容", // Copy terminal selection
   "settings.scSelectAllTerminal": "全選終端機內容", // Select all in terminal
   "settings.scSaveDoc": "儲存文件", // Save document
   "settings.scRecording": "請按下按鍵…", // Press keys…
@@ -1307,6 +1317,7 @@ const zhTW: typeof en = {
   "search.includeArchived": "同時搜尋封存", // Include archived
   "search.includeArchivedHint": "把已封存會話也納入搜尋（預設不搜）", // Also search archived sessions (off by default)
   "search.searching": "搜尋中…", // Searching…
+  "search.progress": (sessions, bytes) => `搜尋中… 已檢查 ${sessions} 個會話 · 已讀取 ${bytes}`,
   "search.noResults": "找不到符合項目", // No matches found
   "search.sessionCount": (n) => `${n} 個會話`, // n sessions
   "search.matchCount": (n) => `${n} 處符合`, // n matches
@@ -1898,6 +1909,7 @@ const zhTW: typeof en = {
   "skills.vspawn": "建立子會話來處理任務。",
   "skills.vspawnTree": "建立使用獨立工作樹的子會話。",
   "skills.vopen": "在 VelaTerm 中開啟檔案或網頁。",
+  "skills.vartifact": "將視覺成果做成即時 HTML 頁面，顯示在會話旁邊。", // Show visual work as a live HTML page beside the conversation.
   "skills.vrefer": "讀取其他會話的對話內容。",
   "skills.vask": "針對其他會話提問，並取得簡要回答。",
   "skills.vsearch": "搜尋所有會話的對話內容。",
@@ -1916,6 +1928,7 @@ const zhTW: typeof en = {
   "session.showTerminal": "終端機檢視",
   "session.switchTitle": "切換檢視將重新啟動智慧體",
   "session.switchBody": "目前進行中的回合會中斷，對話內容不會遺失。",
+  "session.switchBodyBackground": "智慧體啟動的背景工作可能會停止，工作結束時智慧體也不會收到通知。對話內容不會遺失。",
   "session.switchConfirm": "切換",
   "session.terminalViewHint": "點選這裡即可切換回終端機檢視。",
   "session.loading": "正在讀取對話…",
@@ -2061,6 +2074,7 @@ const zhTW: typeof en = {
   "chat.compaction.manual": "上下文已壓縮",
   "chat.compaction.auto": "上下文已自動壓縮",
   "chat.compaction.from": (tokens: string) => `壓縮前 ${tokens} tokens`,
+  "chat.wake.label": "背景工作已結束",
   // N steps
   "chat.subagent.steps": (n: number) => `${n} 步`,
   "chat.subagent.tokens": (tokens: string) => `${tokens} 個 token`,
@@ -2352,6 +2366,76 @@ const zhTW: typeof en = {
   "chat.antigravity.textOnly": "Antigravity 會話檢視目前僅支援文字訊息。",
   "chat.antigravity.permissionsHint": "需要核准的工具必須先在 Antigravity 設定中獲准使用，或在終端機檢視中使用。",
   "chat.antigravity.settingsHint": "請在回合之間變更模型、思考程度或權限。",
+  "chat.history.imageDownloadRequired": "無法在此開啟這張圖片，請下載原圖檢視。",
+  "chat.history.readBody": "讀取完整內容",
+  "chat.history.selectDetail": "選擇檔案或欄位",
+  "chat.history.part": "部分",
+  "chat.history.copyPart": "複製本部分",
+
+  "chat.history.searchMore": "更多結果",
+  "chat.history.indexing": "歷史記錄仍在建立索引",
+  "chat.history.newer": "載入較新的訊息",
+
+  "chat.history.copyComplete": "複製完整內容",
+  "chat.history.downloadComplete": "下載完整內容",
+  "chat.history.unavailable": "此工作階段的歷史詳細資料無法使用。",
+  "chat.history.openViewer": "請開啟詳細資料檢視以讀取完整內容。",
+  "chat.history.copyBusy": "正在複製完整內容。",
+  "chat.history.clipboardLimit": "此內容超過剪貼簿容量限制，請下載完整檔案。",
+  "chat.history.contentChanged": "傳輸期間內容已變更，請重新載入。",
+  "export.preparing": "正在準備匯出會話…",
+  "chat.history.windowLimit": "這則訊息超出顯示上限。請按需讀取或下載完整內容。",
+
+  "chat.history.incomplete": "歷史記錄尚不完整，或仍在建立索引。來源可用後請重試。",
+  "chat.history.indexBusy": "歷史索引正由另一個程序使用，請稍後重試。",
+  "chat.history.unsupported": "部分歷史記錄的格式尚未支援，原始內容已保留。",
+  "chat.history.canceled": "歷史讀取已取消。",
+  "chat.history.pagedRequired": "請透過歷史分頁或詳細資料檢視器讀取此內容。",
+  "chat.history.sourceMissing": "歷史來源遺失或無法存取。",
+  "chat.history.updateServer": "請更新伺服器，以安全讀取工作階段歷史。",
+  "chat.history.storagePressure": "工作階段記錄的儲存空間已滿或無法使用。請釋放空間後重試；智慧體控制仍可使用。",
+
+  "artifact.preview": "預覽", // Preview
+  "artifact.source": "原始碼", // Source
+  "artifact.split": "分欄", // Split
+  "artifact.live": "即時", // Live
+  "artifact.liveTitle": "檔案變更時自動重新載入", // Reloads automatically when the file changes
+  "artifact.offline": "離線", // Offline
+  "artifact.offlineTitle": "此頁面無法從網際網路載入任何內容。點選即可為此檔案開放連網。", // This page cannot load anything from the internet. Click to allow it for this file.
+  "artifact.online": "連網", // Online
+  "artifact.onlineTitle": "此頁面可以從網際網路載入檔案。點選即可重新封鎖。", // This page can load files from the internet. Click to block them again.
+  "artifact.netBlocked": (n: number) => `此頁面嘗試從網際網路載入 ${n} 個檔案，已遭封鎖。`, // This page tried to load ${n} files from the internet. They were blocked.
+  "artifact.allowForFile": "允許此檔案連網", // Allow for this file
+  "artifact.errorCount": (n: number) => `${n} 個錯誤`, // ${n} errors
+  "artifact.warningCount": (n: number) => `${n} 個警告`, // ${n} warnings
+  "artifact.console": "主控台", // Console
+  "artifact.consoleEmpty": "沒有錯誤或警告。", // No errors or warnings.
+  "artifact.clearConsole": "清除", // Clear
+  "artifact.closeConsole": "關閉主控台", // Close console
+  "artifact.sendToSession": "傳送到會話", // Send to session
+  "artifact.sendToSessionTitle": "將這些錯誤填入寫出此頁面的會話輸入框", // Put these errors in the message box of the session that wrote this page
+  "artifact.fileGone": "此檔案已不存在", // This file is no longer available
+  "artifact.fileGoneBody": (name: string) => `${name} 已被移動或刪除。請從新位置重新開啟，或關閉此分頁。`, // ${name} was moved or deleted. Open it again from its new location, or close this tab.
+  "artifact.reload": "重新載入", // Reload
+  "artifact.openInBrowser": "在瀏覽器中開啟", // Open in browser
+  "artifact.viewportFit": "符合分頁大小", // Fit to tab
+  "artifact.viewportDesktop": "桌機", // Desktop
+  "artifact.viewportTablet": "平板", // Tablet
+  "artifact.viewportPhone": "手機", // Phone
+  "artifact.goToSession": "前往會話", // Go to session
+  "artifact.versionTitle": (n: number, time: string) => `版本 ${n} · ${time}`, // Version ${n} · ${time}
+  "artifact.viewingVersion": (n: number, time: string) => `正在檢視版本 ${n}（儲存於 ${time}）`, // Viewing version ${n}, saved ${time}
+  "artifact.restoreVersion": "還原此版本", // Restore this version
+  "artifact.backToLatest": "返回最新版本", // Back to latest
+  "artifact.restoreBody": (n: number) => `檔案將替換為版本 ${n}。目前的內容仍會保留在版本紀錄中。`, // The file will be replaced with version ${n}. Its current content stays in the version history.
+  "artifact.restore": "還原", // Restore
+  "artifact.restoreFailed": "無法還原此版本，請再試一次。", // The version could not be restored. Please try again.
+  "artifact.openAsTab": "在分頁中開啟", // Open as tab
+  "artifact.closePanel": "關閉預覽", // Close preview
+  "artifact.cardOpen": "開啟", // Open
+  "artifact.cardOpenTitle": "在此會話旁開啟", // Open beside this session
+  "artifact.cardKind": "HTML 頁面", // HTML page
+  "artifact.frameTitle": (name: string) => `${name} 的預覽`, // Preview of ${name}
 };
 
 export default zhTW;

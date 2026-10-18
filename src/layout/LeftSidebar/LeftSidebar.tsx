@@ -60,7 +60,7 @@ const STATUS_FILTERS: {
   { st: "working", color: "var(--status-working)", pulse: true, labelKey: "tree.filterWorking" },
   { st: "asking", color: "var(--status-asking)", pulse: true, labelKey: "tree.filterAsking" },
   { st: "waiting", color: "var(--status-waiting)", pulse: false, labelKey: "tree.filterWaiting" },
-  { st: "background", color: "var(--status-background)", pulse: true, labelKey: "tree.filterBackground" },
+  { st: "background", color: "var(--status-background)", pulse: false, labelKey: "tree.filterBackground" },
 ];
 
 /** Isolated filter button/dropdown subscribing to high-frequency runtime/notification changes. Agent updates
@@ -889,7 +889,7 @@ export function LeftSidebar() {
           <Icons.projectOpen size={14} />
         </button>
         <button className="icon-btn sm" title={t("tree.cloneProject")} onClick={() => setCloneModalOpen(true)}>
-          <Icons.git size={14} />
+          <Icons.projectClone size={14} />
         </button>
         <button
           className="icon-btn sm"

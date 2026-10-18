@@ -216,11 +216,8 @@ fn independent_search_handles_chinese_short_terms_tags_and_queries() {
         dispatch(&f.app, "memory_list", &json!({"tag":"不存在"})).unwrap()["total"],
         0
     );
-    let conn = f.app.db().conn.lock().unwrap();
-    let count: i64 = conn
-        .query_row("SELECT count(*) FROM session_fts", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 0);
+    // Memory search never writes conversation search rows; those live in a separate index file.
+    assert!(!crate::search::corpus::path(&f.app.data_dir().unwrap()).exists());
 }
 
 #[test]
@@ -917,7 +914,7 @@ fn hierarchy_is_complete_across_pages_and_supports_manual_and_unknown_projects()
 }
 
 #[test]
-fn collections_group_archived_roots_by_original_project_and_keep_group_paths() {
+fn collections_group_archived_sessions_by_original_project_and_nest_descendants() {
     let f = Fixture::new();
     {
         let conn = f.app.db().conn.lock().unwrap();
@@ -928,8 +925,11 @@ fn collections_group_archived_roots_by_original_project_and_keep_group_paths() {
         // Tombstoned containers still name the session's original location, so they must not be filtered.
         conn.execute("UPDATE projects SET deleted_at=1 WHERE id='p'", []).unwrap();
         conn.execute("UPDATE groups SET deleted_at=1 WHERE id='g'", []).unwrap();
-        // An archived descendant is not an archive root and gets no row of its own.
-        conn.execute("INSERT INTO sessions(id,project_id,name,kind,parent_session_id,archived_at,created_at) VALUES('s2','p','Child','terminal','s1',100,1)", []).unwrap();
+        // An archived descendant nests under its archived parent and carries no group chain of its own.
+        conn.execute("INSERT INTO sessions(id,project_id,group_id,name,kind,parent_session_id,archived_at,created_at) VALUES('s2','p','g2','Child','terminal','s1',100,1)", []).unwrap();
+        // A session archived on its own below a live parent is a root.
+        conn.execute("INSERT INTO sessions(id,project_id,name,kind,created_at) VALUES('live','p','Live parent','claude',1)", []).unwrap();
+        conn.execute("INSERT INTO sessions(id,project_id,name,kind,parent_session_id,archived_at,created_at) VALUES('s3','p','Detached','claude','live',50,1)", []).unwrap();
     }
     let entry = f.save("Stored topic", "Reusable content");
     {
@@ -943,13 +943,17 @@ fn collections_group_archived_roots_by_original_project_and_keep_group_paths() {
     assert_eq!(projects[0]["name"], "Alpha");
     assert_eq!(projects[0]["count"], 1);
     let sessions = projects[0]["sessions"].as_array().unwrap();
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0]["id"], "s1");
-    assert_eq!(sessions[0]["count"], 1);
-    assert_eq!(sessions[0]["groupPath"], json!(["Work", "Nested"]));
-    assert_eq!(result["sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(result["sessions"][0]["id"], "s1");
-    assert_eq!(result["sessions"][0]["name"], "Archived one");
+    let row = |id: &str| sessions.iter().find(|s| s["id"] == id).unwrap().clone();
+    assert_eq!(sessions.len(), 3);
+    assert_eq!(row("s1")["count"], 1);
+    assert_eq!(row("s1")["parentId"], json!(null));
+    assert_eq!(row("s1")["groupIds"], json!(["g", "g2"]));
+    assert_eq!(row("s1")["groupPath"], json!(["Work", "Nested"]));
+    assert_eq!(row("s2")["parentId"], "s1");
+    assert_eq!(row("s2")["groupPath"], json!([]));
+    assert_eq!(row("s3")["parentId"], json!(null));
+    assert_eq!(result["sessions"].as_array().unwrap().len(), 3);
+    assert!(result["sessions"].as_array().unwrap().iter().any(|s| s["id"] == "s2" && s["name"] == "Child"));
 }
 
 #[test]

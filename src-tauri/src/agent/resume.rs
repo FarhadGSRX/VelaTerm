@@ -842,8 +842,7 @@ pub fn find_claude_transcript(id: &str) -> Option<PathBuf> {
 /// view, export, search, and rewind targets in step with what the agent remembers.
 pub(crate) fn read_claude_transcript(id: &str) -> Result<String, String> {
     let path = find_claude_transcript(id).ok_or("Claude transcript file not found")?;
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read transcript: {e}"))?;
+    let content = crate::agent::history_store::compat::read_path(&path)?;
     Ok(claude_active_branch(&content))
 }
 
@@ -908,7 +907,7 @@ pub(crate) fn pi_active_branch(content: &str) -> Vec<serde_json::Value> {
 pub(crate) fn read_pi_transcript(kind: SessionKind, id: &str) -> Result<String, String> {
     let path = find_pi_session(kind, id)
         .ok_or("The agent's session recording could not be found")?;
-    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read transcript: {e}"))
+    crate::agent::history_store::compat::read_path(&path)
 }
 
 /// Keep only the lines on the active branch of a Claude transcript tree.
@@ -1007,87 +1006,10 @@ pub(crate) fn read_codex_rollout_chain(id: &str) -> Result<(PathBuf, String), St
 
 fn read_codex_rollout_chain_in(sessions: &Path, id: &str) -> Result<(PathBuf, String), String> {
     let path = find_codex_rollout_in(sessions, id).ok_or("Codex rollout file not found")?;
-    let mut seen = HashSet::new();
-    let content = read_codex_rollout_segment(sessions, id, None, None, &mut seen, 0)?;
-    Ok((path, content))
-}
-
-fn read_codex_rollout_segment(
-    sessions: &Path,
-    id: &str,
-    end_ordinal_exclusive: Option<u64>,
-    end_byte_offset: Option<u64>,
-    seen: &mut HashSet<String>,
-    depth: usize,
-) -> Result<String, String> {
-    if depth >= 32 {
-        return Err("Codex rollout fork history is deeper than 32 levels".to_string());
-    }
-    if !seen.insert(id.to_string()) {
-        return Err("Codex rollout fork history contains a cycle".to_string());
-    }
-    let path = find_codex_rollout_in(sessions, id).ok_or("Codex parent rollout file not found")?;
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read transcript: {e}"))?;
-    let history_base = raw.lines().find_map(|line| {
-        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
-        if value.get("type").and_then(serde_json::Value::as_str) != Some("session_meta") {
-            return None;
-        }
-        let base = value
-            .pointer("/payload/history_base")
-            .or_else(|| value.pointer("/payload/historyBase"))?;
-        let thread_id = base
-            .get("thread_id")
-            .or_else(|| base.get("threadId"))
-            .and_then(serde_json::Value::as_str)?
-            .to_string();
-        let ordinal = base
-            .get("end_ordinal_exclusive")
-            .or_else(|| base.get("endOrdinalExclusive"))
-            .and_then(serde_json::Value::as_u64);
-        let bytes = base
-            .get("end_byte_offset")
-            .or_else(|| base.get("endByteOffset"))
-            .and_then(serde_json::Value::as_u64);
-        Some((thread_id, ordinal, bytes))
-    });
-
-    let mut logical = String::new();
-    if let Some((parent_id, parent_ordinal, parent_bytes)) = history_base {
-        logical.push_str(&read_codex_rollout_segment(
-            sessions,
-            &parent_id,
-            parent_ordinal,
-            parent_bytes,
-            seen,
-            depth + 1,
-        )?);
-    }
-
-    let segment = end_byte_offset
-        .and_then(|limit| usize::try_from(limit).ok())
-        .filter(|limit| *limit <= raw.len())
-        .and_then(|limit| raw.get(..limit))
-        .map(str::to_string)
-        .unwrap_or_else(|| match end_ordinal_exclusive {
-            Some(limit) => raw
-                .lines()
-                .filter(|line| {
-                    serde_json::from_str::<serde_json::Value>(line)
-                        .ok()
-                        .and_then(|value| value.get("ordinal").and_then(serde_json::Value::as_u64))
-                        .is_none_or(|ordinal| ordinal < limit)
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-            None => raw,
-        });
-    logical.push_str(&segment);
-    if !logical.is_empty() && !logical.ends_with('\n') {
-        logical.push('\n');
-    }
-    Ok(logical)
+    let resolved=crate::agent::history_store::source::resolve_codex(id,&|id|find_codex_rollout_in(sessions,id))?;
+    if let Some(error)=resolved.error {return Err(error);}
+    let content=crate::agent::history_store::compat::read_segments(&resolved.segments)?;
+    Ok((path,content))
 }
 
 #[cfg(test)]

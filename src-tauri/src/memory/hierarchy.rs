@@ -1,7 +1,7 @@
 //! Memory ownership and names are snapshots, independent of the live project tree.
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub fn init(conn: &Connection) -> Result<(), String> {
     let migrated: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('memory_entries') WHERE name='session_id')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
@@ -170,9 +170,9 @@ pub fn tree(
     Ok(result)
 }
 
-/// Group names from the top-level group down to the session's own group. Tombstoned groups survive
-/// archiving, so an archived session keeps the original container chain it was stored in.
-fn group_path(conn: &Connection, group_id: Option<&str>) -> Result<Vec<String>, String> {
+/// Group IDs and names from the top-level group down to the session's own group. Tombstoned groups
+/// survive archiving, so an archived session keeps the original container chain it was stored in.
+fn group_path(conn: &Connection, group_id: Option<&str>) -> Result<Vec<(String, String)>, String> {
     let mut names = Vec::new();
     let mut current = group_id.map(str::to_string);
     while let Some(id) = current {
@@ -186,7 +186,7 @@ fn group_path(conn: &Connection, group_id: Option<&str>) -> Result<Vec<String>, 
             .map_err(|e| e.to_string())?;
         match row {
             Some((name, parent)) => {
-                names.insert(0, name);
+                names.insert(0, (id, name));
                 current = parent;
             }
             None => break,
@@ -195,19 +195,43 @@ fn group_path(conn: &Connection, group_id: Option<&str>) -> Result<Vec<String>, 
     Ok(names)
 }
 
-/// Archived root sessions grouped by their original project for the knowledge-base Collections
+/// Archived sessions grouped by their original project for the knowledge-base Collections
 /// hierarchy. Project snapshots are not needed here: archiving keeps the container rows as
 /// tombstones, so a deleted project's name is still available. A session whose project row is gone
-/// collects under `__unknown__`. Each session carries its generated-entry count, and the full session
-/// objects travel alongside so the frontend can render content without a second lookup.
+/// collects under `__unknown__`. Archived descendants are listed too: `parentId` names the archived
+/// parent they nest under, and they follow their archive root's project so a subtree never splits.
+/// Roots carry their group chain for the tree. Each session carries its generated-entry count, and
+/// the full session objects travel alongside so the frontend can render content without a second lookup.
 pub fn collections(conn: &Connection) -> Result<Value, String> {
-    let sessions = crate::db::repo::list_archived(conn)?;
+    let sessions = crate::db::repo::list_archived_all(conn)?;
+    let by_id: HashMap<&str, &crate::models::Session> = sessions.iter().map(|s| (s.id.as_str(), s)).collect();
+    // Only an archived parent nests a session; one below a live parent is an archive root.
+    let parents: HashMap<&str, &str> = sessions
+        .iter()
+        .filter_map(|s| {
+            let parent = s.parent_session_id.as_deref()?;
+            by_id.contains_key(parent).then_some((s.id.as_str(), parent))
+        })
+        .collect();
     let mut projects: BTreeMap<String, Value> = BTreeMap::new();
     for session in &sessions {
+        let mut parent = parents.get(session.id.as_str()).copied();
+        let mut root = session;
+        // Bounded walk: a corrupt parent cycle has no root, so its members are listed as roots.
+        let mut steps = 0;
+        while let Some(&p) = parents.get(root.id.as_str()) {
+            root = by_id[p];
+            steps += 1;
+            if steps > sessions.len() {
+                parent = None;
+                root = session;
+                break;
+            }
+        }
         let project: Option<(String, String)> = conn
             .query_row(
                 "SELECT id,name FROM projects WHERE id=?1",
-                [&session.project_id],
+                [&root.project_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
@@ -223,13 +247,20 @@ pub fn collections(conn: &Connection) -> Result<Value, String> {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
+        let groups = if parent.is_some() {
+            Vec::new()
+        } else {
+            group_path(conn, session.group_id.as_deref())?
+        };
         let row = json!({
             "id": session.id,
             "name": session.name,
             "kind": session.kind.as_str(),
             "count": count,
             "archivedAt": session.archived_at,
-            "groupPath": group_path(conn, session.group_id.as_deref())?,
+            "parentId": parent,
+            "groupIds": groups.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            "groupPath": groups.iter().map(|(_, name)| name).collect::<Vec<_>>(),
         });
         let entry = projects.entry(project_id.clone()).or_insert_with(|| {
             json!({

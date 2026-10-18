@@ -82,7 +82,7 @@ impl ShareScope {
         if !self.contains(&session) {
             return Err("Session is outside the shared scope".into());
         }
-        if cmd != "read_agent_chat" && session.engine != "chat" {
+        if !readonly_history(cmd,args) && session.engine != "chat" {
             return Err(
                 "The host must switch this session to conversation view before continuing it"
                     .into(),
@@ -184,6 +184,7 @@ pub fn dispatch_shared(
         cmd,
         "get_app_settings"
             | "app_version"
+            | "chat_capabilities"
             | "diagnostic_event"
             | "usage_snapshot"
             | "agent_permission_catalog"
@@ -204,7 +205,7 @@ pub fn dispatch_shared(
     if cmd == "mobile_notification_preview" {
         return super::dispatch::dispatch(app, cmd, args, who, origin);
     }
-    if session.engine != "chat" {
+    if session.engine != "chat" && !readonly_history(cmd,args) {
         return Err(
             "The host must switch this session to conversation view before continuing it".into(),
         );
@@ -225,6 +226,12 @@ pub fn dispatch_shared(
         args.clone()
     };
     super::dispatch::dispatch(app, cmd, &safe_args, who, origin)
+}
+
+fn readonly_history(cmd:&str,args:&Value) -> bool {
+    matches!(cmd,"read_agent_chat"|"chat_detail_read"|"chat_detail_download"|"chat_locate"|"chat_search"|"chat_read_cancel")
+        || (cmd=="chat_snapshot" && args["historyOnly"]==true)
+        || (cmd=="chat_row" && args["protocolVersion"]==2)
 }
 
 /// Rejects an image upload or a scope escape on a tool permission answer, and rebuilds question answers so
@@ -278,12 +285,18 @@ fn app_command(cmd: &str) -> bool {
             | "session_mark_read"
             | "mobile_notification_preview"
             | "chat_snapshot"
+            | "chat_capabilities"
             | "chat_attach"
             | "chat_detach"
             | "chat_models"
             | "agent_version"
             | "chat_commands"
             | "chat_row"
+            | "chat_detail_read"
+            | "chat_detail_download"
+            | "chat_locate"
+            | "chat_search"
+            | "chat_read_cancel"
             | "chat_attachment"
             | "read_agent_chat"
             | "chat_start"
@@ -292,6 +305,7 @@ fn app_command(cmd: &str) -> bool {
             | "chat_auto_continue_cancel"
             | "chat_permission"
             | "chat_queue_steer"
+            | "chat_queue_read"
             | "chat_queue_remove"
             | "chat_queue_update"
             | "chat_background_tasks"
@@ -393,11 +407,17 @@ fn allowed_command(cmd: &str) -> bool {
             | "chat_snapshot"
             | "chat_attachment"
             | "chat_row"
+            | "chat_detail_read"
+            | "chat_detail_download"
+            | "chat_locate"
+            | "chat_search"
+            | "chat_read_cancel"
             | "chat_start"
             | "chat_send"
             | "chat_interrupt"
             | "chat_permission"
             | "chat_queue_steer"
+            | "chat_queue_read"
             | "chat_queue_remove"
             | "chat_queue_update"
     )

@@ -36,7 +36,7 @@ import { useTermStore } from "../../../store/termStore";
 import { MAX_IMAGES } from "./attachments";
 import { ChatPane } from "./ChatPane";
 import { useOutbox } from "./outbox";
-import { clearChatCache } from "./chatCache";
+import { cachedChat, clearChatCache } from "./chatCache";
 
 let eventCallback: (event: ChatEvent) => void;
 let permissions: ChatPermission[];
@@ -46,6 +46,7 @@ let snapshotOverrides: Partial<ChatSnapshot>;
 let reconnectCallback: () => void;
 
 beforeEach(() => {
+  window.history.replaceState(null,"","/");
   document.documentElement.dataset.theme = "light";
   clearChatCache();
   useOutbox.setState({ sessions: {} });
@@ -92,6 +93,76 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+it("reads an archive range without acquiring a process or replacing its runtime state", async () => {
+  const runtime={status:"running" as const,pid:719,startedAt:100,agent:"codex" as const,agentState:"working" as const};
+  useTermStore.setState({runtimes:{s:runtime}});
+  snapshotOverrides={running:false,protocolVersion:2,historyGeneration:"fixed",coverage:"complete",readJobId:"index:archive",
+    locatedRowId:"first",rows:[{kind:"user",id:"first",text:"Original archived text"}]};
+  const view=render(<ChatPane session={{id:"s",projectId:"p",name:"Archive",kind:"codex",engine:"tui",collapsed:false,sortOrder:0,createdAt:0}}
+    area={{}} hidden={false} focused multi={false} readOnly historyOnly initialMessageIndex={0}
+    onActivate={()=>{}} onSplit={()=>{}} onClose={()=>{}}/>);
+  await screen.findByText("Original archived text");
+  expect(vi.mocked(invoke).mock.calls.find(([command])=>command==="chat_snapshot")?.[1]).toMatchObject({historyOnly:true,window:{messageIndex:0}});
+  expect(useTermStore.getState().runtimes.s).toEqual(runtime);
+  expect(cachedChat("s")).toBeUndefined();expect(cachedChat("s\u0000history")?.rows[0].id).toBe("first");
+  view.unmount();
+  const commands=vi.mocked(invoke).mock.calls.map(([command])=>command);
+  expect(commands).not.toEqual(expect.arrayContaining(["chat_attach"]));
+  expect(commands.some(command=>["chat_attach","chat_detach","chat_models","chat_start","chat_send","chat_interrupt"].includes(command))).toBe(false);
+  expect(commands).toContain("chat_read_cancel");
+});
+
+it("bounds the v2 window during live updates and process reset while retaining a history entry", async () => {
+  snapshotOverrides = { protocolVersion: 2, historyGeneration: "generation", coverage: "complete", rowsRevision: 1, startedAt: 1, readJobId: "index:owned" };
+  const view = await mountPane();
+  act(() => eventCallback({ type: "rows", epoch: 1, revision: 2, rows: Array.from({ length: 400 }, (_,i) => ({ kind: "user" as const, id: `u-${i}`, text: `Message ${i}` })) }));
+  await waitFor(() => expect(cachedChat("s")?.rows).toHaveLength(240));
+  expect(cachedChat("s")?.rows[0].id).toBe("u-160");expect(cachedChat("s")?.hasMore).toBe(true);
+  act(() => eventCallback({ type: "reset", epoch: 2, revision: 1, rows: Array.from({ length: 300 }, (_,i) => ({ kind: "user" as const, id: `reset-${i}`, text: `Reset ${i}` })) }));
+  await waitFor(() => expect(cachedChat("s")?.rows[0]?.id).toBe("reset-60"));
+  expect(cachedChat("s")?.rows).toHaveLength(240);expect(cachedChat("s")?.hasMore).toBe(true);
+  view.unmount();expect(vi.mocked(invoke).mock.calls.some(([command,args]) => command === "chat_read_cancel" && args?.jobId === "index:owned")).toBe(true);
+});
+
+it("restores a copied v2 paging link with the same subscription after browser navigation", async () => {
+  window.history.replaceState(null,"","/?chatSession=s&chatBefore=boundary");
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args) => command === "chat_snapshot" ? Promise.resolve({
+    running: false, protocolVersion: 2, historyGeneration: "generation", coverage: "complete", readJobId: "index:window", rows: [{ kind: "user", id: (args?.window as { before?: string })?.before ? "old-page" : "recent-page", text: "Page body" }], queue: [], permissions: [], commands: [], configKeys: [],
+  }) as Promise<never> : previous(command,args));
+  try {
+    await mountPane("claude",null);
+    await waitFor(() => expect(cachedChat("s")?.rows[0]?.id).toBe("old-page"));
+    const initial = vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_snapshot")![1];
+    expect(initial?.protocolVersion).toBe(2);expect(initial?.window).toMatchObject({ before: "boundary" });
+    window.history.replaceState(null,"","/?chatSession=s");act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    await waitFor(() => expect(cachedChat("s")?.rows[0]?.id).toBe("recent-page"));
+    const latest = vi.mocked(invoke).mock.calls.filter(([command]) => command === "chat_snapshot").at(-1)![1];
+    expect(latest?.readJobId).toBe("index:window");
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_detail_read" || command === "chat_row")).toBe(false);
+  } finally { window.history.replaceState(null,"","/"); }
+});
+
+it("cancels a v2 indexing subscription returned after its pane has closed", async () => {
+  let finish!: (value: unknown) => void;const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args) => command === "chat_snapshot" ? new Promise<unknown>(resolve => {finish=resolve;}) as Promise<never> : previous(command,args));
+  const view=await mountPane("claude",null);view.unmount();
+  await act(async () => finish({ protocolVersion: 2, readJobId: "index:late", running: false, rows: [], queue: [], permissions: [], commands: [], configKeys: [] }));
+  expect(vi.mocked(invoke).mock.calls.some(([command,args]) => command === "chat_read_cancel" && args?.jobId === "index:late")).toBe(true);
+});
+
+it("keeps the recent edge complete when an earlier v2 page is added to the retained window", async () => {
+  snapshotOverrides = { protocolVersion: 2, historyGeneration: "generation", coverage: "complete", hasMore: true, hasNewer: false,
+    rows: [{ kind: "user", id: "recent", text: "Recent retained message" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args) => command === "chat_snapshot" && (args?.window as { before?: string })?.before
+    ? Promise.resolve({ ...snapshotOverrides, pageKind: "history", hasMore: false, hasNewer: true, rows: [{ kind: "user", id: "older", text: "Earlier retained message" }] }) as Promise<never> : previous(command,args));
+  const view = await mountPane();fireEvent.click(view.container.querySelector(".sv-history-more")!);
+  await screen.findByText("Earlier retained message");
+  expect(cachedChat("s")?.rows.map(row=>row.id)).toEqual(["older","recent"]);
+  expect(cachedChat("s")?.hasNewer).toBe(false);expect(screen.queryByText("Load newer messages")).toBeNull();
+});
 
 it("keeps the running model visible on discovery failure and restores choices after retry", async () => {
   const previous = vi.mocked(invoke).getMockImplementation()!;
@@ -344,6 +415,17 @@ it("recalls session inputs in order while busy and restores the unsent draft", a
   }
   expect(input.selectionStart).toBe(0);
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+});
+
+it("recalls the original long input without exposing its preview as a complete copy",async()=> {
+  const text="Full original message 雪😀";const sizeBytes=new TextEncoder().encode(text).byteLength;
+  snapshotOverrides={protocolVersion:2,historyGeneration:"g",coverage:"complete",rows:[{kind:"user",id:"original",text:"Preview only",bodyAvailable:true}]};
+  const previous=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args)=>command==="chat_row" ? Promise.resolve({protocolVersion:2,fields:[{label:"body",detailRef:"original",contentRevision:"g:original",sizeBytes}],nextCursor:null}) as never
+    : command==="chat_detail_read" ? Promise.resolve({contentRevision:"g:original",text,nextCursor:null,eof:true}) as never : previous(command,args));
+  const view=await mountPane();const input=view.container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  expect(view.container.querySelector(".sv-message-copy-button")).toBeNull();fireEvent.keyDown(input,{key:"ArrowUp"});
+  await waitFor(()=>expect(input.value).toBe(text));expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==="chat_detail_read")).toHaveLength(1);
 });
 
 it("leaves multiline caret movement, selection, modified arrows and IME input to the editor", async () => {
@@ -968,7 +1050,7 @@ it.each([
   const { container } = await mountPane(kind);
   const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
   fireEvent.change(input, { target: { value: draft, selectionStart: draft.length } });
-  await screen.findByRole("button", { name: /vspawn/ });
+  await screen.findByRole("option", { name: /vspawn/ });
   expect(invoke).toHaveBeenCalledWith("chat_commands", { sessionId: "s" });
   expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "chat_start" || name === "chat_send")).toBe(false);
   fireEvent.keyDown(input, { key: "Tab" });
@@ -976,6 +1058,38 @@ it.each([
   fireEvent.change(input, { target: { value: native + "inspect the project" } });
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_send", expect.objectContaining({ text: native + "inspect the project" })));
+});
+
+
+it("moves through the skill list with the arrow keys and takes the highlighted one", async () => {
+  snapshotOverrides = { running: false, commands: [] };
+  const fallback = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_commands"
+    ? Promise.resolve(["vspawn", "vspawn-tree", "vstat"].map((name) => ({ name, invocation: "$" }))) as Promise<never>
+    : fallback(command, args));
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "$v", selectionStart: 2 } });
+  await screen.findByRole("option", { name: /vstat/ });
+  const selected = () => container.querySelector('.sv-complete [aria-selected="true"]')?.textContent;
+  expect(selected()).toBe("$vspawn");
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(selected()).toBe("$vstat");
+  // The list wraps, so the first entry is one step up from itself.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(selected()).toBe("$vstat");
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  fireEvent.keyDown(input, { key: "Tab" });
+  expect(input.value).toBe("$vspawn-tree ");
+  fireEvent.change(input, { target: { value: "$vs", selectionStart: 3 } });
+  await screen.findByRole("option", { name: /vstat/ });
+  expect(selected()).toBe("$vspawn");
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(input.value).toBe("$vstat ");
+  expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "chat_send")).toBe(false);
 });
 
 
@@ -1000,7 +1114,7 @@ it("waits for the skill catalogue and retries a failed lookup without sending th
   retry = true;
   fireEvent.change(input, { target: { value: "" } });
   fireEvent.change(input, { target: { value: "$vsp", selectionStart: 4 } });
-  await screen.findByRole("button", { name: "$vspawn" });
+  await screen.findByRole("option", { name: "$vspawn" });
   expect(screen.queryByText(/Skill lookup failed/)).toBeNull();
 });
 
@@ -1353,6 +1467,37 @@ it("confirms the target before removing history and resends the edit with its im
   expect(calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text: "Replacement", images: [image] });
   expect(screen.getByText("Keep this")).toBeTruthy();
   expect(screen.queryByText("Old answer")).toBeNull();
+});
+
+it.each(["claude", "codex"] as const)("translates a %s edit after rewind before resending with the same attachments", async kind => {
+  const image = { mimeType: "image/png", data: "UE5H" };
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "edit", text: "Original", images: [image] }] };
+  mockOutgoingTranslation();
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let prepared!: () => void;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "chat_rewind") return Promise.resolve({ prefillText: "Original" }) as Promise<never>;
+    if (command === "translation_prepare") return new Promise<void>(resolve => { prepared = resolve; }) as Promise<never>;
+    return previous(command, args);
+  });
+  await mountPane(kind);
+  await screen.findByRole("switch", { name: "Translation" });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Edit" }), { target: { value: "Replacement" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await waitFor(() => expect(prepared).toBeTypeOf("function"));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send" || command === "chat_send")).toBe(false);
+  await act(async () => prepared());
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("translation_send", expect.objectContaining({ text: "Replacement", images: [image], behavior: "queue" })));
+  const calls = vi.mocked(invoke).mock.calls;
+  const prepareIndex = calls.findIndex(([command]) => command === "translation_prepare");
+  const sendIndex = calls.findIndex(([command]) => command === "translation_send");
+  expect(calls.findIndex(([command]) => command === "chat_rewind")).toBeLessThan(prepareIndex);
+  expect(calls.slice(prepareIndex + 1, sendIndex).some(([command]) => command === "translation_session")).toBe(true);
+  expect(calls[prepareIndex][1]).toEqual(calls[sendIndex][1]);
+  expect(calls.some(([command]) => command === "chat_send")).toBe(false);
+  expect(useOutbox.getState().sessions.s[0].status).toBe("sent");
 });
 
 it("keeps the original conversation and edited text when rewind fails", async () => {

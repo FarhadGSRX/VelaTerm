@@ -520,6 +520,13 @@ pub fn run_refer(args: &[String]) -> ! {
         }
     };
     let body = build_refer_body(&sid, &parsed);
+    if !parsed.list {
+        let endpoint=format!("{url}/refer?t={token}&stream={}",if parsed.json {"json"} else {"text"});
+        match post_reference_stream(&endpoint,&body,parsed.json,&mut std::io::stdout().lock()) {
+            Ok(())=>std::process::exit(0),
+            Err(error)=>{eprintln!("vrefer: {error}");std::process::exit(1);},
+        }
+    }
     let endpoint = format!("{url}/refer?t={token}");
     let (code, payload) = match post_json_read_with(&endpoint, &body, refer_http_timeout(&parsed)) {
         Some(v) => v,
@@ -1301,7 +1308,7 @@ fn short_id(id: &str) -> String {
 /// Shorten an ISO timestamp to `MM-DD HH:MM` for headers, leaving anything unexpected untouched.
 ///
 /// The value is printed as the transcript recorded it, with no timezone conversion.
-fn short_time(ts: &str) -> String {
+pub(crate) fn short_time(ts: &str) -> String {
     let bytes = ts.as_bytes();
     if bytes.len() >= 16 && bytes[4] == b'-' && bytes[7] == b'-' && bytes[10] == b'T' {
         return format!("{} {}", &ts[5..10], &ts[11..16]);
@@ -1320,7 +1327,7 @@ fn one_line(text: &str, max_chars: usize) -> String {
 }
 
 /// Render a `/refer` transcript response as text for a model to read.
-fn render_refer(value: &serde_json::Value) -> String {
+pub(crate) fn render_refer(value: &serde_json::Value) -> String {
     let session_id = value
         .get("sessionId")
         .and_then(|v| v.as_str())
@@ -1402,7 +1409,7 @@ fn render_refer(value: &serde_json::Value) -> String {
 ///
 /// The attribution line matters. What follows is one agent's reading of another session, not that
 /// session's own words, and the caller should quote it as such.
-fn render_answer(value: &serde_json::Value) -> String {
+pub(crate) fn render_answer(value: &serde_json::Value) -> String {
     let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let id = short_id(
         value
@@ -1618,6 +1625,33 @@ fn read_value(cli: &str, status: u16, payload: &str) -> serde_json::Value {
 
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+fn post_reference_stream(url:&str,body:&str,json:bool,writer:&mut impl std::io::Write) -> Result<(),String> {
+    let agent=ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30*60)).redirects(0).try_proxy_from_env(false).build();
+    let response=match agent.post(url).set("Content-Type","application/json").set("Connection","close").send_string(body) {
+        Ok(response)|Err(ureq::Error::Status(_,response))=>response,
+        Err(ureq::Error::Transport(error))=>return Err(format!("cannot read the reference stream: {error}")),
+    };
+    if response.status()!=200 {
+        let mut payload=String::new();response.into_reader().take(512*1024+1).read_to_string(&mut payload).map_err(|e|e.to_string())?;
+        let value=serde_json::from_str::<serde_json::Value>(&payload).unwrap_or_default();
+        return Err(value["error"].as_str().unwrap_or("VelaTerm could not read the requested conversation").into());
+    }
+    let content_type=response.header("Content-Type").unwrap_or_default().split(';').next().unwrap_or_default().trim().to_owned();
+    let protocol=response.header("X-Vlx-History-Protocol")==Some("2");
+    if (json && protocol && content_type=="application/json") || (!json && content_type=="text/plain") {
+        std::io::copy(&mut response.into_reader(),writer).map_err(|e|format!("reference stream ended before completion: {e}"))?;
+    } else if content_type=="application/json" {
+        // Older servers ignore the stream negotiation. Preserve their small complete responses,
+        // while refusing to collect an unbounded legacy transcript on the client.
+        let mut bytes=Vec::new();response.into_reader().take(512*1024+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+        if bytes.len()>512*1024 {return Err(super::history_store::compat::UPGRADE.into());}
+        let value:serde_json::Value=serde_json::from_slice(&bytes).map_err(|_|"VelaTerm returned an invalid reference response")?;
+        if json {writer.write_all(&bytes).map_err(|e|e.to_string())?;}
+        else {writer.write_all(if value.get("answer").is_some() {render_answer(&value)} else {render_refer(&value)}.as_bytes()).map_err(|e|e.to_string())?;}
+    } else {return Err("VelaTerm returned an unsupported reference response type".into());}
+    writer.write_all(b"\n").map_err(|e|e.to_string())?;Ok(())
+}
+
 fn refer_http_timeout(args: &ReferArgs) -> std::time::Duration {
     if args.ask.is_none() {
         return READ_TIMEOUT;
@@ -1633,6 +1667,32 @@ fn refer_http_timeout(args: &ReferArgs) -> std::time::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference_response(payload:Vec<u8>,content_type:&str,protocol:bool,json:bool) -> (Result<(),String>,Vec<u8>) {
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url=format!("http://{}/refer?stream={}",server.server_addr(),if json {"json"} else {"text"});
+        let content_type=content_type.to_owned();
+        let worker=std::thread::spawn(move|| {
+            let request=server.recv().unwrap();
+            let mut response=tiny_http::Response::from_data(payload).with_header(tiny_http::Header::from_bytes("Content-Type",content_type).unwrap());
+            if protocol {response=response.with_header(tiny_http::Header::from_bytes("X-Vlx-History-Protocol","2").unwrap());}
+            let _=request.respond(response);
+        });
+        let mut output=Vec::new();let result=post_reference_stream(&url,"{}",json,&mut output);worker.join().unwrap();(result,output)
+    }
+
+    #[test]
+    fn reference_stream_negotiates_old_servers_without_collecting_large_legacy_bodies() {
+        let value=serde_json::json!({"sessionId":"abcdefgh","name":"Earlier server","kind":"codex","total":1,"range":[0,1],
+            "messages":[{"role":"user","text":"Complete original","tools":[]}]});
+        let (result,output)=reference_response(value.to_string().into_bytes(),"application/json",false,false);
+        result.unwrap();assert_eq!(String::from_utf8(output).unwrap(),format!("{}\n",render_refer(&value)));
+        let (result,output)=reference_response(vec![b'x';512*1024+1],"application/json",false,true);
+        assert!(result.unwrap_err().starts_with("detail_requires_paging:"));assert!(output.is_empty());
+        let long=serde_json::json!({"messages":[{"text":"雪😀".repeat(100_000)}]}).to_string();
+        let (result,output)=reference_response(long.as_bytes().to_vec(),"application/json",true,true);
+        result.unwrap();assert_eq!(output.len(),long.len()+1);assert_eq!(serde_json::from_slice::<serde_json::Value>(&output).unwrap()["messages"][0]["text"],"雪😀".repeat(100_000));
+    }
 
     fn args(rest: &[&str]) -> Vec<String> {
         rest.iter().map(|s| s.to_string()).collect()

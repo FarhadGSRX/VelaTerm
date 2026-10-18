@@ -1149,6 +1149,32 @@ pub fn set_agent_session_id(
     Ok(n > 0)
 }
 
+/// Forget the agent conversation a session's terminal has just cleared (Claude `/clear`).
+///
+/// The agent starts a new conversation whose ID only arrives with the next prompt; until then the stored
+/// ID still names the cleared one, so the session view would replay it and a chat start would resume it.
+/// Unbind only when the cleared ID is the stored one, so a late callback cannot drop a conversation
+/// already captured after the clear. A pending fork has not captured its own ID yet, so its stored ID is
+/// the source conversation's and the clear always releases it.
+///
+/// Return whether data actually changed, like [`set_agent_session_id`].
+pub fn forget_agent_session_id(
+    conn: &Connection,
+    id: &str,
+    cleared_agent_session_id: &str,
+    kind: SessionKind,
+) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE sessions SET agent_session_id = NULL, fork_pending = 0
+             WHERE id = ?2 AND kind = ?3 AND agent_session_id IS NOT NULL
+               AND (agent_session_id = ?1 OR fork_pending <> 0)",
+            params![cleared_agent_session_id, id, kind.as_str()],
+        )
+        .map_err(|e| format!("Failed to clear agent session id: {e}"))?;
+    Ok(n > 0)
+}
+
 /// Atomically claim a newly created agent session ID for a PTY session.
 ///
 /// Disk scanning narrows only by start time/cwd, so concurrent agents may see the same newest file.
@@ -2422,6 +2448,18 @@ pub fn list_archived(conn: &Connection) -> Result<Vec<Session>, String> {
     )
 }
 
+/// List every archived session, descendants included, for the knowledge-base Collections tree,
+/// which nests archived children under their archived parent instead of hiding them.
+pub fn list_archived_all(conn: &Connection) -> Result<Vec<Session>, String> {
+    query_all(
+        conn,
+        &format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC"
+        ),
+        map_session,
+    )
+}
+
 /// List **all** sessions, including archived descendants, for global content search.
 pub fn list_all_sessions(conn: &Connection) -> Result<Vec<Session>, String> {
     query_all(
@@ -3322,6 +3360,51 @@ mod tests {
 
         // A missing session returns None without error.
         assert_eq!(get_agent_session_id(&conn, "nope").unwrap(), None);
+    }
+
+    /// A terminal `/clear` unbinds only the conversation it cleared, and always releases a pending fork.
+    #[test]
+    fn forget_agent_session_id_unbinds_only_the_cleared_conversation() {
+        let conn = mem_conn();
+        let project = import_project(&conn, std::env::temp_dir().to_str().unwrap()).unwrap();
+        let claude = create_session(
+            &conn,
+            &project.id,
+            None,
+            "c",
+            SessionKind::Claude,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        set_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Claude).unwrap();
+
+        // A late callback for an older conversation, or one from another agent kind, changes nothing.
+        assert!(!forget_agent_session_id(&conn, &claude.id, "older", SessionKind::Claude).unwrap());
+        assert!(!forget_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Codex).unwrap());
+        assert_eq!(
+            get_agent_session_id(&conn, &claude.id).unwrap().as_deref(),
+            Some("before-clear")
+        );
+
+        assert!(forget_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Claude).unwrap());
+        assert_eq!(get_agent_session_id(&conn, &claude.id).unwrap(), None);
+        // Repeating the clear reports no change and triggers no broadcast.
+        assert!(!forget_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Claude).unwrap());
+
+        // A fork still anchored to its source releases it even though the cleared ID is the fork's own.
+        set_agent_session_id(&conn, &claude.id, "source", SessionKind::Claude).unwrap();
+        let fork = fork_session(&conn, &claude.id).unwrap();
+        assert!(forget_agent_session_id(&conn, &fork.id, "fork-own", SessionKind::Claude).unwrap());
+        assert_eq!(get_agent_session_id(&conn, &fork.id).unwrap(), None);
+        assert!(!get_fork_pending(&conn, &fork.id).unwrap());
+        assert_eq!(
+            get_agent_session_id(&conn, &claude.id).unwrap().as_deref(),
+            Some("source")
+        );
     }
 
     #[test]

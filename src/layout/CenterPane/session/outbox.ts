@@ -65,7 +65,7 @@ export async function deliverSubmission(session: string, item: Submission, start
   let translating = !!item.translation && !item.translationReady;
   change(session, items => items.map(value => value.id === item.id ? { ...value, status: translating ? "translating" : "sending", error: undefined } : value));
   try {
-    const images = item.images.some(image => "attachmentId" in image) ? await Promise.all(item.images.map(resolveChatImage)) : item.images as ChatImage[];
+    const images = item.images.some(image => "attachmentId" in image) ? await Promise.all(item.images.map(image=>resolveChatImage(image,true))) : item.images as ChatImage[];
     if (translating) {
       await prepareTranslation(session, item.id, item.text, images, item.behavior);
       if (!current() || submissionsFor(session).find(value => value.id === item.id)?.status === "canceled") return;

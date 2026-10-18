@@ -1,0 +1,24 @@
+.sv-deferred,
+.sv-deferred-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pane-gap, 12px);
+}
+
+.sv-deferred-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pane-gap, 12px);
+}
+
+.sv-deferred-text {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}

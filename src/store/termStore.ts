@@ -1132,6 +1132,8 @@ interface TermStore {
   referSummary: ReferSummaryConfig;
   /** Whether the Info panel's Resources section shows the whole-machine group. */
   showSystemResources: boolean;
+  /** Whether the This turn section shows the changed-file list instead of the statistics. */
+  turnFilesView: boolean;
   /**
    * Info panel sections the user collapsed, keyed by section id. Missing keys are open, matching the
    * sparse persisted map, so a section the user never touched keeps its default expanded state.
@@ -1318,6 +1320,8 @@ interface TermStore {
   refreshDocTab: (id: string) => void;
   /** Toggles a document tab's edit mode. */
   setDocTabMode: (id: string, mode: DocTab["mode"]) => void;
+  /** Sets the viewport an artifact tab previews at. */
+  setDocTabViewport: (id: string, viewport: NonNullable<DocTab["viewport"]>) => void;
   /** Marks or clears unsaved document changes. */
   setDocTabDirty: (id: string, dirty: boolean) => void;
   /** Requests document closure; clean tabs close immediately and dirty tabs prompt. */
@@ -1531,6 +1535,7 @@ interface TermStore {
   setReferSummary: (patch: Partial<ReferSummaryConfig>) => void;
   /** Shows or hides the whole-machine rows in the Info panel's Resources section. */
   setShowSystemResources: (v: boolean) => void;
+  setTurnFilesView: (v: boolean) => void;
   /** Collapses or expands one Info panel section by id, persisting the choice across sessions and shells. */
   toggleInfoSection: (id: string) => void;
   /** Replaces the ordered list of composer chips shown inline; chips left out are off. */
@@ -1747,6 +1752,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     sessionTitlePrefs: s.sessionTitlePrefs,
     referSummary: s.referSummary,
     showSystemResources: s.showSystemResources,
+    turnFilesView: s.turnFilesView,
     infoCollapsed: s.infoCollapsed,
     composerInlineChips: s.composerInlineChips,
     composerInlineChipsRevision: s.composerInlineChipsRevision,
@@ -3163,6 +3169,15 @@ export const useTermStore = create<TermStore>((set, get) => ({
       state.docTabs[id]
         ? {
             docTabs: { ...state.docTabs, [id]: { ...state.docTabs[id], mode } },
+          }
+        : {},
+    ),
+
+  setDocTabViewport: (id, viewport) =>
+    set((state) =>
+      state.docTabs[id]
+        ? {
+            docTabs: { ...state.docTabs, [id]: { ...state.docTabs[id], viewport } },
           }
         : {},
     ),
@@ -4706,6 +4721,10 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
   setShowSystemResources: (v) => {
     set({ showSystemResources: v });
+    persistAndApplyVisual(get);
+  },
+  setTurnFilesView: (v) => {
+    set({ turnFilesView: v });
     persistAndApplyVisual(get);
   },
   toggleInfoSection: (id) => {

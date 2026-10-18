@@ -2,7 +2,7 @@
 //! - Cmd/Ctrl+1–9 focuses the numbered open tab and is fixed to tab positions.
 //! - Cmd/Ctrl++/-/0 changes or resets terminal font size and is fixed to those semantics.
 //! - Settings may remap temporary-terminal creation, desktop browser tabs, pane/tab closure, both
-//!   split directions, terminal/global search, terminal selection, and document save. Defaults live in shortcutRegistry
+//!   split directions, terminal/global search, terminal copy and select all, and document save. Defaults live in shortcutRegistry
 //!   and overrides in vlx-settings. Remapping changes only triggers, not contextual behavior.
 //!
 //! Platform defaults use Cmd on macOS and Ctrl+Alt on Windows/Linux (see DEFAULT_BINDINGS). Bare Ctrl
@@ -24,7 +24,13 @@ import { isShareSurface } from "../ipc/shareBase";
 import { env } from "../platform";
 import { useTermStore } from "../store/termStore";
 import { activeAgentLocation, agentPickerUrl, navigateAgentPicker, newAgentPickerRoute, readAgentPickerRoute } from "../layout/NewAgentSession/navigation";
-import { getTerminal, selectAll as selectAllTerminalContent } from "../terminal/registry";
+import { copyText } from "../ipc/info";
+import {
+  getSelection as getTerminalSelection,
+  getTerminal,
+  hasSelection as hasTerminalSelection,
+  selectAll as selectAllTerminalContent,
+} from "../terminal/registry";
 import {
   DEFAULT_BINDINGS,
   hasMod,
@@ -39,6 +45,19 @@ export function useKeyboardShortcuts() {
       if (e.key >= "1" && e.key <= "9") return Number(e.key) - 1;
       if (/^Digit[1-9]$/.test(e.code)) return Number(e.code.slice(5)) - 1;
       return -1;
+    };
+
+    // The session whose terminal owns keyboard focus for this event, or null when the key belongs to
+    // something else: an input, a conversation view, a document/browser/task tab or an IME composition.
+    const focusedTerminalSession = (e: KeyboardEvent): string | null => {
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return null;
+      const { activeSessionId, activeTabId, docTabs, browserTabs, taskTabs } = useTermStore.getState();
+      if (!activeSessionId) return null;
+      if (activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId])) return null;
+      const terminal = getTerminal(activeSessionId);
+      if (!(e.target instanceof Node) || !terminal?.element?.contains(e.target)
+        || !terminal.element.contains(document.activeElement)) return null;
+      return activeSessionId;
     };
 
     const handler = (e: KeyboardEvent) => {
@@ -183,18 +202,22 @@ export function useKeyboardShortcuts() {
       // Only the focused terminal owns this action; inputs, conversation views and overlays keep their
       // native selection. Stop handled keys before xterm can turn a rebound Ctrl+A into PTY input.
       if (matchCombo(e, sc("selectAllTerminal"))) {
-        if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
-        const { activeSessionId, activeTabId, docTabs, browserTabs, taskTabs } = useTermStore.getState();
-        const onSessionTab =
-          !!activeSessionId &&
-          !(activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId]));
-        if (!onSessionTab) return;
-        const terminal = getTerminal(activeSessionId!);
-        if (!(e.target instanceof Node) || !terminal?.element?.contains(e.target)
-          || !terminal.element.contains(document.activeElement)) return;
+        const id = focusedTerminalSession(e);
+        if (!id) return;
         e.preventDefault();
         e.stopPropagation();
-        selectAllTerminalContent(activeSessionId!);
+        selectAllTerminalContent(id);
+        return;
+      }
+
+      // Copy only when the focused terminal has a selection. Without one the key falls through, so a
+      // user who rebinds this to plain Ctrl+C still gets the shell interrupt when nothing is selected.
+      if (matchCombo(e, sc("copyTerminal"))) {
+        const id = focusedTerminalSession(e);
+        if (!id || !hasTerminalSelection(id)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void copyText(getTerminalSelection(id)).catch(() => {});
       }
     };
 

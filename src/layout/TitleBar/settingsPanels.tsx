@@ -58,6 +58,7 @@ const SC_LABEL: Record<ShortcutAction, I18nKey> = {
   splitDown: "settings.scSplitDown",
   search: "settings.scSearch",
   globalSearch: "settings.scGlobalSearch",
+  copyTerminal: "settings.scCopyTerminal",
   selectAllTerminal: "settings.scSelectAllTerminal",
   saveDoc: "settings.scSaveDoc",
 };

@@ -72,7 +72,7 @@ async function mount(over: Partial<TaskTab> = {}) {
   return view;
 }
 
-it("paints the seed at once, subscribes to the session, and reads one paged snapshot for it", async () => {
+it("paints the seed at once, subscribes to the session, and reads control state without requesting history", async () => {
   await mount();
   expect(screen.getByText("protocol probe", { selector: ".sv-task-title" })).toBeTruthy();
   expect(screen.getByText("Alpha: alpha-worker")).toBeTruthy();
@@ -80,8 +80,7 @@ it("paints the seed at once, subscribes to the session, and reads one paged snap
   expect(screen.getByText("1.2k")).toBeTruthy();
   expect(screen.getByText("Running")).toBeTruthy();
   expect(listen).toHaveBeenCalledWith("chat://event/s", expect.any(Function));
-  // A window, even an empty one, makes the engine return a page: the view reads only the extras.
-  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "chat_snapshot")).toEqual([["chat_snapshot", { sessionId: "s", window: {} }]]);
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "chat_snapshot")).toEqual([["chat_snapshot", { sessionId: "s", window: { controlOnly: true } }]]);
 });
 
 it("follows extras events for its own task and ignores other tasks", async () => {
@@ -333,12 +332,12 @@ it("shows a subagent's own conversation and keeps reading it while it runs", asy
       return Promise.resolve({ running: true, rows: [], queue: [], permissions: [], commands: [], configKeys: [], backgroundTasks: snapshotTasks }) as Promise<never>;
     }
     if (command === "chat_subagent_rows") {
-      expect(args).toEqual({ sessionId: "s", taskId: "a1" });
+      expect(args).toMatchObject({ sessionId: "s", taskId: "a1",protocolVersion:2 });
       reads++;
-      return Promise.resolve([
+      return Promise.resolve({protocolVersion:2,childPath:["parent-row"],historyGeneration:"g",coverage:"complete",rows:[
         { kind: "user", id: "u", text: "Map the release pipeline" },
         { kind: "assistant", id: "a", text: `finding ${reads}`, streaming: false },
-      ]) as Promise<never>;
+      ]}) as Promise<never>;
     }
     return Promise.resolve(undefined) as Promise<never>;
   });

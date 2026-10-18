@@ -22,6 +22,8 @@ import { readAgentTranscript, type TranscriptMessage } from "../../ipc/commands"
 import type { Session } from "../../types";
 import { RecordingViewer } from "./RecordingViewer";
 import { TranscriptViewer } from "./TranscriptViewer";
+import { PagedConversation } from "./PagedConversation";
+import { hasPagedHistory } from "./pagedHistory";
 
 /** Whether this session type inherently lacks an agent transcript and should use recording playback. */
 function hasNoTranscript(kind: Session["kind"]): boolean {
@@ -35,6 +37,7 @@ interface SessionContentProps {
   initialQuery?: string;
   highlightTerms?: string[];
   scrollToMessageIndex?: number;
+  scrollToRowId?: string;
   scrollToOrdinal?: number;
   /** Search caches failures as empty arrays; Kiro rechecks them to retain the backend reason. */
   preloadedMessages?: TranscriptMessage[];
@@ -43,6 +46,7 @@ interface SessionContentProps {
 export function SessionContentViewer(props: SessionContentProps) {
   const { session, source, preloadedMessages } = props;
   if (source === "recording" || hasNoTranscript(session.kind)) return <RecordingContent {...props} />;
+  if (hasPagedHistory(session)) return <PagedConversation session={session} messageIndex={props.scrollToRowId ? undefined : props.scrollToMessageIndex} rowId={props.scrollToRowId} />;
   if (preloadedMessages !== undefined) {
     if (preloadedMessages.length > 0) return <TranscriptViewer {...props} messages={preloadedMessages} />;
     if (session.kind !== "kiro") return <RecordingContent {...props} />;

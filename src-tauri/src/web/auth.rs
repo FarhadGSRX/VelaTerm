@@ -2,7 +2,7 @@
 //!
 //! - Passwords are verified against a memory-hard Argon2id PHC string; the salt lives inside the PHC
 //!   string and no plaintext password is ever persisted. Handlers verify through
-//!   [`AuthState::verify_password_async`], which offloads to the blocking pool behind a process-wide
+//!   [`AuthState::verify_attempt`], which offloads to the blocking pool behind a process-wide
 //!   semaphore so the unauthenticated login surface cannot stall the async executor (see `rate_limit`).
 //! - Successful HTTP login creates a random in-memory session token returned in JSON. Clients present it
 //!   through `Authorization: Bearer` or WebSocket `?token=`. Cookies were removed because domain-wide,
@@ -33,7 +33,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::rate_limit::VERIFY_SEMAPHORE;
+use super::rate_limit::{AttemptGuard, VERIFY_SEMAPHORE};
 use super::{access_store, Ctx};
 
 /// Registered device self-reported during handshake; persisted with the pairing state (`access_store`)
@@ -224,25 +224,41 @@ impl AuthState {
     }
 
     /// Synchronous password verification, kept for tests only: every request handler must go through
-    /// [`verify_password_async`](Self::verify_password_async), which offloads and bounds the Argon2 work.
+    /// [`verify_attempt`](Self::verify_attempt), which offloads and bounds the Argon2 work.
     #[cfg(test)]
     pub fn verify_password(&self, password: &str) -> bool {
         verify_phc(&self.verifier_phc, password)
     }
 
-    /// Async password verification for request handlers: bounds concurrent Argon2 runs process-wide via
-    /// [`VERIFY_SEMAPHORE`] and executes the memory-hard hash on the blocking pool, so the unauthenticated
-    /// login surface can never occupy the async executor.
-    pub async fn verify_password_async(&self, password: &str) -> bool {
-        let Ok(_permit) = VERIFY_SEMAPHORE.acquire().await else {
+    /// Async password verification of one login attempt reserved with the rate limiter. Bounds
+    /// concurrent Argon2 runs process-wide via [`VERIFY_SEMAPHORE`] and executes the memory-hard hash
+    /// on the blocking pool, so the unauthenticated login surface can never occupy the async executor.
+    ///
+    /// The semaphore permit and the reservation both move into the blocking task, so they live as long
+    /// as the hash itself rather than the request future: a client that disconnects mid-verify can
+    /// neither free a permit while its hash still runs nor release its reservation before the verdict
+    /// exists. A wrong password records the failure inside the task; a correct one hands the
+    /// reservation back for the caller to resolve after its remaining checks. Cancellation while
+    /// still waiting for a permit releases the reservation at once, as no hash has started.
+    pub async fn verify_attempt(&self, password: &str, attempt: AttemptGuard) -> Option<AttemptGuard> {
+        let Ok(permit) = VERIFY_SEMAPHORE.acquire().await else {
             // The static semaphore is never closed; treat the impossible case as a failed verify.
-            return false;
+            attempt.failure();
+            return None;
         };
         let phc = self.verifier_phc.clone();
         let password = password.to_string();
-        tokio::task::spawn_blocking(move || verify_phc(&phc, &password))
-            .await
-            .unwrap_or(false)
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            if verify_phc(&phc, &password) {
+                Some(attempt)
+            } else {
+                attempt.failure();
+                None
+            }
+        })
+        .await
+        .unwrap_or(None)
     }
 
     /// Pairing token for this run, embedded in links and checked during handshake.
@@ -447,8 +463,8 @@ pub async fn login(
     Json(body): Json<LoginBody>,
 ) -> impl IntoResponse {
     let ip = addr.ip();
-    // The RAII guard keeps the reservation alive across the Argon2 await; if the client disconnects
-    // and this future is cancelled mid-verify, dropping the guard releases the slot immediately.
+    // The reservation moves into the Argon2 task, so a client disconnecting mid-verify cannot release
+    // it before the verdict exists (see AuthState::verify_attempt).
     let Some(attempt) = ctx.limiter.allow(ip) else {
         // The frontend maps 429 to its own localized message; this body is a log/curl-facing fallback.
         return (
@@ -457,10 +473,9 @@ pub async fn login(
         )
             .into_response();
     };
-    if !ctx.auth.verify_password_async(&body.password).await {
-        attempt.failure();
+    let Some(attempt) = ctx.auth.verify_attempt(&body.password, attempt).await else {
         return (StatusCode::UNAUTHORIZED, "Wrong password").into_response();
-    }
+    };
     attempt.success();
     let token = ctx.auth.mint();
     Json(serde_json::json!({ "token": token })).into_response()
@@ -486,8 +501,14 @@ pub async fn logout(State(ctx): State<Ctx>, headers: HeaderMap) -> impl IntoResp
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_password, AuthState, MAX_DEVICES};
+    use super::{hash_password, AuthState, MAX_DEVICES, VERIFY_SEMAPHORE};
+    use crate::web::rate_limit::LoginRateLimiter;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    /// Serializes the tests that run Argon2 through the process-wide [`VERIFY_SEMAPHORE`], so one
+    /// cannot find the permits taken by another.
+    static VERIFY_LOCK: Mutex<()> = Mutex::new(());
 
     /// Unique per test-invocation: the in-process pairing-store registry is keyed by directory, so two
     /// tests (or two runs) must never share a directory unless sharing is exactly what they assert.
@@ -525,17 +546,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The async verify path (semaphore + spawn_blocking) matches the sync verifier's verdicts.
+    /// The async verify path (semaphore + spawn_blocking) matches the sync verifier's verdicts: a
+    /// correct password hands the reservation back, a wrong one consumes it as a failure.
     #[test]
-    fn verify_password_async_matches_sync() {
+    fn verify_attempt_matches_sync() {
+        let _serial = VERIFY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir("async");
         let auth = new_auth("s3cret", &dir);
+        let limiter = Arc::new(LoginRateLimiter::new());
+        let ip: std::net::IpAddr = "10.0.0.1".parse().unwrap();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        assert!(rt.block_on(auth.verify_password_async("s3cret")));
-        assert!(!rt.block_on(auth.verify_password_async("wrong")));
+        let attempt = limiter.allow(ip).unwrap();
+        rt.block_on(auth.verify_attempt("s3cret", attempt))
+            .expect("a correct password returns the reservation")
+            .success();
+        let attempt = limiter.allow(ip).unwrap();
+        assert!(rt.block_on(auth.verify_attempt("wrong", attempt)).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A request cancelled while its Argon2 run is in flight keeps the reservation until the hash
+    /// finishes, and a wrong password is then still recorded as a failure — dropping the request
+    /// future no longer frees the slot early, so disconnect-and-retry cannot outrun the limiter.
+    #[test]
+    fn cancelled_verify_keeps_and_resolves_the_reservation() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        let _serial = VERIFY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir("cancel");
+        let auth = new_auth("s3cret", &dir);
+        let limiter = Arc::new(LoginRateLimiter::new());
+        let ip: std::net::IpAddr = "10.0.0.2".parse().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _rt = rt.enter();
+
+        // Poll once: the free permit is acquired and the hash is spawned, then the future waits on
+        // the blocking task. Dropping it there is the client disconnect.
+        let attempt = limiter.allow(ip).unwrap();
+        let mut verify = Box::pin(auth.verify_attempt("wrong", attempt));
+        let _ = verify.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+        drop(verify);
+
+        // Wait until every Argon2 permit is free again, i.e. the orphaned hash has finished.
+        drop(rt.block_on(VERIFY_SEMAPHORE.acquire_many(2)).unwrap());
+        // The cancelled attempt was recorded as a failure, so only four attempts remain.
+        let held: Vec<_> = (0..4).map(|_| limiter.allow(ip).expect("budget left")).collect();
+        assert!(limiter.allow(ip).is_none(), "the cancelled wrong password must still count");
+        drop(held);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

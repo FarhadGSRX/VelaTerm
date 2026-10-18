@@ -66,6 +66,7 @@ describe("shortcut defaults per shell", () => {
     expect(DEFAULT_BINDINGS.newAgentSession).toBe("mod+n");
     // Desktop selection uses Cmd+A, leaving plain Ctrl+A available to the terminal.
     expect(DEFAULT_BINDINGS.selectAllTerminal).toBe("mod+a");
+    expect(DEFAULT_BINDINGS.copyTerminal).toBe("mod+c");
     expect(formatCombo("mod+shift+d")).toBe("\u2318\u21E7D");
   });
 
@@ -151,6 +152,7 @@ describe("shortcut defaults per shell", () => {
     expect(DEFAULT_BINDINGS.splitDown).toBe("mod+alt+e");
     // Select all uses Shift so plain Ctrl+A remains available to the terminal.
     expect(DEFAULT_BINDINGS.selectAllTerminal).toBe("mod+shift+a");
+    expect(DEFAULT_BINDINGS.copyTerminal).toBe("mod+shift+c");
     expect(formatCombo("mod+alt+d")).toBe("Ctrl+Alt+D");
     expect(formatCombo("mod+shift+a")).toBe("Ctrl+Shift+A");
   });

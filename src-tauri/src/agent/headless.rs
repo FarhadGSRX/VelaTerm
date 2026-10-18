@@ -263,6 +263,10 @@ fn resolve_bin(
 pub enum HeadlessError {
     /// A persisted model or effort contains syntax the target CLI cannot safely receive.
     InvalidSelection(String),
+    /// The complete source could not be delivered; a prefix is never accepted as full context.
+    Input(String),
+    /// The one-shot response exceeded its independent capture budget.
+    OutputTooLarge,
     /// The prompt is too large for argument delivery and this CLI cannot read stdin.
     PromptTooLarge { limit: usize, actual: usize },
     /// The process could not be started, usually because the binary is missing.
@@ -281,6 +285,8 @@ impl std::fmt::Display for HeadlessError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidSelection(e) => write!(f, "invalid summarizer settings: {e}"),
+            Self::Input(e) => write!(f, "could not deliver the complete summarizer input: {e}"),
+            Self::OutputTooLarge => write!(f, "summarizer output exceeds its 32 MiB capture budget"),
             Self::PromptTooLarge { limit, actual } => write!(
                 f,
                 "prompt is {actual} bytes, over this agent's {limit}-byte argument limit"
@@ -362,11 +368,26 @@ pub(crate) fn run_command(
 
 /// Cancellation covers process execution and inherited pipes held open by helper processes.
 pub(crate) fn run_command_with_cancel(
-    mut command: std::process::Command,
+    command: std::process::Command,
     stdin_prompt: Option<&str>,
     timeout: Duration,
     cancelled: Option<&AtomicBool>,
 ) -> Result<String, HeadlessError> {
+    let source=stdin_prompt.map(|prompt| {
+        let body=prompt.to_string();
+        Box::new(move |writer:&mut dyn Write|writer.write_all(body.as_bytes()).map_err(|e|e.to_string())) as PromptSource
+    });
+    run_command_source(command,source,timeout,cancelled)
+}
+
+pub(crate) type PromptSource=Box<dyn FnOnce(&mut dyn Write)->Result<(),String>+Send>;
+
+pub(crate) fn run_command_source(
+    mut command:std::process::Command,
+    source:Option<PromptSource>,
+    timeout:Duration,
+    cancelled:Option<&AtomicBool>,
+) -> Result<String,HeadlessError> {
     check_cancelled(cancelled)?;
     command
         .stdin(Stdio::piped())
@@ -387,59 +408,81 @@ pub(crate) fn run_command_with_cancel(
 
     // Writing the prompt gets its own thread: a large one fills the pipe, and the child cannot drain it
     // while this side is still blocked on the write.
-    if let Some(prompt) = stdin_prompt {
+    let input=if let Some(source) = source {
         if let Some(mut stdin) = child.stdin.take() {
-            let body = prompt.to_string();
+            let (sender,receiver)=std::sync::mpsc::sync_channel(1);
             std::thread::spawn(move || {
-                let _ = stdin.write_all(body.as_bytes());
+                let _=sender.send(source(&mut stdin));
             });
-        }
+            Some(receiver)
+        } else {None}
     } else {
         drop(child.stdin.take());
-    }
+        None
+    };
 
     let out_reader = child.stdout.take().map(|mut out| {
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = out.read_to_string(&mut buf);
-            let _ = sender.send(buf);
+            let _ = sender.send(capture_output(&mut out,32*1024*1024));
         });
         receiver
     });
     let err_reader = child.stderr.take().map(|mut err| {
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut buf = String::new();
-            let _ = err.read_to_string(&mut buf);
-            let _ = sender.send(buf);
+            let _ = sender.send(capture_output(&mut err,32*1024*1024));
         });
         receiver
     });
 
-    let status = match wait_with_deadline(&mut child, timeout.saturating_sub(started.elapsed()), cancelled) {
+    let mut input_done=input.is_none();
+    let status = match (|| {
+        loop {
+            check_cancelled(cancelled)?;
+            if let Some(reader)=&input {
+                match reader.try_recv() {
+                    Ok(Ok(()))=>input_done=true,
+                    Ok(Err(error))=>return Err(HeadlessError::Input(error)),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) if !input_done=>return Err(HeadlessError::Input("input worker closed before completing".into())),
+                    _=>{},
+                }
+            }
+            if let Some(status)=child.try_wait().map_err(|e|HeadlessError::Start(e.to_string()))? {return Ok(status);}
+            if started.elapsed()>=timeout {return Err(HeadlessError::Timeout(timeout));}
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    })() {
         Ok(status) => status,
         Err(error) => {
             terminate(&mut child);
             let _ = child.wait();
-            return Err(if matches!(error, HeadlessError::Cancelled) { error } else { HeadlessError::Timeout(timeout) });
+            return Err(error);
         }
     };
 
     // Helpers may keep inherited pipes open after the main process exits. Collect both streams
     // within the original deadline instead of joining reader threads without a time limit.
-    let collect = |reader: Option<std::sync::mpsc::Receiver<String>>| -> Result<String, HeadlessError> {
+    let collect = |reader: Option<std::sync::mpsc::Receiver<Result<String,HeadlessError>>>| -> Result<String, HeadlessError> {
         let Some(reader) = reader else { return Ok(String::new()) };
         loop {
             check_cancelled(cancelled)?;
             let remaining = timeout.saturating_sub(started.elapsed());
             match reader.recv_timeout(remaining.min(Duration::from_millis(50))) {
-                Ok(output) => return Ok(output),
+                Ok(output) => return output,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !remaining.is_zero() => {},
                 Err(_) => return Err(HeadlessError::Timeout(timeout)),
             }
         }
     };
+
+    if !input_done {
+        let result=input.unwrap().recv_timeout(timeout.saturating_sub(started.elapsed()));
+        if !matches!(result,Ok(Ok(()))) {
+            terminate(&mut child);
+            return Err(HeadlessError::Input(match result {Ok(Err(error))=>error,_=>"input did not complete before the deadline".into()}));
+        }
+    }
     let (stdout, stderr) = match collect(out_reader)
         .and_then(|out| collect(err_reader).map(|err| (out, err)))
     {
@@ -462,6 +505,64 @@ pub(crate) fn run_command_with_cancel(
         return Err(HeadlessError::Empty);
     }
     Ok(answer)
+}
+
+fn capture_output(reader:&mut impl Read,limit:usize) -> Result<String,HeadlessError> {
+    let mut bytes=Vec::new();let mut block=[0u8;32*1024];let mut exceeded=false;
+    loop {
+        let count=reader.read(&mut block).map_err(|e|HeadlessError::Start(e.to_string()))?;
+        if count==0 {break;}
+        if bytes.len().saturating_add(count)<=limit && !exceeded {bytes.extend_from_slice(&block[..count]);} else {exceeded=true;}
+    }
+    if exceeded {return Err(HeadlessError::OutputTooLarge);}
+    String::from_utf8(bytes).map_err(|e|HeadlessError::Start(e.to_string()))
+}
+
+pub(crate) fn run_selected_stream(
+    summarizer:&Summarizer,
+    source:PromptSource,
+    selection:Option<&super::launch_options::AgentSelection>,
+    cwd:Option<&Path>,
+    timeout:Duration,
+    cancelled:&AtomicBool,
+) -> Result<String,HeadlessError> {
+    if selection.is_some_and(|choice|choice.agent!=summarizer.kind) {return Err(HeadlessError::InvalidSelection("agent does not match the resolved one-shot runner".into()));}
+    let mut command=crate::host::command(&summarizer.bin);
+    command.args(summarizer.spec.args);
+    let flags=match selection {
+        Some(choice)=>super::launch_options::apply_selection(None,choice),
+        None=>super::launch_options::apply(summarizer.kind,None,None,None),
+    }.map_err(HeadlessError::InvalidSelection)?;
+    command.args(super::inject::split_extra_args(flags.as_deref()));
+    let source=match summarizer.spec.prompt {
+        PromptDelivery::Stdin {marker}=>{if let Some(marker)=marker {command.arg(marker);}Some(source)},
+        PromptDelivery::Arg {marker}=>{
+            let mut writer=ArgumentPrompt(Vec::new());source(&mut writer).map_err(HeadlessError::Input)?;
+            let prompt=String::from_utf8(writer.0).map_err(|e|HeadlessError::Input(e.to_string()))?;
+            if let Some(marker)=marker {command.arg(marker);}command.arg(prompt);None
+        },
+    };
+    if let Some(cwd)=cwd {command.current_dir(cwd);}
+    crate::login_env::refresh_command(&mut command);
+    super::executable::prepare_command(&mut command,&summarizer.bin);
+    command.env_remove("VLX_SPAWN_URL").env_remove("VLX_SESSION_ID").env_remove("VLX_TOKEN");
+    decode_output(summarizer.spec.output,&run_command_source(command,source,timeout,Some(cancelled))?)
+}
+
+pub(crate) fn run_selected_cancel(
+    summarizer:&Summarizer,prompt:&str,selection:Option<&super::launch_options::AgentSelection>,cwd:Option<&Path>,timeout:Duration,cancelled:&AtomicBool,
+) -> Result<String,HeadlessError> {
+    let prompt=prompt.to_owned();let source:PromptSource=Box::new(move |writer|writer.write_all(prompt.as_bytes()).map_err(|e|e.to_string()));
+    run_selected_stream(summarizer,source,selection,cwd,timeout,cancelled)
+}
+
+struct ArgumentPrompt(Vec<u8>);
+impl Write for ArgumentPrompt {
+    fn write(&mut self,bytes:&[u8]) -> std::io::Result<usize> {
+        if self.0.len().saturating_add(bytes.len())>ARG_PROMPT_LIMIT {return Err(std::io::Error::other("Argument prompt exceeds its byte budget"));}
+        self.0.extend_from_slice(bytes);Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {Ok(())}
 }
 
 /// Run a resolved agent with the model and effort selected in Settings.
@@ -544,33 +645,6 @@ fn decode_output(shape: OutputShape, stdout: &str) -> Result<String, HeadlessErr
 fn check_cancelled(cancelled: Option<&AtomicBool>) -> Result<(), HeadlessError> {
     if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) { return Err(HeadlessError::Cancelled); }
     Ok(())
-}
-
-/// Wait for the child, giving up after `timeout` or when cancellation is requested.
-///
-/// `Child` has no timed wait, so poll it. The interval is short enough to feel immediate and long enough
-/// that a multi-minute run costs almost nothing to watch.
-fn wait_with_deadline(
-    child: &mut std::process::Child,
-    timeout: Duration,
-    cancelled: Option<&AtomicBool>,
-) -> Result<std::process::ExitStatus, HeadlessError> {
-    const POLL: Duration = Duration::from_millis(50);
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        check_cancelled(cancelled)?;
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            // A child that vanished cannot be waited for; treat it as finished rather than spinning to
-            // the deadline.
-            Err(_) => return Err(HeadlessError::Timeout(timeout)),
-            Ok(None) => {}
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(HeadlessError::Timeout(timeout));
-        }
-        std::thread::sleep(POLL.min(deadline.saturating_duration_since(std::time::Instant::now())));
-    }
 }
 
 /// Kill the child and anything it started.
@@ -666,6 +740,29 @@ mod tests {
             let spec = spec(kind).unwrap();
             assert_eq!(spec.key, spec.bin, "{kind:?} uses one name for both");
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stream_delivers_complete_context_and_rejects_failed_prefixes() {
+        let mut command=crate::host::command("sh");command.args(["-c","cat >/dev/null; printf complete"]);
+        let source:PromptSource=Box::new(|writer| {
+            let block="雪😀\n".repeat(4096);
+            for _ in 0..80 {writer.write_all(block.as_bytes()).map_err(|e|e.to_string())?;}
+            Ok(())
+        });
+        assert_eq!(run_command_source(command,Some(source),Duration::from_secs(5),None).unwrap(),"complete");
+        let mut command=crate::host::command("sh");command.args(["-c","cat >/dev/null; printf misleading"]);
+        let source:PromptSource=Box::new(|writer| {writer.write_all(b"prefix").map_err(|e|e.to_string())?;Err("source_changed: original was replaced".into())});
+        let started=std::time::Instant::now();
+        assert!(matches!(run_command_source(command,Some(source),Duration::from_secs(5),None),Err(HeadlessError::Input(error)) if error.contains("source_changed")));
+        assert!(started.elapsed()<Duration::from_secs(2));
+    }
+
+    #[test]
+    fn output_capture_drains_oversized_responses_with_a_fixed_retention_budget() {
+        assert!(matches!(capture_output(&mut std::io::repeat(b'x').take(100_000),64*1024),Err(HeadlessError::OutputTooLarge)));
+        assert_eq!(capture_output(&mut "雪😀".as_bytes(),64*1024).unwrap(),"雪😀");
     }
 
     #[test]

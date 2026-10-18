@@ -1,3 +1,27 @@
+## v0.2.11 — 2026-10-18
+
+- 🧪 Las vistas previas HTML experimentales se abren junto a las conversaciones o en pestañas, se actualizan al cambiar los archivos y ofrecen controles de código, consola y versiones; la validación nativa y multiplataforma sigue pendiente.
+- 📜 Las conversaciones largas cargan los mensajes anteriores por páginas y despliegan el contenido extenso a petición, sin duplicar mensajes ni herramientas en las conversaciones en directo de Claude y Codex.
+- 🔎 La búsqueda global actualiza más rápido las conversaciones modificadas, reanuda la indexación tras interrupciones y omite las conversaciones ilegibles mientras sus archivos no cambien.
+- 📊 El recuento de archivos modificados del panel Info abre una lista de los archivos editados en este turno con las líneas añadidas y eliminadas cuando están disponibles.
+- 🗂️ Las conversaciones archivadas siguen sus proyectos, grupos y sesiones superiores originales en filas compactas, con proyectos plegables y controles para expandir o contraer todo.
+- 🧩 Las habilidades de los complementos de la cuenta de Codex aparecen en las sugerencias de autocompletado y los menús permiten seleccionar con las flechas.
+- ⌨️ En Windows y Linux, Ctrl+Mayús+C copia el texto seleccionado en el terminal y puede cambiarse en Ajustes ▸ Atajos.
+- 🧹 Tras ejecutar `/clear` en el terminal de Claude, volver a abrir la sesión o cambiar a la vista de conversación ya no reanuda la conversación borrada.
+- 📏 El panel Info muestra el límite de contexto del modelo en las conversaciones de OpenCode.
+- 🌐 La traducción incorpora Bing Translator sin clave API, ajustes de idioma compactos y traducción antes de reenviar mensajes editados de Claude y Codex.
+- 🔤 Las traducciones existentes siguen visibles al cambiar el motor o modelo de traducción y pueden volver a traducirse.
+- ⏱️ `vrun` informa del progreso cada 180 segundos con el código de salida 75, permite seguir esperando con `--wait` y protege las tareas activas frente a la reutilización de su nombre.
+- 🧵 Las respuestas de Claude iniciadas al terminar tareas en segundo plano tienen su propio resumen de tarea y separador de conversación, también en el historial.
+- ⚠️ Cambiar entre las vistas de terminal y conversación requiere confirmación si hay tareas en segundo plano en ejecución.
+- 🏠 Las sesiones sin directorio de trabajo o cuyo directorio ya no existe se inician en la carpeta personal en ambas vistas.
+- 🪟 En Windows, iniciar VelaTerm o abrir el panel de conexión ya no solicita instalar WSL si no hay distribuciones registradas.
+- 🔐 Los inicios de sesión remotos fallidos cuentan para el límite de intentos aunque la conexión se cierre durante la verificación de la contraseña.
+- 🏷️ Las insignias de versión del agente muestran un enlace explícito `Update: vX` cuando hay una versión más reciente del CLI.
+- 🔵 Los indicadores de tareas en segundo plano permanecen en cian fijo y los puntos de estado se mantienen en las pestañas y la barra lateral, sin aparecer en los títulos de los paneles.
+- ✍️ Los bordes de la entrada de conversación son más claros, con un contorno exterior al recibir el foco, y los valores del panel Info tienen el mismo brillo que sus etiquetas en el tema oscuro.
+- 🌿 Los botones para clonar proyectos usan un icono de rama con un marcador de proyecto.
+
 ## v0.2.10 — 2026-10-13
 
 - 🧩 Se admite OpenCode v2 además de v1, y la lista de modelos se carga correctamente con OpenCode v2.0.26.

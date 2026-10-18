@@ -5,7 +5,7 @@ import type { ChatImage, SendBehavior } from "./chat";
 import type { LaunchOption } from "./launch";
 
 export type TranslationDisplay = "original" | "translation" | "both" | "immersive";
-export type TranslationEngine = "agent" | "api" | "google";
+export type TranslationEngine = "agent" | "api" | "google" | "bing";
 export interface TranslationPreferences {
   outgoing: boolean; replies: boolean; source: string; target: string;
   replySource: string; replyTarget: string; display: TranslationDisplay; repliesSince: number;

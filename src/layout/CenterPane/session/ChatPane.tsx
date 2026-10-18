@@ -31,7 +31,6 @@ import { translationError } from "../../../translation/SettingsSection";
 import { cancelSubmissionTranslation, sendOriginalSubmission } from "./outbox";
 import { ModelCatalogStatus } from "./ModelCatalogStatus";
 import { useChatModels } from "./useChatModels";
-import { StatusIndicator } from "../../../components/StatusIndicator";
 import { useT, type I18nKey } from "../../../i18n";
 import {
   chatAutoContinueCancel,
@@ -40,8 +39,11 @@ import {
   chatQueueRemove,
   chatQueueSteer,
   chatQueueUpdate,
+  chatQueueRead,
+  readCompleteQueuedText,
   chatRewind,
   chatRewindPreview,
+  chatHistoryGeneration,
   resolveChatImage,
   chatSetMode,
   chatSetCollaborationMode,
@@ -63,6 +65,8 @@ import {
   chatDetach,
   chatRunShell,
   chatSnapshot,
+  chatReadCancel,
+  readCompleteChatBody,
   chatCommands,
   chatStart,
   isTaskFinished,
@@ -122,13 +126,35 @@ import "./session-view.css";
 import { onTransportReconnect, onTransportDisconnect } from "../../../ipc/transport";
 import { TranslationTime } from "../../../translation/Time";
 import { useOutbox, emptySubmissions, acknowledgeSubmissions, createSubmission, deliverSubmission, retrySubmission, submissionsFor, ChatVersions, unconfirmedSubmissionRows } from "./outbox";
-import { cachedChat, cacheChat, mergeRows, reconcileChat, chatSyncMetrics } from "./chatCache";
+import { cachedChat, cacheChat, mergeRows, reconcileChat, chatSyncMetrics, limitHistoryWindow } from "./chatCache";
 import { ChatSearch } from "./ChatSearch";
+import { HistorySearch } from "./HistorySearch";
+import { historyLocation, historyPageURL } from "./historyNavigation";
+import type { ChatSearchHit } from "../../../ipc/chat";
 import { QueuedMessageText } from "./QueuedMessageText";
 import { MessageSender } from "./MessageSender";
 import { parseShellSubmission, shellErrorKey, shellSubmissionFor, acknowledgeShellSubmission } from "./shellMode";
 import { SessionLinkDirectory } from "./links";
 import { Entry, type MessageReplacement } from "./ConversationRows";
+import { Splitter } from "../../../components/Splitter";
+import { ArtifactDock } from "../doc/artifact/ArtifactDock";
+import { ArtifactHostContext, type ArtifactHost } from "../doc/artifact/ArtifactCard";
+import {
+  ARTIFACT_OPEN_BESIDE_EVENT,
+  COMPOSER_INSERT_EVENT,
+  type ArtifactOpenBesideDetail,
+  type ComposerInsertDetail,
+} from "../doc/artifact/artifactWriters";
+
+/** Width of the artifact panel beside a conversation, remembered across panes and restarts. */
+const DOCK_WIDTH_KEY = "vlx-artifact-dock-width";
+const DOCK_MIN_W = 280;
+const DOCK_MAX_W = 1400;
+
+function readDockWidth(): number {
+  const n = Number(localStorage.getItem(DOCK_WIDTH_KEY));
+  return Number.isFinite(n) && n >= DOCK_MIN_W && n <= DOCK_MAX_W ? n : 520;
+}
 
 /** Distance from the bottom still counted as "at the bottom", in pixels. */
 const PIN_SLACK = 40;
@@ -229,6 +255,9 @@ export function ChatPane({
   multi,
   paneId,
   readOnly = false,
+  historyOnly = false,
+  initialMessageIndex,
+  initialRowId,
   mobile = false,
   onActivate,
   onSplit,
@@ -242,12 +271,16 @@ export function ChatPane({
   multi: boolean;
   paneId?: string;
   readOnly?: boolean;
+  historyOnly?: boolean;
+  initialMessageIndex?: number;
+  initialRowId?: string;
   mobile?: boolean;
   onActivate: (paneId: string, id: string) => void;
   onSplit: (paneId: string, id: string, dir: "horizontal" | "vertical") => void;
   onClose: (paneId: string, id: string) => void;
 }) {
   const t = useT();
+  const cacheId=historyOnly ? `${session.id}\u0000history` : session.id;
   const composerOptions = useComposerOptions(mobile);
   const paneStyle = useTermStore((s) => s.paneStyle);
   const shortcutOverrides = useTermStore((s) => s.shortcutOverrides);
@@ -259,7 +292,7 @@ export function ChatPane({
   const closeSearch = useTermStore((s) => s.closeSearch);
   const openTaskTab = useTermStore((s) => s.openTaskTab);
   const [searchTarget, setSearchTarget] = useState<string | null>(null);
-  const unread = useTermStore((s) => session.id in s.notifications);
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
   const defaultMode = useTermStore((s) => storedMode({
     kind: session.kind,
     permissionMode: s.agentDefaults[session.kind]?.permissionMode,
@@ -267,14 +300,17 @@ export function ChatPane({
   // Moving to the terminal restarts the agent under the other engine, so a working one is asked first.
   const { switchTo, confirm: engineConfirm } = useEngineSwitch(session);
 
-  const [rows, setRows] = useState<ChatRow[]>(() => cachedChat(session.id)?.rows ?? []);
-  const [userMessages, setUserMessages] = useState(() => cachedChat(session.id)?.userMessages ?? []);
+  const [rows, setRows] = useState<ChatRow[]>(() => cachedChat(cacheId)?.rows ?? []);
+  const [userMessages, setUserMessages] = useState(() => cachedChat(cacheId)?.userMessages ?? []);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
-  const snapshotRef = useRef(cachedChat(session.id));
+  const snapshotRef = useRef(cachedChat(cacheId));
+  const indexReader = useRef<string | undefined>(undefined);
   const liveVersions = useRef(new ChatVersions());
   const [syncState, setSyncState] = useState<"loading" | "ready" | "failed">("loading");
-  const [hasMore, setHasMore] = useState(cachedChat(session.id)?.hasMore ?? false);
+  const [hasMore, setHasMore] = useState(cachedChat(cacheId)?.hasMore ?? false);
+  const [hasNewer, setHasNewer] = useState(cachedChat(cacheId)?.hasNewer ?? false);
+  const [historyCoverage, setHistoryCoverage] = useState(cachedChat(cacheId)?.coverage);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const historyBusy = useRef(false);
@@ -287,7 +323,7 @@ export function ChatPane({
   const pendingSubmissions = useOutbox(state => state.sessions[session.id] ?? emptySubmissions);
   // Messages typed while the agent was busy. They belong to the backend, not to this pane: a second view
   // of the same session has to show the same queue, and the queue has to outlive this pane being closed.
-  const [queue, setQueueState] = useState<QueuedMessage[]>(() => cachedChat(session.id)?.queue ?? []);
+  const [queue, setQueueState] = useState<QueuedMessage[]>(() => cachedChat(cacheId)?.queue ?? []);
   // Retire optimistic rows only after React has committed their host-backed replacements.
   useEffect(() => {
     acknowledgeSubmissions(session.id, [...rows, ...queue].map(row => row.id));
@@ -296,6 +332,12 @@ export function ChatPane({
   const steeringQueueRef = useRef(false);
   /** The queued message being rewritten in place, and the text so far. */
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const editingRead=useRef<AbortController|null>(null);
+  const [readingQueued,setReadingQueued]=useState<string|null>(null);
+  useEffect(()=>{
+    setReadingQueued(null);
+    return ()=>{editingRead.current?.abort();editingRead.current=null;};
+  },[session.id]);
   const queueRef = useRef(queue);
   const setQueue = useCallback((next: React.SetStateAction<QueuedMessage[]>) => {
     const items = typeof next === "function" ? next(queueRef.current) : next;
@@ -315,7 +357,7 @@ export function ChatPane({
   const [catalogueLoading, setCatalogueLoading] = useState(false);
   const [catalogueError, setCatalogueError] = useState<string | null>(null);
   const [configKeys, setConfigKeys] = useState<ChatConfigKey[]>([]);
-  const [model, setModel] = useState<string | undefined>(() => cachedChat(session.id)?.model);
+  const [model, setModel] = useState<string | undefined>(() => cachedChat(cacheId)?.model);
   const defaultModel = useTermStore((s) =>
     s.chatModelByKind[session.kind] ?? (session.kind === "claude" ? s.chatModel : ""),
   );
@@ -358,7 +400,7 @@ export function ChatPane({
   const [autoContinue, setAutoContinue] = useState<ChatAutoContinue | null>(null);
   /** Bumped when the agent reports its own catalogue, so the model list is read again. */
   const [catalogueVersion, setCatalogueVersion] = useState(0);
-  const { models: catalogue, loading: modelsLoading, failed: modelsFailed, retry: retryModels } = useChatModels(session.id, catalogueVersion);
+  const { models: catalogue, loading: modelsLoading, failed: modelsFailed, retry: retryModels } = useChatModels(session.id, catalogueVersion, !historyOnly);
   /** Backend-owned start of the logical turn currently in flight. */
   const [actionFeedback, setActionFeedback] = useState("");
   const [sending, setSending] = useState(false);
@@ -370,7 +412,7 @@ export function ChatPane({
   const shellSubmission = useRef<{ sessionId: string; command: string; id: string; pending: boolean } | null>(null);
   const stopping = useRef(false);
   const stop = () => {
-    if (stopping.current) return;
+    if (readOnly || stopping.current) return;
     stopping.current = true;
     setError(null);
     setActionFeedback(t("chat.stopping"));
@@ -403,14 +445,17 @@ export function ChatPane({
     draft: string;
     caret: number;
     loading: boolean;
+    bodyRead?:AbortController;
   } | null>(null);
   const updateDraft = (text: string) => {
+    inputHistory.current?.bodyRead?.abort();
     inputHistory.current = null;
     setDraft(text);
   };
   useEffect(() => {
+    inputHistory.current?.bodyRead?.abort();
     inputHistory.current = null;
-    return () => { inputHistory.current = null; };
+    return () => { inputHistory.current?.bodyRead?.abort();inputHistory.current = null; };
   }, [session.id]);
   // Caret position in the draft. An `@` mention is read from where the caret is, not from the end of the
   // text, so that a path can be completed in the middle of a sentence that is already written.
@@ -431,6 +476,7 @@ export function ChatPane({
     scope: ChatRewindScope;
     replacement?: MessageReplacement;
     preview?: ChatRewindPreview;
+    historyGeneration?: string;
     loading: boolean;
   } | null>(null);
   const [rewinding, setRewinding] = useState(false);
@@ -444,6 +490,40 @@ export function ChatPane({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollGeometry = useRef({ height: 0, viewport: 0 });
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // The artifact panel: an HTML page this conversation wrote, open beside it. Phones have no room for it,
+  // so cards there open the page as a tab instead.
+  const [dockPath, setDockPath] = useState<string | null>(null);
+  const [dockWidth, setDockWidth] = useState(readDockWidth);
+  const artifactHost = useMemo<ArtifactHost>(
+    () => ({ sessionId: session.id, openBeside: mobile || readOnly ? null : setDockPath, openPath: dockPath }),
+    [session.id, mobile, readOnly, dockPath],
+  );
+  // "Send to session" from an artifact's console puts its report in this composer without sending it.
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const detail = (e as CustomEvent<ComposerInsertDetail>).detail;
+      if (!detail || detail.sessionId !== session.id) return;
+      setDraft((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")}\n\n${detail.text}` : detail.text));
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
+    return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
+  }, [session.id]);
+  // `vopen page.html` run by this conversation's agent opens the page beside it, when this pane is on screen.
+  const canDock = !mobile && !readOnly && !hidden;
+  useEffect(() => {
+    if (!canDock) return;
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent<ArtifactOpenBesideDetail>).detail;
+      if (e.defaultPrevented || !detail || detail.sessionId !== session.id) return;
+      e.preventDefault();
+      setDockPath(detail.path);
+    };
+    window.addEventListener(ARTIFACT_OPEN_BESIDE_EVENT, onOpen);
+    return () => window.removeEventListener(ARTIFACT_OPEN_BESIDE_EVENT, onOpen);
+  }, [canDock, session.id]);
+
   useEffect(() => {
     if (!inputLatencyLog) return;
     return attachInputLatencyLog(() => inputRef.current, session.id);
@@ -462,19 +542,31 @@ export function ChatPane({
 
   /** Add or replace rows by id. The engine addresses rows this way so a message can be revised as it lands. */
   const applyRows = useCallback((incoming: ChatRow[]) => {
-    setRows(prev => mergeRows(prev, incoming, snapshotRef.current?.hasMore ?? false));
+    setRows(prev => {
+      const known = snapshotRef.current;
+      if (known?.protocolVersion !== 2) return mergeRows(prev, incoming, known?.hasMore ?? false);
+      const visible = known.hasNewer ? incoming.filter(row => prev.some(current => current.id === row.id)) : incoming;
+      const window = limitHistoryWindow(mergeRows(prev, visible, known.hasMore ?? false), pinnedRef.current ? "newer" : "older");
+      if (window.droppedBefore) setHasMore(true);
+      if (window.droppedAfter) setHasNewer(true);
+      snapshotRef.current = { ...known, hasMore: known.hasMore || window.droppedBefore, hasNewer: known.hasNewer || window.droppedAfter };
+      return window.rows;
+    });
   }, []);
 
   // Follow the conversation, then start the agent. Subscribing first means nothing said during startup is
   // missed; the snapshot afterwards covers anything that happened before this pane existed.
   useEffect(() => {
     let disposed = false;
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    let initialLocation = true;
+    indexReader.current = undefined;
     setTurnStartedAt(undefined);
     const versions = new ChatVersions();
     liveVersions.current = versions;
-    versions.epoch = cachedChat(session.id)?.startedAt ?? 0;
-    versions.rows = cachedChat(session.id)?.rowsRevision ?? 0;
-    versions.queue = cachedChat(session.id)?.queueRevision ?? 0;
+    versions.epoch = cachedChat(cacheId)?.startedAt ?? 0;
+    versions.rows = cachedChat(cacheId)?.rowsRevision ?? 0;
+    versions.queue = cachedChat(cacheId)?.queueRevision ?? 0;
     let buffered: ChatEvent[] | null = [];
     const handleEvent = (event: ChatEvent) => {
       if (disposed) return;
@@ -490,8 +582,12 @@ export function ChatPane({
           prependScroll.current = null;
           if (!versions.accept("rows", event.revision, event.epoch)) break;
           setUserMessages(event.userMessages ?? []);
-          setRows(event.rows);
-          setHasMore(event.hasMore ?? false);
+          {
+            const window = snapshotRef.current?.protocolVersion === 2 ? limitHistoryWindow(event.rows, "newer") : undefined;
+            setRows(window?.rows ?? event.rows);
+            setHasMore((event.hasMore ?? false) || (window?.droppedBefore ?? false));
+            setHasNewer(window?.droppedAfter ?? false);
+          }
           setPendingRewind((pending) =>
             pending && event.rows.some((row) => row.id === pending.rowId) ? pending : null,
           );
@@ -505,10 +601,14 @@ export function ChatPane({
           if (!versions.accept("rows", event.revision ?? (event.epoch === undefined ? undefined : 0), event.epoch)) break;
           setUserMessages(event.userMessages ?? []);
           versions.queue = 0;
-          setRows(event.rows ?? []);
+          {
+            const window = snapshotRef.current?.protocolVersion === 2 ? limitHistoryWindow(event.rows ?? [], "newer") : undefined;
+            setRows(window?.rows ?? event.rows ?? []);
+            setHasMore((event.hasMore ?? false) || (window?.droppedBefore ?? false));
+            setHasNewer(window?.droppedAfter ?? false);
+          }
           setQueue([]);
-          snapshotRef.current = undefined;
-          setHasMore(event.hasMore ?? false);
+          snapshotRef.current = snapshotRef.current?.protocolVersion === 2 ? { ...snapshotRef.current, rows: [], queue: [], startedAt: event.epoch, rowsRevision: event.revision } : undefined;
           setEditing(null);
           setPermissions([]);
           setPendingPermissionMode(null);
@@ -615,6 +715,12 @@ export function ChatPane({
           // still a restart request, so it must open the confirmation instead of a bare error.
           if (!permissionRestart.handleError(event.message)) setError(event.message);
           break;
+        case "storagePressure":
+          setHistoryError(t("chat.history.storagePressure"));
+          break;
+        case "historyReadError":
+          setHistoryError(event.message);
+          break;
         case "extras":
           setExtras(event.extras);
           break;
@@ -636,7 +742,7 @@ export function ChatPane({
       }
     };
     let un: ReturnType<typeof onChatEvent> | null = null;
-    const subscribe = () => un ??= onChatEvent(session.id, event => {
+    const subscribe = () => historyOnly ? Promise.resolve() : un ??= onChatEvent(session.id, event => {
       if (buffered) buffered.push(event);
       handleEvent(event);
     }).catch(error => { un = null; throw error; });
@@ -644,6 +750,7 @@ export function ChatPane({
     let receiptsAvailable = false;
     const refresh = async () => {
       if (loading || disposed) return;
+      if (historyBusy.current) {progressTimer = setTimeout(() => void refresh(), 1000);return;}
       loading = true;
       historyGeneration.current += 1;
       setHistoryError(null);
@@ -654,10 +761,34 @@ export function ChatPane({
         await subscribe();
         if (disposed) return;
         const known = snapshotRef.current;
-        const response = await chatSnapshot(session.id, known ? { since: known.rowsRevision, epoch: known.startedAt, from: known.rows[0]?.id } : {});
-        if (disposed) return;
+        const location = known?.pendingLocation ?? (initialLocation ? { ...historyLocation(session.id), ...(initialRowId ? {anchor:initialRowId} : initialMessageIndex!==undefined ? {messageIndex: initialMessageIndex} : {}) } : {});
+        const hasLocation = Boolean(location.before || location.after || location.anchor || location.messageIndex!==undefined);
+        let response: ChatSnapshot;
+        try {
+          response = await chatSnapshot(session.id, { historyOnly,
+            ...(known ? { since: known.rowsRevision, epoch: known.startedAt, from: known.rows[0]?.id } : {}),
+            ...(known?.protocolVersion === 2 || hasLocation ? { protocolVersion: 2 as const, readJobId: indexReader.current,
+              anchor: pinnedRef.current ? undefined : known?.rows.at(-1)?.id } : {}),
+            ...location,
+          });
+        } catch (error) {
+          if (known?.protocolVersion !== 2 || !/^(source_changed|cursor_expired):/.test(String(error).replace(/^Error: /, ""))) throw error;
+          if (indexReader.current) void chatReadCancel(session.id, indexReader.current).catch(() => {});
+          indexReader.current = undefined;
+          response = await chatSnapshot(session.id, { historyOnly, protocolVersion: 2 });
+        }
+        if (disposed) {
+          if (response.readJobId) void chatReadCancel(session.id, response.readJobId).catch(() => {});
+          return;
+        }
+        indexReader.current = response.readJobId;
+        initialLocation = false;
         const pendingEvents = buffered ?? [];
         const snapshot = reconcileChat(response, rowsRef.current, pendingEvents);
+        if (hasLocation) {
+          pinnedRef.current = false;setAway(true);
+          if (location.anchor || snapshot.locatedRowId) {const anchor=snapshot.locatedRowId ?? location.anchor!;pendingHistoryHit.current = { rowId: anchor, snippet: "", offset: 0 };setSearchTarget(anchor);}
+        }
         buffered = null;
         if (snapshot.startedAt === undefined || snapshot.startedAt >= versions.epoch) {
           setRows(snapshot.rows);
@@ -667,10 +798,13 @@ export function ChatPane({
           versions.rows = snapshot.rowsRevision ?? versions.rows;
           versions.queue = snapshot.queueRevision ?? versions.queue;
           setHasMore(snapshot.hasMore ?? false);
+          setHasNewer(snapshot.hasNewer ?? false);
+          setHistoryCoverage(snapshot.coverage);
           snapshotRef.current = snapshot;
-          cacheChat(session.id, snapshotRef.current);
+          cacheChat(cacheId, snapshotRef.current);
         }
         setSyncState("ready");
+        setHistoryError(snapshot.historyError ?? null);
         const metric = { requestMs: performance.now() - requestStarted, commitMs: 0, rows: snapshot.rows.length, mode: snapshot.pageKind ?? "full" };
         chatSyncMetrics.push(metric);
         if (chatSyncMetrics.length > 30) chatSyncMetrics.shift();
@@ -704,14 +838,14 @@ export function ChatPane({
         setAutoContinue(snapshot.autoContinue ?? null);
         // Only while a process is actually behind the conversation: a snapshot taken after one exited
         // still names it, and reporting that as running would light the session up in every sidebar.
-        if (snapshot.running && snapshot.pid !== undefined) {
+        if (!historyOnly && snapshot.running && snapshot.pid !== undefined) {
           useTermStore.getState().setRuntime(session.id, {
             status: "running",
             pid: snapshot.pid,
             startedAt: snapshot.startedAt,
           });
         }
-        if (!snapshot.running) {
+        if (!historyOnly && !snapshot.running) {
           useTermStore.getState().setRuntime(session.id, { status: "idle", pid: undefined, startedAt: undefined });
           // A conversation opens on the pair last chosen by hand: the model, and the effort that was
           // picked for that model. The snapshot of a process already running wins over both, because
@@ -741,6 +875,10 @@ export function ChatPane({
         const events = buffered ?? [];
         buffered = null;
         loading = false;
+        clearTimeout(progressTimer);
+        if (!disposed && snapshotRef.current?.protocolVersion === 2 && (historyOnly || snapshotRef.current.coverage === "partial" || snapshotRef.current.indexing)) {
+          progressTimer = setTimeout(() => void refresh(), snapshotRef.current.coverage === "complete" && !snapshotRef.current.indexing ? 5000 : 1000);
+        }
         // Events were rendered as they arrived, including when the snapshot failed.
         void events;
       }
@@ -761,19 +899,22 @@ export function ChatPane({
     });
     return () => {
       disposed = true;
+      clearTimeout(progressTimer);
+      if (indexReader.current) void chatReadCancel(session.id, indexReader.current).catch(() => {});
+      indexReader.current = undefined;
       historyGeneration.current += 1;
       reconnect();
       disconnect();
       void un?.then((f) => f()).catch(() => {});
     };
-  }, [session.id, session.kind, applyRows, t]);
+  }, [session.id, session.kind, applyRows, t, cacheId, historyOnly, initialMessageIndex,initialRowId]);
 
   useEffect(() => {
     if (snapshotRef.current) {
-      snapshotRef.current = { ...snapshotRef.current, userMessages, auth: extras.auth, rows, queue, hasMore, rowsRevision: liveVersions.current.rows, queueRevision: liveVersions.current.queue };
-      cacheChat(session.id, snapshotRef.current);
+      snapshotRef.current = { ...snapshotRef.current, userMessages, auth: extras.auth, rows, queue, hasMore, hasNewer, rowsRevision: liveVersions.current.rows, queueRevision: liveVersions.current.queue };
+      cacheChat(cacheId, snapshotRef.current);
     }
-  }, [session.id, rows, userMessages, queue, hasMore, extras.auth]);
+  }, [session.id, rows, userMessages, queue, hasMore, hasNewer, extras.auth, cacheId]);
 
   const loadHistory = async (before = rows[0]?.id) => {
     if (historyRequest.current) return historyRequest.current;
@@ -799,11 +940,20 @@ export function ChatPane({
     const generation = historyGeneration.current;
     const request = (async () => {
       try {
-        const page = await chatSnapshot(session.id, { before, epoch: snapshotRef.current?.startedAt ?? (liveVersions.current.epoch || undefined) });
+        const page = await chatSnapshot(session.id, { historyOnly, before, epoch: snapshotRef.current?.startedAt ?? (liveVersions.current.epoch || undefined),
+          ...(snapshotRef.current?.protocolVersion === 2 ? { protocolVersion: 2 as const, historyGeneration: snapshotRef.current.historyGeneration, readJobId: indexReader.current } : {}) });
         if (generation !== historyGeneration.current) return;
         if (page.pageKind !== "history") { await refreshRef.current(); return; }
         rememberPosition();
-        setRows(current => mergeRows(page.rows, current));
+        setRows(current => {
+          const merged = mergeRows(page.rows, current);
+          if (page.protocolVersion !== 2) return merged;
+          const window = limitHistoryWindow(merged, "older");
+          const hasNewer = (snapshotRef.current?.hasNewer ?? false) || window.droppedAfter;
+          setHasNewer(hasNewer);
+          if (snapshotRef.current) snapshotRef.current = { ...snapshotRef.current, hasNewer };
+          return window.rows;
+        });
         setHasMore(page.hasMore ?? false);
         return page;
       } catch (error) {
@@ -813,6 +963,34 @@ export function ChatPane({
     })();
     historyRequest.current = request;
     return request;
+  };
+
+  const loadNewerHistory = async () => {
+    const known = snapshotRef.current;
+    if (known?.protocolVersion !== 2 || !hasNewer || historyBusy.current || syncState !== "ready") return;
+    const after = rowsRef.current.at(-1)?.id;
+    if (!after) return;
+    historyBusy.current = true;setHistoryLoading(true);setHistoryError(null);
+    const generation = historyGeneration.current;
+    try {
+      const page = await chatSnapshot(session.id, { historyOnly, protocolVersion: 2, after, historyGeneration: known.historyGeneration, readJobId: indexReader.current });
+      if (generation !== historyGeneration.current) return;
+      const scroll = scrollRef.current;
+      if (scroll) {
+        const viewport = scroll.getBoundingClientRect();
+        const anchor = Array.from(scroll.querySelectorAll<HTMLElement>(".sv-item[data-search-id]")).find(element => element.getBoundingClientRect().bottom > viewport.top);
+        prependScroll.current = { height: scroll.scrollHeight, top: scroll.scrollTop,
+          anchor: anchor ? { id: anchor.dataset.searchId!, offset: anchor.getBoundingClientRect().top - viewport.top } : undefined };
+      }
+      setRows(current => {
+        const window = limitHistoryWindow(mergeRows(current, page.rows), "newer");
+        setHasMore((known.hasMore ?? false) || window.droppedBefore);return window.rows;
+      });
+      setHasNewer(page.hasNewer ?? false);
+      if (snapshotRef.current) snapshotRef.current = { ...snapshotRef.current, hasNewer: page.hasNewer };
+      return page;
+    } catch (error) {if (generation === historyGeneration.current) setHistoryError(String(error));}
+    finally {historyBusy.current = false;setHistoryLoading(false);}
   };
 
   const recallInput = (direction: "ArrowUp" | "ArrowDown") => {
@@ -835,6 +1013,17 @@ export function ChatPane({
       return [...entries.values()];
     };
     const apply = (entry?: { id: string; text: string }) => {
+      const original=entry && history.find(row=>row.id===entry.id);
+      browsing.bodyRead?.abort();
+      if (original?.bodyAvailable) {
+        browsing.loading=true;const controller=new AbortController();browsing.bodyRead=controller;
+        void readCompleteChatBody(original,controller.signal).then(text=> {
+          if (inputHistory.current!==browsing) return;
+          const at=direction==="ArrowUp"?0:text.length;
+          inputHistory.current={...browsing,id:original.id,loading:false};setDraft(text);setCaret(at);setDismissed(text);placeCaret.current=at;
+        }).catch(cause=>{if (!controller.signal.aborted && inputHistory.current===browsing) setError(String(cause));}).finally(()=>{browsing.loading=false;});
+        return;
+      }
       const text = entry?.text ?? browsing.draft;
       const at = entry ? (direction === "ArrowUp" ? 0 : text.length) : browsing.caret;
       inputHistory.current = entry ? { ...browsing, id: entry.id, loading: false } : null;
@@ -864,7 +1053,7 @@ export function ChatPane({
           while (before && inputHistory.current === browsing) {
             const page = await loadHistory(before);
             if (!page || inputHistory.current !== browsing || generation !== historyGeneration.current) return;
-            history = mergeRows(page.rows, history);
+            history = page.protocolVersion === 2 ? limitHistoryWindow(mergeRows(page.rows, history), "older").rows : mergeRows(page.rows, history);
             const older = entriesOf(history);
             const at = browsing.id === null ? older.length : older.findIndex(entry => entry.id === browsing.id);
             if (at > 0) { apply(older[at - 1]); return; }
@@ -879,8 +1068,9 @@ export function ChatPane({
     }
     return true;
   };
-  // Searching requests the remaining history explicitly; ordinary navigation stays bounded.
-  useEffect(() => { if (searchOpen && focused && !hidden && hasMore && !historyError) void loadHistory(); }, [searchOpen, focused, hidden, hasMore, rows.length, syncState, historyError]);
+  // Legacy readers request older pages only after an actual query. V2 searches stay on the backend.
+  useEffect(() => { if (searchOpen && historySearchQuery && focused && !hidden && hasMore && !historyError && snapshotRef.current?.protocolVersion !== 2) void loadHistory(); }, [searchOpen, historySearchQuery, focused, hidden, hasMore, rows.length, syncState, historyError]);
+  useEffect(() => { if (!searchOpen) setHistorySearchQuery(""); }, [searchOpen]);
 
   // Tell the backend when a view holds this conversation and when it lets go. A pane is unmounted only
   // when its session leaves every tab's layout — a background tab keeps it mounted — so letting go
@@ -888,11 +1078,12 @@ export function ChatPane({
   // the next message sent starts the agent again where it left off. A pane mounted while a turn still
   // runs cancels the release that a closed one asked for.
   useEffect(() => {
+    if (historyOnly) return;
     void chatAttach(session.id).catch(() => {});
     return () => {
       void chatDetach(session.id).catch(() => {});
     };
-  }, [session.id]);
+  }, [session.id, historyOnly]);
 
   // What the list draws, rather than what the engine sent: a burst of tool calls becomes one folded row,
   // so a turn that read a dozen files does not bury the answer that came out of it. The first entry of
@@ -1101,6 +1292,57 @@ export function ChatPane({
     pendingLocate.current = null;
     scrollToEntry(entry.id);
   }, [turnEntries, folded, scrollToEntry, railJump.cancel]);
+  const pendingHistoryHit = useRef<ChatSearchHit | null>(null);
+  const locateHistorySearch = useCallback(async (hit: ChatSearchHit) => {
+    railJump.cancel();
+    pinnedRef.current = false; setAway(true);
+    if (!rowsRef.current.some(row => row.id === hit.rowId)) {
+      const page = await chatSnapshot(session.id, { historyOnly, protocolVersion: 2, anchor: hit.rowId, historyGeneration: snapshotRef.current?.historyGeneration, readJobId: indexReader.current });
+      setRows(page.rows); setHasMore(page.hasMore ?? false);setHasNewer(page.hasNewer ?? false);
+      if (snapshotRef.current) snapshotRef.current = { ...snapshotRef.current, ...page, pendingLocation: page.pendingLocation };
+    }
+    pendingHistoryHit.current = hit;
+    const url = new URL(window.location.href);
+    url.searchParams.set("chatSession", session.id);
+    url.searchParams.set("session", session.id);
+    url.searchParams.delete("chatBefore");url.searchParams.delete("chatAfter");
+    url.searchParams.set("chatRow", hit.rowId);
+    if (hit.detailRef) url.searchParams.set("chatField", hit.detailRef); else url.searchParams.delete("chatField");
+    url.searchParams.set("chatPart", String(hit.chunkSequence ?? 0));
+    window.history.pushState(null, "", url.href); window.dispatchEvent(new PopStateEvent("popstate"));
+    setSearchTarget(hit.rowId);
+  }, [session.id, railJump.cancel]);
+  useEffect(() => {
+    const hit = pendingHistoryHit.current; if (!hit) return;
+    const index = turnEntries.findIndex(entry => entry.kind === "row" ? entry.row.id === hit.rowId : entry.kind === "run" && entry.calls.some(row => row.id === hit.rowId));
+    if (index < 0) return;
+    pendingHistoryHit.current = null; locateSearch(index);
+  }, [turnEntries, locateSearch, searchTarget]);
+  useEffect(() => {
+    if (syncState !== "ready" || snapshotRef.current?.protocolVersion !== 2) return;
+    let active = true;
+    let revision = 0;
+    const restore = async () => {
+      const location = historyLocation(session.id);
+      const current = ++revision;
+      if (location.anchor && rowsRef.current.some(row => row.id === location.anchor)) {
+        pendingHistoryHit.current = { rowId: location.anchor, snippet: "", offset: 0 };
+        setSearchTarget(location.anchor);return;
+      }
+      try {
+        const page = await chatSnapshot(session.id, { historyOnly, protocolVersion: 2, ...location, readJobId: indexReader.current });
+        if (!active || current !== revision) return;
+        indexReader.current = page.readJobId;
+        pinnedRef.current = !location.before && !location.after && !location.anchor;
+        setAway(!pinnedRef.current);setRows(page.rows);setHasMore(page.hasMore ?? false);setHasNewer(page.hasNewer ?? false);
+        setHistoryCoverage(page.coverage);setHistoryError(page.historyError ?? null);
+        snapshotRef.current = { ...snapshotRef.current!, ...page, pendingLocation: page.pendingLocation };
+        if (location.anchor) {pendingHistoryHit.current = { rowId: location.anchor, snippet: "", offset: 0 };setSearchTarget(location.anchor);}
+      } catch (error) {if (active && current === revision) setHistoryError(String(error));}
+    };
+    window.addEventListener("popstate", restore);
+    return () => {active = false;revision++;window.removeEventListener("popstate", restore);};
+  }, [session.id, syncState]);
   useEffect(() => {
     const id = pendingLocate.current;
     if (id && scrollToEntry(id)) pendingLocate.current = null;
@@ -1162,12 +1404,16 @@ export function ChatPane({
     railJump.cancel();
     pinnedRef.current = true;
     setAway(false);
+    if (snapshotRef.current?.protocolVersion === 2 && snapshotRef.current.hasNewer) {
+      window.history.pushState(null, "", historyPageURL(session.id, "after"));
+      void refreshRef.current();
+    }
     const el = scrollRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
       scrollGeometry.current = { height: el.scrollHeight, viewport: el.clientHeight };
     }
-  }, [railJump.cancel]);
+  }, [railJump.cancel, session.id]);
 
   // Keep observers alive while the pane is visible. Draft/caret updates do not change the
   // transcript geometry; only viewport or row resizing and added/removed rows need a follow.
@@ -1243,19 +1489,21 @@ export function ChatPane({
   const askRewind = useCallback((rowId: string, scope: ChatRewindScope, replacement?: MessageReplacement) => {
     if (!canRewind || !rewindScopes.includes(scope)) return;
     setError(null);
+    const target=rows.find(row=>row.id===rowId);
+    const historyGeneration=target ? chatHistoryGeneration(target) : undefined;
     if (scope === "conversation") {
-      setPendingRewind({ rowId, scope, replacement, loading: false });
+      setPendingRewind({ rowId, scope, replacement, historyGeneration, loading: false });
       return;
     }
-    setPendingRewind({ rowId, scope, loading: true });
-    void chatRewindPreview(session.id, rowId)
+    setPendingRewind({ rowId, scope, historyGeneration, loading: true });
+    void chatRewindPreview(session.id, rowId, historyGeneration)
       .then((preview) => setPendingRewind((current) => current?.rowId === rowId && current.scope === scope
-        ? { rowId, scope, preview, loading: false } : current))
+        ? { rowId, scope, preview, historyGeneration: preview.historyGeneration ?? historyGeneration, loading: false } : current))
       .catch((err) => {
         setPendingRewind(null);
         setError(String(err));
       });
-  }, [canRewind, rewindScopes, session.id]);
+  }, [canRewind, rewindScopes, session.id, rows]);
 
   const rewindTarget = pendingRewind ? rows.find(row => row.id === pendingRewind.rowId) : undefined;
 
@@ -1273,9 +1521,9 @@ export function ChatPane({
     try {
       // Resolve attachments before removing their snapshot from the conversation.
       const images = pending.scope !== "files"
-        ? await Promise.all((pending.replacement?.images ?? target.images ?? []).map(resolveChatImage)) : [];
+        ? await Promise.all((pending.replacement?.images ?? target.images ?? []).map(image=>resolveChatImage(image,true))) : [];
       const restored = pending.replacement === undefined ? images.map(restoreAttachment) : [];
-      const result = await chatRewind(session.id, pending.rowId, pending.scope);
+      const result = await chatRewind(session.id, pending.rowId, pending.scope, pending.historyGeneration);
       if (pending.scope !== "files") {
         setRows(current => {
           const index = current.findIndex(row => row.id === pending.rowId);
@@ -1293,9 +1541,11 @@ export function ChatPane({
       }
       setPendingRewind(null);
       if (pending.replacement !== undefined) {
-        const item = createSubmission(session.id, pending.replacement.text, images.map(({ mimeType, data }) => ({ mimeType, data })), "queue");
+        const text = pending.replacement.text;
+        const item = createSubmission(session.id, text, images.map(({ mimeType, data }) => ({ mimeType, data })), "queue", shouldTranslate(text));
         toEnd();
-        await deliverSubmission(session.id, item);
+        const receipt = await deliverSubmission(session.id, item, undefined, () => translation.refresh(true));
+        finishSubmission(item, receipt);
       }
     } catch (err) {
       setError(String(err));
@@ -1350,6 +1600,9 @@ export function ChatPane({
     if (!receipt && !latestDraft.current && submissionsFor(session.id).find(value => value.id === item.id)?.error?.includes("translation:required")) updateDraft(item.text);
     void translation.refresh();
   };
+
+  const shouldTranslate = (text: string) => !!translation.settings?.config.enabled && !!translation.value?.enabled
+    && !!translation.value.preferences.outgoing && !!text.trim() && !text.trimStart().startsWith("/");
 
   const send = (behavior: SendBehavior = "queue") => {
     if (sending || shellSubmission.current?.pending || syncState !== "ready") return;
@@ -1482,7 +1735,7 @@ export function ChatPane({
       return;
     }
     const images = attachments.map(({ mimeType, data }) => ({ mimeType, data }));
-    const translate = !!translation.settings?.config.enabled && !!translation.value?.enabled && !!translation.value.preferences.outgoing && !!text && !text.startsWith("/");
+    const translate = shouldTranslate(text);
     const existing = submissionsFor(session.id).find(item => item.text === text && item.behavior === behavior && JSON.stringify(item.images) === JSON.stringify(images) && !["sent", "queued"].includes(item.status));
     const item = existing ?? createSubmission(session.id, text, images, behavior, translate);
     setSending(true);
@@ -1568,6 +1821,7 @@ export function ChatPane({
   };
 
   const removeQueued = (id: string) => {
+    if (readingQueued===id) {editingRead.current?.abort();setReadingQueued(null);}
     if (editing?.id === id) setEditing(null);
     // Drop it here as well as on the backend: the event confirming it costs a round trip, and the row has
     // to stop looking clickable the moment it is dismissed.
@@ -1587,8 +1841,20 @@ export function ChatPane({
       removeQueued(id);
       return;
     }
-    setQueue((prev) => prev.map((item) => (item.id === id ? { ...item, text: trimmed } : item)));
     void chatQueueUpdate(session.id, id, trimmed).catch((err) => { setError(String(err)); void refreshRef.current(); });
+  };
+
+  const editQueued=async (item:QueuedMessage)=>{
+    if (!item.textDeferred) {setEditing({id:item.id,text:item.text});return;}
+    editingRead.current?.abort();const controller=new AbortController();editingRead.current=controller;setReadingQueued(item.id);
+    try {
+      const text=await readCompleteQueuedText(session.id,item,controller.signal);
+      if (controller.signal.aborted) return;
+      const current=queueRef.current.find(current=>current.id===item.id);
+      if (!current || current.textRevision!==item.textRevision || current.shellCommand!==undefined) return;
+      setEditing({id:item.id,text});
+    } catch (cause) {if (!controller.signal.aborted) setError(String(cause));}
+    finally {if (editingRead.current===controller) {editingRead.current=null;setReadingQueued(null);}}
   };
 
   const applyMode = async (next: Mode) => {
@@ -1804,6 +2070,15 @@ export function ChatPane({
         : buildSuggestions({ draft, caret, commands: completionCommands, configKeys, files }),
     [draft, caret, completionCommands, configKeys, files, dismissed],
   );
+  // The suggestion Tab and Enter take. Arrow keys move it; a new list starts again from its first entry.
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const completionList = useRef<HTMLDivElement>(null);
+  const completionPointer = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => { setActiveSuggestion(0); }, [completion]);
+  useEffect(() => {
+    completionList.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [activeSuggestion, completion]);
+  const chosenSuggestion = completion?.[Math.min(activeSuggestion, completion.length - 1)];
 
   const complete = (suggestion: Suggestion) => {
     const at = suggestion.caret ?? suggestion.insert.length;
@@ -2191,7 +2466,6 @@ export function ChatPane({
             {kindIconEl(session.kind, 13)}
           </span>
           <span className="pt">{session.name}</span>
-          <StatusIndicator status={status} unread={unread} />
           {!mobile && <AgentVersionBadge session={session} hidden={hidden} />}
           <span className="pane-tools">
             <button title={t("term.searchMenu")} onClick={() => useTermStore.getState().openSearch()}>
@@ -2207,7 +2481,7 @@ export function ChatPane({
               {allTurnsCollapsed ? <Icons.expand size={14} /> : <Icons.collapse size={14} />}
             </button>
             {/* The same control the terminal view carries, in the same place, pointing the other way. */}
-            <ConversationViewHint enabled={!mobile && !isShareSurface && focused && !hidden} onSwitch={() => switchTo("tui")} />
+            <ConversationViewHint enabled={!readOnly && !mobile && !isShareSurface && focused && !hidden} onSwitch={() => switchTo("tui")} />
             <button title={labelWithCombo(t("term.splitRight"), "splitRight", shortcutOverrides)} onClick={() => paneId && onSplit(paneId, session.id, "horizontal")}>
               <Icons.splitV size={14} />
             </button>
@@ -2224,9 +2498,13 @@ export function ChatPane({
           </span>
         </div>
 
-        <div className="sv" style={{ position: "relative", flex: 1, minHeight: 0 }}>
-          {searchOpen && focused && !hidden && <ChatSearch key={session.id} entries={turnEntries} scrollRef={scrollRef} onLocate={locateSearch} onClose={closeSearch}
-            loadingHistory={hasMore && !historyError} historyError={historyError} onRetryHistory={() => void loadHistory()} />}
+        <ArtifactHostContext.Provider value={artifactHost}>
+        <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0 }}>
+        <div className="sv" style={{ position: "relative", flex: 1, minHeight: 0, minWidth: 0 }}>
+          {searchOpen && focused && !hidden && (snapshotRef.current?.protocolVersion === 2
+            ? <HistorySearch key={session.id} sessionId={session.id} onLocate={locateHistorySearch} onClose={closeSearch} />
+            : <ChatSearch key={session.id} entries={turnEntries} scrollRef={scrollRef} onLocate={locateSearch} onClose={closeSearch}
+              onQueryChange={setHistorySearchQuery} loadingHistory={Boolean(historySearchQuery && hasMore && !historyError)} historyError={historyError} onRetryHistory={() => void loadHistory()} />)}
           <div className="sv-scroll-wrap">
             <div
               className="sv-scroll"
@@ -2260,14 +2538,23 @@ export function ChatPane({
                 {syncState === "failed" && <button onClick={() => void refreshRef.current()}>{t("common.retry")}</button>}
               </div>}
               {hasMore && <div className="sv-history" aria-busy={historyLoading}>
-                <button className="vlx-btn sv-history-more" disabled={historyLoading || syncState !== "ready"} onClick={() => void loadHistory()}>
+                {snapshotRef.current?.protocolVersion === 2 ? <a className="vlx-btn sv-history-more" href={historyPageURL(session.id, "before", rows[0]?.id)} aria-disabled={historyLoading || syncState !== "ready"} onClick={event => {
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();if (historyLoading || syncState !== "ready") return;
+                  const url = event.currentTarget.href;
+                  void loadHistory().then(page => {if (page?.protocolVersion === 2) window.history.pushState(null, "", url);});
+                }}>
                   {t(historyLoading ? "common.loading" : historyError ? "common.retry" : "chat.sync.history")}
-                </button>
+                </a> : <button className="vlx-btn sv-history-more" disabled={historyLoading || syncState !== "ready"} onClick={() => void loadHistory()}>
+                  {t(historyLoading ? "common.loading" : historyError ? "common.retry" : "chat.sync.history")}
+                </button>}
                 {historyError && <div className="sv-history-error" role="alert">{historyError}</div>}
               </div>}
+              {historyCoverage === "partial" && <div className="sv-sync-state" role="status">{t("chat.history.indexing")}</div>}
+              {historyError && !hasMore && <div className="sv-sync-state" role="alert">{historyError}</div>}
               {/* An empty conversation is what a new session opens on, so it gets the middle of the view:
                   the agent's own mark, drawn large enough to say which agent this is, and one line. */}
-              {syncState === "ready" && rows.length === 0 && pendingSubmissions.length === 0 && !busy && (
+              {syncState === "ready" && historyCoverage !== "partial" && historyCoverage !== "error" && rows.length === 0 && pendingSubmissions.length === 0 && !busy && (
                 <div className="sv-blank">
                   <span className="sv-blank-icon">{kindIconEl(session.kind, 40)}</span>
                   <div className="sv-blank-line">{t("chat.empty")}</div>
@@ -2298,7 +2585,7 @@ export function ChatPane({
                           openRuns={openRuns}
                           onToggleRun={toggleRun}
                           onToggleFold={toggleTurn}
-                          onRewind={rows.some(row => row.id === entry.id) ? askRewind : undefined}
+                          onRewind={!readOnly && rows.some(row => row.id === entry.id) ? askRewind : undefined}
                           rewindDisabledReason={rewindDisabledReason}
                           rewindScopes={rewindScopes}
                           rewindRequest={rewindRequest}
@@ -2321,7 +2608,7 @@ export function ChatPane({
                     openRuns={openRuns}
                     onToggleRun={toggleRun}
                     onToggleFold={toggleTurn}
-                    onRewind={rows.some(row => row.id === entry.id) ? askRewind : undefined}
+                    onRewind={!readOnly && rows.some(row => row.id === entry.id) ? askRewind : undefined}
                     rewindDisabledReason={rewindDisabledReason}
                     rewindScopes={rewindScopes}
                     rewindRequest={rewindRequest}
@@ -2331,9 +2618,19 @@ export function ChatPane({
                   />
                 </div>
               ))}
+              {hasNewer && <div className="sv-history" aria-busy={historyLoading}>
+                <a className="vlx-btn sv-history-more" href={historyPageURL(session.id, "after", rows.at(-1)?.id)} aria-disabled={historyLoading || syncState !== "ready"} onClick={event => {
+                  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();if (historyLoading || syncState !== "ready") return;
+                  const url = event.currentTarget.href;
+                  void loadNewerHistory().then(page => {if (page) window.history.pushState(null, "", url);});
+                }}>
+                  {t(historyLoading ? "common.loading" : "chat.history.newer")}
+                </a>
+              </div>}
               {turnStartedAt !== undefined && <WorkingRow startedAt={turnStartedAt} />}
               {extras.apiRetry && <RetryLine retry={extras.apiRetry} />}
-              {showAgentNotice && (
+              {showAgentNotice && !readOnly && (
                 <AgentMissingNotice
                   key={agentMissingKey}
                   session={session}
@@ -2376,7 +2673,7 @@ export function ChatPane({
               )}
             </div>
           )}
-          {permissions.length > 0 && (
+          {!readOnly && permissions.length > 0 && (
             <div className="sv-permissions">
               {permissions.map((request) => (
                 <PermissionCard key={request.id} request={request} cwd={cwd} onAnswer={answer} />
@@ -2458,10 +2755,19 @@ export function ChatPane({
             }}
           >
             {(completion || (wantsCatalogue && catalogueLoading && draft !== dismissed)) && (
-              <div className="sv-complete">
+              <div className="sv-complete" ref={completionList} role="listbox">
                 {wantsCatalogue && catalogueLoading && draft !== dismissed && <div className="sv-complete-item" role="status">{t("common.loading")}</div>}
                 {completion?.map((c) => (
-                  <button key={c.id} className="sv-complete-item" onClick={() => complete(c)}>
+                  <button key={c.id} role="option" aria-selected={c === chosenSuggestion}
+                    className={`sv-complete-item${c === chosenSuggestion ? " on" : ""}`}
+                    onMouseMove={(e) => {
+                      // Scrolling the highlight into view moves rows under a resting pointer; only a real move counts.
+                      const last = completionPointer.current;
+                      completionPointer.current = { x: e.clientX, y: e.clientY };
+                      if (last && last.x === e.clientX && last.y === e.clientY) return;
+                      setActiveSuggestion(completion.indexOf(c));
+                    }}
+                    onClick={() => complete(c)}>
                     <span className="sv-complete-name">{c.label}</span>
                     {c.hint ? <span className="sv-complete-hint">{c.hint}</span> : null}
                     {c.desc ? <span className="sv-complete-desc">{c.desc}</span> : null}
@@ -2507,8 +2813,11 @@ export function ChatPane({
                             <QueuedMessageText
                               text={queuedShellCommand(item) ?? item.text}
                               origin={item.origin}
-                              disabled={steeringQueue || queuedShellCommand(item) !== null}
-                              onEdit={() => setEditing({ id: item.id, text: item.text })}
+                              disabled={steeringQueue || readingQueued!==null || queuedShellCommand(item) !== null}
+                              onEdit={() => void editQueued(item)}
+                              loadPart={item.textDeferred ? async (sequence,signal)=>{
+                                signal.throwIfAborted();const piece=await chatQueueRead(session.id,item,sequence);signal.throwIfAborted();return piece;
+                              }:undefined}
                             />
                           )}
                         </div>
@@ -2602,6 +2911,15 @@ export function ChatPane({
                   if ((e.key === "ArrowUp" || e.key === "ArrowDown") &&
                       !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
                       !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                    // An open list takes the arrows; input history waits until it is closed.
+                    if (completion && chosenSuggestion) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const at = completion.indexOf(chosenSuggestion);
+                      const step = e.key === "ArrowUp" ? -1 : 1;
+                      setActiveSuggestion((at + step + completion.length) % completion.length);
+                      return;
+                    }
                     const input = e.currentTarget;
                     const style = getComputedStyle(input);
                     const singleLineHeight = Math.max(parseFloat(style.minHeight) || 0,
@@ -2623,9 +2941,9 @@ export function ChatPane({
                     setDismissed(draft);
                     return;
                   }
-                  if (e.key === "Tab" && completion) {
+                  if (e.key === "Tab" && chosenSuggestion) {
                     e.preventDefault();
-                    complete(completion[0]);
+                    complete(chosenSuggestion);
                     return;
                   }
                   if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -2636,7 +2954,7 @@ export function ChatPane({
                       send(behaviorOf(e));
                     } else if (wantsCatalogue && catalogueLoading && draft !== dismissed) {
                       return;
-                    } else if (completion) complete(completion[0]);
+                    } else if (chosenSuggestion) complete(chosenSuggestion);
                     // Holding the modifier says "not later, now": the running turn is stopped and this
                     // message goes first. Alt says "and also this": it joins the running turn. Plain
                     // Enter queues, which is the safe default.
@@ -2683,6 +3001,22 @@ export function ChatPane({
             </div>
           </div>}
         </div>
+        {dockPath && artifactHost.openBeside && (
+          <>
+            <Splitter
+              onDrag={(dx) =>
+                setDockWidth((w) => {
+                  const next = Math.min(DOCK_MAX_W, Math.max(DOCK_MIN_W, w - dx));
+                  try { localStorage.setItem(DOCK_WIDTH_KEY, String(Math.round(next))); } catch { /* Keep it for this session. */ }
+                  return next;
+                })
+              }
+            />
+            <ArtifactDock path={dockPath} onClose={() => setDockPath(null)} style={{ width: dockWidth, maxWidth: "70%" }} />
+          </>
+        )}
+        </div>
+        </ArtifactHostContext.Provider>
       </div>
       {engineConfirm}
       {permissionRestart.dialog}

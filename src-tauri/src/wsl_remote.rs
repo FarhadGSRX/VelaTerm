@@ -36,6 +36,10 @@ pub fn options(app: &crate::host::AppCtx) -> Result<Options, String> {
 }
 
 fn distributions() -> Result<Vec<String>, String> {
+    // The Connect panel lists distributions whenever it opens; skip wsl.exe so the stub left by an
+    // uninstalled WSL cannot raise its install prompt.
+    #[cfg(windows)]
+    if !crate::pty::manager::wsl_distribution_registered() { return Ok(Vec::new()); }
     let mut cmd = crate::host::command("wsl.exe");
     cmd.args(["--list", "--quiet"]);
     let output = capture(cmd, Vec::new(), Duration::from_secs(20))?;

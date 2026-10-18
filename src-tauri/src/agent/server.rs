@@ -543,7 +543,10 @@ fn serve_with_app(
         }
         // Hook, spawn, and view POST requests all carry JSON bodies.
         let mut body = String::new();
-        let _ = request.as_reader().read_to_string(&mut body);
+        if request.as_reader().take(512*1024+1).read_to_string(&mut body).is_err() || body.len()>512*1024 {
+            let _=request.respond(tiny_http::Response::from_string(error_body("Request body exceeds its byte budget")).with_status_code(413));
+            continue;
+        }
 
         // `/refer` and `/search` read transcripts and query SQLite, which takes tens to hundreds of
         // milliseconds and can reach seconds while the search index refreshes. This loop is single
@@ -553,7 +556,30 @@ fn serve_with_app(
             match parse_read(&url, &body, token) {
                 Ok(req) => {
                     let handler = on_read.clone();
+                    let stream_format=url.split_once('?').and_then(|(_,query)|query.split('&').find_map(|pair|match pair {
+                        "stream=text"=>Some("text"),"stream=json"=>Some("json"),_=>None,
+                    }));
+                    let stream_app=app.clone();
                     std::thread::spawn(move || {
+                        if let (Some(app),Some(format),ReadRequest::Refer(refer))=(&stream_app,stream_format,&req) {
+                            if !refer.list {
+                                if crate::agent::history_store::refer::supported(app,refer) {
+                                    match crate::agent::history_store::refer::response(app,refer,format) {
+                                        Ok(response)=>{let _=crate::agent::history_store::refer::respond(request,response);},
+                                        Err((code,message))=>{let _=request.respond(tiny_http::Response::from_string(message).with_status_code(code));},
+                                    }
+                                } else {
+                                    let (code,payload)=handler(req);
+                                    let payload=if format=="text" && code==200 {
+                                        serde_json::from_str::<serde_json::Value>(&payload).map(|value|if value.get("answer").is_some() {super::cli_client::render_answer(&value)} else {super::cli_client::render_refer(&value)}).unwrap_or(payload)
+                                    } else {payload};
+                                    let content_type=if format=="text" {"text/plain; charset=utf-8"} else {"application/json; charset=utf-8"};
+                                    let _=request.respond(tiny_http::Response::from_string(payload).with_status_code(code)
+                                        .with_header(tiny_http::Header::from_bytes("Content-Type",content_type).unwrap()));
+                                }
+                                return;
+                            }
+                        }
                         let (code, payload) = handler(req);
                         let _ = request.respond(
                             tiny_http::Response::from_string(payload).with_status_code(code),
@@ -607,6 +633,14 @@ fn serve_with_app(
             // The source also protects stopped chat sessions against callbacks still in flight.
             if app.as_ref().is_some_and(|app|
                 app.chat().is_alive(&sid) || crate::session_state::has_chat_source(&sid)) {
+                let _ = request.respond(tiny_http::Response::empty(200));
+                continue;
+            }
+            // A Claude `/clear` names the conversation it just ended: unbind that ID instead of capturing it.
+            if parse_url(&url).is_some_and(|(_, _, event)| event == "cleared") {
+                if let Some(app) = &app {
+                    forget_cleared_conversation(app, &sid, &body);
+                }
                 let _ = request.respond(tiny_http::Response::empty(200));
                 continue;
             }
@@ -675,6 +709,42 @@ fn parse_session_id(body: &str) -> Option<String> {
         None
     } else {
         Some(sid.to_string())
+    }
+}
+
+/// The conversation a Claude `SessionEnd` body says `/clear` discarded. Any other ending yields None.
+fn cleared_conversation(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    if v.get("reason").and_then(|r| r.as_str()) != Some("clear") {
+        return None;
+    }
+    parse_session_id(body)
+}
+
+/// Stop a session pointing at the conversation its terminal just cleared.
+///
+/// Claude names the replacement conversation only with the next prompt. Until then the session view would
+/// replay the cleared one and a chat start would resume it; with no ID both start empty, as the TUI is.
+fn forget_cleared_conversation(app: &AppCtx, sid: &str, body: &str) {
+    let Some(cleared) = cleared_conversation(body) else {
+        return;
+    };
+    let changed = {
+        let db = app.db();
+        let Ok(conn) = db.conn.lock() else {
+            return;
+        };
+        crate::db::repo::forget_agent_session_id(
+            &conn,
+            sid,
+            &cleared,
+            crate::models::SessionKind::Claude,
+        )
+        .unwrap_or(false)
+    };
+    // agentSessionId drives Fork/export availability, so every client needs the cleared value.
+    if changed {
+        app.emit(crate::host::TREE_CHANGED, ());
     }
 }
 
@@ -957,7 +1027,7 @@ fn parse_read(url: &str, body: &str, expected_token: &str) -> Result<ReadRequest
 ///
 /// An explicit `start`/`end` range wins over `last`. Out-of-range values clamp rather than fail, because
 /// a caller cannot know the message count before asking.
-fn refer_window(
+pub(crate) fn refer_window(
     total: usize,
     start: Option<u32>,
     end: Option<u32>,
@@ -1077,25 +1147,7 @@ fn handle_refer_with_reader(
     if let Some(question) = req.ask.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
         match answer_question(app, &req, question, &session, &messages) {
             Ok(answered) => {
-                payload["question"] = serde_json::json!(question);
-                payload["answer"] = serde_json::json!(answered.answer);
-                payload["summarizer"] = serde_json::json!({
-                    "kind": answered.kind.as_str(),
-                    "elapsedMs": answered.elapsed_ms,
-                });
-                payload["context"] = match answered.pre_summary {
-                    Some(summary) => serde_json::json!({
-                        "mode": "summary",
-                        "agent": summary.selection.agent.as_str(),
-                        "model": summary.selection.model,
-                        "effort": summary.selection.effort,
-                        "elapsedMs": summary.elapsed_ms,
-                        "searchMatches": answered.search_matches,
-                    }),
-                    None => serde_json::json!({ "mode": "full", "searchMatches": 0 }),
-                };
-                // The transcript went into the summarizer, not into the reply.
-                payload["messages"] = serde_json::json!([]);
+                apply_answered(&mut payload,question,answered);
             }
             Err(reason) => {
                 payload["askFailed"] = serde_json::json!(reason);
@@ -1105,18 +1157,29 @@ fn handle_refer_with_reader(
     (200, payload.to_string())
 }
 
-/// A summarizer's reply plus what produced it.
-struct Answered {
-    answer: String,
-    kind: crate::models::SessionKind,
-    elapsed_ms: u128,
-    pre_summary: Option<PreSummaryRun>,
-    search_matches: usize,
+pub(crate) fn apply_answered(payload:&mut serde_json::Value,question:&str,answered:Answered) {
+    payload["question"]=serde_json::json!(question);payload["answer"]=serde_json::json!(answered.answer);
+    payload["summarizer"]=serde_json::json!({"kind":answered.kind.as_str(),"elapsedMs":answered.elapsed_ms});
+    payload["context"]=match answered.pre_summary {
+        Some(summary)=>serde_json::json!({"mode":"summary","agent":summary.selection.agent.as_str(),"model":summary.selection.model,
+            "effort":summary.selection.effort,"elapsedMs":summary.elapsed_ms,"searchMatches":answered.search_matches}),
+        None=>serde_json::json!({"mode":"full","searchMatches":0}),
+    };
+    payload["messages"]=serde_json::json!([]);
 }
 
-struct PreSummaryRun {
-    selection: crate::agent::launch_options::AgentSelection,
-    elapsed_ms: u128,
+/// A summarizer's reply plus what produced it.
+pub(crate) struct Answered {
+    pub(crate) answer: String,
+    pub(crate) kind: crate::models::SessionKind,
+    pub(crate) elapsed_ms: u128,
+    pub(crate) pre_summary: Option<PreSummaryRun>,
+    pub(crate) search_matches: usize,
+}
+
+pub(crate) struct PreSummaryRun {
+    pub(crate) selection: crate::agent::launch_options::AgentSelection,
+    pub(crate) elapsed_ms: u128,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1129,7 +1192,7 @@ struct StoredReferSummary {
 }
 
 #[derive(Debug)]
-struct OriginalExcerpt {
+pub(crate) struct OriginalExcerpt {
     message_index: u32,
     snippet: String,
     score: u32,
@@ -1227,7 +1290,7 @@ fn answer_question(
 }
 
 /// Read the one global pre-summary selection from the shared settings payload.
-fn refer_summary_selection(
+pub(crate) fn refer_summary_selection(
     app: &AppCtx,
 ) -> Result<Option<crate::agent::launch_options::AgentSelection>, String> {
     let raw = {
@@ -1268,8 +1331,8 @@ fn refer_summary_selection(
     Ok(Some(stored.selection))
 }
 
-const SUMMARY_CHUNK_BYTES: usize = 56 * 1024;
-const SUMMARY_PART_CHARS: usize = 6_000;
+pub(crate) const SUMMARY_CHUNK_BYTES: usize = 56 * 1024;
+pub(crate) const SUMMARY_PART_CHARS: usize = 6_000;
 
 /// Compress a transcript in bounded chunks with the single Agent/model/effort selection from Settings.
 fn summarize_transcript(
@@ -1334,7 +1397,7 @@ fn summarize_transcript(
     Err("the configured summarizer did not reduce the transcript enough".to_string())
 }
 
-fn remaining_timeout(
+pub(crate) fn remaining_timeout(
     started: std::time::Instant,
     timeout: std::time::Duration,
 ) -> Result<std::time::Duration, String> {
@@ -1345,7 +1408,7 @@ fn remaining_timeout(
 }
 
 /// Run one AI step with consistent audit metadata around the shared headless adapter.
-fn run_reference_agent(
+pub(crate) fn run_reference_agent(
     picked: &crate::agent::headless::Summarizer,
     prompt: &str,
     selection: Option<&crate::agent::launch_options::AgentSelection>,
@@ -1353,6 +1416,13 @@ fn run_reference_agent(
     timeout: std::time::Duration,
     goal: &str,
 ) -> Result<String, String> {
+    run_reference_agent_with_cancel(picked,prompt,selection,cwd,timeout,goal,None)
+}
+
+pub(crate) fn run_reference_agent_with_cancel(
+    picked:&crate::agent::headless::Summarizer,prompt:&str,selection:Option<&crate::agent::launch_options::AgentSelection>,
+    cwd:Option<&std::path::Path>,timeout:std::time::Duration,goal:&str,cancel:Option<&std::sync::atomic::AtomicBool>,
+) -> Result<String,String> {
     use sha2::{Digest, Sha256};
     let model = selection
         .map(|choice| choice.model.as_str())
@@ -1381,7 +1451,11 @@ fn run_reference_agent(
         }),
     );
     let started = std::time::Instant::now();
-    match crate::agent::headless::run_selected(picked, prompt, selection, cwd, timeout) {
+    let response=match cancel {
+        Some(cancel)=>crate::agent::headless::run_selected_cancel(picked,prompt,selection,cwd,timeout,cancel),
+        None=>crate::agent::headless::run_selected(picked,prompt,selection,cwd,timeout),
+    };
+    match response {
         Ok(answer) => {
             crate::diagnostics::record(
                 "INFO",
@@ -1413,7 +1487,7 @@ fn run_reference_agent(
 }
 
 /// Whether the legacy switch turns the complete `--ask` shortcut off. Absent means available.
-fn ask_disabled(app: &AppCtx) -> bool {
+pub(crate) fn ask_disabled(app: &AppCtx) -> bool {
     let db = app.db();
     let Ok(conn) = db.conn.lock() else {
         return false;
@@ -1428,7 +1502,7 @@ fn ask_disabled(app: &AppCtx) -> bool {
 ///
 /// The instruction to admit a gap is the important line. A plausible invented answer is worse than no
 /// answer, because the caller has no way to tell the two apart once the transcript is gone.
-fn build_ask_prompt(
+pub(crate) fn build_ask_prompt(
     question: &str,
     messages: &[crate::agent::transcript::TranscriptMessage],
 ) -> String {
@@ -1461,7 +1535,7 @@ fn render_transcript(messages: &[crate::agent::transcript::TranscriptMessage]) -
     out
 }
 
-fn build_summary_prompt(
+pub(crate) fn build_summary_prompt(
     question: &str,
     content: &str,
     part: usize,
@@ -1478,7 +1552,7 @@ fn build_summary_prompt(
     )
 }
 
-fn build_compressed_ask_prompt(
+pub(crate) fn build_compressed_ask_prompt(
     question: &str,
     summary: &str,
     excerpts: &[OriginalExcerpt],
@@ -1544,7 +1618,7 @@ fn numbered_parts(parts: &[String]) -> String {
         .join("\n\n")
 }
 
-fn limit_chars(text: &str, max: usize) -> String {
+pub(crate) fn limit_chars(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.trim().to_string();
     }
@@ -1555,7 +1629,7 @@ fn limit_chars(text: &str, max: usize) -> String {
 
 /// Search the already resolved target session with the useful terms from the question, then rank and
 /// deduplicate excerpts by transcript message. This deliberately uses the same FTS path as `vsearch`.
-fn relevant_original_excerpts(
+pub(crate) fn relevant_original_excerpts(
     app: &AppCtx,
     session_id: &str,
     question: &str,
@@ -1790,28 +1864,9 @@ fn handle_search(app: &AppCtx, req: SearchRequest) -> (u16, String) {
         .scope
         .as_deref()
         .unwrap_or(if resolved.is_some() { "all" } else { "live" });
-    match crate::command_core::search_session_content_in(
-        app,
-        query,
-        Some(scope),
-        resolved.as_deref(),
-    ) {
-        Ok(hits) => {
-            let found = hits.len();
-            let mut hits: Vec<_> = hits
-                .into_iter()
-                .filter(|hit| hit.source == SEARCH_SOURCE_TRANSCRIPT)
-                .collect();
-            // Report what was dropped rather than silently returning fewer sessions than the desktop
-            // panel does for the same query.
-            let recording_only = found - hits.len();
-            let limit = req
-                .limit
-                .map(|v| v as usize)
-                .unwrap_or(DEFAULT_SEARCH_LIMIT)
-                .max(1);
-            let total_sessions = hits.len();
-            hits.truncate(limit);
+    let limit=req.limit.map(u64::from).unwrap_or(DEFAULT_SEARCH_LIMIT as u64).max(1);
+    match crate::search::jobs::blocking(app,query,crate::search::SearchScope::from_arg(scope),resolved.as_deref(),limit,true) {
+        Ok(result) => {
             (
                 200,
                 serde_json::json!({
@@ -1819,9 +1874,9 @@ fn handle_search(app: &AppCtx, req: SearchRequest) -> (u16, String) {
                     "scope": scope,
                     "target": target,
                     "resolvedSessionId": resolved,
-                    "totalSessions": total_sessions,
-                    "recordingOnlySessions": recording_only,
-                    "hits": hits,
+                    "totalSessions": result["totalSessions"],
+                    "recordingOnlySessions": result["recordingOnlySessions"],
+                    "hits": result["hits"],
                 })
                 .to_string(),
             )
@@ -1992,6 +2047,8 @@ fn handle(url: &str, expected_token: &str) -> Option<(String, Option<StatusSigna
         // notfound reports an agent missing from PATH so the frontend can show installation guidance.
         "notfound" => Some(StatusSignal::AgentMissing),
         "boot" => None,
+        // Claude `/clear`: the caller unbinds the ended conversation; the agent's state is unchanged.
+        "cleared" => None,
         _ => return None,
     };
     Some((sid, signal))
@@ -2216,6 +2273,62 @@ mod tests {
         assert!(sig.is_none(), "boot should produce no state signal");
         // Still reject an invalid token.
         assert!(handle("/hook/s1?t=wrong&e=boot", "tok").is_none());
+    }
+
+    #[test]
+    fn cleared_is_stateless_and_names_only_a_clear() {
+        let (sid, sig) =
+            handle("/hook/s1?t=tok&e=cleared", "tok").expect("cleared should be a valid event");
+        assert_eq!(sid, "s1");
+        assert!(sig.is_none(), "a clear leaves the agent's state alone");
+        let end = |reason: &str| {
+            format!(r#"{{"session_id":"old","hook_event_name":"SessionEnd","reason":"{reason}"}}"#)
+        };
+        assert_eq!(cleared_conversation(&end("clear")).as_deref(), Some("old"));
+        assert!(cleared_conversation(&end("prompt_input_exit")).is_none());
+        assert!(cleared_conversation(&end("other")).is_none());
+        assert!(cleared_conversation(r#"{"reason":"clear"}"#).is_none());
+        assert!(cleared_conversation("not json").is_none());
+    }
+
+    /// The cleared conversation's ID must never be captured as the session's anchor.
+    #[test]
+    fn serve_with_does_not_capture_the_cleared_conversation() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let (tx_sid, rx_sid) = mpsc::channel();
+        std::thread::spawn(move || {
+            serve_with(
+                server,
+                "tok",
+                |_sid, _sig| {},
+                |_sid, _prompt| {},
+                move |_vlx_sid, agent_sid| {
+                    let _ = tx_sid.send(agent_sid);
+                    true
+                },
+                |_req| {},
+                |_req| {},
+                unused_read_handler(),
+            );
+        });
+
+        let base = format!("http://127.0.0.1:{port}/hook/vlx-1?t=tok");
+        forward_notify(
+            &format!("{base}&e=cleared"),
+            r#"{"session_id":"before-clear","hook_event_name":"SessionEnd","reason":"clear"}"#,
+        );
+        forward_notify(
+            &format!("{base}&e=working"),
+            r#"{"session_id":"after-clear","hook_event_name":"UserPromptSubmit"}"#,
+        );
+        let first = rx_sid
+            .recv_timeout(Duration::from_secs(3))
+            .expect("the prompt after the clear should be captured");
+        assert_eq!(first, "after-clear");
     }
 
     #[test]

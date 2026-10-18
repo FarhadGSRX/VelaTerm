@@ -50,9 +50,8 @@
 .translation-composer-toggle input[type=checkbox] { width: 28px; height: 16px; }
 .translation-composer-toggle input[type=checkbox]::after { width: 10px; height: 10px; }
 .translation-composer-toggle input[type=checkbox]:checked::after { transform: translateX(12px); }
-.sv-chip.translation-direction { background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--r-sm); text-decoration: none; padding: 0 8px; }
-.translation-direction > span { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sv-chip.translation-direction[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
+.translation-settings-button { flex: 0 0 auto; text-decoration: none; }
+.translation-settings-button[aria-expanded=true] { color: var(--accent); }
 .translation-progress { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; }
 .sv-submission-status[role=status] { flex-wrap: wrap; margin-top: 12px; }
 .sv-submission-status .vlx-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 4px 10px; font-size: 12px; }

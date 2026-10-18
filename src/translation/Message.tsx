@@ -56,8 +56,10 @@ export function ReplyTranslation({ rowId, text, original, streaming = false }: {
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   if (!state?.settings?.config.enabled || !state.value?.enabled) return original;
   const record = state.value.replies.find(record => record.id === rowId);
-  const current = record?.version === state.value.version && record.generation === state.value.generation && record.source === state.value.preferences.replySource && record.target === state.value.preferences.replyTarget && text.startsWith(record.original);
-  const ready = !!record?.result && current;
+  const matches = !!record && record.source === state.value.preferences.replySource && record.target === state.value.preferences.replyTarget && text.startsWith(record.original);
+  const current = matches && record.version === state.value.version && record.generation === state.value.generation;
+  // A translation from an earlier engine configuration still matches this text and language pair, so keep it visible.
+  const ready = !!record?.result && matches;
   const pairs = ready ? formattedTranslationPairs(record.result!.pairs, record.result!.formatVersion) : [];
   const translated = pairs.map(pair => pair.translation).join("\n");
   const translatedSource = pairs.map(pair => pair.original).join("\n");
@@ -82,7 +84,7 @@ export function ReplyTranslation({ rowId, text, original, streaming = false }: {
     {body}
     {pending && <div className="translation-message-status" role="status"><StatusDot status="working" size={6} />{t("translation.translating")}<TranslationTime timing={record} serverTime={state.value.serverTime} running compact /></div>}
     {!pending && current && <TranslationTime timing={record} />}
-    {!pending && (!ready || record?.state === "failed" || (record?.result?.formatVersion ?? 0) < 2) && <div className="translation-message-status"><button className="vlx-btn" onClick={() => void run()}>{t(record?.state === "failed" ? "translation.retry" : "translation.title")}</button></div>}
+    {!pending && (!ready || !current || record?.state === "failed" || (record?.result?.formatVersion ?? 0) < 2) && <div className="translation-message-status"><button className="vlx-btn" onClick={() => void run()}>{t(record?.state === "failed" || ready ? "translation.retry" : "translation.title")}</button></div>}
     {record && !current && <p className="translation-hint">{t("translation.stale")}</p>}
     {(error || record?.error) && <p role="alert" className="translation-hint">{error || (record?.error === "translation:canceled" ? t("translation.unavailable") : translationError(record?.error, t))}</p>}
   </>;

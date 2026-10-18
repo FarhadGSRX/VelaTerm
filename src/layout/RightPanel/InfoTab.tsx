@@ -672,7 +672,7 @@ export function InfoTab({ session, cwd }: { session: Session; cwd: string | null
         </UsageSection>
       )}
 
-      {hasContext && <TurnSection key={session.id} session={session} agentState={agentState} currentTool={currentTool} />}
+      {hasContext && <TurnSection key={session.id} session={session} cwd={cwd} agentState={agentState} currentTool={currentTool} />}
 
       <ResourcesSection pid={runtime?.pid} />
     </div>

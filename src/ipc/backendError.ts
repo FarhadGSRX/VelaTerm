@@ -26,6 +26,24 @@ export function handshakeFailureReason(msg: { type?: string; code?: string }): H
  */
 export function mapBackendError(raw: string): string {
   const idx = raw.indexOf(":");
+  const code = idx > 0 ? raw.slice(0, idx) : raw;
+  const historyKey = {
+    source_changed: "chat.history.contentChanged",
+    cursor_expired: "chat.history.contentChanged",
+    resync_required: "chat.history.contentChanged",
+    source_missing: "chat.history.sourceMissing",
+    index_incomplete: "chat.history.incomplete",
+    index_busy: "chat.history.indexBusy",
+    unsupported_record: "chat.history.unsupported",
+    detail_unavailable: "chat.history.unavailable",
+    storage_pressure: "chat.history.storagePressure",
+    read_canceled: "chat.history.canceled",
+    detail_requires_paging: "chat.history.pagedRequired",
+    detail_requires_download: "chat.history.clipboardLimit",
+    image_requires_download: "chat.history.imageDownloadRequired",
+    history_protocol_unsupported: "chat.history.updateServer",
+  } as const;
+  if (Object.hasOwn(historyKey,code)) return `${code}: ${t(historyKey[code as keyof typeof historyKey])}`;
   if (idx <= 0) return raw;
   const detail = raw.slice(idx + 1);
   switch (raw.slice(0, idx)) {

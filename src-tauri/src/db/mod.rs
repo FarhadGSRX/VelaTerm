@@ -55,8 +55,6 @@ impl Db {
         crate::kb::init(&conn)?;
         crate::knowledge::init(&conn)?;
         crate::security::init(&conn)?;
-        // Create FTS5/trigram separately so an unavailable extension disables search without blocking startup.
-        init_search_index(&conn);
         Ok(Self {
             conn: Mutex::new(conn),
             memory_worker: std::sync::atomic::AtomicBool::new(false),
@@ -64,28 +62,7 @@ impl Db {
     }
 }
 
-/// Create the `session_fts` FTS5 virtual table. Some SQLite builds omit FTS5/trigram, so failure is logged
-/// and swallowed. [`table_exists`] then reports search unavailable without preventing application startup.
-fn init_search_index(conn: &Connection) {
-    if let Err(e) = conn.execute_batch(schema::SESSION_FTS_DDL) {
-        crate::diagnostic_warn!(
-            "[VelaTerm] Search index unavailable: failed to create FTS5 table ({e}). \
-             Full-text search will be disabled. This SQLite build may lack FTS5/trigram support."
-        );
-        return;
-    }
-    // The word-level index arrived after the trigram one. On a database that already holds trigram rows the
-    // table starts empty; search::index::backfill_words fills it from those rows on the next refresh (the
-    // startup warm-up runs one in the background), so no transcript is parsed again.
-    if let Err(e) = conn.execute_batch(schema::SESSION_WORDS_DDL) {
-        crate::diagnostic_warn!(
-            "[VelaTerm] Search index unavailable: failed to create word index table ({e}). \
-             Full-text search will be disabled."
-        );
-    }
-}
-
-/// Whether a regular or virtual table exists in sqlite_master, used to detect session_fts availability.
+/// Whether a regular or virtual table exists in sqlite_master.
 pub fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?1",
@@ -151,14 +128,6 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             [],
         )
         .map_err(|e| format!("Failed to migrate sessions.fork_pending: {e}"))?;
-    }
-    // Add search_index_state.source_path so refresh can stat a known transcript path directly instead of
-    // walking the agent's session directory tree for every session on every search.
-    if table_exists(conn, "search_index_state")
-        && !column_exists(conn, "search_index_state", "source_path")
-    {
-        conn.execute("ALTER TABLE search_index_state ADD COLUMN source_path TEXT", [])
-            .map_err(|e| format!("Failed to migrate search_index_state.source_path: {e}"))?;
     }
     // Add browser_url for browser nodes' latest URL; other session types keep it null.
     if !column_exists(conn, "sessions", "browser_url") {

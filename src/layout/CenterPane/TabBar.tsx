@@ -348,7 +348,7 @@ export function TabBar() {
               {...middleCloseProps(tabId)}
             >
               <span style={{ color: "var(--text-dim)", display: "grid", flex: "none" }}>
-                {doc.kind === "image" ? <Icons.image size={13} /> : <Icons.file size={13} />}
+                {doc.kind === "image" ? <Icons.image size={13} /> : doc.kind === "artifact" ? <Icons.appWindow size={13} /> : <Icons.file size={13} />}
               </span>
               <span className="tnm">{doc.title}</span>
               {doc.dirty && (

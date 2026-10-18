@@ -25,7 +25,7 @@ use axum::response::IntoResponse;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use super::outbound;
 
 use super::dispatch::{dispatch, CallOrigin};
 use super::e2ee::{self, Cipher};
@@ -192,7 +192,7 @@ async fn handle_socket(
         _ => return, // End on close, a binary first frame, or an error.
     }
 
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
+    let (out_tx, mut out_rx) = outbound::channel();
     // Source ID for this connection. Each browser page has an independent WS, distinct from desktop.
     diagnostic.step("read");
 
@@ -201,7 +201,7 @@ async fn handle_socket(
     // against Resized/SpawnResult.owner in fit and mirror decisions. The writer encrypts it in E2EE mode and
     // consumes out_tx serially, guaranteeing delivery before replies, events, or PTY replay.
     let _ = out_tx.send(Message::Text(
-        json!({"t": "hello", "source": conn_source}).to_string(),
+        json!({"t": "hello", "source": conn_source,"historyProtocol":2}).to_string(),
     ));
 
     // Announce the arrival. On a host this is the only sign that someone else is attached: the desktop talks
@@ -223,8 +223,9 @@ async fn handle_socket(
     // text becomes base64 ciphertext and binary becomes raw ciphertext; control frames such as Close/Ping/Pong
     // pass through unchanged. Encryption failure terminates the writer and closes the connection.
     let cipher_w = cipher.clone();
-    let writer = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
+    let mut writer = tokio::spawn(async move {
+        while let Some(queued) = out_rx.recv().await {
+            let msg=queued.message;
             let msg = match &cipher_w {
                 Some(c) => match msg {
                     Message::Text(t) => match c.encrypt_text(&t) {
@@ -239,9 +240,14 @@ async fn handle_socket(
                 },
                 None => msg,
             };
-            if ws_tx.send(msg).await.is_err() {
+            if !matches!(tokio::time::timeout(Duration::from_secs(5),ws_tx.send(msg)).await,Ok(Ok(()))) {
                 break;
             }
+        }
+        if out_rx.pressured() {
+            crate::diagnostic_warn!("[ws] outbound byte or item budget exceeded; closing slow connection for resynchronization");
+            let close=Message::Close(Some(axum::extract::ws::CloseFrame {code:1013,reason:"Outbound budget exceeded; reconnect to resynchronize".into()}));
+            let _=tokio::time::timeout(Duration::from_secs(1),ws_tx.send(close)).await;
         }
     });
 
@@ -318,6 +324,7 @@ async fn handle_socket(
     let mut last_inbound = std::time::Instant::now();
     loop {
         tokio::select! {
+            _ = &mut writer => break,
             msg = ws_rx.next() => {
                 let Some(Ok(msg)) = msg else { break };
                 last_inbound = std::time::Instant::now();
@@ -441,24 +448,23 @@ async fn handshake(
     }
     // Rate limit before any credential verification; the explicit encrypted reason lets clients distinguish
     // throttling from a wrong password.
-    // The RAII guard covers the whole credential check; a cancelled handshake future (client
-    // disconnect during the Argon2 await) releases the reservation on drop instead of leaking it.
+    // The reservation covers the whole credential check and moves into the Argon2 task, so a client
+    // disconnecting mid-verify cannot release it before the verdict exists.
     let Some(attempt) = ctx.limiter.allow(ip) else {
         if let Some(ct) = cipher.encrypt_text(&e2ee::err_msg("rate_limited")) {
             let _ = ws_tx.send(Message::Text(ct)).await;
         }
         return None;
     };
-    let token_ok = ctx.auth.validate_pairing_token(&token);
     // Only a holder of the current pairing token may trigger the expensive Argon2 verify; the token check
     // is constant-time and cheap, so unauthenticated strangers cost the server nothing memory-hard.
-    let pw_ok = if token_ok {
-        match password.as_deref() {
-            Some(p) => ctx.auth.verify_password_async(p).await,
-            None => false,
+    // `verified` carries the still-open reservation back only when the password matched.
+    let verified = match password.as_deref() {
+        Some(p) if ctx.auth.validate_pairing_token(&token) => ctx.auth.verify_attempt(p, attempt).await,
+        _ => {
+            attempt.failure();
+            None
         }
-    } else {
-        false
     };
     // Reject revoked devices even with a valid pairing token and password, blocking reconnect and re-pairing.
     // Without a self-reported device_id, device-level revocation is unavailable, matching registry placeholder behavior.
@@ -466,23 +472,29 @@ async fn handshake(
         .as_deref()
         .map(|id| ctx.auth.is_blocked(id))
         .unwrap_or(false);
-    if token_ok && pw_ok && !blocked {
-        attempt.success();
-        // After both credentials pass and the device is not revoked, register its self-reported display identity.
-        ctx.auth
-            .register_device(device_id.as_deref(), device_name.as_deref());
-        let ct = cipher.encrypt_text(e2ee::MSG_AUTHENTICATED)?;
-        ws_tx.send(Message::Text(ct)).await.ok()?;
-        // Return device_id so the main loop can detect revocation during later heartbeats, and the name
-        // so the presence registry can show who just attached.
-        Some((cipher, device_id, device_name, false))
-    } else {
-        attempt.failure();
-        // Return an encrypted error, proving key exchange succeeded but identity failed, then close.
-        if let Some(ct) = cipher.encrypt_text(&e2ee::err_msg("unauthorized")) {
-            let _ = ws_tx.send(Message::Text(ct)).await;
+    match verified {
+        Some(attempt) if !blocked => {
+            attempt.success();
+            // After both credentials pass and the device is not revoked, register its self-reported display identity.
+            ctx.auth
+                .register_device(device_id.as_deref(), device_name.as_deref());
+            let ct = cipher.encrypt_text(e2ee::MSG_AUTHENTICATED)?;
+            ws_tx.send(Message::Text(ct)).await.ok()?;
+            // Return device_id so the main loop can detect revocation during later heartbeats, and the name
+            // so the presence registry can show who just attached.
+            Some((cipher, device_id, device_name, false))
         }
-        None
+        verified => {
+            // A revoked device with correct credentials still counts as a failed attempt.
+            if let Some(attempt) = verified {
+                attempt.failure();
+            }
+            // Return an encrypted error, proving key exchange succeeded but identity failed, then close.
+            if let Some(ct) = cipher.encrypt_text(&e2ee::err_msg("unauthorized")) {
+                let _ = ws_tx.send(Message::Text(ct)).await;
+            }
+            None
+        }
     }
 }
 
@@ -491,7 +503,7 @@ fn handle_text(
     ctx: &Ctx,
     text: &str,
     conn_source: &str,
-    out_tx: &mpsc::UnboundedSender<Message>,
+    out_tx: &outbound::Sender,
     pty_subs: &mut HashMap<String, u64>,
     listened: &mut HashSet<String>,
     // Sessions whose chat channel this connection forwards. Separate from `listened`: a session can have
@@ -579,11 +591,16 @@ fn handle_text(
                     };
                     let prepare_ms = started.elapsed().as_millis();
                     let encoding = std::time::Instant::now();
-                    let encoded = reply.to_string();
+                    let mut encoded = reply.to_string();
+                    encoded.shrink_to_fit();
                     if cmd == "chat_snapshot" {
                         crate::diagnostics::record("INFO","chat_sync",serde_json::json!({"requestId":trace_request,"prepareMs":prepare_ms as u64,"encodeMs":encoding.elapsed().as_millis() as u64,"bytes":encoded.len(),"success":reply["ok"]}));
                     }
-                    let _ = out_tx.send(Message::Text(encoded));
+                    // Original image reads have their existing explicit five-MiB limit. They use
+                    // a single separately charged slot rather than consuming the control reserve.
+                    let image=cmd=="chat_attachment" && args["purpose"]!="preview";
+                    let message=Message::Text(encoded);
+                    let _=if image {out_tx.attachment(message)} else {out_tx.send(message)};
                 });
             }
         }
@@ -671,12 +688,14 @@ fn dispatch_scoped(
 }
 
 /// Registers forwarding for one event name, sending `{t:"event",name,payload}` through the outbound channel.
-fn listen_forward(app: &AppCtx, name: &str, out_tx: mpsc::UnboundedSender<Message>) -> ListenerId {
+fn listen_forward(app: &AppCtx, name: &str, out_tx: outbound::Sender) -> ListenerId {
     let name_owned = name.to_string();
     app.listen(name, move |payload| {
         let payload: Value = serde_json::from_str(payload).unwrap_or(Value::Null);
+        let presentation=name_owned.starts_with("chat://") && matches!(payload["type"].as_str(),Some("rows"|"replaceRows"));
         let msg = json!({ "t": "event", "name": name_owned, "payload": payload });
-        let _ = out_tx.send(Message::Text(msg.to_string()));
+        let message=Message::Text(msg.to_string());
+        let _=if presentation {out_tx.presentation(message)} else {out_tx.send(message)};
     })
 }
 
@@ -690,7 +709,7 @@ fn web_pty_spawn(
     args: &Value,
     conn_source: &str,
     attach_only: bool,
-    out_tx: mpsc::UnboundedSender<Message>,
+    out_tx: outbound::Sender,
 ) -> Result<SpawnResult, String> {
     let _context=crate::diagnostics::Context::enter(args.get("diagnosticRequestId").and_then(Value::as_str));
     let _operation=crate::diagnostics::Operation::enter(args.get("diagnosticOperationId").and_then(Value::as_str));
@@ -841,7 +860,7 @@ mod tests {
     /// Send one invoke frame through handle_text and await the reply. Non-PTY commands answer from
     /// spawn_blocking, so the reply arrives asynchronously on the outbound channel.
     async fn invoke_reply(ctx: &Ctx, cmd: &str) -> Value {
-        let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+        let (out_tx, mut out_rx) = outbound::channel();
         let mut pty_subs = HashMap::new();
         let mut listened = HashSet::new();
         let mut chat_listened = HashSet::new();
@@ -858,7 +877,7 @@ mod tests {
             &mut event_ids,
             None,
         );
-        match out_rx.recv().await.expect("expected a reply frame") {
+        match out_rx.recv().await.expect("expected a reply frame").message {
             Message::Text(t) => serde_json::from_str(&t).expect("reply must be JSON"),
             other => panic!("expected a text reply, got: {other:?}"),
         }
@@ -893,7 +912,7 @@ mod tests {
     #[tokio::test]
     async fn translation_session_subscribes_once_before_returning_its_snapshot() {
         let ctx=test_ctx(ServeMode::LoopbackHttp);
-        let (out_tx,mut out_rx)=mpsc::unbounded_channel();
+        let (out_tx,mut out_rx)=outbound::channel();
         let mut pty_subs=HashMap::new();let mut listened=HashSet::new();let mut chat_listened=HashSet::new();let mut event_ids=Vec::new();
         let sid={let conn=ctx.app.db().conn.lock().unwrap();let project=crate::db::repo::create_virtual_project(&conn,"Translation event fixture").unwrap();
             let session=crate::db::repo::create_session(&conn,&project.id,None,"Translation",SessionKind::Codex,None,None,None,None,None).unwrap();
@@ -901,14 +920,14 @@ mod tests {
         for id in [1,2] {
             let frame=json!({"t":"invoke","id":id,"cmd":"translation_session","args":{"sessionId":sid}}).to_string();
             handle_text(&ctx,&frame,"translation-test",&out_tx,&mut pty_subs,&mut listened,&mut chat_listened,&mut event_ids,None);
-            let message=tokio::time::timeout(std::time::Duration::from_secs(5),out_rx.recv()).await.unwrap().unwrap();
+            let message=tokio::time::timeout(std::time::Duration::from_secs(5),out_rx.recv()).await.unwrap().unwrap().message;
             let Message::Text(text)=message else {panic!("expected snapshot reply")};
             let value:Value=serde_json::from_str(&text).unwrap();assert_eq!(value["ok"],true);
         }
         ctx.app.emit(&format!("translation://session/{sid}"),json!({}));
-        let Message::Text(text)=out_rx.recv().await.unwrap() else {panic!("expected translation event")};
+        let Message::Text(text)=out_rx.recv().await.unwrap().message else {panic!("expected translation event")};
         assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["name"],format!("translation://session/{sid}"));
-        assert!(out_rx.try_recv().is_err());
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(200),out_rx.recv()).await.is_err(),"the event is delivered once");
         for id in event_ids {ctx.app.unlisten(id);}
     }
 

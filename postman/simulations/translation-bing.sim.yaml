@@ -1,0 +1,5 @@
+simulation: translation-bing
+routing: path
+mocks:
+  - routeKey: bing
+    path: ../mocks/bing-translator/config.yaml

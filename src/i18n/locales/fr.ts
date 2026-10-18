@@ -5,8 +5,15 @@ import type en from "./en";
 const fr: typeof en = {
   "panel.averageOutput": "débit moyen",
   "panel.averageOutputHint": "Estimation du nombre de jetons produits par seconde sur la durée de réponse mesurée, y compris les jetons de raisonnement signalés. Le temps d’exécution des outils et l’attente de l’utilisateur sont exclus. Aucune valeur n’est affichée si l’utilisation et la durée ne peuvent pas être rapprochées de manière fiable. Il ne s’agit pas de la vitesse de décodage seule du modèle.",
+  "panel.turnStats": "Statistiques du tour",
+  "panel.fileCount": (n: number) => n <= 1 ? `${n} fichier` : `${n} fichiers`,
+  "panel.showChangedFiles": "Afficher les fichiers modifiés pendant ce tour",
+  "panel.noFilesChanged": "Aucun fichier n’a été modifié pendant ce tour.",
+  "panel.shellEditsNotListed": "Les modifications effectuées par des commandes shell ne sont pas répertoriées.",
   "translation.swap": "Inverser les langues",
   "translation.openai": "Compatible OpenAI",
+  "translation.bing": "Bing Traducteur (sans clé API)",
+  "translation.bingHint": "Traduction gratuite avec Bing. Aucune clé API ni aucun compte Microsoft n’est nécessaire.",
   "translation.google": "Google Traduction (sans clé API)",
   "translation.googleHint": "Traduction gratuite avec Google. Aucune clé API ni aucun compte Google n’est nécessaire.",
   "translation.rateLimited": "Trop de demandes de traduction. Veuillez réessayer plus tard.",
@@ -293,6 +300,8 @@ const fr: typeof en = {
   "memory.collections": "Sessions archivées",
   "memory.collectionConversation": "Conversation",
   "memory.collectionEmptyEntries": "Cette conversation n'a pas encore d'articles de connaissance.",
+  "memory.collapseAllProjects": "Réduire tous les projets",
+  "memory.expandAllProjects": "Développer tous les projets",
   "memory.title": "Base de connaissances",
   "memory.add": "Ajouter à la base de connaissances",
   "memory.intro": "Organisez les connaissances par projet et par session. Les articles enregistrés restent indépendants de leurs sources et peuvent être modifiés manuellement.",
@@ -881,6 +890,7 @@ const fr: typeof en = {
   "settings.scSplitDown": "Diviser en bas", // Split down
   "settings.scSearch": "Rechercher dans le terminal", // Find in terminal
   "settings.scGlobalSearch": "Rechercher dans toutes les sessions", // Search all sessions
+  "settings.scCopyTerminal": "Copier la sélection du terminal", // Copy terminal selection
   "settings.scSelectAllTerminal": "Tout sélectionner dans le terminal", // Select all in terminal
   "settings.scSaveDoc": "Enregistrer le document", // Save document
   "settings.scRecording": "Appuyez sur les touches…", // Press keys…
@@ -1337,6 +1347,7 @@ const fr: typeof en = {
   "search.includeArchivedHint":
     "Rechercher aussi dans les sessions archivées (désactivé par défaut)", // Also search archived sessions (off by default)
   "search.searching": "Recherche…", // Searching…
+  "search.progress": (sessions, bytes) => `Recherche… ${sessions} sessions vérifiées · ${bytes} lus`,
   "search.noResults": "Aucune correspondance", // No matches found
   "search.sessionCount": (n) => (n === 1 ? "1 session" : `${n} sessions`), // n sessions
   "search.matchCount": (n) =>
@@ -1960,6 +1971,7 @@ const fr: typeof en = {
   "skills.vspawn": "Crée une session enfant chargée d’une tâche.",
   "skills.vspawnTree": "Crée une session enfant avec son propre worktree.",
   "skills.vopen": "Ouvre un fichier ou une page web dans VelaTerm.",
+  "skills.vartifact": "Affiche un rendu visuel sous forme de page HTML en direct, à côté de la session.", // Show visual work as a live HTML page beside the conversation.
   "skills.vrefer": "Lit la conversation d’une autre session.",
   "skills.vask": "Pose une question sur une autre session et obtient une réponse concise.",
   "skills.vsearch": "Recherche dans les conversations de toutes les sessions.",
@@ -1978,6 +1990,7 @@ const fr: typeof en = {
   "session.showTerminal": "Vue terminal",
   "session.switchTitle": "Changer de vue redémarre l'agent",
   "session.switchBody": "Le tour en cours sera interrompu. La conversation est conservée.",
+  "session.switchBodyBackground": "Les tâches en arrière-plan lancées par l'agent peuvent s'arrêter, et l'agent ne sera pas averti de leur fin. La conversation est conservée.",
   "session.switchConfirm": "Basculer",
   "session.terminalViewHint": "Cliquez ici pour revenir à la vue terminal.",
   "session.loading": "Lecture de la conversation…",
@@ -2126,6 +2139,7 @@ const fr: typeof en = {
   "chat.compaction.manual": "Contexte compacté",
   "chat.compaction.auto": "Contexte compacté automatiquement",
   "chat.compaction.from": (tokens: string) => `depuis ${tokens} tokens`,
+  "chat.wake.label": "Tâche en arrière-plan terminée",
   // N steps
   "chat.subagent.steps": (n: number) => (n === 1 ? "1 étape" : `${n} étapes`),
   "chat.subagent.tokens": (tokens: string) => `${tokens} jetons`,
@@ -2418,6 +2432,76 @@ const fr: typeof en = {
   "chat.antigravity.textOnly": "La vue de conversation d’Antigravity ne prend actuellement en charge que les messages texte.",
   "chat.antigravity.permissionsHint": "Les outils nécessitant une autorisation doivent être autorisés dans les paramètres d’Antigravity ou utilisés dans la vue terminal.",
   "chat.antigravity.settingsHint": "Modifiez le modèle, le niveau de raisonnement ou les autorisations entre les tours.",
+  "chat.history.imageDownloadRequired": "Cette image ne peut pas être ouverte ici. Téléchargez l’original pour la consulter.",
+  "chat.history.readBody": "Lire le contenu intégral",
+  "chat.history.selectDetail": "Choisir un fichier ou un champ",
+  "chat.history.part": "Partie",
+  "chat.history.copyPart": "Copier cette partie",
+
+  "chat.history.searchMore": "Autres résultats",
+  "chat.history.indexing": "L’indexation de l’historique est en cours",
+  "chat.history.newer": "Charger les messages plus récents",
+
+  "chat.history.copyComplete": "Copier le contenu complet",
+  "chat.history.downloadComplete": "Télécharger le contenu complet",
+  "chat.history.unavailable": "Les détails de l’historique de cette session ne sont pas disponibles.",
+  "chat.history.openViewer": "Ouvrez la vue détaillée pour lire le contenu complet.",
+  "chat.history.copyBusy": "La copie du contenu complet est déjà en cours.",
+  "chat.history.clipboardLimit": "Ce contenu dépasse la capacité du presse-papiers. Téléchargez le fichier complet.",
+  "chat.history.contentChanged": "Le contenu a changé pendant le transfert. Chargez-le à nouveau.",
+  "export.preparing": "Préparation de l’exportation de la session…",
+  "chat.history.windowLimit": "Ce message dépasse la limite d’affichage. Chargez ou téléchargez son contenu complet.",
+
+  "chat.history.incomplete": "L’historique est incomplet ou son indexation est en cours. Réessayez lorsque ses sources seront accessibles.",
+  "chat.history.indexBusy": "L’index de l’historique est utilisé par un autre processus. Réessayez dans quelques instants.",
+  "chat.history.unsupported": "Le format de certaines entrées de l’historique n’est pas pris en charge. Leur contenu original a été conservé.",
+  "chat.history.canceled": "La lecture de l’historique a été annulée.",
+  "chat.history.pagedRequired": "Consultez ce contenu dans l’historique paginé ou la visionneuse de détails.",
+  "chat.history.sourceMissing": "Une source de l’historique est introuvable ou inaccessible.",
+  "chat.history.updateServer": "Mettez le serveur à jour pour consulter l’historique des conversations en toute sécurité.",
+  "chat.history.storagePressure": "Le stockage de l’historique est plein ou indisponible. Libérez de l’espace et réessayez. Vous pouvez toujours contrôler l’agent.",
+
+  "artifact.preview": "Aperçu", // Preview
+  "artifact.source": "Code source", // Source
+  "artifact.split": "Côte à côte", // Split
+  "artifact.live": "En direct", // Live
+  "artifact.liveTitle": "Se recharge automatiquement quand le fichier change", // Reloads automatically when the file changes
+  "artifact.offline": "Hors ligne", // Offline
+  "artifact.offlineTitle": "Cette page ne peut rien charger depuis Internet. Cliquez pour l’autoriser pour ce fichier.", // This page cannot load anything from the internet. Click to allow it for this file.
+  "artifact.online": "En ligne", // Online
+  "artifact.onlineTitle": "Cette page peut charger des fichiers depuis Internet. Cliquez pour les bloquer à nouveau.", // This page can load files from the internet. Click to block them again.
+  "artifact.netBlocked": (n: number) => n === 1 ? "Cette page a tenté de charger un fichier depuis Internet. Il a été bloqué." : `Cette page a tenté de charger ${n} fichiers depuis Internet. Ils ont été bloqués.`, // This page tried to load ${n} files from the internet. They were blocked.
+  "artifact.allowForFile": "Autoriser pour ce fichier", // Allow for this file
+  "artifact.errorCount": (n: number) => n === 1 ? "1 erreur" : `${n} erreurs`, // ${n} errors
+  "artifact.warningCount": (n: number) => n === 1 ? "1 avertissement" : `${n} avertissements`, // ${n} warnings
+  "artifact.console": "Console", // Console
+  "artifact.consoleEmpty": "Aucune erreur ni aucun avertissement.", // No errors or warnings.
+  "artifact.clearConsole": "Effacer", // Clear
+  "artifact.closeConsole": "Fermer la console", // Close console
+  "artifact.sendToSession": "Envoyer à la session", // Send to session
+  "artifact.sendToSessionTitle": "Place ces erreurs dans la zone de message de la session qui a écrit cette page", // Put these errors in the message box of the session that wrote this page
+  "artifact.fileGone": "Ce fichier n’est plus disponible", // This file is no longer available
+  "artifact.fileGoneBody": (name: string) => `${name} a été déplacé ou supprimé. Rouvrez-le depuis son nouvel emplacement ou fermez cet onglet.`, // ${name} was moved or deleted. Open it again from its new location, or close this tab.
+  "artifact.reload": "Recharger", // Reload
+  "artifact.openInBrowser": "Ouvrir dans le navigateur", // Open in browser
+  "artifact.viewportFit": "Adapter à l’onglet", // Fit to tab
+  "artifact.viewportDesktop": "Ordinateur", // Desktop
+  "artifact.viewportTablet": "Tablette", // Tablet
+  "artifact.viewportPhone": "Téléphone", // Phone
+  "artifact.goToSession": "Aller à la session", // Go to session
+  "artifact.versionTitle": (n: number, time: string) => `Version ${n} · ${time}`, // Version ${n} · ${time}
+  "artifact.viewingVersion": (n: number, time: string) => `Affichage de la version ${n} (enregistrée : ${time})`, // Viewing version ${n}, saved ${time}
+  "artifact.restoreVersion": "Restaurer cette version", // Restore this version
+  "artifact.backToLatest": "Revenir à la dernière version", // Back to latest
+  "artifact.restoreBody": (n: number) => `Le fichier sera remplacé par la version ${n}. Son contenu actuel reste dans l’historique des versions.`, // The file will be replaced with version ${n}. Its current content stays in the version history.
+  "artifact.restore": "Restaurer", // Restore
+  "artifact.restoreFailed": "Impossible de restaurer cette version. Veuillez réessayer.", // The version could not be restored. Please try again.
+  "artifact.openAsTab": "Ouvrir dans un onglet", // Open as tab
+  "artifact.closePanel": "Fermer l’aperçu", // Close preview
+  "artifact.cardOpen": "Ouvrir", // Open
+  "artifact.cardOpenTitle": "Ouvrir à côté de cette session", // Open beside this session
+  "artifact.cardKind": "Page HTML", // HTML page
+  "artifact.frameTitle": (name: string) => `Aperçu de ${name}`, // Preview of ${name}
 };
 
 export default fr;

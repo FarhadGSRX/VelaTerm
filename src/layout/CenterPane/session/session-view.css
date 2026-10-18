@@ -5,7 +5,7 @@
 .sv-agent-version { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; font-size: 10.5px; color: var(--text-faint); }
 .sv-agent-version-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sv-agent-version-update { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--accent); white-space: nowrap; text-decoration: none; }
-.sv-agent-version-update:hover { text-decoration: underline; }
+a.sv-agent-version-update:hover { text-decoration: underline; }
 
 .sv {
   position: absolute;
@@ -1203,12 +1203,14 @@
   gap: 8px;
   padding: 8px 10px;
   background: var(--bg-1);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+/* Focus thickens the edge with an outer ring rather than a wider border, so nothing inside shifts. */
 .sv-box:focus-within {
-  border-color: var(--accent-line);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
 }
 /* Grab strip on the box's top edge for dragging the text box taller or shorter. It stays clear of the
    rounded corners and draws nothing: the cursor is the affordance, the box border is the edge. */
@@ -1262,25 +1264,15 @@
   outline-offset: 2px;
 }
 .sv-image-preview {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  max-width: none;
-  max-height: none;
-  margin: 0;
-  padding: 3vh 3vw;
-  border: 0;
-  background: transparent;
+  width: calc(100vw - 6vw);
+  max-width: calc(100vw - 32px);
   color: var(--text);
-}
-.sv-image-preview::backdrop {
-  background: rgb(0 0 0 / 70%);
 }
 .sv-image-preview-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: calc(100dvh - 6vh);
+  max-height: calc(100dvh - 32px);
   overflow: hidden;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -1330,31 +1322,15 @@
 
 /* The full text of a queued message, when the composer row can only show its first two lines. */
 .sv-queue-preview {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  max-width: none;
-  max-height: none;
-  margin: 0;
-  padding: 3vh 3vw;
-  border: 0;
-  background: transparent;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
   color: var(--text);
-}
-.sv-queue-preview::backdrop {
-  background: rgb(0 0 0 / 60%);
-}
-/* Flex so the panel's auto margins center it on both axes; a block box would only center horizontally. */
-.sv-queue-preview[open] {
-  display: flex;
-  flex-direction: column;
 }
 .sv-queue-preview-panel {
   display: flex;
   flex-direction: column;
   width: min(720px, 100%);
-  max-height: 100%;
+  max-height: calc(100dvh - 32px);
   margin: auto;
   overflow: hidden;
   background: var(--bg-1);
@@ -1748,6 +1724,25 @@ select.sv-pill {
   color: var(--text-faint);
   opacity: 0.75;
 }
+/* A wake-up shares the compaction rule; its summary can be a long sentence, so it gives way to the lines
+   rather than pushing them out, and is cut to one line. */
+.sv-wake-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 85%;
+}
+.sv-wake-title {
+  flex: none;
+}
+.sv-wake-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sv-wake .sv-compaction-line {
+  min-width: 24px;
+}
 /* While it runs, the same row pulses: the agent is busy with it and nothing else is happening. */
 .sv-compaction-running .sv-compaction-label {
   animation: sv-compaction-pulse 1.4s ease-in-out infinite;
@@ -2134,7 +2129,8 @@ select.sv-pill {
   text-align: left;
   cursor: pointer;
 }
-.sv-complete-item:hover {
+/* The pointer moves the highlight too, so one row is lit at a time. */
+.sv-complete-item.on {
   background: var(--bg-hover);
 }
 .sv-complete-name {

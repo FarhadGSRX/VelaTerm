@@ -52,7 +52,7 @@ pub fn transcript_path(id: &str) -> Option<PathBuf> {
 
 pub fn read_transcript(id: &str) -> Result<String, String> {
     let path = transcript_path(id).ok_or("Antigravity transcript file not found")?;
-    std::fs::read_to_string(path).map_err(|e| format!("Failed to read Antigravity transcript: {e}"))
+    crate::agent::history_store::compat::read_path(&path)
 }
 
 /// First user message of an Antigravity conversation, read from the transcript a hook payload names.

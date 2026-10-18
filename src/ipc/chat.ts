@@ -5,6 +5,9 @@
 //! agent is doing arrives on one event channel per session.
 
 import { invoke, listen, type UnlistenFn } from "./transport";
+import { t } from "../i18n";
+import { apiUrl } from "./shareBase";
+import { mapBackendError } from "./backendError";
 import type { Session } from "../types";
 
 /**
@@ -20,6 +23,8 @@ export interface ChatImage {
 export interface ChatImageReference {
   mimeType: string;
   attachmentId: string;
+  contentRevision?: string;
+  sizeBytes?: number;
 }
 
 /** A live row carries bytes; a snapshot row carries a reference until its image is mounted. */
@@ -28,12 +33,29 @@ export type ChatImageValue = ChatImage | ChatImageReference;
 /** A small process-local cache prevents two panes in the same client from fetching the same image twice. */
 const snapshotImageCache = new Map<string, ChatImage>();
 const SNAPSHOT_IMAGE_CACHE_LIMIT = 16;
-const snapshotImageContexts = new WeakMap<object, { sessionId: string; cacheOwner: string }>();
+const SNAPSHOT_IMAGE_CACHE_BYTES = 8 * 1024 * 1024;
+const snapshotImageContexts = new WeakMap<object, { sessionId: string; cacheOwner: string; historyGeneration?: string; childPath?: string[] }>();
+let imageReadTail:Promise<void>=Promise.resolve();
+function serializeImageRead<T>(read:()=>Promise<T>,signal?:AbortSignal):Promise<T> {
+  const previous=imageReadTail;
+  let release!:()=>void;
+  imageReadTail=new Promise<void>(resolve=>{release=resolve;});
+  return previous.then(()=>{signal?.throwIfAborted();return read();}).finally(release);
+}
+function imageBytes(image:ChatImage):number {
+  // Count UTF-16 bytes, the data URL/render copy, serialization, and decoded thumbnail pixels.
+  return image.data.length*5+image.mimeType.length*4+256*256*4+256;
+}
 
 function rememberSnapshotImage(key: string, image: ChatImage): void {
-  if (!snapshotImageCache.has(key) && snapshotImageCache.size >= SNAPSHOT_IMAGE_CACHE_LIMIT) {
+  const bytes=imageBytes(image);
+  if (bytes>SNAPSHOT_IMAGE_CACHE_BYTES) return;
+  snapshotImageCache.delete(key);
+  let retained=[...snapshotImageCache.values()].reduce((total,item)=>total+imageBytes(item),0);
+  while (snapshotImageCache.size && (snapshotImageCache.size>=SNAPSHOT_IMAGE_CACHE_LIMIT || retained+bytes>SNAPSHOT_IMAGE_CACHE_BYTES)) {
     const oldest = snapshotImageCache.keys().next().value as string | undefined;
-    if (oldest) snapshotImageCache.delete(oldest);
+    if (!oldest) break;
+    const previous=snapshotImageCache.get(oldest)!;retained-=imageBytes(previous);snapshotImageCache.delete(oldest);
   }
   snapshotImageCache.set(key, image);
 }
@@ -55,21 +77,30 @@ function registerSnapshotImages(cacheOwner: string, sessionId: string, value: un
 }
 
 /** Resolve one mounted snapshot image. Unmounted history never crosses the transport. */
-export async function resolveChatImage(image: ChatImageValue): Promise<ChatImage> {
+export async function resolveChatImage(image: ChatImageValue, original:boolean|"view" = false,signal?:AbortSignal): Promise<ChatImage> {
+  signal?.throwIfAborted();
   if ("data" in image) return image;
   const context = snapshotImageContexts.get(image);
   if (!context) throw new Error("This chat attachment is no longer associated with a snapshot");
   // Replayed row ids are stable only within one agent process. Including its start time prevents a new
   // branch that reuses `h-0` from receiving the previous process's image bytes from this client cache.
-  const key = `${context.cacheOwner}\u0000${image.attachmentId}`;
+  const purpose=original==="view" ? "view" : original ? "original" : "preview";
+  const key = `${context.cacheOwner}\u0000${image.attachmentId}\u0000${purpose}`;
   const cached = snapshotImageCache.get(key);
   if (cached) return cached;
-  const resolved = await invoke<ChatImage>("chat_attachment", {
-    sessionId: context.sessionId,
-    attachmentId: image.attachmentId,
-  });
-  rememberSnapshotImage(key, resolved);
-  return resolved;
+  return serializeImageRead(async()=> {
+    const reused=snapshotImageCache.get(key);if (reused) return reused;
+    const resolved=await invoke<ChatImage>("chat_attachment", {
+      sessionId: context.sessionId,
+      attachmentId: image.attachmentId,
+      purpose,
+      ...(image.attachmentId.startsWith("history:") ? { historyGeneration: context.historyGeneration, childPath: context.childPath,
+        expectedRevision: image.contentRevision } : {}),
+    });
+    signal?.throwIfAborted();
+    if (purpose==="preview") rememberSnapshotImage(key,resolved);
+    return resolved;
+  },signal);
 }
 
 /** One row of the conversation. A tool call and its result are one row, because they are one card. */
@@ -91,7 +122,7 @@ export interface MessageOrigin {
   round?: number;
 }
 
-export type ChatRow =
+export type ChatRow = (
   | { kind: "user"; id: string; text: string; images?: ChatImageValue[]; at?: number; origin?: MessageOrigin }
   | {
       kind: "assistant";
@@ -125,6 +156,7 @@ export type ChatRow =
       children?: ChatRow[];
       detailAvailable?: boolean;
       childCount?: number;
+      childAvailable?: boolean;
     }
   | { kind: "error"; id: string; message: string }
   /**
@@ -170,6 +202,22 @@ export type ChatRow =
       trigger?: string;
       /** How large the context was before the summary replaced it. */
       preTokens?: number;
+    }
+  /**
+   * A background task finished while the agent was idle, and the agent answered it in a turn of its own.
+   *
+   * A turn boundary like a prompt: without it, what the agent reports on its own reads as the answer to
+   * whatever the person said last. `summary` is the agent's one-line account of the task, possibly empty.
+   */
+  | { kind: "wake"; id: string; summary: string; at?: number }) & {
+      bodyAvailable?: boolean;
+      /**
+       * How this row's details are read, when it differs from the rest of the window: a running
+       * conversation can show history-page rows in front of rows its process produced itself.
+       */
+      detailProtocol?: 1 | 2;
+      /** The history generation a history-page row belongs to, when the window mixes sources. */
+      historyGeneration?: string;
     };
 
 /** A tool the agent wants to run and is waiting for permission on. */
@@ -406,6 +454,8 @@ export interface ChatCollaborationMode {
 export interface QueuedMessage {
   id: string;
   text: string;
+  textDeferred?: boolean;
+  textRevision?: string;
   /** Command preview parsed by the backend; the original context stays in text. */
   shellCommand?: string;
   origin?: MessageOrigin;
@@ -421,6 +471,7 @@ export type ChatRewindScope = "conversation" | "files" | "both";
 
 /** Backend preview of the file checkpoint associated with a user turn. */
 export interface ChatRewindPreview {
+  historyGeneration?: string;
   canRewind?: boolean;
   filesChanged?: string[];
   insertions?: number;
@@ -451,6 +502,20 @@ export interface ChatUserMessage {
 
 /** Everything needed to draw a conversation from scratch. */
 export interface ChatSnapshot {
+  protocolVersion?: 1 | 2;
+  historyGeneration?: string;
+  readJobId?: string;
+  processEpoch?: number | null;
+  snapshotRevision?: string;
+  coverage?: "complete" | "partial" | "error";
+  indexing?: boolean;
+  pendingLocation?: { before?: string; after?: string; anchor?: string; messageIndex?: number };
+  locatedRowId?: string;
+  indexedBytes?: number;
+  sourceBytes?: number;
+  knownRows?: number;
+  hasNewer?: boolean;
+  historyError?: string | null;
   userMessages?: ChatUserMessage[];
   positions?: Record<string, number>;
   pageKind?: "full" | "recent" | "history" | "delta";
@@ -532,11 +597,12 @@ export function extrasOf(snapshot: ChatSnapshot): ChatExtras {
 
 /** What arrives on a session's chat channel. */
 export type ChatEvent =
-  | { type: "rows"; positions?: Record<string, number>; rows: ChatRow[]; revision?: number; epoch?: number }
+  | { type: "historyReadError"; message: string }
+  | { type: "rows"; protocolVersion?: 1 | 2; positions?: Record<string, number>; rows: ChatRow[]; revision?: number; epoch?: number }
   /** A rewind removed rows. Replace rather than merge so every connected view drops the same tail. */
-  | { type: "replaceRows"; userMessages?: ChatUserMessage[]; positions?: Record<string, number>; rows: ChatRow[]; revision?: number; epoch?: number; hasMore?: boolean }
+  | { type: "replaceRows"; protocolVersion?: 1 | 2; userMessages?: ChatUserMessage[]; positions?: Record<string, number>; rows: ChatRow[]; revision?: number; epoch?: number; hasMore?: boolean }
   /** A new process took over; its restored history replaces the previous timeline atomically. */
-  | { type: "reset"; userMessages?: ChatUserMessage[]; epoch?: number; revision?: number; rows?: ChatRow[]; positions?: Record<string, number>; hasMore?: boolean }
+  | { type: "reset"; protocolVersion?: 1 | 2; userMessages?: ChatUserMessage[]; epoch?: number; revision?: number; rows?: ChatRow[]; positions?: Record<string, number>; hasMore?: boolean }
   | { type: "permission"; request: ChatPermission }
   /** The whole queue, whenever it changes. A full list rather than one change, so clients cannot drift. */
   | { type: "queued"; items: QueuedMessage[]; revision?: number; epoch?: number }
@@ -573,6 +639,7 @@ export type ChatEvent =
    */
   | { type: "exited"; code: number; stderr: string; released?: boolean }
   | { type: "error"; message: string }
+  | { type: "storagePressure"; message: string }
   | { type: "extras"; extras: ChatExtras }
   /** The wait for a usage limit to reset began, moved, or ended; `reason` says why it ended unsent. */
   | { type: "autoContinue"; waiting: ChatAutoContinue | null; reason?: ChatAutoContinueReason | null }
@@ -744,6 +811,30 @@ export function chatQueueUpdate(sessionId: string, id: string, text: string): Pr
   return invoke("chat_queue_update", { sessionId, id, text });
 }
 
+/** Read an explicit editable draft through revision-bound text pieces. */
+export interface QueuedTextPiece {text:string;contentRevision:string;chunkSequence:number;eof:boolean;sizeBytes:number}
+export function chatQueueRead(sessionId:string,item:QueuedMessage,sequence=0,expectedRevision=item.textRevision):Promise<QueuedTextPiece> {
+  return invoke("chat_queue_read",{sessionId,id:item.id,expectedRevision,sequence});
+}
+
+export async function readCompleteQueuedText(sessionId:string,item:QueuedMessage,signal?:AbortSignal):Promise<string> {
+  if (!item.textDeferred) return item.text;
+  let revision=item.textRevision;
+  const pieces:string[]=[];
+  let bytes=0;
+  for (let sequence=0;;sequence++) {
+    signal?.throwIfAborted();
+    const part=await chatQueueRead(sessionId,item,sequence,revision);
+    signal?.throwIfAborted();
+    if (part.chunkSequence!==sequence || (revision!==undefined && revision!==part.contentRevision)) throw new Error("source_changed: "+t("chat.history.contentChanged"));
+    if (part.sizeBytes>COMPLETE_COPY_BYTES) throw new Error("detail_requires_download: "+t("chat.history.clipboardLimit"));
+    bytes+=new TextEncoder().encode(part.text).byteLength;
+    if (bytes>COMPLETE_COPY_BYTES) throw new Error("detail_requires_download: "+t("chat.history.clipboardLimit"));
+    revision=part.contentRevision;pieces.push(part.text);
+    if (part.eof) return pieces.join("");
+  }
+}
+
 /** Stop the turn in progress; the conversation stays open. */
 export function chatInterrupt(sessionId: string): Promise<void> {
   return invoke("chat_interrupt", { sessionId });
@@ -810,24 +901,37 @@ export function chatModels(sessionId: string): Promise<ChatModel[]> {
   return invoke("chat_models", { sessionId });
 }
 
-/** Read the whole conversation; snapshot image bytes stay deferred until their individual views mount. */
-export async function chatSnapshot(sessionId: string, window?: { before?: string; from?: string; since?: number; epoch?: number }): Promise<ChatSnapshot> {
+/** Negotiate a bounded conversation window; image and history body bytes remain deferred. */
+export async function chatSnapshot(sessionId: string, window?: { before?: string; from?: string; since?: number; epoch?: number; protocolVersion?: 2; historyGeneration?: string; after?: string; anchor?: string; readJobId?: string; historyOnly?: boolean; messageIndex?: number; controlOnly?: boolean; childPath?: string[] }): Promise<ChatSnapshot> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const snapshot = await Promise.race([
-    invoke<ChatSnapshot>("chat_snapshot", { sessionId, ...(window ? { window } : {}) }),
+    invoke<ChatSnapshot>("chat_snapshot", { sessionId, ...(!window?.controlOnly ? { preferBounded: true } : {}),
+      ...(window?.historyOnly !== undefined ? { historyOnly: window.historyOnly } : {}),
+      ...(window?.childPath?.length ? { childPath: window.childPath } : {}),
+      ...(window?.messageIndex !== undefined ? { messageIndex: window.messageIndex } : {}), ...(window ? { window } : {}),
+      ...(window?.protocolVersion ? { protocolVersion: window.protocolVersion, historyGeneration: window.historyGeneration, after: window.after, anchor: window.anchor, readJobId: window.readJobId } : {}) }),
     new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Conversation synchronization timed out")), 30_000); }),
   ]).finally(() => clearTimeout(timer));
+  if (snapshot.historyError) snapshot.historyError = mapBackendError(snapshot.historyError);
   registerRowPositions(snapshot.rows, snapshot.positions);
   const cacheOwner = `${sessionId}\u0000${snapshot.startedAt ?? "stopped"}`;
   registerSnapshotImages(cacheOwner, sessionId, snapshot.rows);
-  registerToolDetails(sessionId, snapshot.startedAt, snapshot.rows);
+  registerToolDetails(sessionId, snapshot.startedAt, snapshot.rows, snapshot.protocolVersion, snapshot.historyGeneration, window?.childPath);
   registerSnapshotImages(cacheOwner, sessionId, snapshot.queue);
   return snapshot;
 }
 
 /** Preview which files Claude would restore, without changing files or conversation state. */
-export function chatRewindPreview(sessionId: string, rowId: string): Promise<ChatRewindPreview> {
-  return invoke("chat_rewind_preview", { sessionId, rowId });
+export function chatRewindPreview(sessionId: string, rowId: string, historyGeneration?: string): Promise<ChatRewindPreview> {
+  return invoke("chat_rewind_preview", { sessionId, rowId, ...(historyGeneration ? { protocolVersion: 2, historyGeneration } : {}) });
+}
+
+/** Native targets are paged without loading the transcript or depending on the visible row position. */
+export function chatRewindCandidates(sessionId: string, cursor?: string): Promise<{
+  protocolVersion: 2; historyGeneration: string;
+  rows: { rowId: string; text: string; at?: number; hasImages: boolean }[]; nextCursor?: string | null;
+}> {
+  return invoke("chat_rewind_candidates", { sessionId, ...(cursor ? { cursor } : {}) });
 }
 
 /** Apply the confirmed rewind. The backend remains the authority for the resulting timeline. */
@@ -835,8 +939,9 @@ export function chatRewind(
   sessionId: string,
   rowId: string,
   scope: ChatRewindScope,
+  historyGeneration?: string,
 ): Promise<ChatRewindResult> {
-  return invoke("chat_rewind", { sessionId, rowId, scope });
+  return invoke("chat_rewind", { sessionId, rowId, scope, ...(historyGeneration ? { protocolVersion: 2, historyGeneration } : {}) });
 }
 
 /**
@@ -874,25 +979,218 @@ export function onChatEvent(
   cb: (event: ChatEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<ChatEvent>(`chat://event/${sessionId}`, event => {
+    if (event.type === "historyReadError") event = { ...event, message: mapBackendError(event.message) };
     if ((event.type === "rows" || event.type === "replaceRows" || event.type === "reset") && event.rows) {
       registerRowPositions(event.rows, event.positions);
       registerSnapshotImages(`${sessionId}\u0000${event.epoch ?? "live"}`, sessionId, event.rows);
-      registerToolDetails(sessionId, event.epoch, event.rows);
+      registerToolDetails(sessionId, event.epoch, event.rows, event.protocolVersion);
     }
     cb(event);
   });
 }
 
-const toolContexts = new WeakMap<object, { sessionId: string; epoch?: number }>();
-function registerToolDetails(sessionId: string, epoch: number | undefined, rows: ChatRow[]) {
-  for (const row of rows) if (row.kind === "tool") {
-    toolContexts.set(row, { sessionId, epoch });
-    if (row.children) registerToolDetails(sessionId, epoch, row.children);
+const toolContexts = new WeakMap<object, { sessionId: string; epoch?: number; protocolVersion?: 1 | 2; historyGeneration?: string; childPath?: string[] }>();
+function registerToolDetails(sessionId: string, epoch: number | undefined, rows: ChatRow[], windowProtocol?: 1 | 2, historyGeneration?: string, childPath?: string[]) {
+  for (const row of rows) {
+    const protocolVersion = row.detailProtocol ?? windowProtocol;
+    // A history row in front of a running timeline names its own generation; the process's own
+    // rows read from memory are addressed without one.
+    const generation = row.historyGeneration ?? (row.detailProtocol === 1 ? undefined : historyGeneration);
+    toolContexts.set(row, { sessionId, epoch, protocolVersion, historyGeneration: generation, ...(childPath?.length ? {childPath} : {}) });
+    if (row.kind === "user" && protocolVersion===2) for (const image of row.images ?? []) {
+      if ("attachmentId" in image) snapshotImageContexts.set(image,{sessionId,cacheOwner:`${sessionId}\u0000${generation ?? "history"}`,historyGeneration:generation,childPath});
+    }
+    if (row.kind === "tool" && row.children) registerToolDetails(sessionId, epoch, row.children, protocolVersion, generation, childPath);
   }
+}
+
+export interface ChatDetailField {
+  detailRef: string;
+  contentRevision: string;
+  label: string;
+  path: string;
+  sizeBytes?: number;
+  append?: boolean;
+  prefix?: string;
+  suffix?: string;
+  literal?: string;
+  mimeType?: string;
+  kind: "text" | "diff" | "json" | "image" | "binary";
+}
+export interface ChatFileDetail {
+  path: string;
+  changeType?: string | null;
+  detailRef?: string | null;
+  contentRevision?: string | null;
+  kind?: ChatDetailField["kind"] | null;
+  sizeBytes?: number | null;
+}
+export interface ChatManifest {
+  protocolVersion: 2;
+  historyGeneration: string;
+  row: ChatRow;
+  fields: ChatDetailField[];
+  files: ChatFileDetail[];
+  nextCursor: string | null;
+  previousCursor?: string | null;
+}
+export interface ChatDetailChunk {
+  contentRevision: string;
+  chunkSequence: number;
+  text: string;
+  nextCursor: string | null;
+  previousCursor?: string | null;
+  eof: boolean;
+  decodedStart: number;
+  decodedEnd: number;
+}
+export function hasBoundedChatDetails(row: ChatRow) { return toolContexts.get(row)?.protocolVersion === 2; }
+export function chatHistoryGeneration(row: ChatRow) { return toolContexts.get(row)?.historyGeneration; }
+export function chatHistorySessionId(row: ChatRow) { return toolContexts.get(row)?.sessionId; }
+export function chatHistoryChildPath(row: ChatRow): readonly string[] { return toolContexts.get(row)?.childPath??[]; }
+/** Preserve authorized detail ownership when a view adds local presentation facts to a row. */
+export function inheritChatRowContext<T extends ChatRow>(original:ChatRow,presented:T):T {
+  const context=toolContexts.get(original);if (context) toolContexts.set(presented,context);
+  const position=rowPositions.get(original);if (position!==undefined) rowPositions.set(presented,position);
+  return presented;
+}
+/** Follow one explicit parent tool association using the same bounded page and detail contract. */
+export function chatChildSnapshot(row: ChatRow, window?: { before?: string; after?: string; anchor?: string; readJobId?: string; historyGeneration?: string }): Promise<ChatSnapshot> {
+  const context=toolContexts.get(row);
+  if (!context || context.protocolVersion!==2 || row.kind!=="tool" || !row.childAvailable) return Promise.reject(new Error(t("chat.history.unavailable")));
+  return chatSnapshot(context.sessionId,{...window,protocolVersion:2,historyOnly:true,childPath:[...(context.childPath??[]),row.id]});
+}
+export async function chatSubagentSnapshot(sessionId:string,taskId:string,window?:{before?:string;after?:string;anchor?:string;readJobId?:string}):Promise<ChatSnapshot> {
+  const page=await invoke<ChatSnapshot & {childPath:string[]}>("chat_subagent_rows",{sessionId,taskId,protocolVersion:2,...window});
+  if (page.historyError) page.historyError=mapBackendError(page.historyError);
+  registerRowPositions(page.rows,page.positions);
+  registerToolDetails(sessionId,undefined,page.rows,2,page.historyGeneration,page.childPath);
+  return page;
+}
+
+export function chatManifest(row: ChatRow, cursor?: string): Promise<ChatManifest> {
+  const context = toolContexts.get(row);
+  if (!context || context.protocolVersion !== 2) return Promise.reject(new Error(t("chat.history.unavailable")));
+  return invoke("chat_row", { ...context, rowId: row.id, cursor });
+}
+export function chatDetailRead(row: ChatRow, field: ChatDetailField, cursor?: string): Promise<ChatDetailChunk> {
+  const context = toolContexts.get(row);
+  if (!context || context.protocolVersion !== 2) return Promise.reject(new Error(t("chat.history.unavailable")));
+  return invoke("chat_detail_read", { sessionId: context.sessionId, childPath: context.childPath, detailRef: field.detailRef, expectedRevision: field.contentRevision, cursor });
+}
+
+export function chatDetailLocate(row: ChatRow, reference: string, chunkSequence: number): Promise<{ field: ChatDetailField; cursor: string; historyGeneration: string }> {
+  const context = toolContexts.get(row);
+  if (!context || context.protocolVersion !== 2) return Promise.reject(new Error(t("chat.history.unavailable")));
+  return invoke("chat_locate", { sessionId: context.sessionId, childPath: context.childPath, rowId: row.id, detailRef: reference, chunkSequence });
+}
+
+const COMPLETE_COPY_BYTES=8*1024*1024;
+let copyingCompleteDetail=false;
+export function canCopyCompleteChatDetail(field: ChatDetailField) { return field.kind!=="image" && field.kind!=="binary" && field.sizeBytes !== undefined && field.sizeBytes <= COMPLETE_COPY_BYTES; }
+
+export function chatDetailImage(row:ChatRow,field:ChatDetailField):ChatImageReference | undefined {
+  const context=toolContexts.get(row);if (!context || context.protocolVersion!==2 || field.kind!=="image") return;
+  const image={attachmentId:`history:${field.detailRef}`,mimeType:field.mimeType ?? "application/octet-stream",contentRevision:field.contentRevision,sizeBytes:field.sizeBytes};
+  snapshotImageContexts.set(image,{sessionId:context.sessionId,cacheOwner:`${context.sessionId}\u0000${context.historyGeneration ?? "history"}`,historyGeneration:context.historyGeneration,childPath:context.childPath});return image;
+}
+async function readCompleteDetail(row:ChatRow,field:ChatDetailField,signal?:AbortSignal):Promise<string> {
+  if (!canCopyCompleteChatDetail(field)) throw new Error("detail_requires_download: "+t("chat.history.clipboardLimit"));
+  const parts:string[]=[];let bytes=0;let cursor:string|undefined;
+  do {
+    signal?.throwIfAborted();const chunk=await chatDetailRead(row,field,cursor);signal?.throwIfAborted();
+    if (chunk.contentRevision!==field.contentRevision) throw new Error("source_changed: "+t("chat.history.contentChanged"));
+    bytes+=new TextEncoder().encode(chunk.text).byteLength;
+    if (bytes>COMPLETE_COPY_BYTES) throw new Error("detail_requires_download: "+t("chat.history.clipboardLimit"));
+    parts.push(chunk.text);cursor=chunk.nextCursor??undefined;
+  } while(cursor);
+  if (bytes!==field.sizeBytes) throw new Error("source_changed: "+t("chat.history.contentChanged"));
+  return parts.join("");
+}
+
+export async function readCompleteChatBody(row:ChatRow,signal?:AbortSignal):Promise<string> {
+  if (copyingCompleteDetail) throw new Error(t("chat.history.copyBusy"));
+  copyingCompleteDetail=true;
+  try {
+    const fields:ChatDetailField[]=[];let cursor:string|undefined;let bytes=0;
+    do {
+      signal?.throwIfAborted();const manifest=await chatManifest(row,cursor);signal?.throwIfAborted();
+      for (const field of manifest.fields) if (field.label==="body") {
+        if (!canCopyCompleteChatDetail(field)) throw new Error("detail_requires_download: "+t("chat.history.clipboardLimit"));
+        bytes+=(field.literal!==undefined?new TextEncoder().encode(field.literal).byteLength:field.sizeBytes!+new TextEncoder().encode((field.prefix??"")+(field.suffix??"")).byteLength)+(fields.length && !field.append?1:0);
+        if (bytes>COMPLETE_COPY_BYTES) throw new Error("detail_requires_download: "+t("chat.history.clipboardLimit"));
+        fields.push(field);
+      }
+      cursor=manifest.nextCursor??undefined;
+    } while(cursor);
+    if (!fields.length) throw new Error(t("chat.history.unavailable"));
+    const parts:string[]=[];for (const field of fields) {
+      if (parts.length && !field.append) parts.push("\n");
+      const original=await readCompleteDetail(row,field,signal);
+      parts.push(field.literal??((field.prefix??"")+original+(field.suffix??"")));
+    }
+    return parts.join("");
+  } finally {copyingCompleteDetail=false;}
+}
+export async function copyCompleteChatDetail(row: ChatRow, field: ChatDetailField,signal?: AbortSignal): Promise<void> {
+  if (copyingCompleteDetail) throw new Error(t("chat.history.copyBusy"));
+  if (field.sizeBytes === undefined || field.sizeBytes > COMPLETE_COPY_BYTES) throw new Error("detail_requires_download: "+t("chat.history.clipboardLimit"));
+  copyingCompleteDetail=true;
+  try {
+    const text=await readCompleteDetail(row,field,signal);
+    signal?.throwIfAborted();
+    const { platform } = await import("../platform");
+    signal?.throwIfAborted();
+    await platform.clipboard.writeText(text, {reportFailure:true});
+  } finally {copyingCompleteDetail=false;}
+}
+export async function downloadCompleteChatDetail(row: ChatRow,field: ChatDetailField): Promise<void> {
+  const context=toolContexts.get(row);
+  if (!context || context.protocolVersion!==2) throw new Error(t("chat.history.unavailable"));
+  const request={sessionId:context.sessionId,childPath:context.childPath,detailRef:field.detailRef,expectedRevision:field.contentRevision};
+  const imageExtensions:Record<string,string>={"image/png":"png","image/jpeg":"jpg","image/gif":"gif","image/webp":"webp"};
+  const extension=field.kind==="image" ? (imageExtensions[field.mimeType ?? ""] ?? "bin") : field.kind==="json" ? "json" : field.kind==="diff" ? "diff" : "txt";
+  const fileName=`history-detail.${extension}`;
+  const { platform } = await import("../platform");
+  if ((platform.env.isTauri || platform.env.isElectron) && !platform.env.isRemoteWindow) {
+    const destination=await platform.dialog.saveFile({defaultPath:fileName});
+    if (destination) await invoke("chat_detail_save",{...request,destPath:destination});
+    return;
+  }
+  const url=await invoke<string>("chat_detail_download",request);
+  const link=document.createElement("a");link.href=apiUrl(url);link.download=fileName;
+  document.body.appendChild(link);link.click();link.remove();
+}
+
+export interface ChatSearchHit { rowId: string; snippet: string; detailRef?: string; chunkSequence?: number; offset: number; }
+export interface ChatSearchPage { historyGeneration?: string; hits: ChatSearchHit[]; jobId?: string; nextCursor: string | null; coverage: "complete" | "partial" | "error"; scannedBytes: number; scannedRows?: number; }
+export function chatSearch(sessionId: string, query: string, cursor?: string): Promise<ChatSearchPage> {
+  return invoke("chat_search", { sessionId, query, cursor });
+}
+export function chatReadCancel(sessionId: string, jobId: string): Promise<void> { return invoke("chat_read_cancel", { sessionId, jobId }); }
+
+interface ChatExportProgress { jobId: string; status: "pending" | "complete"; download?: string | null; sizeBytes?: number; }
+/** Generate the complete document on disk. The client holds only job progress and the final ticket. */
+export async function chatExportContext(sessionId: string, exportedAt: string, destination?: string, signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted();
+  const job=await invoke<ChatExportProgress>("chat_export_start",{sessionId,destPath:destination,exportedAt});
+  const cancel=() => void chatReadCancel(sessionId,job.jobId).catch(()=>{});
+  signal?.addEventListener("abort",cancel,{once:true});
+  try {
+    signal?.throwIfAborted();
+    let current=job;
+    while (current.status!=="complete") {
+      await new Promise<void>(resolve=>setTimeout(resolve,500));signal?.throwIfAborted();
+      current=await invoke<ChatExportProgress>("chat_export_status",{sessionId,jobId:job.jobId});
+    }
+    signal?.throwIfAborted();return current.download ? apiUrl(current.download) : null;
+  } catch (error) {cancel();throw error;}
+  finally {signal?.removeEventListener("abort",cancel);}
 }
 export async function loadChatTool(row: Extract<ChatRow, { kind: "tool" }>): Promise<Extract<ChatRow, { kind: "tool" }>> {
   const context = toolContexts.get(row);
   if (!context) throw new Error("Tool details are no longer associated with a conversation");
+  if (context.protocolVersion === 2) throw new Error("detail_requires_paging: "+t("chat.history.openViewer"));
   const result = await invoke<Extract<ChatRow, { kind: "tool" }>>("chat_row", { ...context, rowId: row.id });
   registerToolDetails(context.sessionId, context.epoch, [result]);
   registerSnapshotImages(`${context.sessionId}\u0000${context.epoch ?? "stopped"}`, context.sessionId, result);
@@ -901,7 +1199,7 @@ export async function loadChatTool(row: Extract<ChatRow, { kind: "tool" }>): Pro
 
 export function chatToolContextKey(row: ChatRow): string {
   const context = toolContexts.get(row);
-  return `${context?.sessionId}:${context?.epoch}:${row.id}`;
+  return `${context?.sessionId}:${context?.epoch}:${context?.historyGeneration}:${context?.childPath?.join("/")??""}:${row.id}`;
 }
 
 const rowPositions = new WeakMap<ChatRow, number>();

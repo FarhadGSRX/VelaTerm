@@ -481,20 +481,12 @@ impl PtyManager {
                 }
             }
         }
-        // Normalize the working directory. A stale path falls back to the home directory to avoid
-        // process-creation failures. Unspecified (empty or absent, as for a session in a collection with no
-        // folder behind it) also means home rather than this process's own directory, which on a desktop launch
-        // is `/` and is never what the user meant. Codex rollout capture also uses the result for cwd matching.
-        let spawn_cwd = match cwd.filter(|d| !d.is_empty()) {
-            Some(d) if std::path::Path::new(&d).is_dir() => Some(d),
-            Some(stale) => {
-                let fb = home_dir().filter(|h| std::path::Path::new(h).is_dir());
-                crate::diagnostics::record("WARN","pty_cwd_fallback",serde_json::json!({"sessionId":id,"step":"fallback"}));
-                let _ = stale;
-                fb
-            }
-            None => home_dir().filter(|h| std::path::Path::new(h).is_dir()),
-        };
+        // Normalize the working directory: unset or stale means home, as in the chat view (`host::spawn_dir`).
+        // Codex rollout capture also uses the result for cwd matching.
+        let spawn_cwd = crate::host::spawn_dir(cwd.as_deref());
+        if cwd.as_deref().is_some_and(|d| !d.trim().is_empty()) && spawn_cwd != cwd {
+            crate::diagnostics::record("WARN","pty_cwd_fallback",serde_json::json!({"sessionId":id,"step":"fallback"}));
+        }
         if let Some(dir) = &spawn_cwd {
             cmd.cwd(dir);
         }
@@ -2160,18 +2152,23 @@ pub(crate) fn parse_wsl_distros(stdout: &[u8]) -> Vec<String> {
     distros
 }
 
+/// Whether the current user has at least one WSL distribution registered. WSL records each distribution as a
+/// `{GUID}` subkey of Lxss (also the form of its `DefaultDistribution` value); other subkeys are not distributions.
+/// Windows keeps an inbox wsl.exe stub after WSL is uninstalled that answers any invocation, `--list` included,
+/// with an install prompt in its own window, so every caller checks this before running wsl.exe.
+#[cfg(windows)]
+pub(crate) fn wsl_distribution_registered() -> bool {
+    windows_registry::CURRENT_USER
+        .open(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
+        .and_then(|key| key.keys().map(|mut names| names.any(|name| name.starts_with('{'))))
+        .unwrap_or(false)
+}
+
 #[cfg(windows)]
 fn wsl_distros() -> Vec<String> {
     use std::os::windows::process::CommandExt;
 
-    // WSL registers each distribution as a subkey of Lxss. With none registered there is nothing to list, and
-    // Windows keeps an inbox wsl.exe stub after WSL is uninstalled that answers any invocation with an install
-    // prompt in its own window, so probing it would raise that prompt on every shell enumeration.
-    let registered = windows_registry::CURRENT_USER
-        .open(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
-        .and_then(|key| key.keys().map(|mut names| names.next().is_some()))
-        .unwrap_or(false);
-    if !registered {
+    if !wsl_distribution_registered() {
         return Vec::new();
     }
     // Avoid flashing a console window while probing shells during application startup.
@@ -2389,30 +2386,6 @@ fn resolve_fallback_shell(kind: SessionKind, data_dir: Option<&std::path::Path>)
         }
     }
     default_shell(kind, data_dir)
-}
-
-/// Resolves the home directory for stale-cwd fallback. Windows uses `USERPROFILE` or `HOMEDRIVE` plus
-/// `HOMEPATH`; other platforms use `HOME`. `None` lets the child inherit the process directory.
-fn home_dir() -> Option<String> {
-    #[cfg(windows)]
-    {
-        if let Ok(p) = std::env::var("USERPROFILE") {
-            if !p.is_empty() {
-                return Some(p);
-            }
-        }
-        if let (Ok(drive), Ok(path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-            let h = format!("{drive}{path}");
-            if !h.is_empty() {
-                return Some(h);
-            }
-        }
-        None
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var("HOME").ok().filter(|h| !h.is_empty())
-    }
 }
 
 #[cfg(test)]

@@ -1,15 +1,88 @@
 import type { ChatEvent, ChatRow, ChatSnapshot } from "../../../ipc/chat";
 
 import { chatRowPosition } from "../../../ipc/chat";
+import { t } from "../../../i18n";
 
 const cache = new Map<string, ChatSnapshot>();
-export function cachedChat(id: string) { return cache.get(id); }
-export function cacheChat(id: string, snapshot: ChatSnapshot) {
-  cache.delete(id);
-  cache.set(id, snapshot);
-  while (cache.size > 8) cache.delete(cache.keys().next().value!);
+const cacheSizes = new Map<string, number>();
+const byteSizes = new WeakMap<object, number>();
+const CACHE_BYTE_LIMIT = 32 * 1024 * 1024;
+const CACHE_ROW_LIMIT = 8 * 240;
+let cacheBytes = 0;
+let cacheRows = 0;
+export const ACTIVE_HISTORY_ROWS = 240;
+const ACTIVE_HISTORY_BYTES = 8 * 1024 * 1024;
+
+/** Estimate owned bytes without allocating a second serialized conversation or a large UTF-8 buffer. */
+function ownedBytes(value: unknown): number {
+  if (typeof value === "string") {
+    if (value.length > CACHE_BYTE_LIMIT) return CACHE_BYTE_LIMIT + 1;
+    let bytes = 2;
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code < 128) bytes += code < 32 || code === 34 || code === 92 ? 6 : 1;
+      else if (code < 2048) bytes += 2;
+      else if (code >= 0xd800 && code <= 0xdbff && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) { bytes += 4; i++; }
+      else bytes += 3;
+      if (bytes > CACHE_BYTE_LIMIT) return bytes;
+    }
+    // Include JavaScript's UTF-16 storage and a retained render/copy representation as well as
+    // the escaped transport representation measured above.
+    return bytes+value.length*4;
+  }
+  if (!value || typeof value !== "object") return 16;
+  const cached = byteSizes.get(value);
+  if (cached !== undefined) return cached;
+  let bytes = 64;
+  for (const [key, child] of Object.entries(value)) {
+    bytes += key.length * 2 + 32 + ownedBytes(child);
+    if (bytes > CACHE_BYTE_LIMIT) break;
+  }
+  byteSizes.set(value, bytes);
+  return bytes;
 }
-export function clearChatCache() { cache.clear(); }
+
+function evict(id: string) {
+  cacheBytes -= cacheSizes.get(id) ?? 0;
+  cacheRows -= cache.get(id)?.rows.length ?? 0;
+  cache.delete(id);
+  cacheSizes.delete(id);
+}
+
+export function cachedChat(id: string) {
+  const snapshot = cache.get(id);
+  if (snapshot) { cache.delete(id); cache.set(id, snapshot); }
+  return snapshot;
+}
+export function cacheChat(id: string, snapshot: ChatSnapshot) {
+  evict(id);
+  const bytes = ownedBytes(snapshot);
+  // An over-budget window remains in its mounted view and can be read again from the backend. It must
+  // not displace every smaller conversation or silently replace its body with a partial cache entry.
+  if (bytes > CACHE_BYTE_LIMIT || snapshot.rows.length > CACHE_ROW_LIMIT) return;
+  cache.set(id, snapshot);
+  cacheSizes.set(id, bytes);
+  cacheBytes += bytes;
+  cacheRows += snapshot.rows.length;
+  while (cache.size > 8 || cacheBytes > CACHE_BYTE_LIMIT || cacheRows > CACHE_ROW_LIMIT) evict(cache.keys().next().value!);
+}
+export function clearChatCache() { cache.clear(); cacheSizes.clear(); cacheBytes = 0; cacheRows = 0; }
+
+/** Keep a recoverable window, retaining the edge the reader requested rather than trimming message bodies. */
+export function limitHistoryWindow(rows: ChatRow[], edge: "older" | "newer") {
+  let start = edge === "older" ? 0 : rows.length;
+  let end = start;
+  let bytes = 0;
+  while (end - start < ACTIVE_HISTORY_ROWS && (edge === "older" ? end < rows.length : start > 0)) {
+    const index = edge === "older" ? end : start - 1;
+    const next = ownedBytes(rows[index]);
+    if (bytes + next > ACTIVE_HISTORY_BYTES) break;
+    bytes += next;
+    if (edge === "older") end++; else start--;
+  }
+  if (rows.length && start === end) throw new Error("history_window_overflow: "+t("chat.history.windowLimit"));
+  return { rows: rows.slice(start, end), droppedBefore: start > 0, droppedAfter: end < rows.length };
+}
 
 export function mergeRows(base: ChatRow[], incoming: ChatRow[], retainWindow = false): ChatRow[] {
   const result = [...base];
@@ -53,6 +126,10 @@ export function reconcileChat(snapshot: ChatSnapshot, current: ChatRow[], events
       if (event.type === "replaceRows") result = { ...result, userMessages: event.userMessages ?? [] };
       result = { ...result, rows: event.type === "rows" ? mergeRows(result.rows, event.rows, result.hasMore ?? false) : event.rows, rowsRevision: event.revision, hasMore: event.type === "replaceRows" ? (event.hasMore ?? false) : result.hasMore };
     }
+  }
+  if (result.protocolVersion === 2) {
+    const window = limitHistoryWindow(result.rows, "newer");
+    result = { ...result, rows: window.rows, hasMore: result.hasMore || window.droppedBefore, hasNewer: result.hasNewer || window.droppedAfter };
   }
   return result;
 }
