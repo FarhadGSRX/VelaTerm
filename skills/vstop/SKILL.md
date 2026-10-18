@@ -44,7 +44,8 @@ for that particular session.
 ## Output
 
 One line with the session, the result (`stopped` or `already stopped`), the state before, and the pid
-for a terminal session. With `--json`: `sessionId`, `name`, `before`, `pid`, `result`, or `error`.
+for a terminal session. Either result also clears the session's unread marker: a parked session that
+flashes "unread reply" invites fg to click it, and the click starts its process again. With `--json`: `sessionId`, `name`, `before`, `pid`, `result`, or `error`.
 `--reason` is recorded in VelaTerm's diagnostics log.
 
 ## Notes

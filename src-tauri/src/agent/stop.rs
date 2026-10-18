@@ -58,6 +58,8 @@ pub fn stop(app: &AppCtx, req: &Request) -> Result<Value, String> {
     let alive = if chat { app.chat().is_alive(&target) } else { app.pty().is_running(&target) };
     let mut out = json!({"sessionId": target, "name": session.name, "before": state_name(state)});
     if !alive {
+        // A sweep re-running over parked sessions clears any marker left from before.
+        crate::session_state::set_unread(app, &target, false);
         out["result"] = json!("already stopped");
         return Ok(out);
     }
@@ -72,6 +74,9 @@ pub fn stop(app: &AppCtx, req: &Request) -> Result<Value, String> {
     } else {
         app.pty().kill(&target, STOP_SOURCE, crate::pty::session::KillReason::Close)?;
     }
+    // Clear the unread marker too. A parked session that flashes "unread reply" invites a click, and the
+    // click starts the very process the stop just ended.
+    crate::session_state::set_unread(app, &target, false);
     crate::diagnostics::record(
         "INFO",
         "session_stop",
@@ -123,6 +128,7 @@ or a click resumes it in the same conversation.
 Targets accept a session ID, an ID prefix of at least 8 characters, or an unambiguous name.
 Refuses, unless --force, a session that is working, running background work, waiting on a permission
 prompt or question, or has not reported a state; and always refuses the calling session.
+Stopping also clears the session's unread marker.
 --reason is recorded in VelaTerm's diagnostics log.";
 
 /// Parsed command line: the request and whether to print JSON. `None` asks for the usage text.
