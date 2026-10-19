@@ -399,6 +399,8 @@ confirm it is present.
 | `vela` command and skills managed by the edition | `350733c` | Windows: `Get-Command vela` finds a `vela.cmd` whose first line is `@REM VelaTerm managed vela command` (it goes in the first writable user PATH folder; on Evo that is `AppData\Local\agy\bin`, not `~/.local/bin`); `~/.claude/skills/vstat/SKILL.md` is dated after the restart. macOS: `vela` installs only from Settings (it needs admin) |
 | Agents may call vspawn | `d47a663` | `grep -c disable-model-invocation ~/.claude/skills/vspawn/SKILL.md` → `0` |
 | `vstop` | `8fd603d` | `vstop --help` exits 0; `vstat --json` has `stateSince`; `~/.claude/skills/vstop/SKILL.md` exists. Evo, once (passed 2026-10-18): spawn a throwaway session, `vstop` it, `vstat` shows `alive: false`, `vtell` resumes it |
+| `vstop` clears the unread marker | `218ae4d` | `vstop` an idle session that shows the unread dot; the dot goes |
+| vtell wakes a stopped session in its project folder | `18519e9` | Evo, once: `vstop` a session with no `cwd` of its own (most sessions), `vtell` it, and it resumes in the project folder with no folder-trust prompt (`vrefer --last 1` shows the reply) |
 | WSL probe skipped with no distribution | `7bec7d6` | Windows without WSL: invite fg to open a new terminal and confirm no `wsl.exe` error appears |
 
 ---
