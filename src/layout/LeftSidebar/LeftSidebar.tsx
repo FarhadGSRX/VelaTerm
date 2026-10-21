@@ -45,7 +45,7 @@ import {
 import { CollectionDialog } from "./CollectionDialog";
 import { collectionDialogUrl, navigateCollectionDialog, useCollectionDialog } from "./collectionNavigation";
 import { moveToCollectionItem } from "./projectCollectionMenu";
-import { setProjectCollection } from "../../store/projectCollections";
+import { setProjectCollection, sortCollectionAlphabetically } from "../../store/projectCollections";
 import { projectDialogUrl } from "../../remote/dialogNavigation";
 import { newGroupDialogUrl } from "./groupNavigation";
 
@@ -696,6 +696,14 @@ export function LeftSidebar() {
         }]),
         buildMarkItem("project", node.id),
         ...(moveToCollection ? [moveToCollection] : []),
+        // Sorts the list this row sits in: the top level, or its collection.
+        {
+          label: t("tree.sortAlphabetically"),
+          onClick: () => {
+            const level = st.projects.find(c => c.id === project?.collectionId && isVirtualProject(c))?.id ?? null;
+            void sortCollectionAlphabetically(level).catch(() => {});
+          },
+        },
         {
           label: t("common.experimental"),
           submenu: [

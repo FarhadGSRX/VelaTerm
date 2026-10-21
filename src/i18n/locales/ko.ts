@@ -890,6 +890,7 @@ const ko: typeof en = {
   "tree.sessionInfo": "세션 정보", // Session Info
   "tree.groupInfo": "그룹 정보", // Group Info
   "tree.collectionInfo": "컬렉션 정보", // Collection Info
+  "tree.sortAlphabetically": "A–Z 정렬", // Sort A–Z
   "tree.projectInfo": "프로젝트 정보", // Project Info
   "info.branch": "브랜치", // Branch
   "info.path": "경로", // Path

@@ -906,6 +906,7 @@ const ru: typeof en = {
   "tree.sessionInfo": "Сведения о сессии", // Session Info
   "tree.groupInfo": "Сведения о группе", // Group Info
   "tree.collectionInfo": "Сведения о коллекции", // Collection Info
+  "tree.sortAlphabetically": "Сортировать А–Я", // Sort A–Z
   "tree.projectInfo": "Сведения о проекте", // Project Info
   "info.branch": "Ветка", // Branch
   "info.path": "Путь", // Path

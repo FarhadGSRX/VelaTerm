@@ -878,6 +878,7 @@ const zhTW: typeof en = {
   "tree.sessionInfo": "會話資訊", // Session Info
   "tree.groupInfo": "分組資訊", // Group Info
   "tree.collectionInfo": "集合資訊", // Collection Info
+  "tree.sortAlphabetically": "依 A–Z 排序", // Sort A–Z
   "tree.projectInfo": "專案資訊", // Project Info
   "info.branch": "分支", // Branch
   "info.path": "路徑", // Path
