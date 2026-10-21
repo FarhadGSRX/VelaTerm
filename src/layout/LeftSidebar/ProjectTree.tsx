@@ -32,11 +32,11 @@ import { focusTerminal } from "../../terminal/registry";
 import { focusComposer } from "../CenterPane/session/composerFocus";
 import { useGitBranch } from "../../hooks/useGitBranch";
 import { stripControlChars, useCtrlCharGuard } from "../../hooks/textInputGuards";
-import { setProjectCollection } from "../../store/projectCollections";
+import { placeProject } from "../../store/projectCollections";
 import { arrangeProjectsInCollections } from "./projectCollectionLayout";
 import { collectionDialogUrl } from "./collectionNavigation";
 import { newGroupDialogUrl } from "./groupNavigation";
-import { hasProjectDrag, PROJECT_DRAG_MIME, resolveProjectDrop } from "./projectCollectionDrop";
+import { hasProjectDrag, orderBetween, PROJECT_DRAG_MIME, resolveProjectPlacement } from "./projectCollectionDrop";
 
 /** Reference to a node targeted by a context menu or operation. */
 export interface TreeNodeRef {
@@ -1077,27 +1077,14 @@ export function ProjectTree(h: TreeHandlers) {
       prev?.id === id && prev.zone === zone ? prev : { id, zone },
     );
   };
-  // Project drops only change collection membership, so they always highlight the whole row, never an edge.
-  const allowProjectDrop = (e: React.DragEvent, id: string) => {
+  // A project row's edges place the dragged project beside it; only a collection has a center that takes it in.
+  const allowProjectDrop = (e: React.DragEvent, id: string, hasCenter: boolean) => {
     if (!hasProjectDrag(e.dataTransfer.types)) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = "move";
-    setDragOver((prev) => (prev?.id === id && prev.zone === "center" ? prev : { id, zone: "center" }));
-  };
-  const sortBetween = (
-    siblings: { id: string; sortOrder: number }[],
-    targetId: string,
-    pos: "before" | "after",
-  ): number => {
-    const idx = siblings.findIndex((s) => s.id === targetId);
-    if (idx < 0) return Date.now();
-    if (pos === "before") {
-      if (idx === 0) return siblings[0].sortOrder - 1000;
-      return Math.floor((siblings[idx - 1].sortOrder + siblings[idx].sortOrder) / 2);
-    }
-    if (idx === siblings.length - 1) return Date.now();
-    return Math.floor((siblings[idx].sortOrder + siblings[idx + 1].sortOrder) / 2);
+    const zone = calcZone(e, hasCenter);
+    setDragOver((prev) => (prev?.id === id && prev.zone === zone ? prev : { id, zone }));
   };
   const dropOnGroup = (target: Group) => (e: React.DragEvent) => {
     e.preventDefault();
@@ -1132,7 +1119,7 @@ export function ProjectTree(h: TreeHandlers) {
           (g.parentGroupId ?? null) === (target.parentGroupId ?? null),
       )
       .sort((a, b) => a.sortOrder - b.sortOrder);
-    const order = sortBetween(siblings, target.id, zone === "top" ? "before" : "after");
+    const order = orderBetween(siblings, target.id, zone === "top" ? "before" : "after");
     if (p.kind === "group") {
       if (p.projectId !== target.projectId) return;
       if (isInSubtree(p.id, target)) return;
@@ -1153,9 +1140,9 @@ export function ProjectTree(h: TreeHandlers) {
     if (!p) return;
 
     if (p.kind === "project") {
-      const move = resolveProjectDrop(p, target, projects);
+      const placement = resolveProjectPlacement(p, target, zone, projects);
       // Failed moves recover the backend tree and retain a visible error.
-      if (move) void setProjectCollection(move.projectId, move.collectionId).catch(() => {});
+      if (placement) void placeProject(placement).catch(() => {});
       return;
     }
 
@@ -1221,7 +1208,7 @@ export function ProjectTree(h: TreeHandlers) {
           (s.parentSessionId ?? null) === (target.parentSessionId ?? null),
       )
       .sort((a, b) => a.sortOrder - b.sortOrder);
-    const order = sortBetween(siblings, target.id, zone === "top" ? "before" : "after");
+    const order = orderBetween(siblings, target.id, zone === "top" ? "before" : "after");
     void moveNode(
       "session", p.id, target.projectId, target.groupId ?? null,
       target.parentSessionId ?? null, order,
@@ -1369,7 +1356,7 @@ export function ProjectTree(h: TreeHandlers) {
             draggable={!renaming && !isShareSurface}
             onDragStart={onDragStart({ kind: "project", id: p.id, projectId: p.id })}
             onDragOver={(e) =>
-              hasProjectDrag(e.dataTransfer.types) ? allowProjectDrop(e, p.id) : allowDrop(e, p.id, true)
+              hasProjectDrag(e.dataTransfer.types) ? allowProjectDrop(e, p.id, isVirtualProject(p)) : allowDrop(e, p.id, true)
             }
             onDragLeave={() => setDragOver((d) => (d?.id === p.id ? null : d))}
             onDrop={dropOnProject(p)}

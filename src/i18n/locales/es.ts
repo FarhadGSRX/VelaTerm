@@ -915,6 +915,7 @@ const es: typeof en = {
   "tree.sessionInfo": "Información de sesión", // Session Info
   "tree.groupInfo": "Información del grupo", // Group Info
   "tree.collectionInfo": "Información de la colección", // Collection Info
+  "tree.sortAlphabetically": "Ordenar A–Z", // Sort A–Z
   "tree.projectInfo": "Información del proyecto", // Project Info
   "info.branch": "Rama", // Branch
   "info.path": "Ruta", // Path

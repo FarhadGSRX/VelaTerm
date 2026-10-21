@@ -912,6 +912,7 @@ const ja: typeof en = {
   "tree.sessionInfo": "セッション情報", // Session Info
   "tree.groupInfo": "グループ情報", // Group Info
   "tree.collectionInfo": "コレクション情報", // Collection Info
+  "tree.sortAlphabetically": "A–Z で並べ替え", // Sort A–Z
   "tree.projectInfo": "プロジェクト情報", // Project Info
   "info.branch": "ブランチ", // Branch
   "info.path": "パス", // Path

@@ -5,7 +5,7 @@ import type { TreeHandlers } from "./ProjectTree";
 
 const mocks = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
-  setProjectCollection: vi.fn(),
+  placeProject: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-virtual", () => ({
@@ -26,7 +26,7 @@ vi.mock("../../store/termStore", () => ({
   isVisibleSession: () => false,
 }));
 vi.mock("../../store/projectCollections", () => ({
-  setProjectCollection: mocks.setProjectCollection,
+  placeProject: mocks.placeProject,
 }));
 vi.mock("../../i18n", () => ({ useT: () => (key: string) => key }));
 vi.mock("../../components/Icons", () => ({ default: new Proxy({}, { get: () => () => null }) }));
@@ -95,7 +95,7 @@ const rowOf = (text: string) => screen.getByText(text).closest(".row") as HTMLEl
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.setProjectCollection.mockResolvedValue(undefined);
+  mocks.placeProject.mockResolvedValue(undefined);
   mocks.state = {
     projects: [
       collection("f-pay", "Payments", 1), collection("f-empty", "Empty", 2),
@@ -222,20 +222,30 @@ describe("dragging projects", () => {
   it("moves a project dropped on a collection into that collection", () => {
     render(<ProjectTree {...handlers()} />);
     fireEvent.drop(rowOf("Empty"), dropData(projectPayload("p-notes")));
-    expect(mocks.setProjectCollection).toHaveBeenCalledWith("p-notes", "f-empty");
+    expect(mocks.placeProject).toHaveBeenCalledWith({ projectId: "p-notes", collectionId: "f-empty", changesCollection: true, sortOrder: null });
     expect(mocks.state.moveNode).not.toHaveBeenCalled();
   });
 
   it("moves a project dropped on a project inside a collection into that collection", () => {
     render(<ProjectTree {...handlers()} />);
     fireEvent.drop(rowOf("payments-api"), dropData(projectPayload("p-notes")));
-    expect(mocks.setProjectCollection).toHaveBeenCalledWith("p-notes", "f-pay");
+    expect(mocks.placeProject).toHaveBeenCalledWith({ projectId: "p-notes", collectionId: "f-pay", changesCollection: true, sortOrder: null });
   });
 
   it("takes a project out of its collection when dropped on a loose project", () => {
     render(<ProjectTree {...handlers()} />);
     fireEvent.drop(rowOf("notes"), dropData(projectPayload("p-web")));
-    expect(mocks.setProjectCollection).toHaveBeenCalledWith("p-web", null);
+    expect(mocks.placeProject).toHaveBeenCalledWith({ projectId: "p-web", collectionId: null, changesCollection: true, sortOrder: null });
+  });
+
+  it("reorders a project within its collection when dropped on a sibling's edge", () => {
+    render(<ProjectTree {...handlers()} />);
+    // jsdom rows have no height, so the pointer reads as the lower half: below payments-api.
+    expect(fireEvent.dragOver(rowOf("payments-api"), overData(["text/plain", PROJECT_DRAG_MIME]))).toBe(false);
+    fireEvent.drop(rowOf("payments-api"), dropData(projectPayload("p-web")));
+    expect(mocks.placeProject).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: "p-web", collectionId: "f-pay", changesCollection: false, sortOrder: expect.any(Number),
+    }));
   });
 
   it("does nothing when a project is dropped on itself or its own collection", () => {
@@ -243,7 +253,7 @@ describe("dragging projects", () => {
     fireEvent.drop(rowOf("payments-web"), dropData(projectPayload("p-web")));
     fireEvent.drop(rowOf("Payments"), dropData(projectPayload("p-web")));
     fireEvent.drop(rowOf("payments-api"), dropData(projectPayload("p-web")));
-    expect(mocks.setProjectCollection).not.toHaveBeenCalled();
+    expect(mocks.placeProject).not.toHaveBeenCalled();
   });
 
   it("keeps session and group drops on a project inside a collection unchanged", () => {
@@ -252,7 +262,7 @@ describe("dragging projects", () => {
     expect(mocks.state.moveNode).toHaveBeenCalledWith("session", "s1", "p-web", null, null, expect.any(Number));
     fireEvent.drop(rowOf("payments-web"), dropData({ kind: "group", id: "g1", projectId: "p-web" }));
     expect(mocks.state.moveNode).toHaveBeenCalledWith("group", "g1", "p-web", null, null, expect.any(Number));
-    expect(mocks.setProjectCollection).not.toHaveBeenCalled();
+    expect(mocks.placeProject).not.toHaveBeenCalled();
   });
 
   it("never treats a project dropped on a group row as a group move", () => {
@@ -265,7 +275,7 @@ describe("dragging projects", () => {
     fireEvent.drop(rowOf("backend"), dropData(projectPayload("p-notes")));
     fireEvent.drop(rowOf("backend"), dropData(projectPayload("p-web")));
     expect(mocks.state.moveNode).not.toHaveBeenCalled();
-    expect(mocks.setProjectCollection).not.toHaveBeenCalled();
+    expect(mocks.placeProject).not.toHaveBeenCalled();
   });
 
   it("keeps collection rows available to both session and project drags", () => {

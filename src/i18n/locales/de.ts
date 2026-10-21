@@ -912,6 +912,7 @@ const de: typeof en = {
   "tree.sessionInfo": "Sitzungsinfo", // Session Info
   "tree.groupInfo": "Gruppeninfo", // Group Info
   "tree.collectionInfo": "Sammlungsinfo", // Collection Info
+  "tree.sortAlphabetically": "A–Z sortieren", // Sort A–Z
   "tree.projectInfo": "Projektinfo", // Project Info
   "info.branch": "Branch", // Branch
   "info.path": "Pfad", // Path

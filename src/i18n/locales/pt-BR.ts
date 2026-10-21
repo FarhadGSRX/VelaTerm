@@ -913,6 +913,7 @@ const ptBR: typeof en = {
   "tree.sessionInfo": "Informações da sessão", // Session Info
   "tree.groupInfo": "Informações do grupo", // Group Info
   "tree.collectionInfo": "Informações da coleção", // Collection Info
+  "tree.sortAlphabetically": "Ordenar A–Z", // Sort A–Z
   "tree.projectInfo": "Informações do projeto", // Project Info
   "info.branch": "Ramo", // Branch
   "info.path": "Caminho", // Path

@@ -912,6 +912,7 @@ const en = {
   "tree.sessionInfo": "Session Info",
   "tree.groupInfo": "Group Info",
   "tree.collectionInfo": "Collection Info",
+  "tree.sortAlphabetically": "Sort A–Z",
   "tree.projectInfo": "Project Info",
   "info.branch": "Branch",
   "info.path": "Path",
