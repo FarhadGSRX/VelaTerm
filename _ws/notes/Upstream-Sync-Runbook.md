@@ -32,8 +32,7 @@ None of those firing means: merge, push, build, swap, and hand him step 8.
 
 > **Ownership.** Steps 0-5 run on **any one machine**: claim the sync in mesh room `#velaterm` first, so
 > two machines do not merge the same release at once. A second merge would not lose anything (its push is
-> refused as non-fast-forward), but it wastes a resolution. **6-9 every machine, independently**: each box
-> builds, swaps and reports its own install; only the SHA is shared · 8 fg restarts.
+> refused as non-fast-forward), but it wastes a resolution. **6-9 every machine**: Evo builds for both Windows machines and hands CX1 the binary through `_fg-Apps` (step 6b); the Mac builds its own. Each machine swaps and reports its own install · 8 fg restarts.
 >
 > These notes are in the repo (`_ws/`, on `fg-main`), so they travel by git: pull before editing, commit
 > and push after. Claim a doc in `#velaterm` before a large edit, since every machine writes to it.
@@ -250,7 +249,7 @@ git ls-remote --heads origin fg-main          # quote this SHA in #velaterm
 
 ---
 
-## 6 — Build (every machine, independently)
+## 6 — Build (Evo for both Windows machines; the Mac its own)
 
 **Build in a fixed worktree outside the vault, never in the live repo.** `$FG_VAULT_ROOT/Code/VelaTerm` is
 git's only transport for that tree, and a build checks out whatever it ships. A worktree shares the live
@@ -303,9 +302,38 @@ retired source patcher (`.claude/_tools/spaces/adventuretime-theme/build_velater
 - `M src-tauri/Cargo.toml` in the worktree is a **`core.autocrlf` phantom**: `git diff --ignore-cr-at-eol`
   returns empty.
 
+### 6b — Hand the Windows binary to CX1 (Evo builds, CX1 doesn't)
+
+fg decided on 2026-10-27 that the Windows build happens once, on Evo. Both machines are x86-64 Windows and the build sets no CPU-specific flags, so Evo's `velaterm-fg.exe` runs on CX1 as it is. CX1 never compiles; it swaps. The carrier is `~/_fg-Apps/Temp-VelaTerm/`: the `fg-apps` sync pair carries `*.exe`, and `fg3` skips `Code/`, so a binary can't ride a repo.
+
+**Evo, after `commit_of` has confirmed the build is `$NEW`:** stage it under its SHA, clear older ones, sync, and tell CX1.
+
+```bash
+STAGE="$HOME/_fg-Apps/Temp-VelaTerm"; mkdir -p "$STAGE"
+for f in "$STAGE"/velaterm-fg-*.exe; do [ -e "$f" ] && rm -- "$f"; done
+cp "$CARGO_TARGET_DIR/release/velaterm-fg.exe" "$STAGE/velaterm-fg-${NEW:0:7}.exe"
+pwsh -NoProfile -File "$HOME/.technet-sync/app/fg-rclone/fgsync.ps1" fg-apps   # expect ok, 0 conflicts
+```
+
+Then post in `#ws-velaterm`, mentioning `cx1/velaterm-crew`: the full `$NEW` SHA, the staged file name, and that the sync came back `ok`. Evo's own swap (step 7) doesn't wait on CX1.
+
+**CX1, on that mention:** pull the repo so `commit_of` knows the commit, sync, and check the staged file before step 7.
+
+```bash
+WT="${FG_VAULT_ROOT:-$HOME/_fg3}/Code/VelaTerm"; git -C "$WT" pull -q --ff-only
+NEW=<the SHA from the post>
+pwsh -NoProfile -File "$HOME/.technet-sync/app/fg-rclone/fgsync.ps1" fg-apps
+BIN="$HOME/_fg-Apps/Temp-VelaTerm/velaterm-fg-${NEW:0:7}.exe"
+commit_of "$BIN" | grep -qx "$NEW" && echo "staged binary is ${NEW:0:7}"
+```
+
+A missing file or no match means the sync hasn't landed yet, or the post's SHA is wrong. Ask in `#ws-velaterm`; don't build instead. After a good swap, CX1 deletes the staged file and runs `fgsync fg-apps` again, so the folder empties on every machine, including the Mac, which syncs `_fg-Apps` too.
+
+**When CX1 needs the installer instead:** an exe swap leaves the install's bundled `resources/` as they were. If a merge changes `src-tauri/resources/`, build the NSIS installer on Evo (`scripts/build-fg.sh` without `--swap`) and stage that instead. It closes the running app, so fg runs it on CX1 himself.
+
 ---
 
-## 7 — Swap the install (every machine, independently)
+## 7 — Swap the install (every machine)
 
 **Every build reports `ProductVersion` 0.2.9, so the version proves nothing. The commit is embedded:**
 
@@ -327,12 +355,14 @@ Claude sessions run inside `velaterm-fg.exe`, so **rename, then copy**. Windows 
 renamed, and the live app keeps running off the renamed file. An installer closes the app and kills the
 session doing the swap.
 
+`BIN` is the new binary: on Evo `$CARGO_TARGET_DIR/release/velaterm-fg.exe`, and on CX1 the staged file from step 6b.
+
 ```bash
 DIR="$LOCALAPPDATA/VelaTerm fg"
 powershell -NoProfile -c "Get-Process | ? Path -like '*VelaTerm*' | Select Name,Path"   # must list it
 OLD=$(commit_of "$DIR/velaterm-fg.exe"); echo "${OLD:0:7}"
 mv "$DIR/velaterm-fg.exe" "$DIR/velaterm-fg-${OLD:0:7}-backup.exe"
-cp "$CARGO_TARGET_DIR/release/velaterm-fg.exe" "$DIR/velaterm-fg.exe"
+cp "$BIN" "$DIR/velaterm-fg.exe"
 commit_of "$DIR/velaterm-fg.exe" | grep -qx "$NEW" && echo swapped
 # keep exactly one backup, the one just made
 for f in "$DIR"/velaterm-fg-*-backup.exe; do [ "$f" = "$DIR/velaterm-fg-${OLD:0:7}-backup.exe" ] || rm -- "$f"; done
