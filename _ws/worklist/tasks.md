@@ -7,7 +7,7 @@ Tags: [tasks]
 ## Now
 
 - [x] Launch presets from F-Co's Team Config: VelaTerm follows `~/.config/velaterm/presets.json` while running, and a linked session takes its preset's current args at each resume; `vpreset` links existing sessions (fg's go 2026-10-31; request and format in `#ws-velaterm` msgs 1640–1650) #task/cc/evo/velaterm-lead ✅ 2026-10-31 (fdfc3a6, Evo live test passed)
-- [ ] Roll the presets build out to CX1 (runbook step 6b) and the Mac, on fg's go #task/cc/evo/velaterm-lead
+- [x] Roll the presets build out to CX1 (runbook step 6b) and the Mac, on fg's go #task/cc/evo/velaterm-lead ✅ 2026-10-31 (all three on 5facf8b; `#ws-velaterm` msgs 1673, 1676)
 
 ## Next
 

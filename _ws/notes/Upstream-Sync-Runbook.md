@@ -388,6 +388,8 @@ commit_of "/Applications/VelaTerm fg-${NEW:0:7}.app/Contents/MacOS/velaterm-fg" 
 `VelaTerm fg-<old-sha>-backup.app`, moves the staged one into place, keeps one backup, and relaunches. It
 was rewritten for `VelaTerm fg.app` on 2026-10-18, and its `ps` wait was proved positive while the app ran.
 
+Since 2026-10-31 the script holds no SHA, so it never needs repointing. It finds the one staged `VelaTerm fg-<sha>.app` (not a `-backup.app`), or takes a SHA as `$1`, and checks it with `commit_of` before swapping. It refuses when there is none, more than one, or a mismatch. Before asking fg to quit VelaTerm, run `~/velaterm-swap.sh --dry-run` while the app is up: it should name `$NEW` and wait. The 5facf8b rollout's first run failed because the old script still named the previous upgrade's bundle.
+
 ---
 
 ## 8 — fg restarts
