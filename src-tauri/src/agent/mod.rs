@@ -7,6 +7,7 @@ pub mod antigravity;
 pub mod chat;
 pub mod codex_models;
 pub mod claude_models;
+pub mod claude_trust;
 pub mod cli_client;
 pub mod cline;
 pub mod copilot;

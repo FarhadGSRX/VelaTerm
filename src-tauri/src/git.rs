@@ -437,6 +437,7 @@ pub fn materialize_owned_worktree(receipt: &OwnedWorktree) -> Result<WorktreeInf
         run_git_checked(&receipt.repo, &["worktree", "add", &receipt.path, &receipt.branch])?;
     }
     ensure_worktrees_ignored(&receipt.repo);
+    crate::agent::claude_trust::seed_worktree(&receipt.path, &receipt.repo);
     Ok(WorktreeInfo { path: receipt.path.clone(), branch: receipt.branch.clone(), base_ref: receipt.base_ref.clone() })
 }
 
@@ -552,6 +553,7 @@ fn worktree_add_in(repo_root: &str, name: &str, sibling: bool) -> Result<Worktre
     }
     // Add .vlx-worktrees/ to repository-local info/exclude; failure is nonfatal.
     ensure_worktrees_ignored(&top);
+    crate::agent::claude_trust::seed_worktree(&path_str, &top);
     Ok(WorktreeInfo {
         path: path_str,
         branch,

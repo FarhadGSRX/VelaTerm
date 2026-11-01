@@ -86,6 +86,12 @@ VelaTerm follows `~/.config/velaterm/presets.json` while it runs (`agent/preset_
 - **Linking.** New sessions from a file preset are linked by `agent_preset_id`. Existing ones are linked with `vpreset link` (`agent/preset_cli.rs`, the `/preset` route) or the Preset picker in Edit Session (`set_session_preset`). File presets are read-only in VelaTerm. A preset's `cwd` places only new sessions, so `vpreset link` refuses a session whose folder (its own `cwd`, else its project's root, compared by `same_dir`) isn't the preset's `cwd`, unless `--force`; a forced link is logged with `"forced": true`. The Edit Session picker passes `force`, since fg's pick there is deliberate (agreed in Zulip F-Co › review the F-Co design, msgs 129–131).
 - **Log.** Every change, link and unlink is appended to `~/.config/velaterm/presets-import.log` as JSON Lines, for the Monitor to post to `ops`.
 
+## Folder trust for new worktrees
+
+Claude Code trusts a folder when it, or a folder above it, has `projects["<path>"].hasTrustDialogAccepted: true` in `~/.claude.json`, and the walk up stops at a git root, so every worktree needs its own entry. Without one, a woken or spawned session in a worktree stops at the trust prompt. When VelaTerm creates a worktree (`git::worktree_add_in` for New Agent Session, `git::materialize_owned_worktree` for vspawn-tree and plan-execute), `agent/claude_trust.rs` adds that entry, but only when the repository's main checkout (the first `git worktree list` entry) already has its own, so a worktree never gets more trust than its repo.
+
+The write follows Claude-OS's `trust_seed.py`. It re-reads the file just before an atomic rename, merges the one key, and retries up to five times if Claude Code wrote the file in between. It never removes a key or sets one to false. VelaTerm's `serde_json` sorts keys, so the file is parsed into an order-keeping value, and Claude Code's key order, 2-space indent and trailing newline (or lack of one) are kept. A failure is only logged (`claude_trust_seed_failed`), and the worktree is still created. This makes VelaTerm a writer of `~/.claude.json`; fg approved it through `ask_fg` on 2026-11-01 (Zulip F-Co › roll out the F-Co design), after claude-os-mgr and technet-sync-lead agreed in #ws-claude-os msgs 1679–1687.
+
 ## One session, several viewers
 
 A single PTY can be attached to desktop, remote browser and mobile at once. A **fit owner / mirror
