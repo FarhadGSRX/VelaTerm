@@ -1,2 +1,3 @@
 - [VelaTerm WebGL garble](velaterm-webgl-garble.md) — garbled Claude screens = WebGL renderer; use DOM; already fully investigated
 - [Evo build RAM limit](evo-build-ram-limit.md) — throttle cargo (-j 2) on Evo; ask the open-model-testing lab first if it is online
+- [f-co-mgr directs VelaTerm](f-co-mgr-directs-velaterm.md) — follow f-co-mgr on VelaTerm feature design; swaps/restarts still fg's word
