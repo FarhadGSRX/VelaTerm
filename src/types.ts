@@ -136,6 +136,13 @@ export interface AgentPreset {
   icon?: string | null;
   sortOrder: number;
   createdAt: number;
+  /** "file" for a preset kept in step with ~/.config/velaterm/presets.json: read-only here, and its linked
+   *  sessions take its current values each time they start. Null for a preset made in VelaTerm. */
+  source?: string | null;
+  /** File presets only: the folder a session created from it starts in. */
+  cwd?: string | null;
+  /** File presets only: a settings file merged into each launch of a linked session. */
+  settingsPath?: string | null;
 }
 
 export interface Session {

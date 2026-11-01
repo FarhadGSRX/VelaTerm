@@ -24,7 +24,7 @@ import {
   worktreesInSubtree,
 } from "../ipc/commands";
 import { copyText, openDir } from "../ipc/info";
-import { createAgentPreset } from "../ipc/presets";
+import { createAgentPreset, setSessionPreset } from "../ipc/presets";
 import { PresetIcon } from "./agentPresetIcon";
 import { agentPickerUrl, navigateAgentPicker, newAgentPickerRoute } from "./NewAgentSession/navigation";
 import { onGitbashDownloadDone } from "../ipc/events";
@@ -40,6 +40,7 @@ import { type SelNode, useTermStore } from "../store/termStore";
 import { findLeaf } from "./CenterPane/paneTree";
 import { defaultEngineFor, effectivePermissionMode } from "../store/settings";
 import {
+  type AgentPreset,
   isVirtualProject,
   projectRoot,
   type NodeKind,
@@ -760,6 +761,7 @@ export function useSessionMenu(opts?: { groupNavigation?: boolean }): SessionMen
                 (p): MenuItem => ({
                   label: t("tree.newAgentSession", p.name),
                   icon: <PresetIcon preset={p} />,
+                  shortcut: p.source === "file" ? "presets.json" : undefined,
                   onClick: () =>
                     void handleNewSession(
                       projectId,
@@ -773,6 +775,7 @@ export function useSessionMenu(opts?: { groupNavigation?: boolean }): SessionMen
                         permissionMode: p.permissionMode ?? null,
                         agentPresetId: p.id,
                         agentPath: p.execPath ?? null,
+                        cwd: p.cwd ?? undefined,
                       },
                     ),
                 }),
@@ -1074,6 +1077,7 @@ export function useSessionMenu(opts?: { groupNavigation?: boolean }): SessionMen
               agentArgs: s?.agentArgs ?? "",
               // Show the permission the session launches with, including one inherited from the agent default.
               permissionMode: s ? effectivePermissionMode(s, useTermStore.getState().agentDefaults) ?? "" : "",
+              presetId: filePresetId(s?.agentPresetId),
             },
           });
         },
@@ -1237,6 +1241,12 @@ export function useSessionMenu(opts?: { groupNavigation?: boolean }): SessionMen
           values.permissionMode === dialog.initial.permissionMode
             ? null
             : values.permissionMode || null,
+      }).then(() => {
+        // Linking after the update: a linked session's launch values come from the preset from now on.
+        const presetId = values.presetId ?? "";
+        if (presetId !== (dialog.initial.presetId ?? "")) {
+          return setSessionPreset(dialog.id, presetId || null).then(() => undefined);
+        }
       });
     }
     setDialog(null);
@@ -1362,6 +1372,7 @@ export function useSessionMenu(opts?: { groupNavigation?: boolean }): SessionMen
               supportsAgentArgs(k),
               supportsPermissionToggle(k),
               k,
+              k === "claude" ? agentPresets.filter((p) => p.source === "file") : [],
             );
           })()}
           initial={dialog.initial}
@@ -1540,11 +1551,18 @@ export function useSessionMenu(opts?: { groupNavigation?: boolean }): SessionMen
 // Show custom launch arguments and supported permission controls for agents.
 // Nonempty shells render a selector plus custom input;
 // otherwise use a plain text field.
+/** A session's preset link as the Edit Session picker shows it: only presets from presets.json can be linked. */
+const filePresetId = (presetId: string | null | undefined): string => {
+  const preset = useTermStore.getState().agentPresets.find((p) => p.id === presetId);
+  return preset?.source === "file" ? preset.id : "";
+};
+
 const sessionFields = (
   shells: ShellOption[],
   isAgent: boolean,
   canPermission: boolean,
   kind: SessionKind,
+  filePresets: AgentPreset[] = [],
 ): FieldDef[] => [
   { key: "name", label: t("tree.sessionName"), required: true, autoFocus: true },
   {
@@ -1588,6 +1606,19 @@ const sessionFields = (
             uncheckedValue: "default",
             hint: t("tree.permissionSkipHint"),
           }),
+        },
+      ]
+    : []),
+  // A linked session takes its preset's arguments and permission mode each time it starts.
+  ...(filePresets.length > 0
+    ? [
+        {
+          key: "presetId",
+          label: t("tree.presetLink"),
+          select: [
+            { value: "", label: t("tree.presetNone") },
+            ...filePresets.map((p) => ({ value: p.id, label: p.name })),
+          ],
         },
       ]
     : []),

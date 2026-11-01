@@ -714,6 +714,8 @@ fn web_pty_spawn(
         .map(str::to_string);
 
     let app = &ctx.app;
+    // A session linked to a file preset takes the preset's current values before they are read below.
+    crate::agent::preset_file::prepare_launch(app, sid)?;
     let (in_db, mut resume_id, fork, agent_args, perm, created_at) = {
         let conn = app.db().conn.lock().unwrap();
         let session = repo::get_session(&conn, sid)?;

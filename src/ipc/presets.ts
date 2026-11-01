@@ -54,6 +54,12 @@ export function deleteAgentPreset(id: string): Promise<void> {
   return invoke<void>("delete_agent_preset", { id });
 }
 
+/** Link a session to a preset from presets.json, or unlink it with null. A linked session takes the
+ *  preset's current launch values each time it starts; unlinking keeps what the preset last gave it. */
+export function setSessionPreset(sessionId: string, presetId: string | null): Promise<string | null> {
+  return invoke<string | null>("set_session_preset", { sessionId, presetId });
+}
+
 /** Persist a new menu order from the full list of preset IDs. */
 export function reorderAgentPresets(ids: string[]): Promise<void> {
   return invoke<void>("reorder_agent_presets", { ids });

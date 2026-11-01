@@ -157,6 +157,8 @@ fn wake_cwd(own: Option<String>, project_root: Option<String>) -> Option<String>
 /// receipt: `sent` once Claude has read the message, `blocked` when Claude is up but stopped short of it.
 fn wake(app: &AppCtx, target: &str, wire: &str) -> Result<&'static str, String> {
     use crate::models::SessionKind;
+    // A session linked to a file preset takes the preset's current values before they are read below.
+    crate::agent::preset_file::prepare_launch(app, target)?;
     let (session, cwd, extra_args, permission_mode) = {
         let conn = app.db().conn.lock().map_err(|_| "The database is unavailable")?;
         let session = crate::db::repo::get_session(&conn, target)?.ok_or("The target session no longer exists")?;

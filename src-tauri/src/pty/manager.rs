@@ -382,6 +382,9 @@ impl PtyManager {
         };
         let first_sink = first_sink.take().expect("the sink has not been consumed since the slot was reserved");
         // A confirmed ordinary spawn owns its launch settings. Screen dimensions and source remain local.
+        // Spawn-request sessions read their launch values from their row just below, so a linked file
+        // preset is followed first. Other callers already did this before passing the values in.
+        crate::agent::preset_file::follow(&app.db().conn.lock().unwrap(), &id)?;
         let (kind, shell, cwd, resume_id, fork, extra_args, permission_mode, init_prompt) =
             if let Some(session) = crate::agent::spawn_requests::pty_session(&app, &id)? {
                 let conn = app.db().conn.lock().unwrap();
@@ -737,6 +740,20 @@ impl PtyManager {
             codex_hooks_supported,
             bin_broken,
         );
+        // A linked file preset's settings file goes under VelaTerm's own settings, in the one `--settings`.
+        if kind == SessionKind::Claude {
+            let preset_settings = {
+                let conn = app.db().conn.lock().unwrap();
+                crate::agent::preset_file::settings_path(&conn, &id)?
+            };
+            if let Some(file) = preset_settings {
+                for (key, value) in &mut agent_spawn.env {
+                    if key == inject::CLAUDE_SETTINGS_ENV {
+                        *value = crate::agent::preset_file::merge_settings(value, &file)?;
+                    }
+                }
+            }
+        }
         // Windows only: set Claude's theme explicitly in `--settings`. ConPTY answers OSC 11 with its own
         // always-dark background, making automatic detection incorrect. Unix PTYs handle OSC 11 and live
         // theme changes correctly, so they retain automatic behavior. `CLAUDE_SETTINGS_ENV` carries the setting.

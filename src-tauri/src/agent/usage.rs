@@ -672,7 +672,7 @@ fn refresh_grok_token(refresh_token: &str, client_id: &str) -> Result<RefreshedT
     })
 }
 
-fn unix_to_rfc3339_utc(secs: u64) -> String {
+pub(crate) fn unix_to_rfc3339_utc(secs: u64) -> String {
     // Civil date from Unix days (Howard Hinnant).
     let z = (secs / 86400) as i64 + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;

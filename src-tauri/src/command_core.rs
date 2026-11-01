@@ -389,6 +389,30 @@ pub fn update_session(
     Ok(())
 }
 
+/// Link a session to a preset from presets.json, or unlink it with `None`. A linked session takes the
+/// preset's current launch values each time it starts; an unlinked one keeps what the preset last gave
+/// it. Each change is written to the presets import log. Returns the preset linked, or the one unlinked
+/// (`None` when there was no link to remove).
+pub fn set_session_preset(ctx: &AppCtx, session_id: &str, preset_id: Option<&str>) -> Result<Option<String>, String> {
+    use crate::agent::preset_file;
+    preset_file::refresh(ctx);
+    let (changed, change) = {
+        let conn = ctx.db().conn.lock().unwrap();
+        match preset_id {
+            Some(preset) => {
+                preset_file::link(&conn, session_id, preset)?;
+                (Some(preset.to_string()), "linked")
+            }
+            None => (preset_file::unlink(&conn, session_id)?, "unlinked"),
+        }
+    };
+    if let Some(preset) = &changed {
+        preset_file::log(&[serde_json::json!({"change": change, "id": preset, "sessionId": session_id})]);
+        ctx.emit(TREE_CHANGED, ());
+    }
+    Ok(changed)
+}
+
 /// Renames a node.
 pub fn rename_node(ctx: &AppCtx, kind: NodeKind, id: &str, name: &str) -> Result<(), String> {
     {
@@ -944,6 +968,8 @@ pub fn chat_start(
     effort: Option<&str>,
     fast_mode: bool,
 ) -> Result<(), String> {
+    // A session linked to a file preset takes the preset's current values before the row is read.
+    let preset_settings = crate::agent::preset_file::prepare_launch(ctx, session_id)?;
     let (session, project_root) = {
         let conn = ctx.db().conn.lock().unwrap();
         let session = repo::get_session(&conn, session_id)?.ok_or("Session not found")?;
@@ -979,6 +1005,11 @@ pub fn chat_start(
     session_settings::persist(ctx, &session, &selection)?;
     let extra_args =
         session_settings::without_selection_args(session.kind, session.agent_args.as_deref());
+    let mut extra_args = crate::agent::inject::split_extra_args(Some(&extra_args));
+    if let Some(file) = preset_settings {
+        crate::agent::preset_file::read_settings(&file)?;
+        extra_args.extend(["--settings".to_string(), file]);
+    }
     let permission_mode = {
         let conn = ctx.db().conn.lock().unwrap();
         crate::agent::permission_catalog::effective(&conn, session.kind, session.permission_mode.as_deref())?
@@ -994,7 +1025,7 @@ pub fn chat_start(
         selection.effort.as_deref(),
         permission_mode.as_deref(),
         session.collaboration_mode.as_deref(),
-        &crate::agent::inject::split_extra_args(Some(&extra_args)),
+        &extra_args,
         fast_mode,
     )
 }

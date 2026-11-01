@@ -271,6 +271,13 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         conn.execute("ALTER TABLE sessions ADD COLUMN agent_path TEXT", [])
             .map_err(|e| format!("Failed to migrate sessions.agent_path: {e}"))?;
     }
+    // File presets: where they came from, plus the start folder and settings file only they carry.
+    for column in ["source", "cwd", "settings_path"] {
+        if table_exists(conn, "agent_presets") && !column_exists(conn, "agent_presets", column) {
+            conn.execute(&format!("ALTER TABLE agent_presets ADD COLUMN {column} TEXT"), [])
+                .map_err(|e| format!("Failed to migrate agent_presets.{column}: {e}"))?;
+        }
+    }
     if table_exists(conn, "projects") && !column_exists(conn, "projects", "collection_id") {
         conn.execute("ALTER TABLE projects ADD COLUMN collection_id TEXT REFERENCES projects(id) ON DELETE SET NULL", [])
             .map_err(|e| format!("Failed to migrate projects.collection_id: {e}"))?;

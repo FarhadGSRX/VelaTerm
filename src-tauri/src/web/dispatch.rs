@@ -485,6 +485,11 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             )?;
             Ok(Value::Null)
         }
+        "set_session_preset" => to_value(core::set_session_preset(
+            app,
+            &req_str(args, "sessionId")?,
+            opt_str(args, "presetId").as_deref().filter(|p| !p.is_empty()),
+        )?),
         "session_title_options" => to_value(crate::agent::session_title::options(app, &req_str(args, "sessionId")?)?),
         "rename_session_with_agent" => to_value(crate::agent::session_title::rename(app, &req_str(args, "sessionId")?,
             opt_str(args, "agent").map(|kind| serde_json::from_value::<SessionKind>(Value::String(kind))

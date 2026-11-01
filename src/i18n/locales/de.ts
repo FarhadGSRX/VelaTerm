@@ -913,6 +913,8 @@ const de: typeof en = {
   "tree.groupInfo": "Gruppeninfo", // Group Info
   "tree.collectionInfo": "Sammlungsinfo", // Collection Info
   "tree.sortAlphabetically": "A–Z sortieren", // Sort A–Z
+  "tree.presetLink": "Preset (presets.json)", // Preset (presets.json) / Not linked
+  "tree.presetNone": "Nicht verknüpft",
   "tree.projectInfo": "Projektinfo", // Project Info
   "info.branch": "Branch", // Branch
   "info.path": "Pfad", // Path

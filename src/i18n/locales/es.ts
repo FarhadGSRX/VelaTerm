@@ -916,6 +916,8 @@ const es: typeof en = {
   "tree.groupInfo": "Información del grupo", // Group Info
   "tree.collectionInfo": "Información de la colección", // Collection Info
   "tree.sortAlphabetically": "Ordenar A–Z", // Sort A–Z
+  "tree.presetLink": "Preajuste (presets.json)", // Preset (presets.json) / Not linked
+  "tree.presetNone": "Sin vincular",
   "tree.projectInfo": "Información del proyecto", // Project Info
   "info.branch": "Rama", // Branch
   "info.path": "Ruta", // Path

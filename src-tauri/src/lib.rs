@@ -387,6 +387,12 @@ pub fn run_stop(args: &[String]) -> ! {
     agent::stop::run_cli(args)
 }
 
+/// Hidden `--preset` entry used by the PATH `vpreset` shim. POST `/preset` to list file presets or link a
+/// session to one, then exit.
+pub fn run_preset(args: &[String]) -> ! {
+    agent::preset_cli::run_cli(args)
+}
+
 pub fn run_flow(args: &[String]) -> ! {
     agent::plan_execute::run_cli(args)
 }
@@ -995,6 +1001,8 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             agent::usage_store::start(AppCtx::Tauri(app.handle().clone()));
             // Sends the continuation prompt to conversations waiting for a usage limit to reset.
             agent::chat::auto_continue::start(AppCtx::Tauri(app.handle().clone()));
+            // Keeps file presets in step with ~/.config/velaterm/presets.json while VelaTerm runs.
+            agent::preset_file::start(AppCtx::Tauri(app.handle().clone()));
             agent::remote_model_catalog::start(AppCtx::Tauri(app.handle().clone()));
 
             // Refresh the search index in the background so the first search only pays for what changed
@@ -1743,6 +1751,7 @@ fn serve_main(args: &ServeArgs) -> Result<(), String> {
     // which read the stored snapshot instead of querying providers themselves.
     agent::usage_store::start(ctx.clone());
     agent::chat::auto_continue::start(ctx.clone());
+    agent::preset_file::start(ctx.clone());
     agent::remote_model_catalog::start(ctx.clone());
 
     // Same background index warm-up as the desktop entry point.

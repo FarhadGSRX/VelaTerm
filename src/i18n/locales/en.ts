@@ -913,6 +913,8 @@ const en = {
   "tree.groupInfo": "Group Info",
   "tree.collectionInfo": "Collection Info",
   "tree.sortAlphabetically": "Sort A–Z",
+  "tree.presetLink": "Preset (presets.json)",
+  "tree.presetNone": "Not linked",
   "tree.projectInfo": "Project Info",
   "info.branch": "Branch",
   "info.path": "Path",

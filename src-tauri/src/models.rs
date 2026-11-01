@@ -108,7 +108,8 @@ impl SessionKind {
 /// replacements of one CLI run side by side, which a single per-kind executable path cannot express.
 ///
 /// Creating a session from a preset copies these launch values onto the session row, so editing or
-/// deleting a preset never changes how an existing session starts.
+/// deleting a preset never changes how an existing session starts. File presets are the exception; see
+/// `agent::preset_file`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPreset {
@@ -129,6 +130,16 @@ pub struct AgentPreset {
     pub icon: Option<String>,
     pub sort_order: i64,
     pub created_at: i64,
+    /// `None` for a preset made in VelaTerm; `"file"` for one kept in step with presets.json, which is
+    /// read-only here and followed by its linked sessions at every launch.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// File presets only: the folder a session created from it starts in.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// File presets only: a settings file merged into each launch of a linked session.
+    #[serde(default)]
+    pub settings_path: Option<String>,
 }
 
 /// Upper bound on a preset icon, applied when writing. Icons are downscaled to 64x64 before encoding, so
