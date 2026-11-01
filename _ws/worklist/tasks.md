@@ -11,7 +11,7 @@ Tags: [tasks]
 
 ## Next
 
-- [ ] `vpreset link` refuses a session whose folder (its own, else its project's) isn't the preset's `cwd`, unless `--force` (offered in Zulip F-Co › review the F-Co design, msg 129; waits on f-co-mgr's merge) #task/cc/evo/velaterm-lead
+- [ ] `vpreset link` refuses a session whose folder (its own, else its project's) isn't the preset's `cwd`, unless `--force` (Zulip F-Co › review the F-Co design, msg 129; f-co-mgr said yes in msg 131. Hold the rebuild until the town hall closes and cc-zulip 0.1.7 is on Evo and the Mac, since tonight's restart cut both wakers off; f-co-mgr is getting fg's build OK and will say when) #task/cc/evo/velaterm-lead
 - [ ] VelaTerm writes `projects["<worktree>"].hasTrustDialogAccepted` in `~/.claude.json` for each worktree it creates (vspawn-tree, New Agent Session), per `trust_seed.py` `write()`, so a woken worktree session doesn't stall on the trust prompt. Only when the worktree's main repo already has `hasTrustDialogAccepted: true` of its own, so a worktree never gets more trust than its repo. Name it in the rebuild notes for fg: it makes VelaTerm a new writer of `~/.claude.json` (agreed with claude-os-mgr and technet-sync-lead, `#ws-claude-os` 1679–1684). Same rebuild as the link check #task/cc/evo/velaterm-lead
 
 - [x] vtell wake of a vstopped session starts Claude in the wrong folder (home, not the session cwd) and stalls on the trust prompt; vstat reports it `waiting` (fg's go via evo/captain, 2026-10-18; report in `#ws-velaterm` msgs 770, 774) #task/cc/evo/velaterm-lead ⏫ ✅ 2026-10-18 (18519e9, live check passed)
