@@ -391,26 +391,36 @@ pub fn update_session(
 
 /// Link a session to a preset from presets.json, or unlink it with `None`. A linked session takes the
 /// preset's current launch values each time it starts; an unlinked one keeps what the preset last gave
-/// it. Each change is written to the presets import log. Returns the preset linked, or the one unlinked
-/// (`None` when there was no link to remove).
-pub fn set_session_preset(ctx: &AppCtx, session_id: &str, preset_id: Option<&str>) -> Result<Option<String>, String> {
+/// it. Each change is written to the presets import log. Unless `force`, a link is refused when the
+/// session's folder isn't the preset's `cwd`. Returns the preset linked, or the one unlinked (`None` when
+/// there was no link to remove), and whether `force` let a folder mismatch through.
+pub fn set_session_preset(
+    ctx: &AppCtx,
+    session_id: &str,
+    preset_id: Option<&str>,
+    force: bool,
+) -> Result<(Option<String>, bool), String> {
     use crate::agent::preset_file;
     preset_file::refresh(ctx);
-    let (changed, change) = {
+    let (changed, change, forced) = {
         let conn = ctx.db().conn.lock().unwrap();
         match preset_id {
             Some(preset) => {
-                preset_file::link(&conn, session_id, preset)?;
-                (Some(preset.to_string()), "linked")
+                let forced = preset_file::link(&conn, session_id, preset, force)?;
+                (Some(preset.to_string()), "linked", forced)
             }
-            None => (preset_file::unlink(&conn, session_id)?, "unlinked"),
+            None => (preset_file::unlink(&conn, session_id)?, "unlinked", false),
         }
     };
     if let Some(preset) = &changed {
-        preset_file::log(&[serde_json::json!({"change": change, "id": preset, "sessionId": session_id})]);
+        let mut entry = serde_json::json!({"change": change, "id": preset, "sessionId": session_id});
+        if forced {
+            entry["forced"] = true.into();
+        }
+        preset_file::log(&[entry]);
         ctx.emit(TREE_CHANGED, ());
     }
-    Ok(changed)
+    Ok((changed, forced))
 }
 
 /// Renames a node.
