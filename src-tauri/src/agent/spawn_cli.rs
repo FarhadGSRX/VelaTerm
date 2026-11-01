@@ -1,5 +1,6 @@
 //! Installation and discovery of built-in command shims and their companion skills (`vspawn`,
-//! `vspawn-tree`, `vopen`, `vrefer`, `vsearch`, `vask`, `vself`, `vflow`, `vtell`, `vstop`, and `vkb`).
+//! `vspawn-tree`, `vopen`, `vrefer`, `vsearch`, `vask`, `vself`, `vflow`, `vtell`, `vstop`, `vpreset`, and
+//! `vkb`).
 //!
 //! At startup VelaTerm installs thin shims under the application data `bin/` directory and prepends it
 //! to each session shell's PATH, allowing `vspawn "task"`, `vopen <file>`, `vrefer <session>`, and
@@ -32,6 +33,7 @@ const SHIMS: &[(&str, &str)] = &[
     ("vflow", "--flow"),
     ("vtell", "--tell"),
     ("vstop", "--stop"),
+    ("vpreset", "--preset"),
     ("vrun", "--run"),
 ];
 
@@ -72,6 +74,7 @@ const SKILLS: &[(&str, &str)] = &[
     ("vflow", include_str!("../../../skills/vflow/SKILL.md")),
     ("vtell", include_str!("../../../skills/vtell/SKILL.md")),
     ("vstop", include_str!("../../../skills/vstop/SKILL.md")),
+    ("vpreset", include_str!("../../../skills/vpreset/SKILL.md")),
     ("vkb", include_str!("../../../skills/vkb/SKILL.md")),
 ];
 

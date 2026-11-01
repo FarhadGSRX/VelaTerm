@@ -897,6 +897,8 @@ const zhTW: typeof en = {
   "tree.groupInfo": "分組資訊", // Group Info
   "tree.collectionInfo": "集合資訊", // Collection Info
   "tree.sortAlphabetically": "依 A–Z 排序", // Sort A–Z
+  "tree.presetLink": "預設 (presets.json)", // Preset (presets.json) / Not linked
+  "tree.presetNone": "未連結",
   "tree.projectInfo": "專案資訊", // Project Info
   "info.branch": "分支", // Branch
   "info.path": "路徑", // Path

@@ -137,7 +137,9 @@ CREATE TABLE IF NOT EXISTS url_host_keys (
 -- in app_settings cannot express.
 --
 -- Sessions copy a preset's values onto their own row at creation and keep `agent_preset_id` for display
--- only, so editing or deleting a preset never disturbs sessions already created from it.
+-- only, so editing or deleting a preset never disturbs sessions already created from it. A file preset
+-- (`source = 'file'`, see agent/preset_file.rs) is the exception: its linked sessions take its current
+-- values at every launch.
 --
 -- `icon` holds a base64 data URL rather than a file path: remote and browser clients cannot read a local
 -- file, and an inline value reaches them through the existing tree sync.
@@ -150,7 +152,10 @@ CREATE TABLE IF NOT EXISTS agent_presets (
   permission_mode TEXT,
   icon            TEXT,                       -- base64 data URL, size-capped at write time
   sort_order      INTEGER NOT NULL DEFAULT 0,
-  created_at      INTEGER NOT NULL
+  created_at      INTEGER NOT NULL,
+  source          TEXT,                       -- NULL: made in VelaTerm; 'file': kept in step with presets.json
+  cwd             TEXT,                       -- File presets: the folder a new session starts in
+  settings_path   TEXT                        -- File presets: a settings file merged into each launch
 );
 
 -- Freshness bookkeeping for the global search index. Each session/track records how far indexing has

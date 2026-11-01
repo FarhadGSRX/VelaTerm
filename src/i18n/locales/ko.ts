@@ -909,6 +909,8 @@ const ko: typeof en = {
   "tree.groupInfo": "그룹 정보", // Group Info
   "tree.collectionInfo": "컬렉션 정보", // Collection Info
   "tree.sortAlphabetically": "A–Z 정렬", // Sort A–Z
+  "tree.presetLink": "프리셋 (presets.json)", // Preset (presets.json) / Not linked
+  "tree.presetNone": "연결 안 됨",
   "tree.projectInfo": "프로젝트 정보", // Project Info
   "info.branch": "브랜치", // Branch
   "info.path": "경로", // Path

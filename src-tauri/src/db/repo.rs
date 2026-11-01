@@ -762,7 +762,7 @@ pub fn get_agent_args(conn: &Connection, id: &str) -> Result<Option<String>, Str
 
 /// Column list for `agent_presets`, matching `map_agent_preset`.
 const AGENT_PRESET_COLUMNS: &str =
-    "id, name, base_kind, exec_path, agent_args, permission_mode, icon, sort_order, created_at";
+    "id, name, base_kind, exec_path, agent_args, permission_mode, icon, sort_order, created_at, source, cwd, settings_path";
 
 fn map_agent_preset(row: &rusqlite::Row) -> rusqlite::Result<AgentPreset> {
     Ok(AgentPreset {
@@ -775,7 +775,23 @@ fn map_agent_preset(row: &rusqlite::Row) -> rusqlite::Result<AgentPreset> {
         icon: row.get(6)?,
         sort_order: row.get(7)?,
         created_at: row.get(8)?,
+        source: row.get(9)?,
+        cwd: row.get(10)?,
+        settings_path: row.get(11)?,
     })
+}
+
+/// A preset that comes from presets.json changes only when the file does.
+fn check_not_file_preset(conn: &Connection, id: &str) -> Result<(), String> {
+    let source: Option<String> = conn
+        .query_row("SELECT source FROM agent_presets WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("Failed to read agent preset: {e}"))?
+        .flatten();
+    if source.is_some() {
+        return Err("This preset comes from presets.json; edit the file instead".to_string());
+    }
+    Ok(())
 }
 
 /// All presets in menu order.
@@ -833,6 +849,9 @@ pub fn create_agent_preset(
         icon: icon.map(str::to_string).filter(|s| !s.is_empty()),
         sort_order: now_millis(),
         created_at: now_secs(),
+        source: None,
+        cwd: None,
+        settings_path: None,
     };
     conn.execute(
         "INSERT INTO agent_presets
@@ -867,6 +886,7 @@ pub fn update_agent_preset(
 ) -> Result<(), String> {
     check_icon(icon)?;
     let name = check_name(name)?;
+    check_not_file_preset(conn, id)?;
     let n = conn
         .execute(
             "UPDATE agent_presets
@@ -884,6 +904,7 @@ pub fn update_agent_preset(
 /// Delete a preset. Sessions created from it keep running: they hold their own copy of every launch value
 /// and only lose the preset's name and icon in the sidebar.
 pub fn delete_agent_preset(conn: &Connection, id: &str) -> Result<(), String> {
+    check_not_file_preset(conn, id)?;
     conn.execute("DELETE FROM agent_presets WHERE id = ?1", params![id])
         .map_err(|e| format!("Failed to delete agent preset: {e}"))?;
     Ok(())

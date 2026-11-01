@@ -913,6 +913,8 @@ const ja: typeof en = {
   "tree.groupInfo": "グループ情報", // Group Info
   "tree.collectionInfo": "コレクション情報", // Collection Info
   "tree.sortAlphabetically": "A–Z で並べ替え", // Sort A–Z
+  "tree.presetLink": "プリセット (presets.json)", // Preset (presets.json) / Not linked
+  "tree.presetNone": "リンクなし",
   "tree.projectInfo": "プロジェクト情報", // Project Info
   "info.branch": "ブランチ", // Branch
   "info.path": "パス", // Path

@@ -903,6 +903,8 @@ const vi: typeof en = {
   "tree.groupInfo": "Thông tin nhóm",
   "tree.collectionInfo": "Thông tin bộ sưu tập",
   "tree.sortAlphabetically": "Sắp xếp A–Z",
+  "tree.presetLink": "Cấu hình sẵn (presets.json)",
+  "tree.presetNone": "Chưa liên kết",
   "tree.projectInfo": "Thông tin dự án",
   "info.branch": "Nhánh",
   "info.path": "Đường dẫn",

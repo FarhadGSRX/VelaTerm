@@ -75,6 +75,17 @@ starve the focused terminal — xterm time-slices per terminal, which is not eno
 corrupt live state. Per-agent dispatch; **Codex is deliberately a no-op** because its state is
 hook-authoritative and must never be guessed from screen text (`screenDetect.ts:56-59`).
 
+## Presets from a file
+
+VelaTerm follows `~/.config/velaterm/presets.json` while it runs (`agent/preset_file.rs`). F-Co's Team Config generates the file, one preset per role on each machine. The format and its rules are in `skills/vpreset/SKILL.md`, and the request and agreement are in #ws-velaterm msgs 1640–1650.
+
+- **Import.** A poll every 2 s, and a check right before each launch of a linked session, compares the file's size and modification time with the last import. A changed file is imported in one transaction: presets are added and updated by `id`, and file presets no longer in it are removed (`agent_presets.source = 'file'`). Presets made in VelaTerm are never touched. A file that won't parse changes nothing. A rejected preset keeps its last good version.
+- **Following.** A preset made in VelaTerm is copied onto a session once, at creation. A file preset is followed instead: `prepare_launch` copies its args and permission mode onto the session's row, and clears `agent_path`, before each launch path reads the row. The paths are the desktop `pty_spawn`, the web `pty_spawn` (`web/ws.rs`), the vtell wake (`tell_tui.rs`), spawn-request sessions (`pty/manager.rs`) and `chat_start`. A `--model` or `--effort` in the args also overwrites `session_model_settings`, because the terminal prefers that stored choice over the args. `cwd` is used only when a session is created, since a resume has to start in the conversation's own folder.
+- **Settings.** VelaTerm already passes its own `--settings` (inline JSON with its status hooks), so a preset's `settings` file is merged into that JSON in `pty/manager.rs`. The file's keys stay, VelaTerm's keys win, and VelaTerm's hooks are added after the file's for each event. The chat engine passes no `--settings`, so there the file goes as `--settings <path>`. A settings file that can't be read stops the launch.
+- **Safety.** Any agent can write the file, so it can't set `bypassPermissions`, an executable path, or the flags VelaTerm owns (`--settings`, `--setting-sources`, `--permission-mode`, the skip-permissions flags, `--resume`/`-r`, `--continue`/`-c`, `--fork-session`, `--session-id`). Args are quoted once for every shell, so backslashes, double quotes, backticks, `$`, `%`, `!` and control characters are refused.
+- **Linking.** New sessions from a file preset are linked by `agent_preset_id`. Existing ones are linked with `vpreset link` (`agent/preset_cli.rs`, the `/preset` route) or the Preset picker in Edit Session (`set_session_preset`). File presets are read-only in VelaTerm.
+- **Log.** Every change, link and unlink is appended to `~/.config/velaterm/presets-import.log` as JSON Lines, for the Monitor to post to `ops`.
+
 ## One session, several viewers
 
 A single PTY can be attached to desktop, remote browser and mobile at once. A **fit owner / mirror

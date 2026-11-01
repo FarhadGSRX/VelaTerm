@@ -925,6 +925,8 @@ const ru: typeof en = {
   "tree.groupInfo": "Сведения о группе", // Group Info
   "tree.collectionInfo": "Сведения о коллекции", // Collection Info
   "tree.sortAlphabetically": "Сортировать А–Я", // Sort A–Z
+  "tree.presetLink": "Пресет (presets.json)", // Preset (presets.json) / Not linked
+  "tree.presetNone": "Не связан",
   "tree.projectInfo": "Сведения о проекте", // Project Info
   "info.branch": "Ветка", // Branch
   "info.path": "Путь", // Path

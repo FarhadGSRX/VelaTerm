@@ -77,6 +77,7 @@ fn main() {
         Some("--spawn") => velaterm_lib::run_spawn(&args),
         Some("--tell") => velaterm_lib::run_tell(&args),
         Some("--stop") => velaterm_lib::run_stop(&args),
+        Some("--preset") => velaterm_lib::run_preset(&args),
         Some("--run") => velaterm_lib::run_wait(&args),
         Some("--flow") => velaterm_lib::run_flow(&args),
         Some("--view") => velaterm_lib::run_view(&args),

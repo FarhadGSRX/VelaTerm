@@ -182,6 +182,8 @@ pub fn pty_spawn(
     let _diagnostic_context = crate::diagnostics::Context::enter(diagnostic_request_id.as_deref());
     let _operation=crate::diagnostics::Operation::enter(diagnostic_operation_id.as_deref());
     let mut diagnostic = crate::diagnostics::Span::new("pty_prepare", serde_json::json!({"sessionId":session_id}));
+    // A session linked to a file preset takes the preset's current values before they are read below.
+    crate::agent::preset_file::prepare_launch(&crate::host::AppCtx::Tauri(app.clone()), &session_id)?;
     // Read the resume ID and pending-fork flag under a short lock, then verify the transcript exists.
     let (in_db, mut resume_id, fork, agent_args, perm, created_at) = {
         let conn = db.conn.lock().unwrap();

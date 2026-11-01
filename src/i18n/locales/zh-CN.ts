@@ -896,6 +896,8 @@ const zhCN: typeof en = {
   "tree.groupInfo": "分组信息",
   "tree.collectionInfo": "集合信息",
   "tree.sortAlphabetically": "按 A–Z 排序",
+  "tree.presetLink": "预设 (presets.json)",
+  "tree.presetNone": "未关联",
   "tree.projectInfo": "项目信息",
   "info.branch": "分支",
   "info.path": "路径",

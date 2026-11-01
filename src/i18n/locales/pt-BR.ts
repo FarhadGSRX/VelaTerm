@@ -914,6 +914,8 @@ const ptBR: typeof en = {
   "tree.groupInfo": "Informações do grupo", // Group Info
   "tree.collectionInfo": "Informações da coleção", // Collection Info
   "tree.sortAlphabetically": "Ordenar A–Z", // Sort A–Z
+  "tree.presetLink": "Predefinição (presets.json)", // Preset (presets.json) / Not linked
+  "tree.presetNone": "Não vinculado",
   "tree.projectInfo": "Informações do projeto", // Project Info
   "info.branch": "Ramo", // Branch
   "info.path": "Caminho", // Path
