@@ -19,6 +19,9 @@ pub struct Request {
     pub target: Option<String>,
     #[serde(default)]
     pub preset: Option<String>,
+    /// `link` only: link even when the session's folder isn't the preset's `cwd`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
 }
 
 pub fn run(app: &AppCtx, req: &Request) -> Result<Value, String> {
@@ -41,14 +44,17 @@ pub fn run(app: &AppCtx, req: &Request) -> Result<Value, String> {
             } else {
                 None
             };
-            let changed = core::set_session_preset(app, &target, preset)?;
+            let (changed, forced) = core::set_session_preset(app, &target, preset, req.force)?;
             let running = app.pty().is_running(&target) || app.chat().is_alive(&target);
             let result = match (&changed, preset) {
                 (_, Some(_)) => "linked",
                 (Some(_), None) => "unlinked",
                 (None, None) => "was not linked",
             };
-            Ok(json!({"sessionId": target, "name": session.name, "preset": changed, "result": result, "running": running}))
+            Ok(json!({
+                "sessionId": target, "name": session.name, "preset": changed, "result": result, "running": running,
+                "forced": forced,
+            }))
         }
         other => Err(format!("Unknown action {other}")),
     }
@@ -91,22 +97,26 @@ pub fn handle(app: AppCtx, mut request: crate::diagnostics::HttpRequest, token: 
 }
 
 const USAGE: &str = "usage: vpreset list [--json]
-       vpreset link <session> <preset-id> [--json]
+       vpreset link <session> <preset-id> [--force] [--json]
        vpreset unlink <session> [--json]
 Link sessions to the presets VelaTerm follows from ~/.config/velaterm/presets.json. A linked session
 takes its preset's current arguments, permission mode and settings file each time it starts, so an edit
 to the file applies at its next resume. Unlinking keeps the values the preset last gave it.
+A link is refused when the session's folder (its own, else its project's) isn't the preset's cwd;
+--force links it anyway.
 Sessions accept a session ID, an ID prefix of at least 8 characters, or an unambiguous name.
 Links and unlinks are written to ~/.config/velaterm/presets-import.log.";
 
 /// Parsed command line: the request and whether to print JSON. `None` asks for the usage text.
 fn parse_args(args: &[String]) -> Result<Option<(Request, bool)>, String> {
     let mut json = false;
+    let mut force = false;
     let mut words = Vec::new();
     for arg in args {
         match arg.as_str() {
             "--help" | "-h" => return Ok(None),
             "--json" => json = true,
+            "--force" => force = true,
             _ if arg.starts_with('-') => return Err(format!("Unknown option {arg}")),
             _ => words.push(arg.clone()),
         }
@@ -125,7 +135,10 @@ fn parse_args(args: &[String]) -> Result<Option<(Request, bool)>, String> {
     if words.next().is_some() {
         return Err("Too many arguments".into());
     }
-    Ok(Some((Request { session_id: String::new(), action, target, preset }, json)))
+    if force && action != "link" {
+        return Err("--force applies only to link".into());
+    }
+    Ok(Some((Request { session_id: String::new(), action, target, preset, force }, json)))
 }
 
 fn render(action: &str, value: &Value) -> String {
@@ -154,6 +167,9 @@ fn render(action: &str, value: &Value) -> String {
     let mut out = format!("{} ({}): {}", text(&value["name"]), text(&value["sessionId"]), text(&value["result"]));
     if value["preset"].is_string() {
         out.push_str(&format!(" {}", text(&value["preset"])));
+    }
+    if value["forced"] == true {
+        out.push_str(", though its folder isn't the preset's cwd");
     }
     if action == "link" {
         out.push_str(if value["running"] == true {
@@ -214,8 +230,14 @@ mod tests {
         assert_eq!((req.target.as_deref(), req.preset.as_deref()), (Some("velaterm-lead"), Some("f-co/velaterm-lead")));
         let (req, _) = parse_args(&args(&["unlink", "12345678"])).unwrap().unwrap();
         assert_eq!((req.action.as_str(), req.target.as_deref(), req.preset), ("unlink", Some("12345678"), None));
+        assert!(!req.force);
+        let (req, _) = parse_args(&args(&["link", "a", "f-co/a", "--force"])).unwrap().unwrap();
+        assert!(req.force);
         assert!(parse_args(&args(&["--help"])).unwrap().is_none());
-        for values in [vec![], vec!["link", "s"], vec!["unlink"], vec!["list", "x"], vec!["drop", "s"], vec!["list", "--all"]] {
+        for values in [
+            vec![], vec!["link", "s"], vec!["unlink"], vec!["list", "x"], vec!["drop", "s"], vec!["list", "--all"],
+            vec!["list", "--force"], vec!["unlink", "s", "--force"],
+        ] {
             assert!(parse_args(&args(&values)).is_err(), "{values:?}");
         }
     }
@@ -232,6 +254,11 @@ mod tests {
         );
         let linked = json!({"sessionId": "s1", "name": "a", "preset": "f-co/a", "result": "linked", "running": true});
         assert!(render("link", &linked).starts_with("a (s1): linked f-co/a; it is running"));
+        let forced = json!({"sessionId": "s1", "name": "a", "preset": "f-co/a", "result": "linked", "forced": true});
+        assert_eq!(
+            render("link", &forced),
+            "a (s1): linked f-co/a, though its folder isn't the preset's cwd; the preset applies when it next starts"
+        );
         let nothing = json!({"sessionId": "s1", "name": "a", "preset": null, "result": "was not linked"});
         assert_eq!(render("unlink", &nothing), "a (s1): was not linked");
     }
@@ -239,6 +266,10 @@ mod tests {
     #[test]
     fn request_rejects_unknown_fields() {
         assert!(serde_json::from_value::<Request>(json!({"sessionId":"s","action":"list"})).is_ok());
-        assert!(serde_json::from_value::<Request>(json!({"sessionId":"s","action":"list","force":true})).is_err());
+        assert!(serde_json::from_value::<Request>(json!({"sessionId":"s","action":"link","force":true})).is_ok());
+        assert!(serde_json::from_value::<Request>(json!({"sessionId":"s","action":"list","bogus":true})).is_err());
+        // A plain request leaves `force` out, so it reads the same to a VelaTerm that predates the flag.
+        let plain = Request { session_id: "s".into(), action: "list".into(), ..Default::default() };
+        assert!(serde_json::to_value(plain).unwrap().get("force").is_none());
     }
 }

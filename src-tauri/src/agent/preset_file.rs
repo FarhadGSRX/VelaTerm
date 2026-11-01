@@ -469,17 +469,26 @@ pub fn merge_settings(own: &str, file: &str) -> Result<String, String> {
 // ── Linking ──
 
 /// Link a session to a file preset. The session takes the preset's values from its next launch.
-pub fn link(conn: &Connection, session_id: &str, preset_id: &str) -> Result<(), String> {
-    let kind: String = conn
-        .query_row("SELECT kind FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+///
+/// A preset's `cwd` only places new sessions, so a session linked from another folder would run the role
+/// in the wrong place. Unless `force`, the link is refused when the session's folder (its own, else its
+/// project's, as when it starts) isn't the preset's `cwd`. Returns whether `force` let a mismatch through.
+pub fn link(conn: &Connection, session_id: &str, preset_id: &str, force: bool) -> Result<bool, String> {
+    let (kind, own, root): (String, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT s.kind, s.cwd, p.root_path FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
+              WHERE s.id = ?1",
+            [session_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or("The session no longer exists")?;
-    let base: String = conn
+    let (base, cwd): (String, Option<String>) = conn
         .query_row(
-            "SELECT base_kind FROM agent_presets WHERE id = ?1 AND source = ?2",
+            "SELECT base_kind, cwd FROM agent_presets WHERE id = ?1 AND source = ?2",
             params![preset_id, SOURCE],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -487,9 +496,34 @@ pub fn link(conn: &Connection, session_id: &str, preset_id: &str) -> Result<(), 
     if kind != base {
         return Err(format!("A {base} preset can't drive a {kind} session"));
     }
+    let folder = own.filter(|d| !d.trim().is_empty()).or(root);
+    let mismatch = match (&cwd, &folder) {
+        (Some(cwd), Some(folder)) => !same_dir(folder, cwd),
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    if mismatch && !force {
+        return Err(format!(
+            "The session's folder {} isn't the preset's cwd {}. Pass --force to link it anyway",
+            folder.as_deref().unwrap_or("(none)"),
+            cwd.as_deref().unwrap_or_default()
+        ));
+    }
     conn.execute("UPDATE sessions SET agent_preset_id = ?2 WHERE id = ?1", params![session_id, preset_id])
         .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(mismatch)
+}
+
+/// Whether two folders are the same place: resolved through links where they exist, with either slash,
+/// no trailing slash, and ignoring case where the file system usually does.
+fn same_dir(a: &str, b: &str) -> bool {
+    let key = |p: &str| {
+        let path = std::fs::canonicalize(p).map_or_else(|_| p.to_string(), |c| c.to_string_lossy().into_owned());
+        let path = path.strip_prefix(r"\\?\").unwrap_or(&path).replace('\\', "/");
+        let path = path.trim_end_matches('/');
+        if cfg!(any(windows, target_os = "macos")) { path.to_lowercase() } else { path.to_string() }
+    };
+    key(a) == key(b)
 }
 
 /// Unlink a session from its file preset, keeping the values the preset last gave it. Returns the preset
@@ -553,7 +587,7 @@ mod tests {
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::schema::SCHEMA).unwrap();
-        conn.execute("INSERT INTO projects (id, name, root_path, created_at) VALUES ('p', 'p', '/p', 0)", [])
+        conn.execute("INSERT INTO projects (id, name, root_path, created_at) VALUES ('p', 'p', ?1, 0)", [abs("/work")])
             .unwrap();
         for (id, kind) in [("s", "claude"), ("t", "terminal")] {
             conn.execute(
@@ -721,7 +755,7 @@ mod tests {
         assert_eq!(follow(&conn, "s").unwrap(), None, "an unlinked session is left alone");
         assert_eq!(row(&conn, "s"), (Some("--old".into()), Some("plan".into()), Some("/bin/other".into())));
 
-        link(&conn, "s", "f-co/lead").unwrap();
+        link(&conn, "s", "f-co/lead", false).unwrap();
         conn.execute("INSERT INTO session_model_settings (session_id, model, effort) VALUES ('s', 'haiku', 'low')", [])
             .unwrap();
         assert_eq!(follow(&conn, "s").unwrap(), Some(abs("/s.json")));
@@ -748,7 +782,7 @@ mod tests {
         conn.execute("UPDATE sessions SET agent_preset_id = ?1 WHERE id = 's'", [&mine.id]).unwrap();
         assert_eq!(follow(&conn, "s").unwrap(), None);
         assert_eq!(row(&conn, "s").0.as_deref(), Some("--old"));
-        assert!(link(&conn, "s", &mine.id).is_err(), "only file presets can be linked");
+        assert!(link(&conn, "s", &mine.id, false).is_err(), "only file presets can be linked");
         assert!(unlink(&conn, "s").is_err(), "and only their links removed");
         assert!(crate::db::repo::update_agent_preset(&conn, &mine.id, "x", None, None, None, None).is_ok());
     }
@@ -766,11 +800,11 @@ mod tests {
     fn link_checks_kind_and_unlink_keeps_last_values() {
         let conn = db();
         import(&conn, file(json!([lead(json!(["--model", "opus"]))])), 1);
-        assert!(link(&conn, "t", "f-co/lead").unwrap_err().contains("terminal"));
-        assert!(link(&conn, "s", "missing").is_err());
-        assert!(link(&conn, "gone", "f-co/lead").is_err());
+        assert!(link(&conn, "t", "f-co/lead", false).unwrap_err().contains("terminal"));
+        assert!(link(&conn, "s", "missing", false).is_err());
+        assert!(link(&conn, "gone", "f-co/lead", false).is_err());
         assert_eq!(unlink(&conn, "s").unwrap(), None);
-        link(&conn, "s", "f-co/lead").unwrap();
+        link(&conn, "s", "f-co/lead", false).unwrap();
         let listed = list(&conn).unwrap();
         assert_eq!(listed[0]["sessions"], json!([{"sessionId": "s", "name": "s"}]));
         follow(&conn, "s").unwrap();
@@ -779,6 +813,38 @@ mod tests {
         import(&conn, file(json!([lead(json!(["--model", "haiku"]))])), 2);
         assert_eq!(follow(&conn, "s").unwrap(), None);
         assert_eq!(row(&conn, "s").0.as_deref(), Some("--model opus"), "an unlinked session no longer follows");
+    }
+
+    #[test]
+    fn link_refuses_a_session_outside_the_preset_folder_unless_forced() {
+        let conn = db();
+        import(&conn, file(json!([lead(json!([])), {"id": "f-co/free", "name": "free"}])), 1);
+        // The project's folder is the preset's, written with a trailing slash.
+        conn.execute("UPDATE projects SET root_path = ?1", [abs("/work/")]).unwrap();
+        assert_eq!(link(&conn, "s", "f-co/lead", false), Ok(false));
+        // The session's own folder comes before its project's.
+        conn.execute("UPDATE sessions SET cwd = ?1 WHERE id = 's'", [abs("/elsewhere")]).unwrap();
+        let err = link(&conn, "s", "f-co/lead", false).unwrap_err();
+        assert!(err.contains("elsewhere") && err.contains("--force"), "{err}");
+        assert_eq!(link(&conn, "s", "f-co/lead", true), Ok(true));
+        // A blank folder of its own falls back to the project's.
+        conn.execute("UPDATE sessions SET cwd = '  ' WHERE id = 's'", []).unwrap();
+        assert_eq!(link(&conn, "s", "f-co/lead", false), Ok(false));
+        // A preset with no cwd links a session anywhere.
+        conn.execute("UPDATE sessions SET cwd = ?1 WHERE id = 's'", [abs("/elsewhere")]).unwrap();
+        assert_eq!(link(&conn, "s", "f-co/free", false), Ok(false));
+    }
+
+    #[test]
+    fn same_dir_ignores_slash_style_and_a_trailing_slash() {
+        assert!(same_dir(&abs("/work/a"), &abs("/work/a/")));
+        assert!(!same_dir(&abs("/work/a"), &abs("/work/b")));
+        if cfg!(windows) {
+            assert!(same_dir("C:/Work/A", r"c:\work\a\"));
+            // An existing folder resolves on both sides, whatever its spelling.
+            let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+            assert!(same_dir(&tmp, &tmp.replace('\\', "/").to_uppercase()));
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ description: >-
   each time it starts, so an edit to the file applies at its next resume without restarting VelaTerm.
   Use when the user asks to attach sessions to their role presets, or a rollout script links them.
   Available only inside VelaTerm-hosted local sessions.
-argument-hint: "list | link <session> <preset-id> | unlink <session> [--json]"
+argument-hint: "list | link <session> <preset-id> [--force] | unlink <session> [--json]"
 allowed-tools: Bash(vpreset:*)
 ---
 
@@ -23,6 +23,7 @@ This is an action: link or unlink a session only when the user asked, or an assi
 ```bash
 vpreset list                                  # file presets and the sessions linked to each
 vpreset link <session> <preset-id>            # e.g. vpreset link velaterm-lead f-co/velaterm-lead
+vpreset link <session> <preset-id> --force    # link even though the session's folder isn't the preset's cwd
 vpreset unlink <session>                      # stop following; keeps the values the preset last gave it
 vpreset list --json                           # machine-readable, for a script
 ```
@@ -30,6 +31,11 @@ vpreset list --json                           # machine-readable, for a script
 Sessions accept a session ID, an ID prefix of at least 8 characters, or an unambiguous name, as in `vtell`.
 A link takes effect at the session's next start: a click, or a `vtell` after `vstop`. A running session
 keeps the process it has.
+
+A preset's `cwd` only places new sessions; a linked session keeps starting in its own folder. So `link`
+refuses a session whose folder (its own, else its project's) isn't the preset's `cwd`, and names both.
+Check that you have the right session before passing `--force`. A forced link is logged with
+`"forced": true`. The Preset picker in Edit Session isn't held to the folder.
 
 ## The file
 
@@ -54,7 +60,7 @@ A rejected preset keeps its last good version. A file that won't parse changes n
 
 Every change is appended to `~/.config/velaterm/presets-import.log`, one JSON object per line, with `ts`,
 `change` (`added`, `updated`, `removed`, `rejected`, `file-error`, `linked`, `unlinked`), `id`, and
-`fields`, `reason` or `sessionId` as they apply.
+`fields`, `reason`, `sessionId` or `forced` as they apply.
 
 ## Notes
 
