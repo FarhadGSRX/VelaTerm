@@ -945,6 +945,15 @@ impl PtyManager {
                     cmd.env(crate::agent::executable::PATH_APPEND_VAR, paths);
                     command.insert_str(0, &format!("{} ", crate::agent::executable::PATH_APPEND_COMMAND));
                 }
+                // A command too long to type travels in the environment, and the shell gets a short `eval` of it.
+                #[cfg(unix)]
+                {
+                    let (typed, deferred) = crate::agent::executable::typed_launch(std::mem::take(command));
+                    if let Some(full) = deferred {
+                        cmd.env(crate::agent::executable::LAUNCH_VAR, full);
+                    }
+                    *command = typed;
+                }
             }
         }
 

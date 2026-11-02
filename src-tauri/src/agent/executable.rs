@@ -349,6 +349,26 @@ pub(crate) const PATH_APPEND_COMMAND: &str = "_vlx_path_rest=${VLX_PATH_APPEND-}
     case \":${PATH-}:\" in *\":$_vlx_path_bin:\"*) ;; *) export PATH=\"${PATH:+$PATH:}$_vlx_path_bin\" ;; esac; \
     done; unset _vlx_path_bin _vlx_path_rest;";
 
+/// Environment variable that carries a typed launch command too long to type whole.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) const LAUNCH_VAR: &str = "VLX_LAUNCH";
+
+/// Longest typed launch line, Enter included, that keeps clear of macOS's 1024-byte limit described above.
+#[cfg_attr(windows, allow(dead_code))]
+const TYPED_LINE_LIMIT: usize = 1000;
+
+/// The line to type for a POSIX launch command, and the command to put in `LAUNCH_VAR` when that line is an
+/// `eval` of it instead. Custom arguments, such as a launch preset's, can push the command past the limit, and
+/// the shell then gets a cut line with no Enter and never runs it. A command that fits is typed as before.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn typed_launch(command: String) -> (String, Option<String>) {
+    if command.len() < TYPED_LINE_LIMIT {
+        (command, None)
+    } else {
+        (format!("eval \"${LAUNCH_VAR}\""), Some(command))
+    }
+}
+
 /// Value for `PATH_APPEND_VAR`: POSIX directory paths joined by `:`. A directory containing `:` cannot be a
 /// PATH entry, so it is skipped.
 pub(crate) fn path_append_value(dirs: &[std::path::PathBuf]) -> String {
@@ -595,6 +615,37 @@ mod tests {
             let output = std::process::Command::new(shell)
                 .env_clear().env("PATH", "/usr/bin:/bin").env(PATH_APPEND_VAR, &value)
                 .args([flag, &format!("{PATH_APPEND_COMMAND} printf '%s' \"$PATH\"")]).output().unwrap();
+            assert!(output.status.success(), "{shell}");
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), expected, "{shell}");
+        }
+    }
+
+    #[test]
+    fn a_launch_too_long_to_type_becomes_an_eval_of_the_environment() {
+        let short = "printf x; claude --resume id -- \"$VLX_INIT_PROMPT\"".to_string();
+        assert_eq!(typed_launch(short.clone()), (short, None));
+        let long = format!("claude {}", "--add-dir /Users/someone/folder ".repeat(40));
+        assert!(long.len() > 1024);
+        assert_eq!(typed_launch(long.clone()), ("eval \"$VLX_LAUNCH\"".to_string(), Some(long)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_typed_eval_runs_the_whole_command_in_every_shell() {
+        // Quotes, variable references and a trailing positional argument must arrive as they would typed.
+        let command = format!(
+            "{PATH_APPEND_COMMAND} if [ -x /bin/sh ]; then printf '%s|' --settings \"$VLX_X\" {} -- \"$VLX_P\"; else printf no; fi",
+            "\"plugin:a@b\" ".repeat(80),
+        );
+        let (typed, deferred) = typed_launch(command);
+        let full = deferred.expect("the command is too long to type");
+        let expected = format!("--settings|{{\"k\": 1}}|{}--|two words|", "plugin:a@b|".repeat(80));
+        for (shell, flag) in [("/bin/sh", "-c"), ("/bin/bash", "-c"), ("/bin/zsh", "-fc")] {
+            if !Path::new(shell).exists() { continue; }
+            let output = std::process::Command::new(shell)
+                .env_clear().env("PATH", "/usr/bin:/bin").env(LAUNCH_VAR, &full)
+                .env("VLX_X", "{\"k\": 1}").env("VLX_P", "two words")
+                .args([flag, &typed]).output().unwrap();
             assert!(output.status.success(), "{shell}");
             assert_eq!(String::from_utf8(output.stdout).unwrap(), expected, "{shell}");
         }
