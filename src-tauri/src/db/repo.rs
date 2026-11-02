@@ -15,7 +15,7 @@ use crate::models::{
 /// Converts Windows verbatim paths returned by `std::fs::canonicalize` into the ordinary form used
 /// by the UI and persisted session configuration. Drive paths become `D:\dir`; verbatim UNC paths
 /// become `\\server\share`. Other device namespaces (for example volume GUID paths) stay intact.
-fn normalize_windows_verbatim_path(path: String) -> String {
+pub(crate) fn normalize_windows_verbatim_path(path: String) -> String {
     let Some(rest) = path.strip_prefix(r"\\?\") else {
         return path;
     };
