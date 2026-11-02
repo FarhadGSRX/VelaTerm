@@ -360,7 +360,7 @@ fn execute(app: &AppCtx, receipt: &Receipt) -> Result<(), String> {
                                 Err(error) => {
                                     cleanup_worktree(app, &receipt.request_id).map_err(|cleanup|
                                         format!("{error}; worktree cleanup needs attention: {cleanup}"))?;
-                                    crate::diagnostics::record("WARN", "spawn_worktree_fallback", json!({"requestId":receipt.request_id,"status":"cleaned"}));
+                                    crate::diagnostics::record("WARN", "spawn_worktree_fallback", json!({"requestId":receipt.request_id,"status":"cleaned","error":error}));
                                 }
                             }
                         }

@@ -370,7 +370,9 @@ pub struct OwnedWorktree {
 
 pub fn prepare_owned_worktree(repo: &str, name: &str, sibling: bool) -> Result<OwnedWorktree, String> {
     let top = run_git_checked(repo, &["rev-parse", "--show-toplevel"])?;
-    let repo = std::fs::canonicalize(&top).map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    // On Windows canonicalize answers `\\?\C:\…`, which git can't use as a directory.
+    let repo = crate::db::repo::normalize_windows_verbatim_path(
+        std::fs::canonicalize(&top).map_err(|e| e.to_string())?.to_string_lossy().into_owned());
     let start_commit = run_git_checked(&repo, &["rev-parse", "--verify", "HEAD^{commit}"])?;
     let base_ref = resolve_head_ref(&repo).ok_or("Cannot resolve the worktree base")?;
     let owner = Uuid::new_v4().to_string();
@@ -415,6 +417,10 @@ fn verify_owned_refs(receipt: &OwnedWorktree) -> Result<(), String> {
     Ok(())
 }
 
+/// git lists worktrees with `/`, while the receipt's path was joined with the platform's separator.
+/// `Path` compares by component, so on Windows `C:/a/b` and `C:\a\b` are the same.
+fn same_path(a: &str, b: &str) -> bool { std::path::Path::new(a) == std::path::Path::new(b) }
+
 pub fn materialize_owned_worktree(receipt: &OwnedWorktree) -> Result<WorktreeInfo, String> {
     let marker = format!("refs/velaterm/worktrees/{}", receipt.owner);
     if run_git(&receipt.repo, &["rev-parse", "--verify", &marker]).is_some() {
@@ -426,7 +432,7 @@ pub fn materialize_owned_worktree(receipt: &OwnedWorktree) -> Result<WorktreeInf
         owned_refs(receipt, true)?;
     }
     let entries = worktree_list(&receipt.repo)?;
-    if let Some(entry) = entries.iter().find(|entry| entry.path == receipt.path) {
+    if let Some(entry) = entries.iter().find(|entry| same_path(&entry.path, &receipt.path)) {
         if entry.branch.as_deref() != Some(receipt.branch.as_str()) {
             return Err("The worktree path belongs to another branch".into());
         }
@@ -453,7 +459,7 @@ pub fn rollback_owned_worktree(receipt: &OwnedWorktree) -> Result<(), String> {
     }
     verify_owned_refs(receipt)?;
     let entries = worktree_list(&receipt.repo)?;
-    if let Some(entry) = entries.iter().find(|entry| entry.path == receipt.path) {
+    if let Some(entry) = entries.iter().find(|entry| same_path(&entry.path, &receipt.path)) {
         if entry.branch.as_deref() != Some(receipt.branch.as_str())
             || run_git_checked(&receipt.path, &["rev-parse", "HEAD"])? != receipt.start_commit {
             return Err("The worktree checkout has changed; resources were preserved".into());
