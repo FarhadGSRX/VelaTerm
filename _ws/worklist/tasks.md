@@ -16,6 +16,7 @@ Tags: [tasks]
 
 ## Next
 
+- [ ] A remote client (browser, phone, or a VelaTerm remote window) that reconnects after VelaTerm restarts doesn't re-read settings. It keeps its old `vlx-settings` copy, and its next preference change writes the whole blob back, which undoes any direct DB write made while it was away. Seen on the Mac 2026-11-02: `velaterm_defaults.py`'s new `agentDefaults.claude.args` were overwritten 90 s after the restart, with a client on CX1 connected to the Mac's port 8799 (Zulip ops › mac, msgs 2777–2792). The fix: re-run `refreshSettingsFromBackend` on reconnect in `App.tsx` `onConnState`. It's an upstream bug too. Waiting on fg's Batch answer (Zulip ws-velaterm › remote client keeps stale settings) #task/cc/evo/velaterm-lead
 - [ ] One queued `vtell` note was delivered twice with the same message ID, after its first attempt came back `blocked` on an MCP prompt and fg cleared the prompt (CX1, research-knowledge-mgr `b3903b68`, about 14:17Z 2026-11-02; Zulip F-Co › vtell lands in the middle of fg's typing, msgs 303, 313). Low priority. fg says mid-typing delivery itself is fine #task/cc/evo/velaterm-lead
 
 - [x] vtell wake of a vstopped session starts Claude in the wrong folder (home, not the session cwd) and stalls on the trust prompt; vstat reports it `waiting` (fg's go via evo/captain, 2026-10-18; report in `#ws-velaterm` msgs 770, 774) #task/cc/evo/velaterm-lead ⏫ ✅ 2026-10-18 (18519e9, live check passed)
