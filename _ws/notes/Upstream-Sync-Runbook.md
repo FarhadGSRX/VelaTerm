@@ -428,6 +428,7 @@ confirm it is present.
 | Feature | Since | Check |
 |---|---|---|
 | New build running | every upgrade | `commit_of` the installed binary prints `$NEW`, and the app's process started after the swap |
+| fg's remote connection, CX1 to Evo | any build that changes the remote server, its pairing, or how a client reconnects | Before that build goes past Evo. It needs a person, so invite fg. From a VelaTerm remote window on CX1, over the tailnet only: see an Evo session and type into it, answer a prompt, and restart a parked session. Then let CX1 sleep and change networks, and check the connection comes back. Check CX1's old client against Evo's new build, and again once CX1 has the new one. This is fg's main way into sessions when he's away from Evo, so if it fails, stop the rollout |
 | `vela` command and skills managed by the edition | `350733c` | Windows: `Get-Command vela` finds a `vela.cmd` whose first line is `@REM VelaTerm managed vela command` (it goes in the first writable user PATH folder; on Evo that is `AppData\Local\agy\bin`, not `~/.local/bin`); `~/.claude/skills/vstat/SKILL.md` is dated after the restart. macOS: `vela` installs only from Settings (it needs admin) |
 | Agents may call vspawn | `d47a663` | `grep -c disable-model-invocation ~/.claude/skills/vspawn/SKILL.md` → `0` |
 | `vstop` | `8fd603d` | `vstop --help` exits 0; `vstat --json` has `stateSince`; `~/.claude/skills/vstop/SKILL.md` exists. Evo, once (passed 2026-10-18): spawn a throwaway session, `vstop` it, `vstat` shows `alive: false`, `vtell` resumes it |

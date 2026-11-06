@@ -5,6 +5,7 @@ fg's fork of VelaTerm (upstream `vlinx-io/VelaTerm`), the terminal that hosts F-
 ## Local rules
 
 - **The repo is public.** Before every push, run the outgoing diff (`git diff origin/<branch>..HEAD`) as its own step, and read it for anything sensitive about fg or the team before you push. Worklist lines and commit messages are outgoing text too, so refer to a private project by its role, not its name.
+- **fg relies on VelaTerm's remote connection, CX1 to Evo.** A build that changes the remote server, its pairing or how a client reconnects gets the runbook's remote check before it goes past Evo.
 - **`_ws/` and `+Intro.md` live on `fg-main` only.** Upstream PR branches are cut from `main`, never from `fg-main`, so they carry neither.
 - **On Evo, builds share RAM with the Open-Model-Testing lab.** If a lab session is up, ask in `open-model-testing` before a heavy cargo build. Build with `-j 2`, or `CARGO_BUILD_JOBS=1` for a release.
 
