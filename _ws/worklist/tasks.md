@@ -36,6 +36,8 @@ Tags: [tasks]
 
 ## Later / Maybe
 
+- [ ] Get the app-wide local token off `claude`'s command line. The hook URLs carry it (`agent/inject.rs` `hook_url_at`), and `--settings` expands them onto the process line, so a process listing can print it into a transcript, as happened in a test on 2026-11-05. It only works on 127.0.0.1. To check first: whether HTTP hooks can take a header from an allowed env var, which is from memory of the docs. Size S, my guess #task/cc/evo/velaterm-lead
+
 - [ ] A command that reads another live session's rendered screen, from the backend's replay buffer (`pty/session.rs`) plus a terminal parser crate. It would show what a stuck session is stopped on. Size S-M, my guess. Held until the Orca evaluation decides #task/cc/evo/velaterm-lead
 
 - [ ] Upstream PRs for the Windows worktree bug (d0fdde0) and the macOS launch-line bug (a7db13e), each cut from `main`, if fg wants them #task/cc/evo/velaterm-lead
