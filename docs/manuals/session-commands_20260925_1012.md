@@ -137,7 +137,7 @@ Sends a message to another session. Without message arguments, the text is read 
 - The recipient must be a Claude Code, Codex, OpenCode, Pi or OMP session in the conversation view. Archived sessions and the sending session itself are rejected.
 - An idle recipient starts a new turn. A busy recipient queues the message until its turn ends; `--steer` adds it to the running turn instead.
 - A message can contain up to 65,536 bytes of text.
-- The command prints a receipt: `sent`, `queued` or `steered`. `blocked` means the recipient is waiting for a permission or an answer. A receipt confirms delivery, not that the recipient finished the work.
+- The command prints a receipt: `sent`, `queued` or `steered`. `blocked` means the recipient is waiting for a permission or an answer. `unconfirmed` means a Claude terminal took the message as typed input but no turn started within 10 seconds, so it may be sitting in the prompt box. A receipt confirms delivery, not that the recipient finished the work.
 - The command prints a message ID. To retry a delivery whose outcome is uncertain, repeat the command with `--message-id` and the same text; the message is not delivered twice.
 - `--report --round N` is used by executors in a planning and execution workflow to submit their result for review. It goes to the executor's planner. See [Planning and Execution](planning-and-execution_20260925_1012.md).
 

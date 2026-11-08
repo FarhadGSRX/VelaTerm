@@ -31,8 +31,9 @@ is ambiguous, use the returned candidate list to identify the intended session; 
 without native chat support are rejected. Supported recipients currently include Claude, Codex,
 OpenCode, Pi and OMP native chat sessions, and Claude sessions running in a terminal.
 
-A Claude terminal session receives the message as typed input when it is idle (`sent`). While it is
-working the message waits and is handed to Claude when that turn ends (`queued`), or after its pending
+A Claude terminal session receives the message as typed input when it is idle (`sent` once a turn starts,
+`unconfirmed` if none starts within 10 seconds). While it is working, or has not yet reported any state since
+its terminal started, the message waits and is handed to Claude when that turn ends (`queued`), or after its pending
 question is answered (`blocked`). A stopped Claude terminal session is woken: VelaTerm resumes its saved
 conversation with the message as the first prompt (`sent`). A running terminal whose Claude has exited
 back to the shell is refused rather than typed into.
@@ -98,11 +99,15 @@ omitted, the command generates an ID and prints it before delivery. Retain that 
 retry with `--message-id` and unchanged target, text and report round. Never generate a new ID to bypass
 an uncertain receipt. The same ID with different content is rejected.
 
-Report the actual `sent`, `steered`, `blocked` or `queued` receipt, and tell the user which one came
-back. `sent` started a new turn, `steered` joined a turn already running, `blocked` joined a turn whose
-agent is waiting for an answer to a question, and `queued` is waiting for the running turn to end. Both
-`blocked` and `queued` mean the recipient has not read the message, so report what it is waiting on.
-None of the four means the recipient has finished its task or accepted a report. A retained message or `chat_submission_pending` error is not proof of delivery;
+Report the actual `sent`, `steered`, `blocked`, `queued` or `unconfirmed` receipt, and tell the user which
+one came back. `sent` started a new turn, `steered` joined a turn already running, `blocked` joined a turn whose
+agent is waiting for an answer to a question, and `queued` is waiting for the running turn to end (a Claude
+terminal that has not yet reported any state also queues, until its first turn ends). `unconfirmed` means a
+Claude terminal took the message as typed input but no turn started within 10 seconds, so it may be sitting in
+the prompt box. A retry with the same message ID reports `unconfirmed` again and does not type it a second
+time. `blocked`, `queued` and `unconfirmed` mean the recipient may not have read the message, so report what
+it is waiting on.
+None of the five means the recipient has finished its task or accepted a report. A retained message or `chat_submission_pending` error is not proof of delivery;
 inspect the recipient with `vrefer` and workflow receipts with `vflow status` when applicable. Do not
 poll continuously or repeatedly send the same instructions.
 

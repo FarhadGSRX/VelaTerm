@@ -4,8 +4,12 @@
 //! keyboard, so a message reaches it one of two ways:
 //!
 //! - **Idle** (`waiting`/`idle`): the message is typed in as one bracketed paste followed by Enter, the way
-//!   the mobile view sends a draft into a live Claude TUI. Receipt `sent`.
-//! - **Busy** (`working`, or `asking` on a permission prompt): the message waits in `session_tell_pending`.
+//!   the mobile view sends a draft into a live Claude TUI. Receipt `sent` once the session reports a turn
+//!   started (`working`) within 10 s, else `unconfirmed`: it was typed in but no turn began, so it may be
+//!   sitting in the prompt box. A retry of an `unconfirmed` message reports `unconfirmed`.
+//! - **Not yet reported** (a Claude that has reported no state since its terminal started) is treated as busy:
+//!   it may still be loading or at a trust prompt.
+//! - **Busy** (`working`, `asking` on a permission prompt, or not yet reported): the message waits in `session_tell_pending`.
 //!   When the turn ends, Claude's Stop hook asks VelaTerm whether to stop; the hook response blocks the stop
 //!   with the pending messages as its reason, so Claude reads them and carries on without anything being
 //!   typed under the user's cursor. Receipts `queued` and `blocked`. A turn that ends without a Stop
@@ -48,11 +52,12 @@ fn is_claude_executable(name: &str) -> bool {
     name == "claude" || name == "claude.exe"
 }
 
-/// Whether a running Claude is at its prompt, from its last reported state. Every turn starts with a
-/// prompt-submit hook that reports `working`, and the state is dropped when the terminal exits, so a Claude
-/// that has reported nothing since its terminal started has not begun a turn: it is waiting for input.
+/// Whether a running Claude is at its prompt, from its last reported state. Claude's hooks report nothing
+/// before its first turn, so a Claude that has reported no state since its terminal started may still be
+/// loading, or sitting at a folder-trust prompt, and text typed then is lost or answers the prompt. Such a
+/// message waits (`queued`) until the first turn ends (Stop hook) or Claude's idle notice arrives.
 fn ready_for_input(state: Option<&str>) -> bool {
-    matches!(state, None | Some("waiting") | Some("idle"))
+    matches!(state, Some("waiting") | Some("idle"))
 }
 
 /// The receipt for a message that cannot be typed in right now, from the target's last reported state.
@@ -103,7 +108,11 @@ fn delivered_receipt(app: &AppCtx, id: &str) -> Result<Option<&'static str>, Str
         .query_row("SELECT receipt FROM session_tell_delivered WHERE id=?1", [id], |r| r.get(0))
         .optional()
         .map_err(|e| e.to_string())?;
-    Ok(delivered.map(|receipt| if receipt == "blocked" { "blocked" } else { "sent" }))
+    Ok(delivered.map(|receipt| match receipt.as_str() {
+        "blocked" => "blocked",
+        "unconfirmed" => "unconfirmed",
+        _ => "sent",
+    }))
 }
 
 fn mark_delivered(app: &AppCtx, ids: &[String], receipt: &str) {
@@ -237,17 +246,47 @@ const WAKE_CONFIRM: std::time::Duration = std::time::Duration::from_secs(30);
 /// that turn's prompt-submit hook reports the session working, so that is the receipt: `true`. `false` when
 /// the wait runs out with the terminal still open; an error when it closes.
 fn confirm_woken(app: &AppCtx, target: &str) -> Result<bool, String> {
-    let deadline = std::time::Instant::now() + WAKE_CONFIRM;
+    match wait_for_working(app, target, WAKE_CONFIRM) {
+        TurnWait::Started => Ok(true),
+        TurnWait::TimedOut => Ok(false),
+        TurnWait::Closed => Err("The woken terminal closed before Claude read the message".into()),
+    }
+}
+
+/// How long a message typed into an idle Claude waits for its turn to start.
+const TYPE_IN_CONFIRM: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The result of polling a terminal for the session to report `working`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnWait {
+    Started,
+    TimedOut,
+    Closed,
+}
+
+/// Poll the cached state until it is `working`, the terminal closes, or `wait` runs out.
+fn wait_for_working(app: &AppCtx, target: &str, wait: std::time::Duration) -> TurnWait {
+    let deadline = std::time::Instant::now() + wait;
     while std::time::Instant::now() < deadline {
         if !app.pty().is_running(target) {
-            return Err("The woken terminal closed before Claude read the message".into());
+            return TurnWait::Closed;
         }
         if app.pty().cached_agent_state(target).as_deref() == Some("working") {
-            return Ok(true);
+            return TurnWait::Started;
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
-    Ok(false)
+    TurnWait::TimedOut
+}
+
+/// The receipt for a message typed into an idle Claude, from the wait for its turn to start. `Ok` carries
+/// the receipt to record; `Err` is the error to return, and the message is recorded as delivered either way.
+fn typed_in_outcome(wait: TurnWait) -> Result<&'static str, String> {
+    match wait {
+        TurnWait::Started => Ok("sent"),
+        TurnWait::TimedOut => Ok("unconfirmed"),
+        TurnWait::Closed => Err("The message was typed in, then the terminal closed, so Claude may not have read it".into()),
+    }
 }
 
 /// Deliver an already-recorded `session_tells` message to a terminal session.
@@ -288,8 +327,10 @@ pub fn deliver(app: &AppCtx, target: &str, wire: &str, id: &str) -> Result<&'sta
     }
     let mut all = earlier;
     all.push(id.to_string());
-    mark_delivered(app, &all, "sent");
-    Ok("sent")
+    // The write only proves the terminal took it: wait for Claude to start a turn on it.
+    let outcome = typed_in_outcome(wait_for_working(app, target, TYPE_IN_CONFIRM));
+    mark_delivered(app, &all, outcome.as_deref().unwrap_or("unconfirmed"));
+    outcome
 }
 
 /// Remove and return a session's waiting messages as (id, wire), oldest first.
@@ -440,6 +481,21 @@ mod tests {
     }
 
     #[test]
+    fn typing_in_reports_a_receipt_for_each_outcome_of_the_wait() {
+        assert_eq!(typed_in_outcome(TurnWait::Started), Ok("sent"));
+        assert_eq!(typed_in_outcome(TurnWait::TimedOut), Ok("unconfirmed"));
+        let closed = typed_in_outcome(TurnWait::Closed).unwrap_err();
+        assert!(closed.contains("typed in") && closed.contains("closed"), "got: {closed}");
+    }
+
+    #[test]
+    fn an_unconfirmed_message_answers_its_retry_as_unconfirmed() {
+        let app = app_with_messages(&["msg-a"]);
+        mark_delivered(&app, &["msg-a".into()], "unconfirmed");
+        assert_eq!(delivered_receipt(&app, "msg-a").unwrap(), Some("unconfirmed"));
+    }
+
+    #[test]
     fn a_woken_session_starts_in_its_own_directory_else_its_projects() {
         let root = Some("/work/project".to_string());
         assert_eq!(wake_cwd(Some("/work/own".into()), root.clone()).as_deref(), Some("/work/own"));
@@ -459,8 +515,8 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_that_has_not_started_a_turn_is_ready_for_input() {
-        assert!(ready_for_input(None));
+    fn a_claude_that_has_not_reported_a_state_waits_for_one() {
+        assert!(!ready_for_input(None));
         assert!(ready_for_input(Some("waiting")));
         assert!(ready_for_input(Some("idle")));
         assert!(!ready_for_input(Some("working")));
