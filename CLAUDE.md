@@ -19,7 +19,7 @@ fg's fork of VelaTerm (upstream `vlinx-io/VelaTerm`), the terminal that hosts F-
 
 ## Build and test
 
-- Rust, from `src-tauri/`: `cargo test -j 2 --lib --no-default-features -- --test-threads=2`. About 15 Windows-only tests fail on every run (mostly file locks), so compare the failure set with the previous run's instead of expecting zero.
+- Rust, from `src-tauri/`: `cargo test -j 2 --lib --no-default-features -- --test-threads=2`. About 15 Windows-only tests fail on every run (mostly file locks), so compare the failure set with the previous run's instead of expecting zero. From PowerShell, put `C:\Program Files\Git\usr\bin` on `PATH` first: many tests start `cat`, and without it about 140 more fail with "program not found".
 - Frontend: `pnpm test` (vitest). On Evo, don't run it alongside cargo.
 - Release build and install, on every machine: `scripts/build-fg.sh`, as the runbook says.
 
