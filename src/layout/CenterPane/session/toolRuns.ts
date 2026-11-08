@@ -124,7 +124,8 @@ function isAgentWork(entryRow: DisplayRow): boolean {
 /**
  * Put the agent's author line on the first entry of each turn.
  *
- * A turn is everything between one prompt and the next. The agent's name, model and duration are carried
+ * A turn is everything between one prompt and the next, where a background task that woke the agent counts
+ * as a prompt. The agent's name, model and duration are carried
  * by its replies, which come after its reasoning and its tool calls; without this pass the work that
  * opens a turn has no author of its own and reads as though the prompt above it had produced it. Marking
  * the first entry lets the view draw one author line above the whole turn instead of one per message.
@@ -141,7 +142,7 @@ export function markAgentTurns(entries: readonly DisplayRow[]): DisplayRow[] {
   };
   for (let index = 0; index < out.length; index += 1) {
     const entryRow = out[index];
-    if (entryRow.kind === "row" && entryRow.row.kind === "user") {
+    if (isTurnStart(entryRow)) {
       close();
       continue;
     }
@@ -276,8 +277,12 @@ export function mountedStart(rows: readonly DisplayRow[], minMounted = MOUNTED_R
   return index;
 }
 
+/**
+ * A prompt starts a turn, and so does a background task that woke the agent: the agent answers that one
+ * on its own, and folding its report under the last prompt would pass it off as the answer to that prompt.
+ */
 function isTurnStart(entryRow: DisplayRow | undefined): boolean {
-  return entryRow?.kind === "row" && entryRow.row.kind === "user";
+  return entryRow?.kind === "row" && (entryRow.row.kind === "user" || entryRow.row.kind === "wake");
 }
 
 /** Rough height in pixels, used for the parts of the list that have not been drawn yet. */
@@ -295,6 +300,7 @@ export function estimateRowHeight(row: DisplayRow | undefined): number {
     case "error":
     case "notice":
     case "compaction":
+    case "wake":
       return 36 + head;
     case "user":
       return textHeight(row.row.text, 46);

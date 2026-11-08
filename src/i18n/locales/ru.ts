@@ -13,8 +13,88 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const ru: typeof en = {
-  "panel.averageOutput": "средняя скорость вывода",
-  "panel.averageOutputHint": "Оценка количества выходных токенов в секунду за измеренное время ответа, включая сообщённые токены рассуждений. Время выполнения инструментов и ожидания пользователя не учитывается. Значение не отображается, если данные об использовании токенов нельзя надёжно сопоставить с измеренным временем. Это не скорость декодирования самой модели.",
+  "panel.turnStats": "Статистика хода",
+  "panel.fileCount": (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "файл" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "файла" : "файлов"}`,
+  "panel.showChangedFiles": "Показать файлы, изменённые за этот ход",
+  "panel.noFilesChanged": "За этот ход файлы не редактировались.",
+  "panel.shellEditsNotListed": "Изменения, сделанные командами оболочки, в список не попадают.",
+  "translation.swap": "Поменять языки местами",
+  "translation.openai": "Совместимый с OpenAI",
+  "translation.bing": "Bing Переводчик (без ключа API)",
+  "translation.bingHint": "Бесплатный перевод с помощью Bing. Ключ API и учётная запись Microsoft не требуются.",
+  "translation.google": "Google Переводчик (без ключа API)",
+  "translation.googleHint": "Бесплатный перевод с помощью Google. Ключ API и аккаунт Google не требуются.",
+  "translation.rateLimited": "Слишком много запросов на перевод. Повторите попытку позже.",
+  "translation.saved": "Настройки сохранены.",
+
+  "translation.title": "Перевод",
+  "translation.enable": "Включить перевод",
+  "translation.visibility": "Элементы управления переводом появляются в диалогах только при включении этой функции.",
+  "translation.defaultEnabled": "Включать перевод по умолчанию",
+  "translation.defaultEnabledHint": "Применяется к диалогам без сохранённых настроек перевода. Изменения сохраняются автоматически.",
+  "translation.conversationKinds": "Типы агентов для диалогов",
+  "translation.conversationKindsHint": "Элементы управления переводом и автоматический перевод доступны только в диалогах с агентами выбранных типов. Изменения сохраняются автоматически.",
+  "translation.chooseConversationKinds": "Выберите типы агентов",
+  "translation.allConversationKinds": "Все типы агентов",
+  "translation.kindSaveFailed": "Не удалось сохранить типы агентов. Ваш выбор ещё не сохранён.",
+  "translation.noConversationKinds": "Типы агентов не выбраны. Параметры перевода скрыты во всех диалогах.",
+  "translation.engine": "Средство перевода",
+  "translation.api": "API-сервис",
+  "translation.service": "Сохранённый сервис",
+  "translation.newService": "Добавить сервис",
+  "translation.editService": "Изменить сервис",
+  "translation.name": "Название сервиса",
+  "translation.protocol": "Протокол",
+  "translation.apiKey": "Ключ API",
+  "translation.copyKey": "Копировать ключ API",
+  "translation.keyCopied": "Ключ API скопирован",
+  "translation.showKey": "Показать ключ API",
+  "translation.hideKey": "Скрыть ключ API",
+  "translation.keyConfigured": "Ключ API настроен",
+  "translation.keyNotConfigured": "Ключ API не настроен",
+  "translation.deleteServiceConfirm": "Удалить этот сервис и его сохранённый ключ API?",
+  "translation.saveConfig": "Сохранить настройки",
+  "translation.test": "Проверить подключение",
+  "translation.testHint": "Переводит английский пример «Connection test.» на немецкий с сохранёнными настройками.",
+  "translation.testSuccess": "Подключение проверено успешно.",
+  "translation.hostOnly": "Настройте сервисы перевода в настольном приложении на хосте.",
+  "translation.configure": "Настройте перевод в настройках.",
+  "translation.languages": "Языки перевода",
+  "translation.moreSettings": "Дополнительные настройки",
+  "translation.source": "Исходный язык",
+ "translation.target": "Язык перевода",
+  "translation.chooseTarget": "Перед переводом выберите язык перевода.",
+  "translation.auto": "Определять автоматически",
+  "translation.outgoing": "Переводить перед отправкой",
+  "translation.replies": "Переводить ответы",
+  "translation.replySource": "Исходный язык ответов",
+  "translation.replyTarget": "Язык перевода ответов",
+  "translation.replyDisplay": "Отображение ответов",
+  "translation.original": "Оригинал",
+  "translation.translation": "Перевод",
+  "translation.both": "Оба текста",
+  "translation.immersive": "Построчное сопоставление",
+  "translation.copyBoth": "Копировать оригинал и перевод",
+  "translation.copyTranslation": "Копировать перевод",
+  "translation.copiedBoth": "Оригинал и перевод скопированы",
+  "translation.copiedTranslation": "Перевод скопирован",
+  "translation.duration": (time: string) => `Время перевода: ${time}`,
+  "translation.translating": "Перевод…",
+  "translation.failed": "Не удалось перевести. Сообщение не отправлено.",
+  "translation.canceled": "Перевод отменён. Сообщение не отправлено.",
+  "translation.cancel": "Отменить перевод",
+  "translation.retry": "Повторить перевод",
+  "translation.sendOriginal": "Отправить оригинал",
+  "translation.sent": "Отправленный перевод",
+  "translation.showSent": "Показать отправленный перевод",
+  "translation.hideSent": "Скрыть отправленный перевод",
+  "translation.stale": "Этот перевод относится к предыдущему тексту, языкам или настройкам средства перевода.",
+  "translation.unavailable": "Перевод недоступен. Проверьте выбранного агента или сервис.",
+  "translation.invalid": "Проверьте настройки перевода и выбранные языки.",
+  "translation.structure": "Перевод не сохранил структуру сообщения. Повторите попытку.",
+  "translation.network": "Сервис перевода недоступен. Повторите попытку.",
+  "translation.paymentRequired": "Для использования сервиса перевода требуется оплата (HTTP 402). Проверьте баланс или статус оплаты в аккаунте API.",
+
   "tree.newPlanExecuteSession": "Новая сессия планирования/выполнения…",
   "launch.splitTasks": "Автоматически разделить на несколько задач",
   "launch.splitTasksHint": "Сеанс планирования предложит независимые задачи. Перед запуском проверьте инструкции, агентов, модели и глубину рассуждений.",
@@ -130,20 +210,20 @@ const ru: typeof en = {
   "nb.attach": "Прикрепить файл",
   "nb.browse": "Обзор",
   "nb.chooseNote": "Начните с заметки",
-  "nb.closeHint": "Убрать этот блокнот из списка. Файлы останутся на диске.",
-  "nb.closeVault": "Закрыть блокнот",
+  "nb.closeHint": "Убрать эту базу знаний из списка. Файлы останутся на диске.",
+  "nb.closeVault": "Закрыть базу знаний",
   "nb.conflict": "Файл изменён вне этого редактора. Ваш черновик сохранён. Загрузите файл заново или сохраните черновик как новую заметку.",
-  "nb.copyTo": "Копировать в локальный блокнот",
+  "nb.copyTo": "Копировать в локальную базу знаний",
   "nb.createVault": "Создать базу знаний",
   "nb.destination": "Путь назначения",
   "nb.download": "Скачать",
   "nb.downloadHint": "Скачайте вложение, чтобы открыть его в другом приложении.",
-  "nb.empty": "Откройте папку или создайте блокнот, чтобы начать писать.",
+  "nb.empty": "Откройте папку или создайте базу знаний, чтобы начать писать.",
   "nb.emptyImport": "Не выбраны файлы, доступные для импорта.",
   "nb.emptyNotes": "Заметки сохраняются в формате Markdown.",
   "nb.emptyOutline": "Здесь появятся заголовки документа.",
   "nb.emptyTrash": "Корзина пуста.",
-  "nb.error": "Не удалось получить доступ к блокноту. Проверьте подключение и папку, затем повторите попытку.",
+  "nb.error": "Не удалось получить доступ к базе знаний. Проверьте подключение и папку, затем повторите попытку.",
   "nb.exists": "Такой файл или папка уже существует. Выберите другое имя или папку.",
   "nb.favorites": "Избранное",
   "nb.files": "Файлы",
@@ -151,6 +231,9 @@ const ru: typeof en = {
   "nb.generatedHint": "Знания, собранные из ваших сеансов, вместе с источниками и историей изменений.",
   "nb.homeHint": "Просматривайте базу знаний сеансов и локальные базы знаний.",
   "nb.homeSearch": "Поиск по знаниям сеансов и локальным заметкам…",
+  "nb.layout": "Вид",
+  "nb.layoutCards": "Карточки",
+  "nb.layoutList": "Список",
   "nb.loadMore": "Загрузить ещё",
   "nb.import": "Импорт",
   "nb.importFiles": "Выбрать файлы",
@@ -184,7 +267,7 @@ const ru: typeof en = {
   "nb.local": "Локальные файлы",
   "nb.localVaults": "Локальные базы знаний",
   "nb.move": "Переименовать или переместить",
-  "nb.moveHint": "Укажите путь относительно корня блокнота. При перемещении файла или папки существующие ссылки в заметках обновляются.",
+  "nb.moveHint": "Укажите путь относительно корня базы знаний. При перемещении файла или папки существующие ссылки в заметках обновляются.",
   "nb.name": "Имя",
   "nb.newFolder": "Новая папка",
   "nb.newNote": "Новая заметка",
@@ -218,25 +301,26 @@ const ru: typeof en = {
   "nb.searchThisVault": "Эта база знаний",
   "nb.skipped": "Пропущено",
   "nb.split": "Раздельный вид",
-  "nb.tooLarge": "Файл или выбранные данные превышают ограничения блокнота.",
+  "nb.tooLarge": "Файл или выбранные данные превышают ограничения базы знаний.",
   "nb.trash": "Корзина",
-  "nb.trashHint": "Переместить этот элемент в корзину блокнота. Позже его можно будет восстановить.",
+  "nb.trashHint": "Переместить этот элемент в корзину базы знаний. Позже его можно будет восстановить.",
   "nb.unsaved": "Несохранённые изменения",
   "nb.vaults": "Базы знаний",
   "nb.view": "Режим просмотра",
-  "nb.welcome": "Ваши блокноты",
-  "nb.welcomeText": "Записывайте мысли, связывайте идеи и храните заметки в обычных локальных файлах. Откройте существующую папку Markdown или импортируйте документы в новый блокнот.",
+  "nb.welcome": "Ваши базы знаний",
+  "nb.welcomeText": "Записывайте мысли, связывайте идеи и храните заметки в обычных локальных файлах. Откройте существующую папку Markdown или импортируйте документы в новую базу знаний.",
   "memory.globalMemory": "База знаний сеансов",
   "memory.collections": "Архивные сессии",
   "memory.collectionConversation": "Диалог",
   "memory.collectionEmptyEntries": "В этом диалоге пока нет статей базы знаний.",
+  "memory.collapseAllProjects": "Свернуть все проекты",
+  "memory.expandAllProjects": "Развернуть все проекты",
   "memory.title": "База знаний",
   "memory.add": "Добавить в базу знаний",
   "memory.intro": "Упорядочивайте знания по проектам и сеансам. Сохранённые статьи не зависят от изменений источников и доступны для ручного редактирования.",
   "memory.entries": "Статьи базы знаний",
   "memory.emptyJobs": "История обработки пока пуста.",
   "memory.jobs": "История обработки",
-  "memory.search": "Поиск по заголовкам и содержимому…",
   "memory.empty": "Подходящих статей нет. Создайте статьи из сеанса или добавьте статью вручную.",
   "memory.emptyDetail": "Выберите статью, чтобы прочитать её и просмотреть связи и источники.",
   "memory.new": "Новая статья",
@@ -245,7 +329,6 @@ const ru: typeof en = {
   "memory.content": "Содержимое (Markdown)",
   "memory.tags": "Метки (через запятую)",
   "memory.related": "Связанные статьи",
-  "memory.backlinks": "Ссылки на эту статью",
   "memory.sources": "Источники",
   "memory.history": "История версий",
   "memory.restore": "Восстановить эту версию",
@@ -304,6 +387,8 @@ const ru: typeof en = {
   "chat.imageCopy": "Копировать изображение",
   "chat.imageSave": "Сохранить изображение",
   "chat.imageActionFailed": "Не удалось выполнить операцию с изображением. Повторите попытку.",
+  "clipboard.unresponsive":
+    "Приложение — источник содержимого буфера обмена не отвечает, поэтому вставка не выполнена. Повторите попытку чуть позже.",
   "common.copy": "Копировать", // Copy
   "common.cut": "Вырезать", // Cut
   "common.paste": "Вставить", // Paste
@@ -427,6 +512,8 @@ const ru: typeof en = {
     `Запускается с ${flag}. Пропускает все подтверждения разрешений — используйте с осторожностью.`, // YOLO flag hint
   "settings.permViaEnvHint":
     "Пропускает все подтверждения разрешений через инъекцию конфига (без CLI флага). Применяется при запуске сессии.",
+  "settings.permViaAnswerHint":
+    "Автоматически одобряет все запросы разрешений в режиме диалога, включая команды, выходящие за пределы рабочей области. Используйте с осторожностью.",
   "settings.catGeneral": "Общие", // General
   "settings.cliLabel": "Команда оболочки",
   "settings.cliInstall": "Установить команду ‘vela’",
@@ -572,7 +659,9 @@ const ru: typeof en = {
   "changes.loading": "Загрузка…",
   "changes.loadingDiff": "Загрузка diff…",
   "changes.noChanges": "Нет изменений",
+  "changes.unchangedLines": "Показать неизменённые строки: $",
   "changes.refresh": "Обновить",
+  "changes.openFile": "Открыть файл",
   "changes.notRepo": "Не git-репозиторий",
   "changes.selectFile": "Выберите файл",
   "changes.binary": "Двоичный файл — построчный diff недоступен",
@@ -581,7 +670,30 @@ const ru: typeof en = {
   "git.staged": "В индексе",
   "git.changes": "Изменения",
   "git.untracked": "Неотслеживаемые файлы",
-  "git.committed": "Закоммиченные изменения",
+  "git.committed": "История коммитов",
+  "git.conflicts": "Конфликты",
+  "git.conflictNotice": "Разрешите конфликты перед созданием коммита.",
+  "git.filterFiles": "Фильтр по имени файла или пути",
+  "git.noMatchingFiles": "Нет подходящих файлов",
+  "changes.compareAll": "HEAD → Рабочая директория",
+  "changes.compareStaged": "HEAD → Индекс",
+  "changes.compareUnstaged": "Индекс → Рабочая директория",
+  "changes.compareCommit": "До коммита → После коммита",
+  "changes.compareBranch": (base: string) => `База слияния с ${base} → HEAD`,
+  "changes.ignoreWhitespace": "Игнорировать пробелы",
+  "changes.collapseUnchanged": "Сворачивать неизменённые строки",
+  "changes.tooLarge": "Этот файл превышает лимит предпросмотра в 2 МиБ.",
+  "git.fileStatus.modified": "Изменён",
+  "git.fileStatus.added": "Добавлен",
+  "git.fileStatus.deleted": "Удалён",
+  "git.fileStatus.renamed": "Переименован",
+  "git.fileStatus.untracked": "Не отслеживается",
+  "git.fileStatus.conflicted": "Конфликт",
+  "git.changedFiles": (n: number) => `Изменённые файлы: ${n}`,
+  "git.changedFilesOver": (n: number) => `Изменённые файлы: более ${n}`,
+  "git.tooManyChanges": (n: number) => `Изменений слишком много, чтобы показать все. Показаны первые ${n} файлов, без подсчёта строк.`,
+  "git.ignoreSuggestion": (folder: string) => `Многие из этих файлов находятся в ${folder}/.`,
+  "git.addToGitignore": "Добавить в .gitignore",
   "git.stage": "Добавить в индекс",
   "git.unstage": "Убрать из индекса",
   "git.stageAll": "Добавить всё",
@@ -591,7 +703,6 @@ const ru: typeof en = {
   "git.viewAll": "Показать всё",
   "git.detached": "(отсоединённый HEAD)",
   "git.repository": "Репозиторий",
-  "git.aheadBehind": "Коммиты впереди и позади вышестоящей ветки",
   "git.commitPlaceholder": "Сообщение коммита",
   "git.amend": "Изменить последний коммит",
   "git.amendCommit": "Изменить коммит",
@@ -599,8 +710,76 @@ const ru: typeof en = {
   "git.commitNoFiles": "В этом коммите нет изменений файлов",
   "git.noCommits": "Коммитов пока нет",
   "git.loadMore": "Загрузить ещё",
-  "git.allBranches": "Все ветки",
-  "git.currentBranch": "Текущая ветка",
+  "git.upstreamTitle": (u: string) => `Вышестоящая ветка: ${u}`,
+  "git.fetch": "Получить",
+  "git.pull": "Извлечь",
+  "git.pullTitle": (u: string) => `Извлечь из ${u} (только перемотка вперёд)`,
+  "git.pullRebase": "Извлечь с перебазированием",
+  "git.pullMerge": "Извлечь со слиянием",
+  "git.divergedHint": "И в локальной, и в вышестоящей ветке есть новые коммиты. Выберите способ их объединить:",
+  "git.branchChanges": "Коммиты этой ветки",
+  "git.compareBase": "Сравнение с",
+  "git.compareAheadBehind": (ahead: number, behind: number, base: string) => `С момента ответвления от ${base}: в этой ветке ${ahead} коммитов, в ${base} — ${behind} новых`,
+  "git.noBranchChanges": "С момента ответвления от базовой ветки файлы не менялись",
+  "git.pr.open": "Создать pull request",
+  "git.pr.opening": "Создание…",
+  "git.pr.formTitle": "Создание pull request в Gitea",
+  "git.pr.formDescription": (branch: string, base: string) => `Отправляет ${branch} в origin и создаёт pull request в ${base}.`,
+  "git.pr.titleField": "Заголовок",
+  "git.pr.bodyField": "Описание",
+  "git.pr.noToken": "Чтобы создавать pull request здесь, добавьте токен Gitea в настройках.",
+  "git.pr.unreachable": "Сервер Gitea сейчас недоступен.",
+  "git.pr.opened": "Pull request создан",
+  "git.push": "Отправить",
+  "git.pushTitle": (u: string) => `Отправить в ${u}`,
+  "git.publish": "Опубликовать ветку",
+  "git.publishTitle": "Отправить эту ветку в удалённый репозиторий и отслеживать её",
+  "git.forcePush": "Принудительная отправка…",
+  "git.forcePushAction": "Отправить принудительно",
+  "git.forcePushConfirm": (u: string) => `Заменить ${u} локальной веткой? Принудительная отправка остановится, если в удалённом репозитории есть коммиты, которые ещё не получены сюда.`,
+  "git.moreActions": "Другие действия Git",
+  "git.running.fetch": "Получение…",
+  "git.running.pull": "Извлечение…",
+  "git.running.push": "Отправка…",
+  "git.running.publish": "Публикация…",
+  "git.operation.merge": "Выполняется слияние",
+  "git.operation.rebase": "Выполняется перебазирование",
+  "git.operation.cherry-pick": "Выполняется cherry-pick",
+  "git.operation.revert": "Выполняется revert",
+  "git.operationHint": (n: number) => `Разрешите конфликты в файлах (${n}), добавьте их в индекс и продолжите.`,
+  "git.operationReady": "Все конфликты разрешены. Продолжите, чтобы завершить операцию, или прервите её, чтобы отменить.",
+  "git.continue": "Продолжить",
+  "git.abort": "Прервать",
+  "git.abortConfirm": "Прервать и вернуться к состоянию до начала операции? Уже разрешённые конфликты будут потеряны.",
+  "git.amendTarget": (hash: string, subject: string) => `Будет изменён ${hash}: ${subject}`,
+  "git.amendUnavailable": "Пока нет коммита, который можно изменить",
+  "git.conflictKind.both-modified": "Изменено с обеих сторон",
+  "git.conflictKind.both-added": "Добавлено с обеих сторон",
+  "git.conflictKind.both-deleted": "Удалено с обеих сторон",
+  "git.conflictKind.added-by-us": "Добавлено нами",
+  "git.conflictKind.added-by-them": "Добавлено ими",
+  "git.conflictKind.deleted-by-us": "Удалено нами",
+  "git.conflictKind.deleted-by-them": "Удалено ими",
+  "git.markResolved": "Отметить как разрешённый",
+  "git.openChanges": "Открыть изменения",
+  "git.discardAll": "Отменить все изменения",
+  "git.deleteAll": "Удалить все неотслеживаемые файлы",
+  "git.discardConfirm": (n: number) => `Отменить изменения в файлах (${n})? Это действие нельзя отменить.`,
+  "git.deleteConfirm": (n: number) => `Удалить неотслеживаемые файлы (${n})? Это действие нельзя отменить.`,
+  "git.selectedCount": (n: number) => `Выбрано: ${n}`,
+  "git.clearSelection": "Снять выделение",
+  "git.viewAsTree": "Показать деревом",
+  "git.viewAsList": "Показать списком",
+  "git.copyCommitHash": "Копировать хеш коммита",
+  "git.copyCommitMessage": "Копировать сообщение коммита",
+  "git.ask.resolve": (agent: string) => `Попросить ${agent} разрешить`,
+  "git.ask.resolvePrompt": (files: string) => `Разреши конфликты Git в этих файлах, сохранив замысел обеих сторон, затем добавь каждый разрешённый файл в индекс через git add. Не создавай коммит и не продолжай и не прерывай слияние, перебазирование или cherry-pick — я проверю результат и завершу операцию сам.\n\n${files}`,
+  "git.ask.fix": (agent: string) => `Попросить ${agent} исправить`,
+  "git.ask.fixPrompt": (error: string) => `Команда Git, запущенная из панели Git, завершилась с ошибкой:\n\n${error}\n\nВыясни причину и исправь её, если это безопасно. Прежде чем выполнять принудительную отправку, переписывать историю или отбрасывать изменения, спроси меня.`,
+  "git.ask.commit": (agent: string) => `Попросить ${agent} написать сообщение и закоммитить изменения из индекса`,
+  "git.ask.commitPrompt": "Просмотри изменения в индексе (git diff --cached) и закоммить их с понятным и кратким сообщением, соответствующим соглашениям этого репозитория. Коммить только то, что в индексе; не добавляй файлы в индекс, не убирай их оттуда и не редактируй.",
+  "git.ask.explain": (agent: string) => `Попросить ${agent} объяснить`,
+  "git.ask.explainPrompt": (hash: string, subject: string) => `Объясни с помощью git show ${hash}, что меняет коммит ${hash} («${subject}») и зачем. Ничего не изменяй.`,
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",
@@ -669,10 +848,9 @@ const ru: typeof en = {
   "settings.recordSessionsHint":
     "По умолчанию выключено. Когда включено, вывод терминала сохраняется в файл журнала для воспроизведения из архива и поиска. Обычные сессии терминала никогда не записываются; сессии агента читают собственную расшифровку.", // Record session logs hint
   "settings.fonts": "Fonts", // TODO translate
-  "settings.uiFont": "Interface font", // TODO translate
-  "settings.uiFontSize": "Interface size", // TODO translate
-  "settings.termFont": "Terminal font", // TODO translate
-  "settings.termFontSize": "Terminal size", // TODO translate
+  "settings.uiFontSize": "Размер шрифта интерфейса",
+  "settings.termFont": "Шрифт терминала",
+  "settings.termFontSize": "Размер шрифта терминала",
   "settings.termLineHeight": "Высота строки в терминале",
   "settings.chatTypography": "Просмотр диалога",
   "settings.chatTypographyHint": "Эти настройки шрифта не зависят от терминала и применяются сразу.",
@@ -695,7 +873,7 @@ const ru: typeof en = {
   "settings.composerChip.tasks": "Фоновые задачи",
   "settings.composerChip.account": "Аккаунт",
   "settings.composerChip.codexCredits": "Сбросы лимитов Codex",
-  "settings.fontDefault": "Default", // TODO translate
+  "settings.fontDefault": "По умолчанию",
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontListUnavailable": "Не удалось получить список системных шрифтов. Название шрифта можно ввести вручную.",
   "settings.fontUnconfirmed": "Не удалось подтвердить доступность этого шрифта.",
@@ -740,6 +918,7 @@ const ru: typeof en = {
   "settings.scSplitDown": "Разделить вниз", // Split down
   "settings.scSearch": "Поиск в терминале", // Find in terminal
   "settings.scGlobalSearch": "Поиск по всем сеансам", // Search all sessions
+  "settings.scCopyTerminal": "Копировать выделение в терминале", // Copy terminal selection
   "settings.scSelectAllTerminal": "Выделить всё в терминале", // Select all in terminal
   "settings.scSaveDoc": "Сохранить документ", // Save document
   "settings.scFocusSidebar": "Фокус на боковой панели", // Focus sidebar
@@ -844,6 +1023,7 @@ const ru: typeof en = {
   "connect.portPlaceholder": "Порт", // Port
   "connect.connecting": "Подключение…", // Connecting…
   "connect.connect": "Подключиться", // Connect
+  "connect.stop": "Остановить",
   "connect.stagePreparing": "Подготовка сервера…",
   "connect.stageTransferring": "Передача сервера…",
   "connect.stageStarting": "Запуск сервера…",
@@ -928,6 +1108,7 @@ const ru: typeof en = {
   "tree.presetLink": "Пресет (presets.json)", // Preset (presets.json) / Not linked
   "tree.presetNone": "Не связан",
   "tree.projectInfo": "Сведения о проекте", // Project Info
+  "tree.codeAudit": "Аудит кода", // Code audit
   "info.branch": "Ветка", // Branch
   "info.path": "Путь", // Path
   "info.recentCommits": "Последние коммиты", // Recent Commits
@@ -936,6 +1117,7 @@ const ru: typeof en = {
   "tree.killProcessConfirm": (name: string) => `Завершить процесс сеанса «${name}»? Текущая задача будет прервана. Сохранённая история переписки и файлы останутся.`,
   "tree.archiveSession": "Архивировать сессию", // Archive Session
   "tree.archiveGroup": "Архивировать группу", // Archive Group
+  "tree.archiveCollection": "Архивировать коллекцию", // Archive Collection
   // Temporary (draft) sessions
   "tree.scratchTag": "врем.", // scratch
   "tree.persistSession": "Сделать постоянной сессией…", // Make Permanent Session…
@@ -1065,6 +1247,11 @@ const ru: typeof en = {
   // Working directory / Leave empty for the default
   "tree.workingDirLabel": "Рабочий каталог",
   "tree.workingDirPlaceholder": "Оставьте пустым для каталога по умолчанию",
+  "preset.savedTitle": "Сохранённые пресеты",
+  "preset.empty": "Нет сохранённых пресетов.",
+  "preset.deleteHint": "При удалении пресета существующие сеансы сохраняются.",
+  "preset.deleteNamed": (name: string) => `Удалить пресет «${name}»`,
+  "preset.deleteConfirm": (name: string) => `Удалить пресет «${name}»?`,
   "preset.execPathLabel": "Исполняемый файл (необязательно)",
   "preset.execPathPlaceholder": "/usr/local/bin/claude",
   "preset.execPathHint":
@@ -1100,8 +1287,6 @@ const ru: typeof en = {
     `Удалить группу «${name}»? Все её подгруппы и сессии тоже будут удалены. Это действие необратимо.`, // Delete group "{name}"?…
   "tree.deleteSessionBody": (name) =>
     `Удалить сессию «${name}» (и все её дочерние сессии)? Это действие необратимо.`, // Delete session "{name}"…
-  "tree.deleteWorktrees": (n) =>
-    `Также удалить связанные git worktree (всего ${n}; удаление может не сработать, если в рабочем дереве есть изменения)`, // Also remove associated git worktrees…
 
   // Session information dialog
   "info.name": "Название", // Name
@@ -1124,10 +1309,12 @@ const ru: typeof en = {
   "importSessions.results": ({ count }: { count: number }) => `Результатов: ${count}`,
   "importSessions.selected": ({ count }: { count: number }) => `Выбрано: ${count}`,
   "importSessions.clearSelection": "Снять выделение",
-  "importSessions.clearSearch": "Очистить поиск",
+  "importSessions.clearFilters": "Сбросить фильтры",
+  "importSessions.agentFilter": "Фильтр по агенту",
+  "importSessions.allAgents": "Все агенты",
   "importSessions.noHistory": "Для каталога этого проекта не найдено предыдущих сессий.",
   "importSessions.title": "Импорт сессий",
-  "importSessions.description": "Найдите существующие сессии Codex, Claude, OpenCode и Kiro, рабочий каталог которых совпадает с каталогом проекта. Выберите сессии для добавления в проект, затем откройте нужную сессию, чтобы продолжить разговор. Просмотр истории Kiro пока поддерживается только для записей, содержащих исключительно текст.",
+  "importSessions.description": "Найдите существующие сессии Codex, Claude, OpenCode, Pi, OMP, ZCode, DeepSeek и Kiro, рабочий каталог которых совпадает с каталогом проекта. Выберите сессии для добавления в проект, затем откройте нужную сессию, чтобы продолжить разговор. Просмотр истории Kiro пока поддерживается только для записей, содержащих исключительно текст.",
   "importSessions.search": "Поиск по названию, агенту или ID сессии",
   "importSessions.empty": "Подходящие сессии не найдены.",
   "importSessions.imported": "Уже импортирована",
@@ -1150,7 +1337,7 @@ const ru: typeof en = {
     "У этого проекта нет пригодного пути к git-репозиторию.", // This project has no usable git repository path.
   // ── Worktree selector for custom session creation ──
   "worktreeSel.label": "Worktree",
-  "worktreeSel.modeNone": "Без", // None
+  "worktreeSel.modeNone": "Нет", // None
   "worktreeSel.modeNew": "Новый", // New
   "worktreeSel.modeExisting": "Существующий", // Existing
   "worktreeSel.loading": "Загрузка worktree…", // Loading worktrees…
@@ -1196,6 +1383,7 @@ const ru: typeof en = {
   "search.includeArchivedHint":
     "Искать также в архивных сессиях (по умолчанию выкл.)", // Also search archived sessions (off by default)
   "search.searching": "Поиск…", // Searching…
+  "search.progress": (sessions, bytes) => `Поиск… Проверено сессий: ${sessions} · Прочитано: ${bytes}`,
   "search.noResults": "Совпадений не найдено", // No matches found
   "search.sessionCount": (n) =>
     `${n} ${plural(n, "сессия", "сессии", "сессий")}`, // n sessions
@@ -1207,6 +1395,8 @@ const ru: typeof en = {
   "search.archivedBadge": "В архиве", // Archived
   "search.summary": (m, s) =>
     `${m} ${plural(m, "совпадение", "совпадения", "совпадений")} · ${s} ${plural(s, "сессия", "сессии", "сессий")}`, // X matches · N sessions
+  "search.pending": (n) =>
+    `Индексация ещё не завершена для ${n} ${plural(n, "сессии", "сессий", "сессий")}, поэтому результаты могут быть неполными.`, // N sessions are still being indexed, so results may be incomplete
   "search.matchPosition": (n, total) => `${n} из ${total}`, // N of M
   "search.roleTerminal": "Терминал", // Terminal
   "search.collapseGroup": "Свернуть", // Collapse
@@ -1248,6 +1438,7 @@ const ru: typeof en = {
   "browser.loading": "Загрузка…", // Loading…
   // Application-exit confirmation and dormant restored sessions.
   "quit.title": "Закрыть VelaTerm?", // Quit VelaTerm?
+  "quit.closeWindowTitle": "Закрыть главное окно?", // Close the main window?
   "quit.body": "Все запущенные сеансы терминала и агента будут остановлены.", // Any running terminal and agent sessions will be stopped.
   "quit.remoteWindows": "Открытые окна удалённого подключения также будут закрыты.", // Open remote windows will also be closed.
   "quit.saveWorkspace": "Сохранить рабочее пространство", // Save workspace
@@ -1291,6 +1482,31 @@ const ru: typeof en = {
   "term.startFailed": (err) => `Не удалось запустить: ${err}`, // Failed to start: {err}
 
   // ── Карточка помощи с установкой агента ──
+  "agentVersion.label": "Версия агента",
+  "agentVersion.loading": "Проверка версии…",
+  "agentVersion.unavailable": "Версия недоступна",
+  "agentVersion.running": (version) => `Запущенная версия: ${version}`,
+  "agentVersion.installed": (version) => `Установленная версия: ${version}`,
+  "agentVersion.update": (version) => `Обновление: v${version}`,
+  "agentVersion.upgrade": (version) => `Доступна версия ${version}. Открыть официальные инструкции по обновлению.`,
+  "agentVersion.checkFailed": "Не удалось проверить обновления.",
+  "agentVersion.upgradeAction": (version) => `Доступна версия ${version}. Нажмите, чтобы обновить.`,
+  "agentUpdate.title": (label) => `Обновление ${label}`,
+  "agentUpdate.commandHint": "VelaTerm выполнит встроенную команду обновления агента:",
+  "agentUpdate.confirm": "Обновить",
+  "agentUpdate.docs": "Официальная инструкция",
+  "agentUpdate.running": "Идёт обновление…",
+  "agentUpdate.background": "Это окно можно закрыть — обновление продолжится.",
+  "agentUpdate.waiting": "Ожидание вывода…",
+  "agentUpdate.succeeded": (label, version) => `${label} обновлён до v${version}.`,
+  "agentUpdate.unchanged": (version) => `Команда завершилась, но установленная версия по-прежнему v${version}. Проверьте вывод выше.`,
+  "agentUpdate.finished": "Команда обновления завершилась. Проверьте вывод выше.",
+  "agentUpdate.failed": "Обновление не завершено. Проверьте вывод выше или скопируйте команду и выполните её в терминале.",
+  "agentUpdate.broken": (label) => `После обновления ${label} не запускается, значит обновление не завершено. Проверьте вывод выше или переустановите ${label}.`,
+  "agentUpdate.timedOut": "Обновление остановлено через 15 минут. Скопируйте команду и выполните её в терминале.",
+  "agentUpdate.restartHint": "Этот диалог всё ещё использует предыдущую версию. Перезапустите агента, чтобы перейти на новую: диалог сохранится, а новая версия запустится при следующем сообщении.",
+  "agentUpdate.restart": "Перезапустить агента",
+  "agentUpdate.startFailed": "Не удалось начать обновление. Повторите попытку.",
   "agentInstall.title": (label) => `${label} не установлен`, // {label} is not installed
   "agentInstall.desc": (label) =>
     `VelaTerm не нашёл ${label} в PATH. Установите его, чтобы запустить эту сессию.`, // couldn't find {label} on PATH
@@ -1299,6 +1515,10 @@ const ru: typeof en = {
   "agentInstall.dismiss": "Установлю сам", // I'll do it myself
   "agentInstall.docs": "Документация", // Install docs
   "agentInstall.needsNode": "Требуется Node.js / npm", // Requires Node.js / npm
+  "agentInstall.runInTerminal": "Выполните эту команду в терминале, чтобы установить агента, затем отправьте сообщение ещё раз.",
+  "agentInstall.installing": "Установка…", // Installing…
+  "agentInstall.installingDesc": "Идёт загрузка и установка. Это может занять несколько минут.", // Downloading and installing. This can take a few minutes.
+  "agentInstall.installFailed": "Установка не завершилась. Выполните эту команду в терминале, чтобы узнать причину, затем отправьте сообщение ещё раз.", // Installation didn't finish. Run this command in a terminal to see what went wrong, then send your message again.
   "agentInstall.afterInstall": "После установки:", // After install:
   "agentInstall.pathSaved": (label: string) =>
     `Путь к исполняемому файлу ${label} сохранён в настройках:`, // executable path saved to Settings
@@ -1604,7 +1824,6 @@ const ru: typeof en = {
   "mobile.inputOptions": "Параметры сообщения",
   "mobile.connections": "Управление подключениями",
   "mobile.more": "Другие действия",
-  "mobile.toDesktop": "Перейти к версии для ПК", // Switch to desktop
   "mobile.empty1": "Нет сеансов.", // No sessions.
   "mobile.noMatch": "Нет подходящих сеансов", // No matching sessions
   "mobile.empty2":
@@ -1612,6 +1831,10 @@ const ru: typeof en = {
   "mobile.back": "‹ Назад", // ‹ Back
   "mobile.selCopy": "Копировать", // Copy
   "mobile.selCancel": "Отмена", // Cancel
+  "mobile.compose": "Написать сообщение",
+  "mobile.composePlaceholder": "Введите сообщение для терминала",
+  "mobile.showTranscript": "Стенограмма",
+  "mobile.showTerminal": "Терминал",
 
   // ── Mobile connection client (apps/mobile start page) ──
   "mobile.phaseConnecting": "Подключение по SSH…",
@@ -1810,6 +2033,7 @@ const ru: typeof en = {
   "skills.vspawn": "Создаёт дочернюю сессию для выполнения задачи.",
   "skills.vspawnTree": "Создаёт дочернюю сессию с собственным рабочим деревом.",
   "skills.vopen": "Открывает файл или веб-страницу в VelaTerm.",
+  "skills.vartifact": "Показывает визуальный результат как HTML-страницу с автообновлением рядом с сессией.", // Show visual work as a live HTML page beside the conversation.
   "skills.vrefer": "Читает диалог другой сессии.",
   "skills.vask": "Задаёт вопрос о другой сессии и возвращает краткий ответ.",
   "skills.vsearch": "Ищет по диалогам всех сессий.",
@@ -1828,6 +2052,7 @@ const ru: typeof en = {
   "session.showTerminal": "Вид терминала",
   "session.switchTitle": "Смена вида перезапускает агента",
   "session.switchBody": "Текущий ход будет прерван. Разговор сохранится.",
+  "session.switchBodyBackground": "Фоновые задачи, запущенные агентом, могут остановиться, и агент не узнает об их завершении. Разговор сохранится.",
   "session.switchConfirm": "Переключить",
   "session.terminalViewHint": "Нажмите здесь, чтобы вернуться к виду терминала.",
   "session.loading": "Читаем беседу…",
@@ -1959,6 +2184,8 @@ const ru: typeof en = {
   "chat.attach.tooLarge": (name: string, mb: number) => `${name} превышает ${mb} МБ и не был приложен`,
   "chat.attach.unreadable": (name: string) => `Не удалось прочитать ${name}`,
   // ── Shell mode: `!` runs a command in the session's shell ──
+  "chat.findings.count": (n: number) => `Найдено проблем: ${n}`,
+  "chat.findings.none": "Проблем не найдено",
   "chat.shell.title": "Команда оболочки",
   "chat.shell.running": "Выполняется…",
   "chat.shell.cancel": "Отменить",
@@ -1976,6 +2203,7 @@ const ru: typeof en = {
   "chat.compaction.manual": "Контекст сжат",
   "chat.compaction.auto": "Контекст сжат автоматически",
   "chat.compaction.from": (tokens: string) => `было ${tokens} токенов`,
+  "chat.wake.label": "Фоновая задача завершена",
   // N steps
   "chat.subagent.steps": (n: number) => {
     const tail = n % 100 >= 11 && n % 100 <= 14 ? 0 : n % 10;
@@ -2078,6 +2306,15 @@ const ru: typeof en = {
   "chat.auth.claude.invalidCode": "Вставьте полный код текущей попытки авторизации, включая часть после #.",
   "chat.auth.claude.externalAuth": "Ключи API и другие настроенные способы аутентификации не изменятся.",
   "chat.auth.open": "Открыть страницу авторизации",
+  "chat.auth.zcode.required": "Чтобы пользоваться этим разговором, войдите в ZCode с учётной записью Z.ai или BigModel.",
+  "chat.auth.zcode.pending": "Откройте страницу авторизации и разрешите доступ. После завершения входа это представление обновится автоматически.",
+  "chat.auth.zcode.failed": "Не удалось завершить вход. Попробуйте ещё раз.",
+  "chat.auth.zcode.zai": "Войти через Z.ai",
+  "chat.auth.zcode.bigmodel": "Войти через BigModel",
+  "chat.auth.zcode.noPlan.zai": "Вы вошли в ZCode через Z.ai, но у этой учётной записи Z.ai нет доступного GLM Coding Plan или лимит тарифа исчерпан. Если тариф оформлен в BigModel, откройте меню «Учётная запись ZCode» и выберите «Войти через BigModel».",
+  "chat.auth.zcode.noPlan.bigmodel": "Вы вошли в ZCode через BigModel, но у этой учётной записи BigModel нет доступного GLM Coding Plan или лимит тарифа исчерпан. Если тариф оформлен в Z.ai, откройте меню «Учётная запись ZCode» и выберите «Войти через Z.ai».",
+  "chat.auth.zcode.noModels.zai": "ZCode не нашёл GLM Coding Plan для текущего входа через Z.ai, поэтому модели недоступны. Откройте меню «Учётная запись ZCode» и выберите «Войти через Z.ai», чтобы войти заново. Если тариф оформлен в BigModel, выберите «Войти через BigModel».",
+  "chat.auth.zcode.noModels.bigmodel": "ZCode не нашёл GLM Coding Plan для текущего входа через BigModel, поэтому модели недоступны. Откройте меню «Учётная запись ZCode» и выберите «Войти через BigModel», чтобы войти заново. Если тариф оформлен в Z.ai, выберите «Войти через Z.ai».",
   "chat.resetCredits.label": (n: string) => `Сбросов лимита: ${n}`,
   "chat.resetCredits.title": "Доступные сбросы лимитов Codex",
   "chat.resetCredits.unknown": "Не удалось получить количество доступных сбросов.",
@@ -2159,11 +2396,20 @@ const ru: typeof en = {
     `Повторная попытка (${attempt}/${max}) через ${seconds} с: ${message}`,
   "chat.notify.dismiss": "Закрыть",
   "settings.completionMode": "Подсказки команд",
-  "settings.completionAuto": "Автоматически",
-  "settings.completionTab": "По Tab",
+  "settings.completionAuto": "В строке + Tab",
+  "settings.completionTab": "Только Tab",
   "settings.completionOff": "Выключены",
   "settings.completionUnavailable": "Не удалось загрузить или сохранить настройки.",
-  "settings.completionHint": "Применяется к новым терминалам Zsh, Bash 4+, Fish и PowerShell. В CMD сохраняется стандартное действие Tab. Tab вставляет выбранную подсказку; Enter выполняет текущую команду без применения подсказки.",
+  "settings.completionHint": "При вводе в Zsh после курсора бледным текстом показывается последняя подходящая команда из истории; нажмите → или End, чтобы принять её. Tab работает так же, как в самой оболочке: единственный вариант вставляется сразу, общая часть дополняется первой, а список открывается, если вариантов остаётся несколько. Применяется к новым терминалам Zsh, Bash 4+, Fish и PowerShell.",
+  "settings.completionTabOnlyHint": "Во время ввода подсказки не показываются. Нажмите Tab, чтобы дополнить так же, как в самой оболочке: единственный вариант вставляется сразу, общая часть дополняется первой, а список открывается, если вариантов остаётся несколько. Применяется к новым терминалам Zsh, Bash 4+, Fish и PowerShell.",
+  "settings.completionTabKey": "Клавиша Tab",
+  "settings.completionTabAccept": "Принять подсказку",
+  "settings.completionTabComplete": "Дополнить команду",
+  "settings.completionTabAcceptHint": "Пока показана бледная подсказка, Tab принимает её. Если сразу нажать Tab ещё раз, действие отменится и откроется список вариантов. Принять подсказку можно и клавишами → или End.",
+  "settings.completionTabCompleteHint": "Tab всегда дополняет команду, даже когда показана бледная подсказка. Чтобы принять подсказку, нажмите → или End.",
+  "term.completionTipAccept": "Принять подсказку",
+  "term.completionTipComplete": "Дополнить команду",
+  "term.completionTipUndo": "Отменить и показать варианты",
 
   // Native texts of the mobile remote plugin (iOS, Android, download bridge). They reach the apps through native-text.json; {name} placeholders are replaced natively.
   "mobile.native.trustTitle": "Подтверждение отпечатка удалённого узла",
@@ -2270,8 +2516,186 @@ const ru: typeof en = {
   "term.runs.logEmpty": "Вывода пока нет",
   "chat.antigravity.placeholder": "Напишите Antigravity или укажите файлы через @файлы",
   "chat.antigravity.textOnly": "В режиме диалога Antigravity пока поддерживаются только текстовые сообщения.",
+  "chat.textOnly": (agent: string) => `В режиме диалога ${agent} поддерживаются только текстовые сообщения.`,
+  "chat.signInRequired": (agent: string) => `Чтобы пользоваться режимом диалога, войдите в ${agent}. Перейдите в режим терминала, выполните вход и отправьте сообщение ещё раз.`,
+  "chat.apiKeyRequired": "Для DeepSeek Harness нужен ключ API. Задайте переменную окружения DEEPSEEK_API_KEY или запустите `dsh web` и сохраните ключ на странице Models, затем отправьте сообщение ещё раз.",
   "chat.antigravity.permissionsHint": "Инструменты, требующие одобрения, необходимо заранее разрешить в настройках Antigravity или использовать в режиме терминала.",
   "chat.antigravity.settingsHint": "Изменяйте модель, уровень рассуждений или разрешения между ходами.",
+  "chat.history.imageDownloadRequired": "Это изображение нельзя открыть здесь. Скачайте оригинал, чтобы просмотреть его.",
+  "chat.history.readBody": "Прочитать полностью",
+  "chat.history.selectDetail": "Выберите файл или поле",
+  "chat.history.part": "Часть",
+  "chat.history.copyPart": "Копировать эту часть",
+
+  "chat.history.searchMore": "Другие результаты",
+  "chat.history.indexing": "Загрузка разговора…",
+  "chat.history.newer": "Загрузить более новые сообщения",
+
+  "chat.history.copyComplete": "Копировать полное содержимое",
+  "chat.history.downloadComplete": "Скачать полное содержимое",
+  "chat.history.unavailable": "Подробные данные истории этой сессии недоступны.",
+  "chat.history.openViewer": "Откройте подробный просмотр, чтобы прочитать полное содержимое.",
+  "chat.history.copyBusy": "Копирование полного содержимого уже выполняется.",
+  "chat.history.clipboardLimit": "Содержимое превышает лимит буфера обмена. Скачайте файл целиком.",
+  "chat.history.contentChanged": "Содержимое изменилось во время передачи. Загрузите его заново.",
+  "export.preparing": "Подготовка экспорта сеанса…",
+  "chat.history.windowLimit": "Это сообщение превышает предел отображения. Загрузите полный текст для чтения или скачайте его в виде файла.",
+
+  "chat.history.incomplete": "Разговор ещё не загрузился полностью. Повторите попытку чуть позже.",
+  "chat.history.indexBusy": "Индекс истории используется другим процессом. Повторите попытку через некоторое время.",
+  "chat.history.unsupported": "Формат некоторых записей истории не поддерживается. Их исходное содержимое сохранено.",
+  "chat.history.canceled": "Чтение истории отменено.",
+  "chat.history.pagedRequired": "Откройте это содержимое в постраничной истории или в просмотрщике подробностей.",
+  "chat.history.sourceMissing": "Источник истории отсутствует или недоступен.",
+  "chat.history.updateServer": "Обновите сервер, чтобы безопасно загружать историю разговоров.",
+  "chat.history.storagePressure": "Хранилище истории заполнено или недоступно. Освободите место и повторите попытку. Управление агентом остаётся доступным.",
+
+  "artifact.preview": "Просмотр", // Preview
+  "artifact.source": "Исходный код", // Source
+  "artifact.split": "Рядом", // Split
+  "artifact.live": "Автообновление", // Live
+  "artifact.liveTitle": "Перезагружается автоматически при изменении файла", // Reloads automatically when the file changes
+  "artifact.offline": "Офлайн", // Offline
+  "artifact.offlineTitle": "Эта страница не может ничего загружать из интернета. Нажмите, чтобы разрешить для этого файла.", // This page cannot load anything from the internet. Click to allow it for this file.
+  "artifact.online": "Онлайн", // Online
+  "artifact.onlineTitle": "Эта страница может загружать файлы из интернета. Нажмите, чтобы снова заблокировать.", // This page can load files from the internet. Click to block them again.
+  "artifact.netBlocked": (n: number) => `Страница пыталась загрузить файлы из интернета (${n}). Они заблокированы.`, // This page tried to load ${n} files from the internet. They were blocked.
+  "artifact.allowForFile": "Разрешить для этого файла", // Allow for this file
+  "artifact.errorCount": (n: number) => `Ошибок: ${n}`, // ${n} errors
+  "artifact.warningCount": (n: number) => `Предупреждений: ${n}`, // ${n} warnings
+  "artifact.console": "Консоль", // Console
+  "artifact.consoleEmpty": "Нет ошибок и предупреждений.", // No errors or warnings.
+  "artifact.clearConsole": "Очистить", // Clear
+  "artifact.closeConsole": "Закрыть консоль", // Close console
+  "artifact.sendToSession": "Отправить в сессию", // Send to session
+  "artifact.sendToSessionTitle": "Вставляет эти ошибки в поле ввода сессии, которая создала эту страницу", // Put these errors in the message box of the session that wrote this page
+  "artifact.fileGone": "Этот файл больше недоступен", // This file is no longer available
+  "artifact.fileGoneBody": (name: string) => `Файл ${name} перемещён или удалён. Откройте его снова из нового места или закройте эту вкладку.`, // ${name} was moved or deleted. Open it again from its new location, or close this tab.
+  "artifact.reload": "Перезагрузить", // Reload
+  "artifact.openInBrowser": "Открыть в браузере", // Open in browser
+  "artifact.viewportFit": "По размеру вкладки", // Fit to tab
+  "artifact.viewportDesktop": "Компьютер", // Desktop
+  "artifact.viewportTablet": "Планшет", // Tablet
+  "artifact.viewportPhone": "Телефон", // Phone
+  "artifact.goToSession": "Перейти к сессии", // Go to session
+  "artifact.versionTitle": (n: number, time: string) => `Версия ${n} · ${time}`, // Version ${n} · ${time}
+  "artifact.viewingVersion": (n: number, time: string) => `Просмотр версии ${n} (сохранена: ${time})`, // Viewing version ${n}, saved ${time}
+  "artifact.restoreVersion": "Восстановить эту версию", // Restore this version
+  "artifact.backToLatest": "К последней версии", // Back to latest
+  "artifact.restoreBody": (n: number) => `Файл будет заменён версией ${n}. Текущее содержимое останется в истории версий.`, // The file will be replaced with version ${n}. Its current content stays in the version history.
+  "artifact.restore": "Восстановить", // Restore
+  "artifact.restoreFailed": "Не удалось восстановить версию. Попробуйте ещё раз.", // The version could not be restored. Please try again.
+  "artifact.openAsTab": "Открыть во вкладке", // Open as tab
+  "artifact.closePanel": "Закрыть просмотр", // Close preview
+  "artifact.cardOpen": "Открыть", // Open
+  "artifact.cardOpenTitle": "Открыть рядом с этой сессией", // Open beside this session
+  "artifact.cardKind": "HTML-страница", // HTML page
+  "artifact.frameTitle": (name: string) => `Просмотр: ${name}`, // Preview of ${name}
+  "newSession.menu": "Новая сессия…", // New Session…
+  "newSession.heading": "Над чем будем работать?", // What should we work on?
+  "newSession.terminalOnly": "Только вид терминала", // Terminal view only
+  "newSession.conversationOnly": "Только вид беседы", // Conversation view only
+  "newSession.noConversationView": "У этого агента нет вида беседы, поэтому сессия откроется в виде терминала.", // This agent has no conversation view, so the session opens in the terminal view.
+  "newSession.noTerminalView": "У этого агента нет вида терминала, поэтому сессия откроется в виде беседы.", // This agent has no terminal view, so the session opens in the conversation view.
+  "newSession.taskLabel": "Первая задача", // First task
+  "newSession.placeholder": "Опишите задачу или задайте вопрос", // Describe a task or ask a question
+  "newSession.enterHint": "Enter — начать · Shift+Enter — новая строка", // Enter to start · Shift+Enter for a new line
+  "newSession.start": "Начать", // Start
+  "newSession.starting": "Запуск…", // Starting…
+  "newSession.viewLabel": "Вид", // View
+  "newSession.worktreeHint": "Сессия работает в собственной ветке в отдельной папке.", // Runs this session on its own branch in a separate folder.
+  "newSession.worktreeNotRepo": "Для отдельного рабочего дерева нужен Git-репозиторий.", // A separate worktree needs a Git repository.
+  "newSession.worktreeName": "Имя рабочего дерева (необязательно)", // Worktree name (optional)
+  "newSession.worktreeNameHint": "Задаёт имя новой папки и ветки. Оставьте пустым, чтобы использовать имя сессии.", // Names the new folder and branch. Leave empty to use the session name.
+  "newSession.typeLabel": "Тип сессии",
+  "newSession.typeTask": "Задача",
+  "newSession.typeProject": "Проект",
+  "newSession.typeChat": "Чат",
+  "newSession.typeTaskHint": "Выполняет задачу без проекта, например импорт проекта.",
+  "newSession.typeProjectHint": "Работает в папке проекта.",
+  "newSession.typeChatHint": "Обычная беседа без проекта и файлов.",
+  "newSession.location": "Проект или коллекция",
+  "newSession.locationSearch": "Фильтр проектов и коллекций",
+  "newSession.collectionOption": "Коллекция",
+  "newSession.newTask": "Новая сессия задачи",
+  "newSession.newChat": "Новая сессия чата",
+  "systemCollection.projects": "Проекты",
+  "systemCollection.agents": "Агенты",
+  "systemCollection.terminals": "Терминалы",
+  "systemCollection.tasks": "Задачи",
+  "systemCollection.chat": "Чаты",
+  "systemCollection.projectsHint": "Все проекты. Встроенная коллекция, её нельзя удалить.",
+  "systemCollection.agentsHint": "Агенты, запущенные в терминалах. Агент исчезает из списка после завершения.",
+  "systemCollection.terminalsHint": "Терминалы, которые сейчас работают.",
+  "systemCollection.tasksHint": "Сессии задач, не относящиеся ни к одному проекту.",
+  "systemCollection.chatHint": "Сессии чата.",
+  "sidebarSection.nav": "Разделы боковой панели",
+  "sidebarSection.noTasks": "Сессий задач пока нет.",
+  "sidebarSection.noChats": "Сессий чата пока нет.",
+  "artifact.comment": "Комментировать", // Comment
+  "artifact.commentTitle": "Выберите элементы страницы, чтобы оставить комментарии для агента", // Click elements in the page to leave comments for the agent
+  "artifact.pickHint": "Нажмите на элемент страницы, чтобы прокомментировать его. Esc — завершить.", // Click an element in the page to comment on it. Press Esc to stop.
+  "artifact.commentOn": (target: string) => `Комментарий к ${target}`, // Comment on ${target}
+  "artifact.commentPlaceholder": "Что здесь изменить?", // What should change here?
+  "artifact.commentAdd": "Добавить комментарий", // Add comment
+  "artifact.commentMore": "Прокомментировать другой элемент", // Comment on another element
+  "artifact.commentRemove": "Удалить комментарий", // Remove comment
+  "artifact.showInPage": "Показать на странице", // Show in page
+  "artifact.sendCommentsTitle": "Вставляет эти комментарии в поле ввода сессии, которая создала эту страницу", // Put these comments in the message box of the session that wrote this page
+  "artifact.copyCommentsTitle": "Копирует эти комментарии, чтобы отправить их агенту", // Copy these comments to send to an agent
+  "artifact.options": "Варианты", // Options
+  "artifact.useOption": (id: string) => `Выбрать ${id}`, // Use ${id}
+  "artifact.useOptionTitle": "Вставляет в поле ввода сессии, которая создала эту страницу, сообщение с просьбой оставить этот вариант", // Put a message asking to keep this option in the message box of the session that wrote this page
+  "artifact.useOptionCopyTitle": "Копирует сообщение с просьбой оставить этот вариант", // Copy a message asking to keep this option
+  // Knowledge base and archived sessions pages.
+  "kb.overview": "Обзор",
+  "kb.sources": "Источники",
+  "kb.searchAll": "Поиск по знаниям и заметкам…",
+  "kb.localHint": "Папки Markdown на этом компьютере. Редактируйте их здесь или в любом другом редакторе.",
+  "kb.archiveHint": "Завершённые беседы. Те, что стоит сохранить, можно добавить в базу знаний.",
+  "kb.recent": "Недавно обновлённые",
+  "kb.openArchived": "Открыть архивную сессию",
+  "kb.editDetails": "Изменить сведения",
+  "kb.moreActions": "Другие действия",
+  "archive.allSessions": "Все сессии",
+  "archive.projects": "Проекты",
+  "archive.allProjects": "Все проекты",
+  "archive.allAgents": "Все агенты",
+  "archive.anyKnowledge": "С знаниями и без",
+  "archive.withKnowledge": "Добавлена в базу знаний",
+  "archive.withoutKnowledge": "Ещё не добавлена",
+  "archive.view": "Вид",
+  "archive.viewTree": "Дерево",
+  "archive.viewTime": "По дате",
+  "archive.newest": "Сначала новые",
+  "archive.oldest": "Сначала старые",
+  "archive.colSession": "Сессия",
+  "archive.colProject": "Проект",
+  "archive.colAgent": "Агент",
+  "archive.colKnowledge": "Знания",
+  "archive.colArchived": "В архиве с",
+  "archive.restoreShort": "Восстановить",
+  "kb.needsAttention": (count: string) => `Требуют внимания: ${count}`,
+  "kb.statusAttention": "Требует внимания",
+  "kb.statusOrganized": "Упорядочено",
+  "kb.organizedCount": (count: string) => `Упорядочено: ${count}`,
+  "kb.failedTimes": (count: string) => `Неудачных попыток: ${count}`,
+  "kb.succeededAfter": (count: string) => `Успешно после неудачных попыток: ${count}`,
+  "kb.fromSession": "Из сессии",
+  "kb.showAllTags": "Показать все теги",
+  "kb.inKnowledgeBase": (count: string) => `В базе знаний: ${count}`,
+  "kb.entriesCount": (count: string) => `Статей: ${count}`,
+  "kb.entriesFrom": (_count: string, sessions: string) => `статей · сессий: ${sessions}`,
+  "kb.notesIn": (_count: string, folders: string) => `заметок · папок: ${folders}`,
+  "kb.sessionsIn": (_count: string, projects: string) => `сессий · проектов: ${projects}`,
+  "kb.lastArchived": "Последнее архивирование",
+  "nb.notesWord": (_count: string) => "заметок",
+  "archive.sessionsInProjects": (sessions: string, projects: string) => `Сессий: ${sessions} · проектов: ${projects}`,
+  "archive.collapseAll": "Свернуть все",
+  "kb.andMore": (count: string) => `и ещё ${count}`,
+  "kb.searchEntries": "Поиск по статьям…",
+  "kb.updatedOn": (date: string) => `Обновлено ${date}`,
+  "archive.sessionsCount": (count: string) => `Сессий: ${count}`,
 };
 
 export default ru;

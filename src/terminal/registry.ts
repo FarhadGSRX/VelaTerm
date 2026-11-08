@@ -137,6 +137,11 @@ export function isAppCursorMode(id: string): boolean {
   return registry.get(id)?.modes.applicationCursorKeysMode ?? false;
 }
 
+/** Whether the program in this terminal has turned on bracketed paste (DECSET 2004). */
+export function isBracketedPasteMode(id: string): boolean {
+  return registry.get(id)?.modes.bracketedPasteMode ?? false;
+}
+
 /** Update colors on every live terminal after a theme change. */
 export function setXtermTheme(theme: ITheme) {
   for (const term of registry.values()) {

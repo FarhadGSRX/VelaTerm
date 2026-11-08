@@ -2,8 +2,9 @@
 
 import {
   isRemoteWindow,
+  isTauri,
   listen,
-  listenNative,
+  listenOwnWindow,
   type UnlistenFn,
 } from "./transport";
 import type { MirrorSnapshot, RemoteClient } from "./mirror";
@@ -94,6 +95,7 @@ export type StatusSignal =
         | "kiro"
         | "grok"
         | "zoo"
+        | "zcode"
         | null;
       stateSource?: "hooks" | "legacy" | "chat";
     }
@@ -184,6 +186,8 @@ export interface ViewRequest {
   sessionId: string;
   path: string;
   isUrl?: boolean;
+  /** Set by `vartifact`: open the file beside the calling conversation instead of in a tab. */
+  beside?: boolean;
 }
 
 /** Listen for open-document/browser-tab requests as a global event registered once on mount. */
@@ -306,6 +310,23 @@ export interface CloneProgress {
   percent: number | null;
 }
 
+/** Something changed below a watched directory. */
+export interface FsChange {
+  /** Matches `WatchInfo.root`. */
+  root: string;
+  /** Directories whose listing changed, relative to `root` with `/` separators (`""` is the root);
+   *  null when too many changed to list and everything shown should be re-read. */
+  dirs: string[] | null;
+  /** Something in git's own files changed, which moves status and badges. */
+  git: boolean;
+  /** HEAD/references changed. Older servers omit this; focus/polling still refresh branches. */
+  branch?: boolean;
+}
+
+export function onFsChanged(cb: (event: FsChange) => void): Promise<UnlistenFn> {
+  return listen<FsChange>("fs://changed", cb);
+}
+
 export function onCloneProgress(
   cb: (progress: CloneProgress) => void,
 ): Promise<UnlistenFn> {
@@ -319,6 +340,9 @@ export function onCloneProgress(
  * but their regular `listen` goes over the WebSocket relay to the remote server, so they must listen
  * natively. Terminal split actions are registered here because WKWebView may consume their macOS key
  * equivalents before dispatching a JavaScript keydown event.
+ *
+ * The backend addresses each action to the focused window only. Every window listens for its own label,
+ * otherwise one Cmd+D split the main window and every open remote window at the same time.
  */
 export type MenuAction =
   | "settings"
@@ -326,14 +350,16 @@ export type MenuAction =
   | "share"
   | "clear-badges"
   | "split-right"
-  | "split-down";
+  | "split-down"
+  // Not a menu click: a native paste was abandoned because the clipboard source stopped responding.
+  | "clipboard-unresponsive";
 
 /** Listen for native-menu actions as a global event registered once on mount. */
 export function onMenuAction(
   cb: (action: MenuAction) => void,
 ): Promise<UnlistenFn> {
-  if (isRemoteWindow) {
-    return listenNative<MenuAction>("menu://action", (payload) => cb(payload));
+  if (isTauri || isRemoteWindow) {
+    return listenOwnWindow<MenuAction>("menu://action", (payload) => cb(payload));
   }
   return listen<MenuAction>("menu://action", (payload) => cb(payload));
 }

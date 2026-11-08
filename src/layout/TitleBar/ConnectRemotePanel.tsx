@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { genId } from "../../genId";
 import { useT } from "../../i18n";
 import { env } from "../../platform/env";
 import { RemoteDevices } from "../../sharing/RemoteDevices";
@@ -14,7 +15,8 @@ import "./wsl-connect.css";
 //!   the system, provision vela-server, start serving, forward a port, and log in automatically. Backend
 //!   `ssh://progress` events drive a progress bar. The four latest hosts appear inline and older entries
 //!   under View All; selecting one fills the form without connecting. Password prompts optionally remember
-//!   secrets in the system keyring and default to off.
+//!   secrets in the system keyring and default to off. A Stop button beside the progress button cancels the
+//!   attempt through `connect_cancel`; the backend tears down whatever it already set up.
 //! - URL: paste a pairing link and password, verify the remote TLS fingerprint, then open a remote window
 //!   with automatic login. URL history and optional keyring password storage behave the same way.
 
@@ -58,6 +60,9 @@ const RECENT_INLINE_MAX = 4;
 /** Matches backend AUTH_REQUIRED_TAG; this public-key rejection prefix opens password input. */
 const AUTH_REQUIRED_TAG = "__VLX_SSH_AUTH_REQUIRED__";
 
+/** Matches backend `connect_cancel::CANCELLED_TAG`: the attempt was stopped, so there is nothing to show. */
+const CANCELLED_TAG = "__VLX_CONNECT_CANCELLED__";
+
 /** Whether to show the temporarily hidden shared-remote-database checkbox. Option/Alt-clicking the title
  * bar button enables it; otherwise connections always use an independent database. */
 export function ConnectRemotePanel({
@@ -75,6 +80,20 @@ export function ConnectRemotePanel({
   const setMode = (m: Mode) => {const u = new URL(location.href);u.searchParams.set("connect",m);sharingNavigate(u.href);};
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Id of the running SSH/WSL attempt, also sent as `connectId`. Stop clears it, so a result that arrives
+  // later from the stopped attempt no longer matches and is dropped.
+  const attemptRef = useRef<string | null>(null);
+  const beginAttempt = () => (attemptRef.current = genId());
+  const isStale = (id: string, e?: unknown) =>
+    attemptRef.current !== id || (e !== undefined && String(e).includes(CANCELLED_TAG));
+  const stopConnect = () => {
+    const id = attemptRef.current;
+    attemptRef.current = null;
+    if (id) void invoke("connect_cancel", { connectId: id }).catch(() => {});
+    setBusy(false);
+    setProgress(null);
+    setError("");
+  };
   const [wslOptions, setWslOptions] = useState<WslOptions | null>(null);
   const [wslLoading, setWslLoading] = useState(false);
   const [wslError, setWslError] = useState("");
@@ -100,9 +119,10 @@ export function ConnectRemotePanel({
   const wslConnect = async () => {
     if (busy || wslLoading || wslError || !wslOptions?.supported || !wslOptions.distributions.includes(wslDistribution)) return;
     setBusy(true); setError(""); setProgress(null);
-    try { await invoke("wsl_connect", { distribution: wslDistribution, restartExisting: wslUpgrade }); onClose(); }
-    catch (e) { if (String(e).includes("wsl_version_running")) setWslUpgradeDistribution(wslDistribution); else setError(String(e)); }
-    finally { setBusy(false); }
+    const id = beginAttempt();
+    try { await invoke("wsl_connect", { distribution: wslDistribution, restartExisting: wslUpgrade, connectId: id }); if (!isStale(id)) onClose(); }
+    catch (e) { if (isStale(id, e)) return; if (String(e).includes("wsl_version_running")) setWslUpgradeDistribution(wslDistribution); else setError(String(e)); }
+    finally { if (!isStale(id)) { attemptRef.current = null; setBusy(false); } }
   };
 
   // URL mode.
@@ -271,21 +291,27 @@ export function ConnectRemotePanel({
     if (h === "") return;
     setBusy(true);
     setError("");
+    const id = beginAttempt();
     try {
       const p = await invoke<HostKeyProbe>("ssh_probe_host", { host: h });
+      if (isStale(id)) return;
       if (p.status === "known") {
-        await sshConnect(false, undefined, h); // Known matching host key: connect directly.
+        await sshConnect(false, undefined, h, id); // Known matching host key: connect directly.
       } else {
+        attemptRef.current = null;
         setProbe(p); // New or changed host key: request confirmation.
         setBusy(false); // Re-enable confirmation instead of leaving it stuck on Connecting.
       }
     } catch (e) {
+      if (isStale(id, e)) return;
+      attemptRef.current = null;
       setError(String(e));
       setBusy(false);
     }
   };
-  const sshConnect = async (needTrust: boolean, pw?: string, hostArg?: string) => {
+  const sshConnect = async (needTrust: boolean, pw?: string, hostArg?: string, attempt?: string) => {
     const h = (hostArg ?? sshHost).trim();
+    const id = attempt ?? beginAttempt();
     setBusy(true);
     setError("");
     setProgress(null);
@@ -304,9 +330,13 @@ export function ConnectRemotePanel({
         // Mirror mode decides the data mode itself, so the switch is irrelevant while it is on.
         sharedDb: showSharedDb && !mirror && sharedDb,
         mirror,
+        connectId: id,
       });
+      if (isStale(id)) return;
       onClose(); // Connection succeeded and the auto-login window is open.
     } catch (e) {
+      if (isStale(id, e)) return; // Stopped: the Stop handler already reset the panel.
+      attemptRef.current = null;
       const msg = String(e);
       if (msg.includes(AUTH_REQUIRED_TAG)) {
         // Public-key auth failed without a stored password: prompt for one and hide the low-level error.
@@ -337,7 +367,9 @@ export function ConnectRemotePanel({
     if (sshPassword === "" || pwHost === null) return;
     void sshConnect(false, sshPassword, pwHost);
   };
+  // While a password attempt is running, Cancel also stops it.
   const cancelPw = () => {
+    if (attemptRef.current) stopConnect();
     setPwHost(null);
     setSshPassword("");
     setError("");
@@ -693,12 +725,13 @@ export function ConnectRemotePanel({
           )}
 
           {mode === "wsl" && wslUpgrade && <p className="wsl-connect-hint" style={{ marginTop: "var(--connect-gap)", fontSize: 12 }}>{t("connect.wslUpgrade")}</p>}
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           <button
             onClick={onPrimary}
             disabled={busy || !canStart}
             style={{
-              width: "100%",
-              marginTop: 12,
+              flex: 1,
+              minWidth: 0,
               padding: "8px 0",
               border: "none",
               borderRadius: "var(--r-sm, 6px)",
@@ -712,6 +745,13 @@ export function ConnectRemotePanel({
           >
             {primaryLabel}
           </button>
+          {/* SSH and WSL attempts can run for minutes (download, upload, start), so they can be stopped. */}
+          {busy && attemptRef.current !== null && (
+            <button type="button" onClick={stopConnect} style={{ ...modalSecondaryBtnStyle, padding: "8px 14px" }}>
+              {t("connect.stop")}
+            </button>
+          )}
+          </div>
 
           {busy && progress?.percent != null && (
             <div
@@ -834,7 +874,6 @@ export function ConnectRemotePanel({
               <button
                 type="button"
                 onClick={cancelPw}
-                disabled={busy}
                 style={{ ...modalSecondaryBtnStyle, flex: 1 }}
               >
                 {t("common.cancel")}

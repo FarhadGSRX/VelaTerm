@@ -1,9 +1,12 @@
 //! PTY subsystem: pseudoterminal creation, I/O, resizing, and cleanup.
 
+pub mod agent_probe;
 pub mod manager;
 pub mod completion;
 pub mod monitor;
 pub mod session;
+#[cfg(windows)]
+pub mod conpty_win;
 
 /// Agent work state corresponding exactly to frontend `AgentState` using serde snake_case.
 ///

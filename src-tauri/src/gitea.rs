@@ -304,8 +304,6 @@ fn pr_base_name(base_ref: &str) -> String {
 }
 
 /// Whether this worktree matches configured Gitea by base URL and origin host without network access.
-/// Retained for reconnecting the Gitea PR option to the unified merge dialog.
-#[allow(dead_code)]
 pub fn relevant(db: &Db, wt_path: &str) -> bool {
     let Some(base_url) = get_base_url(db) else {
         return false;
@@ -317,8 +315,7 @@ pub fn relevant(db: &Db, wt_path: &str) -> bool {
 }
 
 /// Check provider availability after `relevant`: validate a token and probe `/version`. Return an
-/// availability flag and localizable `ok`, `no_token`, or `unreachable` reason. Retained for the merge UI.
-#[allow(dead_code)]
+/// availability flag and localizable `ok`, `no_token`, or `unreachable` reason.
 pub fn land_provider_check(db: &Db, identifier: &str) -> (bool, String) {
     if load_token(db, identifier).is_none() {
         return (false, "no_token".into());

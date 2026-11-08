@@ -77,6 +77,10 @@ const MANAGEMENT_CMDS: &[&str] = &[
 /// No remote UI calls the gated commands (the URL-host flows are desktop GUI-only), so gating is
 /// regression-free by construction.
 const SECRET_CMDS: &[&str] = &[
+    "translation_save",
+    "translation_service_save",
+    "translation_service_key",
+    "translation_service_delete",
     "gitea_set_config",
     "url_host_password",
     "url_host_record",
@@ -181,7 +185,7 @@ pub fn dispatch(
     let _context = crate::diagnostics::Context::enter(Some(&inherited));
     let mut span = crate::diagnostics::Span::new("rpc", serde_json::json!({"command":cmd,"clientId":source,"sessionId":args.get("sessionId").or_else(||args.get("id"))}));
     let result = dispatch_inner(app, cmd, args, source, origin);
-    if let Err(error)=&result { crate::diagnostics::record("WARN","rpc_failure",serde_json::json!({"command":cmd,"errorCode":crate::diagnostics::error_code(error)})); }
+    if let Err(error)=&result { crate::diagnostics::record("WARN","rpc_failure",serde_json::json!({"command":cmd,"errorCode":crate::diagnostics::error_code(error),"errorReason":crate::diagnostics::error_reason(error)})); }
     span.finish(&result);
     result
 }
@@ -214,6 +218,9 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
     if cmd.starts_with("security_") {
         return crate::security::dispatch(app, cmd, args);
     }
+    if cmd.starts_with("translation_") {
+        return crate::agent::translation::dispatch(app, cmd, args, origin == CallOrigin::Local);
+    }
     if cmd.starts_with("memory_") {
         return crate::memory::dispatch(app, cmd, args);
     }
@@ -224,6 +231,9 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
     if cmd.starts_with("knowledge_") {
         crate::knowledge::guard_paths(app,cmd,args,|path|guard_remote_path(app,origin,path))?;
         return crate::knowledge::dispatch(app, cmd, args);
+    }
+    if cmd.starts_with("artifact_") {
+        return artifact_dispatch(app, cmd, args, origin);
     }
     match cmd {
         // Browser clients render on another device: never return the server's installed fonts.
@@ -239,6 +249,7 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             let settings = core::get_app_settings(app)?;
             Ok(serde_json::json!({
                 "mode": settings.get(crate::pty::completion::MODE_KEY),
+                "tabBehavior": settings.get(crate::pty::completion::TAB_BEHAVIOR_KEY),
                 "available": crate::pty::completion::AVAILABLE,
                 "modes": ["auto", "tab", "off"], "debounceMs": crate::pty::completion::DEBOUNCE_MS,
             }))
@@ -248,6 +259,7 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
                 &req_str(args, "sessionId")?, &req_str(args, "action")?, source,
                 args.get("revision").and_then(Value::as_u64),
                 args.get("index").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()),
+                args.get("apply").and_then(Value::as_bool).unwrap_or(false),
             )?)
         }
         "pty_write" => {
@@ -320,11 +332,31 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
         "agent_install_recipe" => to_value(crate::agent::install::install_recipe(&req_str(
             args, "agent",
         )?)),
+        "agent_version" => to_value(crate::agent::version::for_session(app,
+            &req_str(args, "sessionId")?, args.get("checkUpdates").and_then(Value::as_bool).unwrap_or(false),
+        )?),
+        // Both resolve the session's executable; start spawns the self-update and returns at once.
+        "agent_update_status" => to_value(crate::agent::update::status(app, &req_str(args, "sessionId")?)?),
+        "agent_update_start" => to_value(crate::agent::update::start(app, &req_str(args, "sessionId")?)?),
         // Installation-path discovery performs filesystem I/O and an npm-prefix subprocess. Dispatch
         // already runs in desktop_call's blocking pool or a WebSocket worker, never the main thread.
-        "agent_locate_bin" => to_value(crate::agent::install::locate_installed_bin(&req_str(
+        "agent_locate_bin" => to_value(crate::agent::install::locate_working_bin(&req_str(
             args, "agent",
         )?)),
+        // One-click install: the typed command leaves a marker in the data directory once it returns, and
+        // completion polling checks for it before trusting a located binary. Both are small filesystem calls.
+        "agent_install_begin" => to_value(crate::agent::install::begin_install(
+            &app.data_dir()?, &req_str(args, "agent")?,
+        )),
+        "agent_install_finished" => to_value(crate::agent::install::install_finished(
+            &app.data_dir()?, &req_str(args, "token")?,
+        )),
+        // An agent without a terminal interface has no shell to type its install into, so the backend runs
+        // it and returns once it exits. Downloads take minutes; this is already off the main thread.
+        "agent_install_run" => {
+            crate::agent::install::run_install(&app.data_dir()?, &req_str(args, "agent")?)?;
+            Ok(Value::Null)
+        }
         // Model enumeration spawns the agent CLI and waits for it, so it belongs on the same blocking
         // path as agent_locate_bin rather than on the main thread.
         "session_permission_state" => to_value(crate::agent::permission_state::read(app, &req_str(args, "sessionId")?)?),
@@ -578,6 +610,10 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             core::archive_group(app, &req_str(args, "id")?)?;
             Ok(Value::Null)
         }
+        "archive_collection" => {
+            core::archive_collection(app, &req_str(args, "id")?)?;
+            Ok(Value::Null)
+        }
         "list_archived_sessions" => to_value(core::list_archived_sessions(app)?),
         // Persist a browser node's latest URL. Electron renders with main-process WebContentsView, but
         // persistence belongs in the sidecar, so Electron and remote clients dispatch here without a
@@ -630,43 +666,56 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             &req_str(args, "query")?,
             opt_str(args, "scope").as_deref(),
         )?),
+        "search_content_start"=>crate::search::jobs::start(app,&req_str(args,"query")?,
+            crate::search::SearchScope::from_arg(opt_str(args,"scope").as_deref().unwrap_or("live")),opt_str(args,"sessionId").as_deref()),
+        "search_content_page"=>crate::search::jobs::page_window(app,&req_str(args,"jobId")?,args.get("cursor").and_then(Value::as_u64),args.get("before").and_then(Value::as_u64),
+            args.get("limit").and_then(Value::as_u64),false),
+        "search_content_cancel"=>{crate::search::jobs::cancel(app,&req_str(args,"jobId")?)?;Ok(Value::Null)},
 
         // ── Info panel, files, and Git ──
         "get_git_status" => to_value(git::status(&req_str(args, "path")?)),
-        "git_changed_files" => to_value(git::changed_files(&req_str(args, "cwd")?)?),
+        "get_git_branch_info" => to_value(git::branch_info(&req_str(args, "path")?)),
+        "git_changed_files" => to_value(git::changed_file_list(&req_str(args, "cwd")?)?),
+        // Offered when the change list is cut off: one folder name derived from git status.
+        "git_ignore_suggestion" => to_value(git::ignore_suggestion(&req_str(args, "cwd")?)?),
+        "git_ignore_folder" => {
+            // Appends to the repository's .gitignore directly rather than through git, so gate the
+            // file actually written, like the files::* write arms.
+            let cwd = req_str(args, "cwd")?;
+            guard_remote_path(app, origin, &git::ignore_file_path(&cwd).to_string_lossy())?;
+            to_value(git::ignore_folder(&cwd, &req_str(args, "folder")?)?)
+        }
         // Git panel on a folder that is not a repository: offer the repositories found below it.
         "git_discover_repos" => to_value(git::discover_repos(&req_str(args, "path")?)),
         "git_file_diff" => {
-            // file_diff reads the worktree side with a raw fs::read of repo_top(cwd).join(path):
+            // file_diff reads worktree content at repo_top(cwd).join(path):
             // an absolute `path` replaces the base entirely and repo_top falls back to `cwd` outside
             // a repository, so the effective target is caller-chosen file content — gate the path
             // actually read, exactly like the files::* content arms.
             let cwd = req_str(args, "cwd")?;
             let path = req_str(args, "path")?;
+            let side = opt_str(args, "side").unwrap_or_else(|| "all".into());
             if origin == CallOrigin::Remote {
                 // Compute the effective worktree path ONCE, gate it, and hand the SAME value through
                 // to the read: checked path and used path cannot diverge, and the repo_top git
                 // subprocess runs once instead of twice.
                 let target = git::file_diff_worktree_path(&cwd, &path);
                 guard_remote_path(app, origin, &target.to_string_lossy())?;
-                to_value(git::file_diff_at(&cwd, &path, &target)?)
+                to_value(git::panel::file_diff_at(&cwd, &path, &side, &target)?)
             } else {
-                // Local lane: no ACL applies, so skip the extra repo_top subprocess entirely.
-                to_value(git::file_diff(&cwd, &path)?)
+                // Local calls use the same effective path without the remote ACL.
+                to_value(git::panel::file_diff_at(&cwd, &path, &side, &git::file_diff_worktree_path(&cwd, &path))?)
             }
         }
         "git_recent_commits" => to_value(git::recent_commits(&req_str(args, "cwd")?, 5)),
         // Git panel history: a page of commits, one commit's files, and one file's diff inside it.
-        "git_commit_count" => to_value(git::commit_count(
-            &req_str(args, "cwd")?,
-            args.get("all").and_then(Value::as_bool).unwrap_or(false),
-        )),
-        "git_log_page" => to_value(git::log_page(
+        "git_commit_count" => to_value(git::commit_count(&req_str(args, "cwd")?)),
+        "git_log_page" => to_value(git::log_page_at(
             &req_str(args, "cwd")?,
             opt_u64(args, "limit").unwrap_or(30) as usize,
             opt_u64(args, "offset").unwrap_or(0) as usize,
-            args.get("all").and_then(Value::as_bool).unwrap_or(false),
-        )),
+            opt_str(args, "head").as_deref(),
+        )?),
         "git_commit_files" => to_value(git::commit_files(
             &req_str(args, "cwd")?,
             &req_str(args, "hash")?,
@@ -695,11 +744,59 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             git::discard(&req_str(args, "cwd")?, &req_str_vec(args, "paths")?)?;
             Ok(Value::Null)
         }
-        "git_commit" => to_value(git::commit(
+        "git_commit" => to_value(git::commit_at(
             &req_str(args, "cwd")?,
             &req_str(args, "message")?,
             args.get("amend").and_then(Value::as_bool).unwrap_or(false),
+            opt_str(args, "expectHead").as_deref(),
         )?),
+        // Remote synchronization and stopped-operation control. All run through git in the
+        // repository; network commands are headless with a timeout (git/remote.rs).
+        "git_fetch" => {
+            git::remote::fetch(&req_str(args, "cwd")?)?;
+            Ok(Value::Null)
+        }
+        "git_pull" => {
+            let mode = git::remote::PullMode::parse(&opt_str(args, "mode").unwrap_or_else(|| "ff-only".into()))?;
+            git::remote::pull(&req_str(args, "cwd")?, mode)?;
+            Ok(Value::Null)
+        }
+        "git_push" => {
+            git::remote::push(
+                &req_str(args, "cwd")?,
+                args.get("force").and_then(Value::as_bool).unwrap_or(false),
+            )?;
+            Ok(Value::Null)
+        }
+        // Branch comparison: files committed since HEAD split from a base, and their diffs. Both
+        // sides come out of the object database; `from`/`to` are validated commit hashes.
+        "git_branch_compare" => to_value(git::compare::compare(
+            &req_str(args, "cwd")?,
+            opt_str(args, "base").as_deref(),
+        )?),
+        "git_range_files" => to_value(git::compare::range_files(
+            &req_str(args, "cwd")?,
+            &req_str(args, "from")?,
+            &req_str(args, "to")?,
+        )?),
+        "git_range_file_diff" => to_value(git::compare::range_file_diff(
+            &req_str(args, "cwd")?,
+            &req_str(args, "from")?,
+            &req_str(args, "to")?,
+            &req_str(args, "path")?,
+        )?),
+        // Change-notification leases; events arrive as `fs://changed`. The Git panel watches its
+        // repository's top level, the Files tab the directory it shows.
+        "git_watch" => to_value(crate::fs_watch::watch(app, &git::top_level(&req_str(args, "cwd")?)?)?),
+        "fs_watch" => to_value(crate::fs_watch::watch(app, &req_str(args, "path")?)?),
+        "git_abort_operation" => {
+            git::remote::abort_operation(&req_str(args, "cwd")?)?;
+            Ok(Value::Null)
+        }
+        "git_continue_operation" => {
+            git::remote::continue_operation(&req_str(args, "cwd")?)?;
+            Ok(Value::Null)
+        }
         "agent_context_info" => {
             to_value(core::agent_context_info(app, &req_str(args, "sessionId")?)?)
         }
@@ -768,7 +865,8 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
                 personality.as_deref(),
             )?)
         }
-        "chat_auth_start" => to_value(core::chat_auth_start(app, &req_str(args, "sessionId")?)?),
+        "chat_agent_readiness" => to_value(core::chat_agent_readiness(app, &req_str(args, "sessionId")?)?),
+        "chat_auth_start" => to_value(core::chat_auth_start(app, &req_str(args, "sessionId")?, args.get("provider").and_then(Value::as_str))?),
         "chat_auth_logout" => to_value(core::chat_auth_logout(app, &req_str(args, "sessionId")?)?),
         "chat_auth_submit" => to_value(core::chat_auth_submit(app, &req_str(args, "sessionId")?, &req_str(args, "code")?)?),
         "chat_auth_cancel" => to_value(core::chat_auth_cancel(app, &req_str(args, "sessionId")?)?),
@@ -800,13 +898,21 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             &req_str(args, "sessionId")?,
             &req_str(args, "taskId")?,
         )?),
-        "chat_subagent_rows" => to_value(core::chat_subagent_rows(
-            app,
-            &req_str(args, "sessionId")?,
-            &req_str(args, "taskId")?,
-        )?),
+        "chat_subagent_rows" => {
+            let sid=req_str(args,"sessionId")?;
+            if args.get("protocolVersion").and_then(Value::as_u64)==Some(2) {
+                let (branch,path)=crate::agent::history_store::children::task(app,&sid,&req_str(args,"taskId")?)?;
+                let mut page=branch.page(opt_str(args,"before").as_deref(),opt_str(args,"after").as_deref(),opt_str(args,"anchor").as_deref())?;
+                page["readJobId"]=serde_json::json!(branch.store.subscribe(&sid,&branch.sources,opt_str(args,"readJobId").as_deref())?);
+                page["childPath"]=serde_json::json!(path);
+                if serde_json::to_vec(&page).map_err(|e|e.to_string())?.len()>crate::agent::history_store::limits::PAGE_BYTES {return Err("History task page exceeds its wire byte budget".into());}
+                return Ok(page);
+            }
+            to_value(core::chat_subagent_rows(app,&sid,&req_str(args,"taskId")?)?)
+        },
         "chat_background_tasks" => to_value(core::chat_background_tasks(app, &req_str(args, "sessionId")?)?),
         "chat_send" => {
+            crate::agent::translation::guard_original(app, &req_str(args, "sessionId")?, args)?;
             let behavior = opt_str(args, "behavior");
             // Attachments arrive as the same objects the timeline hands back, so a malformed one is a
             // programming error rather than something to guess at: reject the call instead of silently
@@ -841,6 +947,8 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             &req_str(args, "sessionId")?,
             &req_str(args, "id")?,
         )?),
+        "chat_queue_read" => app.chat().queue_read(&req_str(args,"sessionId")?,&req_str(args,"id")?,
+            opt_str(args,"expectedRevision").as_deref(),args.get("sequence").and_then(Value::as_u64).unwrap_or(0)),
         "chat_queue_remove" => to_value(core::chat_queue_remove(
             app,
             &req_str(args, "sessionId")?,
@@ -855,6 +963,11 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
         "chat_interrupt" => to_value(core::chat_interrupt(app, &req_str(args, "sessionId")?)?),
         "chat_auto_continue_cancel" => to_value(core::chat_auto_continue_cancel(app, &req_str(args, "sessionId")?)?),
         "chat_permission" => {
+            if let Some(answers)=args.get("questionAnswers").filter(|v|!v.is_null()) {
+                if args["allow"]!=true {return Err("translation:structure".into());}
+                return to_value(crate::agent::translation::answer_question(app,&req_str(args,"sessionId")?,
+                    &req_str(args,"requestId")?,answers,args["sendOriginal"]==true)?);
+            }
             let message = opt_str(args, "message");
             // Absent means "run what was proposed"; a form the user filled in arrives here instead.
             let updated_input = args.get("updatedInput").filter(|v| !v.is_null()).cloned();
@@ -908,34 +1021,209 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
         "model_catalog_refresh" => to_value(crate::agent::remote_model_catalog::refresh(app)),
         "chat_models" => core::chat_models(app, &req_str(args, "sessionId")?),
         "chat_commands" => to_value(core::chat_commands(app, &req_str(args, "sessionId")?)?),
+        "chat_capabilities" => Ok(serde_json::json!({"historyProtocol":2,
+            "pageRows":crate::agent::history_store::limits::PAGE_ROWS,
+            "pageBytes":crate::agent::history_store::limits::PAGE_BYTES,
+            "detailBytes":crate::agent::history_store::limits::DETAIL_BYTES})),
         "chat_snapshot" => {
             let window = args.get("window").filter(|value| !value.is_null()).map(|value| serde_json::from_value::<crate::agent::chat::engine::ChatWindow>(value.clone())).transpose().map_err(|e| e.to_string())?;
             let sid = req_str(args,"sessionId")?;
+            if window.as_ref().is_some_and(|w|w.control_only) {
+                let mut value=to_value(core::chat_snapshot_control(app,&sid,window.as_ref())?)?;
+                crate::agent::tell::decorate(app,&sid,&mut value);
+                if serde_json::to_vec(&value).map_err(|e|e.to_string())?.len()>crate::agent::history_store::limits::PAGE_BYTES {
+                    return Err("Chat control snapshot exceeds its wire byte budget".into());
+                }
+                return Ok(value);
+            }
+            let prefer=args.get("preferBounded").and_then(Value::as_bool)==Some(true);
+            let history_only=args.get("historyOnly").and_then(Value::as_bool)==Some(true);
+            let located=args.get("messageIndex").is_some() || args.get("recordOffset").is_some();
+            if !history_only && !located && crate::agent::history_store::children::path(args)?.is_empty() {
+                if let Some(live)=app.chat().paged_history(&sid) {
+                    // Earlier rows are history pages in front of this process's timeline. The timeline part
+                    // is a whole window rather than a delta, so the merged rows replace the client's copy.
+                    let mut live_window=window.clone().unwrap_or_default();live_window.since=None;live_window.from=None;
+                    let mut value=to_value(core::chat_snapshot_control(app,&sid,Some(&live_window))?)?;
+                    app.chat().decorate_runtime_snapshot(&sid,&mut value);
+                    crate::agent::history_store::live_view::merge(app,&sid,args,&mut value,&live);
+                    crate::agent::tell::decorate(app,&sid,&mut value);
+                    return Ok(value);
+                }
+            }
+            let idle_bounded=if prefer {
+                let kind=crate::db::repo::get_session_kind(&app.db().conn.lock().unwrap(),&sid)?;
+                // A Grok conversation view draws its native stream through the ACP mapper, which keeps tool
+                // cards; the paged reader serves its read-only history views.
+                (matches!(kind,Some(SessionKind::Codex|SessionKind::Claude|SessionKind::Pi|SessionKind::Omp|SessionKind::Antigravity|SessionKind::Opencode|SessionKind::Kiro))
+                    || kind==Some(SessionKind::Grok) && history_only)
+                    && (history_only || app.chat().snapshot_window(&sid,Some(&crate::agent::chat::engine::ChatWindow {control_only:true,..Default::default()})).pid.is_none())
+            } else {false};
+            if args.get("protocolVersion").and_then(Value::as_u64)==Some(2) || idle_bounded {
+                let mut value=to_value(core::chat_snapshot_control(app,&sid,Some(window.as_ref().unwrap_or(&Default::default())))?)?;
+                match crate::agent::history_store::children::prepare(app,&sid,&crate::agent::history_store::children::path(args)?) {
+                    Ok(branch)=>{
+                        if args.get("historyGeneration").and_then(Value::as_str).is_some_and(|g|g!=branch.generation) {
+                            return Err("cursor_expired: history generation changed".into());
+                        }
+                        let index=args.get("messageIndex").and_then(Value::as_u64);
+                        let offset=args.get("recordOffset").and_then(Value::as_u64);
+                        let mut page=if index.is_some() || offset.is_some() {
+                            let mut status=branch.page(None,None,None)?;
+                            if status["indexing"]==true {
+                                let mut location=serde_json::Map::new();
+                                if let Some(index)=index {location.insert("messageIndex".into(),serde_json::json!(index));}
+                                if let Some(offset)=offset {location.insert("recordOffset".into(),serde_json::json!(offset));}
+                                status["pendingLocation"]=Value::Object(location);status["rows"]=serde_json::json!([]);status["positions"]=serde_json::json!({});status
+                            } else {
+                                // A search hit read from the recording locates its record directly; the message
+                                // number is the fallback for hits indexed without an offset.
+                                let mut row=match offset {Some(offset)=>branch.row_at_record(offset)?,None=>None};
+                                if row.is_none() {
+                                    let Some(index)=index else {return Err("cursor_expired: transcript message is outside the current branch".into());};
+                                    if status["coverage"]=="error" {return Err("index_incomplete: cannot confirm this message number".into());}
+                                    let prose=crate::agent::history_store::prose::Prose::new(branch.clone(),&std::sync::atomic::AtomicBool::new(false))?;
+                                    row=prose.row_id(index)?;
+                                }
+                                let row=row.ok_or("cursor_expired: transcript message is outside the current branch")?;
+                                let mut page=branch.page(None,None,Some(&row))?;page["locatedRowId"]=serde_json::json!(row);page
+                            }
+                        } else {branch.page(window.as_ref().and_then(|w|w.before.as_deref()),opt_str(args,"after").as_deref(),opt_str(args,"anchor").as_deref())?};
+                        let read_job=branch.store.subscribe(&sid,&branch.sources,opt_str(args,"readJobId").as_deref())?;
+                        page["readJobId"]=serde_json::json!(read_job);
+                        if value.get("pid").is_none() || history_only || !crate::agent::history_store::children::path(args)?.is_empty() {
+                            value.as_object_mut().unwrap().extend(page.as_object().unwrap().clone());
+                            if history_only || !crate::agent::history_store::children::path(args)?.is_empty() {
+                                for key in ["pid","startedAt","turnStartedAt","auth"] {value.as_object_mut().unwrap().remove(key);}
+                                value["permissions"]=serde_json::json!([]);value["queue"]=serde_json::json!([]);value["running"]=serde_json::json!(false);
+                            }
+                        } else {
+                            // Live and historical row identity mapping is introduced at the receive boundary.
+                            // Until that mapping is available, publish control facts without guessing a merge.
+                            for key in ["protocolVersion","historyGeneration","coverage","indexing","pendingLocation","indexedBytes","sourceBytes","knownRows","snapshotRevision","readJobId"] {
+                                value[key]=page[key].clone();
+                            }
+                        }
+                    }
+                    Err(error)=>{
+                        value["protocolVersion"]=serde_json::json!(2);
+                        value["coverage"]=serde_json::json!("error");
+                        value["historyError"]=serde_json::json!(error);
+                    }
+                }
+                crate::agent::tell::decorate(app,&sid,&mut value);
+                if serde_json::to_vec(&value).map_err(|e|e.to_string())?.len()>crate::agent::history_store::limits::PAGE_BYTES {
+                    return Err("Chat snapshot exceeds its wire byte budget".into());
+                }
+                return Ok(value);
+            }
             let mut value = to_value(core::chat_snapshot_window(app, &sid, window.as_ref())?)?;
+            app.chat().decorate_runtime_snapshot(&sid,&mut value);
             crate::agent::tell::decorate(app,&sid,&mut value);
+            if serde_json::to_vec(&value).map_err(|e|e.to_string())?.len()>crate::agent::history_store::limits::PAGE_BYTES {
+                return Err("detail_requires_paging: this conversation requires the bounded snapshot contract".into());
+            }
             Ok(value)
         }
         "chat_row" => {
             let sid=req_str(args,"sessionId")?;
+            if args.get("protocolVersion").and_then(Value::as_u64)==Some(2) {
+                let branch=crate::agent::history_store::children::prepare(app,&sid,&crate::agent::history_store::children::path(args)?)?;
+                if args.get("historyGeneration").and_then(Value::as_str).is_some_and(|g|g!=branch.generation) {
+                    return Err("cursor_expired: history generation changed".into());
+                }
+                return branch.manifest_page(&req_str(args,"rowId")?,opt_str(args,"cursor").as_deref());
+            }
             let mut value=core::chat_row(app,&sid,&req_str(args,"rowId")?,args.get("epoch").and_then(Value::as_u64))?;
             crate::agent::tell::decorate(app,&sid,&mut value);
+            if serde_json::to_vec(&value).map_err(|e|e.to_string())?.len()>crate::agent::history_store::limits::PAGE_BYTES {
+                return Err("detail_requires_paging: this tool requires the manifest and detail contract".into());
+            }
             Ok(value)
         },
-        "chat_attachment" => to_value(core::chat_attachment(
-            app,
-            &req_str(args, "sessionId")?,
-            &req_str(args, "attachmentId")?,
-        )?),
+        "chat_detail_read" => {
+            let sid=req_str(args,"sessionId")?;
+            crate::agent::history_store::children::prepare(app,&sid,&crate::agent::history_store::children::path(args)?)?.detail_page(&req_str(args,"detailRef")?,
+                opt_str(args,"expectedRevision").as_deref(),opt_str(args,"cursor").as_deref())
+        }
+        "chat_detail_download" => {
+            let sid=req_str(args,"sessionId")?;
+            let branch=crate::agent::history_store::children::prepare(app,&sid,&crate::agent::history_store::children::path(args)?)?;
+            to_value(crate::web::download::issue_detail(branch,&req_str(args,"detailRef")?,opt_str(args,"expectedRevision").as_deref())?)
+        }
+        "chat_detail_save" => {
+            let destination=req_str(args,"destPath")?;
+            guard_remote_path(app,origin,&destination)?;
+            let branch=crate::agent::history_store::children::prepare(app,&req_str(args,"sessionId")?,&crate::agent::history_store::children::path(args)?)?;
+            let reference=req_str(args,"detailRef")?;let revision=opt_str(args,"expectedRevision");
+            branch.detail_facts(&reference,revision.as_deref())?;
+            let destination=std::path::Path::new(&destination);
+            let parent=destination.parent().ok_or("History detail destination has no parent directory")?;
+            let temporary=parent.join(format!(".vlx-detail-{}.tmp",uuid::Uuid::new_v4()));
+            guard_remote_path(app,origin,&temporary.to_string_lossy())?;
+            let result=(|| {
+                let mut options=std::fs::OpenOptions::new();options.create_new(true).write(true);
+                #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
+                let mut file=options.open(&temporary).map_err(|_|"History detail destination cannot be opened")?;
+                if crate::agent::history_store::attachments::is_attachment(&branch,&reference)? {
+                    crate::agent::history_store::attachments::write(&branch,&reference,revision.as_deref(),&mut file,&std::sync::atomic::AtomicBool::new(false))?;
+                } else {branch.write_detail(&reference,revision.as_deref(),&mut file,&std::sync::atomic::AtomicBool::new(false))?;}
+                file.sync_all().map_err(|_|"History detail file could not be persisted")?;drop(file);
+                std::fs::rename(&temporary,destination).map_err(|_|"History detail file could not be placed at its destination")?;
+                Ok(Value::Null)
+            })();
+            if result.is_err() {let _=std::fs::remove_file(&temporary);}
+            result
+        }
+        "chat_locate" => {
+            let sid=req_str(args,"sessionId")?;
+            let branch=crate::agent::history_store::children::prepare(app,&sid,&crate::agent::history_store::children::path(args)?)?;
+            if let Some(reference)=opt_str(args,"detailRef") {
+                return branch.locate_detail(&req_str(args,"rowId")?,&reference,args.get("chunkSequence").and_then(Value::as_u64).unwrap_or(0));
+            }
+            branch.page(None,None,Some(&req_str(args,"rowId")?))
+        }
+        "chat_search" => crate::agent::history_store::search::read(app,&req_str(args,"sessionId")?,
+            &req_str(args,"query")?,opt_str(args,"cursor").as_deref()),
+        "chat_read_cancel" => {
+            let session=req_str(args,"sessionId")?;let job=req_str(args,"jobId")?;
+            if job.starts_with("export:") {crate::agent::history_store::exports::cancel(&session,&job)?;}
+            else if job.starts_with("index:") {crate::agent::history_store::store::cancel_reader(&session,&job)?;}
+            else {crate::agent::history_store::search::cancel(&session,&job)?;}
+            Ok(Value::Null)
+        }
+        "chat_export_start" => {
+            let destination=opt_str(args,"destPath");
+            if let Some(path)=destination.as_deref() {guard_remote_path(app,origin,path)?;}
+            crate::agent::history_store::exports::start(app,&req_str(args,"sessionId")?,destination.as_deref(),opt_str(args,"exportedAt").as_deref())
+        }
+        "chat_export_status" => crate::agent::history_store::exports::status(&req_str(args,"sessionId")?,&req_str(args,"jobId")?),
+        "chat_attachment" => {
+            let attachment=req_str(args,"attachmentId")?;
+            let purpose=args["purpose"].as_str().unwrap_or("original");
+            if let Some(reference)=attachment.strip_prefix("history:") {
+                let branch=crate::agent::history_store::children::prepare(app,&req_str(args,"sessionId")?,&crate::agent::history_store::children::path(args)?)?;
+                if args.get("historyGeneration").and_then(Value::as_str).is_some_and(|generation|generation!=branch.generation) {return Err("source_changed: image history generation changed".into());}
+                let image=crate::agent::history_store::attachments::resolve(&branch,reference,opt_str(args,"expectedRevision").as_deref(),purpose!="preview")?;
+                if purpose=="view" {to_value(crate::agent::history_store::attachments::resolve_owned(image,purpose)?)} else {to_value(image)}
+            } else {
+                let sid=req_str(args,"sessionId")?;
+                to_value(crate::agent::history_store::attachments::resolve_runtime(purpose,||core::chat_attachment(app,&sid,&attachment))?)
+            }
+        },
+        "chat_rewind_candidates" => crate::agent::history_store::rewind::prepare(app,&req_str(args,"sessionId")?,opt_str(args,"cursor").as_deref()),
         "chat_rewind_preview" => to_value(core::chat_rewind_preview(
             app,
             &req_str(args, "sessionId")?,
             &req_str(args, "rowId")?,
+            opt_str(args,"historyGeneration").as_deref(),
         )?),
         "chat_rewind" => to_value(core::chat_rewind(
             app,
             &req_str(args, "sessionId")?,
             &req_str(args, "rowId")?,
             &req_str(args, "scope")?,
+            opt_str(args,"historyGeneration").as_deref(),
         )?),
         "chat_attach" => to_value(core::chat_attach(app, &req_str(args, "sessionId")?)?),
         "chat_detach" => to_value(core::chat_detach(app, &req_str(args, "sessionId")?)?),
@@ -1178,6 +1466,15 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
             &req_str(args, "baseUrl")?,
             &req_str(args, "token")?,
         )),
+        // Git panel pull requests through Gitea: availability, then push + open into the compare base.
+        "git_pr_provider" => to_value(core::git_pr_provider(app, &req_str(args, "cwd")?)),
+        "git_open_pull_request" => to_value(core::git_open_pull_request(
+            app,
+            &req_str(args, "cwd")?,
+            &req_str(args, "base")?,
+            &req_str(args, "title")?,
+            &req_str(args, "body")?,
+        )?),
         "land_gitea_pr" => to_value(core::land_gitea_pr(
             app,
             &req_str(args, "sessionId")?,
@@ -1336,6 +1633,60 @@ fn dispatch_inner(app: &AppCtx, cmd: &str, args: &Value, source: &str, origin: C
         "agent_session_create" => to_value(crate::agent::spawn_requests::create_agent_session(app,
             &serde_json::from_value(args.get("request").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)?),
 
+        other => Err(format!("Unknown command: {other}")),
+    }
+}
+
+/// Artifact previews (see artifact.rs): grants for the sandboxed iframe, lease renewal and version snapshots.
+fn artifact_dispatch(app: &AppCtx, cmd: &str, args: &Value, origin: CallOrigin) -> Result<Value, String> {
+    // A remote caller may preview a folder that happens to contain the data directory; the grant then
+    // refuses every file under it, matching the ACL guard_remote_path applies to the entry page.
+    let deny = || -> Option<std::path::PathBuf> {
+        if origin != CallOrigin::Remote {
+            return None;
+        }
+        app.data_dir().ok().map(|d| d.canonicalize().unwrap_or(d))
+    };
+    let version = |key: &str| -> Result<Option<u32>, String> {
+        opt_u64(args, key).map(|v| u32::try_from(v).map_err(|_| "Invalid version.".to_string())).transpose()
+    };
+    match cmd {
+        "artifact_grant" => {
+            let path = req_str(args, "path")?;
+            guard_remote_path(app, origin, &path)?;
+            let base = req_str(args, "base")?;
+            let data_dir = app.data_dir().ok();
+            let opts = crate::artifact::IssueOptions {
+                base: &base,
+                net: args.get("net").and_then(Value::as_bool).unwrap_or(false),
+                version: version("version")?,
+                data_dir: data_dir.as_deref(),
+                deny: deny(),
+            };
+            to_value(crate::artifact::issue(&path, opts)?)
+        }
+        "artifact_renew" => to_value(crate::artifact::renew(&req_str(args, "grantId")?)),
+        "artifact_revoke" => {
+            crate::artifact::revoke(&req_str(args, "grantId")?);
+            Ok(Value::Null)
+        }
+        "artifact_versions" => {
+            let path = req_str(args, "path")?;
+            guard_remote_path(app, origin, &path)?;
+            to_value(crate::artifact::versions(&app.data_dir()?, &path)?)
+        }
+        "artifact_snapshot" => {
+            let path = req_str(args, "path")?;
+            guard_remote_path(app, origin, &path)?;
+            to_value(crate::artifact::snapshot(&app.data_dir()?, &path)?)
+        }
+        "artifact_restore" => {
+            let path = req_str(args, "path")?;
+            guard_remote_path(app, origin, &path)?;
+            let version = version("version")?.ok_or("Invalid version.")?;
+            crate::artifact::restore(&app.data_dir()?, &path, version)?;
+            Ok(Value::Null)
+        }
         other => Err(format!("Unknown command: {other}")),
     }
 }
@@ -1532,6 +1883,16 @@ mod tests {
         assert_eq!(tree["projects"].as_array().unwrap().iter().find(|p| p["id"] == project["id"]).unwrap()["collectionId"], parent["id"]);
         drop(app);
         std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
+    fn history_capability_probe_needs_no_session_or_source() {
+        let app=test_ctx();let data_dir=app.data_dir().unwrap();
+        let capability=dispatch(&app,"chat_capabilities",&json!({}),DESKTOP_SOURCE,CallOrigin::Local).unwrap();
+        assert_eq!(capability["historyProtocol"],2);
+        assert_eq!(capability["pageBytes"],crate::agent::history_store::limits::PAGE_BYTES);
+        assert!(!data_dir.join("chat-index").exists());assert!(!data_dir.join("chat-spool").exists());
+        drop(app);std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     #[test]
@@ -1785,6 +2146,10 @@ mod tests {
     fn secret_commands_are_gated_for_remote_origin() {
         let app = test_ctx();
         const EXPECTED_SECRET: &[&str] = &[
+            "translation_save",
+            "translation_service_save",
+            "translation_service_key",
+            "translation_service_delete",
             "gitea_set_config",
             "url_host_password",
             "url_host_record",
@@ -2339,7 +2704,9 @@ mod tests {
         "list_dir",        // metadata only (names, sizes, mtimes)
         "stat_file",       // metadata only
         "get_git_status",  // derived repo status, no file content
+        "get_git_branch_info", // branch/worktree metadata only, no file content
         "git_changed_files",
+        "git_ignore_suggestion", // one folder name derived from git status, no file content
         "git_discover_repos", // directory names and paths only, no file content
         "git_recent_commits",
         "git_branch_list",
@@ -2359,6 +2726,22 @@ mod tests {
         "git_unstage",
         "git_discard",
         "git_commit",
+        // Remote sync and stopped-operation control: git-mediated, refused outside a repository,
+        // and they name no file at all.
+        "git_fetch",
+        "git_pull",
+        "git_push",
+        "git_abort_operation",
+        "git_continue_operation",
+        "git_watch", // returns the repository root; events carry no file content
+        "fs_watch",  // metadata only: changed directory paths below a directory, like list_dir
+        // Object-database reads like the history arms above; never a caller-named file on disk.
+        "git_branch_compare",
+        "git_range_files",
+        "git_range_file_diff",
+        // Pull requests read `origin` and push through git; they name no file.
+        "git_pr_provider",
+        "git_open_pull_request",
         "create_worktree",   // git-mediated, refused outside a repository
         "list_worktrees",
         "commit_worktree",   // git-mediated mutation, refused outside a repository

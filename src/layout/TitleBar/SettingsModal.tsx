@@ -65,6 +65,8 @@ import {
   ImagePasteModeField,
   NotificationField,
 } from "./settingsBehaviorFields";
+import { TranslationSettingsSection } from "../../translation/SettingsSection";
+import { followTranslationLink, navigateTranslation, translationUrl, useTranslationRoute } from "../../translation/navigation";
 
 /** Accent palette; auto follows the light/dark theme. */
 const ACCENT_HEX: Record<string, string> = {
@@ -76,6 +78,8 @@ const ACCENT_HEX: Record<string, string> = {
 const ACCENTS: AccentChoice[] = ["auto", "green", "blue", "amber", "violet"];
 
 /** Shared style for the font-size stepper's minus/plus buttons. */
+
+
 const STEP_BTN: React.CSSProperties = {
   width: 24,
   height: 26,
@@ -90,7 +94,6 @@ const STEP_BTN: React.CSSProperties = {
   cursor: "pointer",
   flex: "none",
 };
-
 
 /** Language picker. Writing the choice through to the backend as well keeps other shells in sync. */
 function LangSelect() {
@@ -221,7 +224,6 @@ function ComposerChipsSection() {
   );
 }
 
-/** Font-size stepper. Clicking the value resets it; null displays autoLabel for density-derived UI size. */
 function FontSizeStepper({
   value,
   onChange,
@@ -374,7 +376,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setAutoContinueAtUsageLimit = useTermStore((s) => s.setAutoContinueAtUsageLimit);
   const soundEnabled = useTermStore((s) => s.soundEnabled);
   const toggleSound = useTermStore((s) => s.toggleSound);
-  const uiFontFamily = useTermStore((s) => s.uiFontFamily);
   const uiFontSize = useTermStore((s) => s.uiFontSize);
   const termFontFamily = useTermStore((s) => s.termFontFamily);
   const termFontSize = useTermStore((s) => s.termFontSize);
@@ -382,7 +383,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const chatFontFamily = useTermStore((s) => s.chatFontFamily);
   const chatFontSize = useTermStore((s) => s.chatFontSize);
   const chatLineHeight = useTermStore((s) => s.chatLineHeight);
-  const setUiFontFamily = useTermStore((s) => s.setUiFontFamily);
   const setUiFontSize = useTermStore((s) => s.setUiFontSize);
   const setTermFontFamily = useTermStore((s) => s.setTermFontFamily);
   const setTermFontSize = useTermStore((s) => s.setTermFontSize);
@@ -391,16 +391,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setChatFontSize = useTermStore((s) => s.setChatFontSize);
   const setChatLineHeight = useTermStore((s) => s.setChatLineHeight);
 
-  // Section navigation stays local so switching is instant and does not round-trip through settings
-  // persistence; the store copy is only the seed on open and the sink on change, which is what makes
-  // Settings reopen on the section last viewed instead of always Appearance.
+  // Section navigation stays local so switching is instant; the store copy seeds the first open (so Settings
+  // reopens on the section last viewed) and receives each change. A translation route wins over the seed.
   const savedTab = useTermStore((s) => s.settingsTab);
   const setSettingsTab = useTermStore((s) => s.setSettingsTab);
-  const [cat, setCatLocal] = useState<Cat>(savedTab);
+  const route = useTranslationRoute();
+  const legacyTranslation = route.get("settings") === "conversation" && route.get("settingsSection") === "translation";
+  const requestedCategory = legacyTranslation ? "translation" : route.get("settings");
+  const showTranslation = route.get("settingsTranslation") === "1" || requestedCategory === "translation";
+  const [cat, setCatLocal] = useState<Cat>((requestedCategory as Cat) || savedTab);
   const setCat = (v: Cat) => {
     setCatLocal(v);
-    setSettingsTab(v);
+    if (v !== "translation") setSettingsTab(v);
   };
+  useEffect(() => { if (requestedCategory) setCatLocal(requestedCategory as Cat); }, [requestedCategory]);
+  useEffect(() => { if (legacyTranslation) navigateTranslation(translationUrl({ settings: "translation", settingsSection: null }), true); }, [legacyTranslation]);
   const [skillOn, setSkillOn] = useState<boolean | null>(null);
   const [cliStatus, setCliStatus] = useState<VelaCommandStatus | null>(null);
   const [cliBusy, setCliBusy] = useState(false);
@@ -417,6 +422,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     { key: "appearance", label: t("settings.appearance") },
     { key: "terminal", label: t("settings.catTerminal") },
     { key: "conversation", label: t("settings.chatTypography") },
+    { key: "translation", label: t("translation.title") },
     { key: "behavior", label: t("settings.catBehavior") },
     { key: "advanced", label: t("settings.catAdvanced") },
     { key: "agents", label: t("settings.catAgents") },
@@ -491,8 +497,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Main area: category navigation and content. */}
-        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-          <div
+        <div className="settings-modal-body" style={{ flex: 1, display: "flex", minHeight: 0 }}>
+          <div className="settings-modal-nav"
             style={{
               width: 158,
               flex: "none",
@@ -501,12 +507,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               overflowY: "auto",
             }}
           >
-            {cats.map((c) => {
+            {cats.filter(c => c.key !== "translation" || showTranslation).map((c) => {
               const on = c.key === cat;
               return (
-                <button
+                <a
                   key={c.key}
-                  onClick={() => setCat(c.key)}
+                  href={translationUrl({ settings: c.key, settingsSection: null, settingsTranslation: showTranslation ? "1" : null, translationService: null })}
+                  onClick={(event) => { followTranslationLink(event); if (event.defaultPrevented) setCat(c.key); }}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -521,6 +528,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     background: on ? "var(--accent-soft)" : "transparent",
                     color: on ? "var(--accent)" : "var(--text)",
                     fontWeight: on ? 600 : 500,
+                    textDecoration: "none",
                   }}
                   onMouseEnter={(e) => {
                     if (!on)
@@ -531,7 +539,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   }}
                 >
                   {c.label}
-                </button>
+                </a>
               );
             })}
           </div>
@@ -623,9 +631,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     onChange={setNavLayout}
                   />
                 </Field>
-                <Field label={t("settings.uiFont")}>
-                  <FontSelect fonts={fonts} value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} proportional />
-                </Field>
                 <Field label={t("settings.uiFontSize")}>
                   <FontSizeStepper
                     value={uiFontSize}
@@ -667,6 +672,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 </Field>
               </>
             )}
+
+            {cat === "translation" && <TranslationSettingsSection />}
 
             {cat === "conversation" && (
               <>

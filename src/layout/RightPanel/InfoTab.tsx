@@ -1,4 +1,4 @@
-//! Right-side Info tab: basic session details and uptime, Claude/Codex/Grok quotas,
+//! Right-side Info tab: basic session details and uptime, Claude/Codex/Grok/ZCode quotas,
 //! current-turn statistics, and a Resources section at the bottom holding this session's process-tree
 //! CPU/memory alongside whole-machine CPU, memory, and saturation. Extracted from RightPanel;
 //! usage helpers are private to this tab, while the shared KV row lives in parts.
@@ -191,6 +191,8 @@ function ResourcesSection({ pid }: { pid: number | undefined }) {
   useEffect(() => {
     let cancelled = false;
     const sample = () => {
+      // Nobody sees the numbers while the window is hidden; sampling resumes the moment it shows again.
+      if (document.hidden) return;
       if (pid == null) setStats(null);
       else
         processStats(pid)
@@ -205,9 +207,11 @@ function ResourcesSection({ pid }: { pid: number | undefined }) {
     sample();
     // Three seconds still appears live to users while reducing sampling cost by one-third versus 2s.
     const t = setInterval(sample, 3000);
+    document.addEventListener("visibilitychange", sample);
     return () => {
       cancelled = true;
       clearInterval(t);
+      document.removeEventListener("visibilitychange", sample);
     };
   }, [pid, showSystem]);
 
@@ -416,6 +420,17 @@ function usageRows(provider: UsageProvider, snap: UsageSnapshot | null): React.R
       </>
     );
   }
+  if (provider === "zcode") {
+    const u = snap.zcode?.data;
+    if (!u || u.windows.length === 0) return null;
+    return (
+      <>
+        {u.windows.map((w) => (
+          <UsageRow key={w.label} label={w.label} pct={w.usedPercent} reset={w.resetsAt} />
+        ))}
+      </>
+    );
+  }
   const u = snap.grok.data;
   if (!u) return null;
   return (
@@ -430,6 +445,7 @@ function usageRows(provider: UsageProvider, snap: UsageSnapshot | null): React.R
 function providerLabel(kind: SessionKind): string {
   if (kind === "codex") return "Codex";
   if (kind === "grok") return "Grok";
+  if (kind === "zcode") return "ZCode";
   return "Claude";
 }
 
@@ -569,7 +585,7 @@ export function InfoTab({ session, cwd }: { session: Session; cwd: string | null
   const isGrok = session.kind === "grok";
   const isOpencode = session.kind === "opencode";
   const isPi = session.kind === "pi" || session.kind === "omp";
-  const hasContext = isClaude || isCodex || isGrok || isOpencode || isPi || session.kind === "kiro";
+  const hasContext = isClaude || isCodex || isGrok || isOpencode || isPi || session.kind === "kiro" || session.kind === "zcode";
 
   const agentState = runtime?.agentState;
   const currentTool = runtime?.currentTool;
@@ -583,7 +599,9 @@ export function InfoTab({ session, cwd }: { session: Session; cwd: string | null
       ? "codex"
       : isGrok
         ? "grok"
-        : null;
+        : session.kind === "zcode"
+          ? "zcode"
+          : null;
   const entry = provider && usage ? usage[provider] : null;
   const rows = provider ? usageRows(provider, usage) : null;
   const [usageBusy, setUsageBusy] = useState(false);
@@ -672,7 +690,7 @@ export function InfoTab({ session, cwd }: { session: Session; cwd: string | null
         </UsageSection>
       )}
 
-      {hasContext && <TurnSection key={session.id} session={session} agentState={agentState} currentTool={currentTool} />}
+      {hasContext && <TurnSection key={session.id} session={session} cwd={cwd} agentState={agentState} currentTool={currentTool} />}
 
       <ResourcesSection pid={runtime?.pid} />
     </div>

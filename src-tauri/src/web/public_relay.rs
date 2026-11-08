@@ -143,6 +143,18 @@ pub fn share_scope_for(app: &AppCtx, share_id: &str, account_id: &str) -> Option
     Some(scope)
 }
 
+/// Whether a share connection belongs to the account that owns this host. The owner is always the first
+/// allowed account: `enable` records it alone and `sync_grants` puts the grant owner ahead of invitees.
+pub fn visitor_is_owner(app: &AppCtx, scope: &ShareScope) -> bool {
+    let Some((share_id, account_id)) = &scope.push_authority else {
+        return false;
+    };
+    load(app)
+        .ok()
+        .and_then(|config| config.shares.get(share_id)?.allowed_accounts.first().cloned())
+        .is_some_and(|owner| &owner == account_id)
+}
+
 /// Mints a one-time browser session on the relay and returns the URL a desktop window should load. The
 /// destination is the selected device's remote page, or the specific grant when one is given.
 pub fn browser_ticket_url(
@@ -620,6 +632,32 @@ mod tests {
         assert!(share_scope_for(&app, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "acct-1").is_some());
         assert!(share_scope_for(&app, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "acct-2").is_none());
         assert!(share_scope_for(&app, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "acct-1").is_none());
+        drop(app);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Only the grant owner, recorded first, counts as the host's own account; invitees and scopes without
+    /// a tunnel identity do not.
+    #[test]
+    fn owner_is_the_first_allowed_account() {
+        let dir = std::env::temp_dir().join(format!("vlx-share-owner-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = crate::db::Db::open(&dir.join("test.db")).unwrap();
+        let share = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let config = json!({
+            "origin": "https://velaterm.com",
+            "deviceId": "11111111-1111-1111-1111-111111111111",
+            "token": "device-token",
+            "shares": {share: {"scope": "project", "targetId": "p", "secret": "s", "allowedAccounts": ["owner", "guest"]}}
+        });
+        std::fs::write(dir.join(CONFIG), config.to_string()).unwrap();
+        let app = AppCtx::Headless(std::sync::Arc::new(HeadlessHost::new(dir.clone(), db)));
+        let owner = share_scope_for(&app, share, "owner").unwrap();
+        let guest = share_scope_for(&app, share, "guest").unwrap();
+        assert!(visitor_is_owner(&app, &owner));
+        assert!(!visitor_is_owner(&app, &guest));
+        let anonymous = ShareScope { scope: "project".into(), target_id: Some("p".into()), push_authority: None };
+        assert!(!visitor_is_owner(&app, &anonymous));
         drop(app);
         std::fs::remove_dir_all(dir).unwrap();
     }

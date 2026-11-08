@@ -8,7 +8,9 @@
 //!   started (`working`) within 10 s, else `unconfirmed`: it was typed in but no turn began, so it may be
 //!   sitting in the prompt box. A retry of an `unconfirmed` message reports `unconfirmed`.
 //! - **Not yet reported** (a Claude that has reported no state since its terminal started) is treated as busy:
-//!   it may still be loading or at a trust prompt.
+//!   it may still be loading or at a trust prompt. The exception is a Claude with a saved conversation whose
+//!   terminal has been up 15 s or more: a resumed one reports nothing until its first turn, so it counts as
+//!   idle (`prompt_ready::effective_state`).
 //! - **Busy** (`working`, `asking` on a permission prompt, or not yet reported): the message waits in `session_tell_pending`.
 //!   When the turn ends, Claude's Stop hook asks VelaTerm whether to stop; the hook response blocks the stop
 //!   with the pending messages as its reason, so Claude reads them and carries on without anything being
@@ -58,6 +60,25 @@ fn is_claude_executable(name: &str) -> bool {
 /// message waits (`queued`) until the first turn ends (Stop hook) or Claude's idle notice arrives.
 fn ready_for_input(state: Option<&str>) -> bool {
     matches!(state, Some("waiting") | Some("idle"))
+}
+
+/// The target's state for the delivery decision: what it last reported, else `waiting` for a resumed Claude
+/// that has a saved conversation and has been up 15 s or more with no report (see `prompt_ready`).
+fn prompt_state(app: &AppCtx, target: &str) -> Option<String> {
+    let reported = app.pty().cached_agent_state(target);
+    if reported.is_some() {
+        return reported;
+    }
+    let saved = app
+        .db()
+        .conn
+        .lock()
+        .ok()
+        .and_then(|conn| crate::db::repo::get_session(&conn, target).ok().flatten())
+        .map(|s| (s.kind, s.agent_session_id.is_some_and(|id| !id.trim().is_empty())));
+    let (kind, has_saved) = saved?;
+    super::prompt_ready::effective_state(kind, has_saved, app.pty().uptime(target), None)
+        .map(|_| "waiting".to_string())
 }
 
 /// The receipt for a message that cannot be typed in right now, from the target's last reported state.
@@ -306,7 +327,7 @@ pub fn deliver(app: &AppCtx, target: &str, wire: &str, id: &str) -> Result<&'sta
         return Ok(receipt);
     }
     ensure_claude_in_terminal(app, target)?;
-    let state = app.pty().cached_agent_state(target);
+    let state = prompt_state(app, target);
     if !ready_for_input(state.as_deref()) {
         // A retry of a message still waiting for its turn to end is reported again rather than re-queued.
         if !is_pending(app, id)? {
@@ -515,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_that_has_not_reported_a_state_waits_for_one() {
+    fn a_claude_that_has_not_reported_a_state_waits_for_one_unless_it_was_resumed() {
         assert!(!ready_for_input(None));
         assert!(ready_for_input(Some("waiting")));
         assert!(ready_for_input(Some("idle")));

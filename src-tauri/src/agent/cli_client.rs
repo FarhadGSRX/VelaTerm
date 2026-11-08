@@ -105,17 +105,26 @@ pub fn run_spawn(args: &[String]) -> ! {
     }
 }
 
-/// `vlx-term --view <file|URL>...` entry point: POST each item to `/view`; any failure returns code 1.
+/// `vlx-term --view [--beside] <file|URL>...` entry point: POST each item to `/view`; any failure returns code 1.
+///
+/// `vopen` opens every item as a tab. `vartifact` passes `--beside`: files open the same way but in the panel
+/// beside the calling conversation (or as a tab when that conversation is not on screen); URLs still open a
+/// browser tab, since the panel cannot host one.
 pub fn run_view(args: &[String]) -> ! {
-    let rest = &args[args.len().min(2)..];
+    let mut rest = &args[args.len().min(2)..];
+    let beside = rest.first().is_some_and(|a| a == "--beside");
+    if beside {
+        rest = &rest[1..];
+    }
+    let (cmd, usage) = if beside { ("vartifact", ARTIFACT_USAGE) } else { ("vopen", VIEW_USAGE) };
     if let Some(first) = rest.first() {
         if first == "-h" || first == "--help" {
-            println!("{VIEW_USAGE}");
+            println!("{usage}");
             std::process::exit(0);
         }
     }
     if rest.is_empty() {
-        eprintln!("{VIEW_USAGE}");
+        eprintln!("{usage}");
         std::process::exit(2);
     }
 
@@ -134,14 +143,14 @@ pub fn run_view(args: &[String]) -> ! {
 
     let mut exit = 0;
     for f in rest {
-        let body = build_view_body(&sid, f, &cwd);
+        let body = build_view_body(&sid, f, &cwd, beside);
         match post_json(&endpoint, &body) {
             Some(code) if (200..300).contains(&code) => {
-                println!("opened in VelaTerm: {f}");
+                println!("opened by VelaTerm: {f}");
             }
             _ => {
                 // `/view` validation returns 404 for missing/nonregular files; connection failure returns None.
-                eprintln!("vopen: open failed (file missing or not a regular file): {f}");
+                eprintln!("{cmd}: open failed (file missing or not a regular file): {f}");
                 exit = 1;
             }
         }
@@ -150,7 +159,7 @@ pub fn run_view(args: &[String]) -> ! {
 }
 
 const SPAWN_USAGE: &str =
-    "usage: vspawn [--worktree] [--cwd <path>] [--yes] [--claude|--codex|--copilot|--kiro] [--model <name>] [--effort <level>] <task description...>\n\
+    "usage: vspawn [--worktree] [--cwd <path>] [--yes] [--agent <agent>|--claude|--codex|--copilot|--kiro|--pi] [--model <name>] [--effort <level>] <task description...>\n\
     --plan-execute    create planning, execution and optional independent review chat sessions\n\
     --split-tasks     let the planner propose multiple tasks for user confirmation (requires --plan-execute)\n\
     --worktree-mode <none|shared|each>   directory mode for all workflow roles; overrides --worktree (requires --plan-execute)\n\
@@ -158,6 +167,8 @@ const SPAWN_USAGE: &str =
     --plan-agent / --exec-agent / --review-agent <agent>   agent for each role\n\
     --plan-model / --exec-model / --review-model <model>   model for each role\n\
     --plan-effort / --exec-effort / --review-effort <level> reasoning effort for each role\n\
+    --agent <agent>   child agent: claude, codex, opencode, copilot, cursor, antigravity, cline, pi, omp, crush, kimi, kiro, grok, zoo, zcode or deepseek\n\
+    --claude / --codex / --copilot / --kiro / --pi   shortcuts for --agent with that agent\n\
     --cwd <path>      child working directory and repository used to create a worktree\n\
     --request-id <uuid> reuse the same request identity after a lost acknowledgement\n\
     --yes             skip initial launch confirmation; split-task proposals still require review\n\
@@ -165,7 +176,12 @@ const SPAWN_USAGE: &str =
     --effort <level>  reasoning effort for agents that offer one, such as low, medium, or high";
 const VIEW_USAGE: &str = "usage: vopen <file|url>...   (relative paths resolve against the current dir; opens multiple at once)\n\
     opens by type: markdown editor / image viewer / code editor (syntax highlight)\n\
-    http/https urls open in an in-app browser tab (desktop only)";
+    html pages open as a live preview tab; use vartifact to open a file beside the conversation instead\n\
+    http/https urls open in an in-app browser tab (desktop only); Claude artifact links open in the system browser";
+const ARTIFACT_USAGE: &str = "usage: vartifact <file|url>...   (relative paths resolve against the current dir)\n\
+    like vopen, but files open in the panel beside this conversation instead of a tab\n\
+    html pages show a live preview there; markdown, images and code open in the same views as vopen\n\
+    when the conversation is not on screen (terminal session, hidden pane, phone) files open as tabs; urls always open a browser tab";
 
 /// Read the three session environment variables and return a user-facing error if any is missing.
 fn session_env() -> Result<(String, String, String), String> {
@@ -207,9 +223,9 @@ enum SpawnParse {
 }
 
 /// Parse arguments after `--spawn`. `--worktree/--wt` enables a worktree, `--no-worktree/--nowt`
-/// disables it, `--yes/-y/--no-confirm` skips the confirmation dialog, agent flags select kind,
-/// `--cwd`/`--model`/`--effort` take a value in either `--cwd x` or `--cwd=x` form, help flags show usage,
-/// and everything after `--` is prompt text even when prefixed by `-`. Other options are errors;
+/// disables it, `--yes/-y/--no-confirm` skips the confirmation dialog, `--agent` or a shortcut flag selects
+/// kind, `--cwd`/`--model`/`--effort`/`--agent` take a value in either `--cwd x` or `--cwd=x` form, help
+/// flags show usage, and everything after `--` is prompt text even when prefixed by `-`. Other options are errors;
 /// remaining words join into a required prompt.
 fn parse_spawn_args(rest: &[String]) -> SpawnParse {
     let mut request_id = None;
@@ -306,6 +322,7 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
             "--codex" => kind = Some("codex".to_string()),
             "--copilot" => kind = Some("copilot".to_string()),
             "--kiro" => kind = Some("kiro".to_string()),
+            "--pi" => kind = Some("pi".to_string()),
             "-h" | "--help" => return SpawnParse::Help,
             "--" => {
                 for w in &rest[i + 1..] {
@@ -314,7 +331,7 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
                 break;
             }
             // Value options. Both spellings are accepted because agents write one and people the other.
-            "--cwd" | "--model" | "--effort" => {
+            "--cwd" | "--model" | "--effort" | "--agent" => {
                 let Some(v) = rest
                     .get(i + 1)
                     .map(|s| s.as_str())
@@ -325,13 +342,18 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
                 match a {
                     "--cwd" => cwd = Some(v.to_string()),
                     "--model" => model = Some(v.to_string()),
+                    "--agent" => match task_agent(v) {
+                        Ok(k) => kind = Some(k),
+                        Err(e) => return SpawnParse::Err(e),
+                    },
                     _ => effort = Some(v.to_string()),
                 }
                 i += 1;
             }
             _ if a.starts_with("--cwd=")
                 || a.starts_with("--model=")
-                || a.starts_with("--effort=") =>
+                || a.starts_with("--effort=")
+                || a.starts_with("--agent=") =>
             {
                 // The prefix test guarantees a separator, so the split cannot fail.
                 let (flag, v) = a.split_once('=').unwrap_or((a, ""));
@@ -341,6 +363,10 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
                 match flag {
                     "--cwd" => cwd = Some(v.to_string()),
                     "--model" => model = Some(v.to_string()),
+                    "--agent" => match task_agent(v) {
+                        Ok(k) => kind = Some(k),
+                        Err(e) => return SpawnParse::Err(e),
+                    },
                     _ => effort = Some(v.to_string()),
                 }
             }
@@ -388,6 +414,20 @@ fn parse_spawn_args(rest: &[String]) -> SpawnParse {
     })
 }
 
+/// Resolve an `--agent` value against the same task-capable catalogue the backend checks, so a typo
+/// fails here with the valid names instead of after the request is sent.
+fn task_agent(value: &str) -> Result<String, String> {
+    let options = super::launch_options::catalog();
+    let kind: Option<crate::models::SessionKind> = serde_json::from_value(serde_json::json!(value)).ok();
+    match kind {
+        Some(kind) if options.iter().any(|o| o.id == kind && o.accepts_task) => Ok(kind.as_str().to_owned()),
+        _ => {
+            let names: Vec<&str> = options.iter().filter(|o| o.accepts_task).map(|o| o.id.as_str()).collect();
+            Err(format!("vspawn: unknown agent {value}; use one of {}", names.join(", ")))
+        }
+    }
+}
+
 /// Build the `/spawn` JSON body, omitting kind so the backend can inherit it when absent. serde_json
 /// safely escapes quotes, newlines, and backslashes. The supplied cwd is the resolved invocation
 /// directory. `noConfirm`, `model`, and `effort` are only
@@ -420,8 +460,8 @@ fn build_spawn_body(sid: &str, args: &SpawnArgs, cwd: &str) -> String {
 }
 
 /// Build the `/view` JSON body.
-fn build_view_body(sid: &str, path: &str, cwd: &str) -> String {
-    serde_json::json!({ "sessionId": sid, "path": path, "cwd": cwd }).to_string()
+fn build_view_body(sid: &str, path: &str, cwd: &str, beside: bool) -> String {
+    serde_json::json!({ "sessionId": sid, "path": path, "cwd": cwd, "beside": beside }).to_string()
 }
 
 /// Send an HTTP/1.1 POST to the local hook service and return its status code, or None on connection
@@ -494,6 +534,13 @@ pub fn run_refer(args: &[String]) -> ! {
         }
     };
     let body = build_refer_body(&sid, &parsed);
+    if !parsed.list {
+        let endpoint=format!("{url}/refer?t={token}&stream={}",if parsed.json {"json"} else {"text"});
+        match post_reference_stream(&endpoint,&body,parsed.json,&mut std::io::stdout().lock()) {
+            Ok(())=>std::process::exit(0),
+            Err(error)=>{eprintln!("vrefer: {error}");std::process::exit(1);},
+        }
+    }
     let endpoint = format!("{url}/refer?t={token}");
     let (code, payload) = match post_json_read_with(&endpoint, &body, refer_http_timeout(&parsed)) {
         Some(v) => v,
@@ -1287,7 +1334,7 @@ fn short_id(id: &str) -> String {
 /// Shorten an ISO timestamp to `MM-DD HH:MM` for headers, leaving anything unexpected untouched.
 ///
 /// The value is printed as the transcript recorded it, with no timezone conversion.
-fn short_time(ts: &str) -> String {
+pub(crate) fn short_time(ts: &str) -> String {
     let bytes = ts.as_bytes();
     if bytes.len() >= 16 && bytes[4] == b'-' && bytes[7] == b'-' && bytes[10] == b'T' {
         return format!("{} {}", &ts[5..10], &ts[11..16]);
@@ -1306,7 +1353,7 @@ fn one_line(text: &str, max_chars: usize) -> String {
 }
 
 /// Render a `/refer` transcript response as text for a model to read.
-fn render_refer(value: &serde_json::Value) -> String {
+pub(crate) fn render_refer(value: &serde_json::Value) -> String {
     let session_id = value
         .get("sessionId")
         .and_then(|v| v.as_str())
@@ -1388,7 +1435,7 @@ fn render_refer(value: &serde_json::Value) -> String {
 ///
 /// The attribution line matters. What follows is one agent's reading of another session, not that
 /// session's own words, and the caller should quote it as such.
-fn render_answer(value: &serde_json::Value) -> String {
+pub(crate) fn render_answer(value: &serde_json::Value) -> String {
     let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let id = short_id(
         value
@@ -1473,11 +1520,20 @@ fn render_search(value: &serde_json::Value) -> String {
         .get("recordingOnlySessions")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let pending = value
+        .get("pendingSessions")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let pending_note = match pending {
+        0 => String::new(),
+        n => format!("\n({n} sessions are still being indexed; results may be incomplete, search again later)"),
+    };
     if hits.is_empty() {
-        return match recording_only {
+        let none = match recording_only {
             0 => "no matches".to_string(),
             n => format!("no matches in conversations ({n} matched terminal output only)"),
         };
+        return format!("{none}{pending_note}");
     }
     let total = value
         .get("totalSessions")
@@ -1549,6 +1605,7 @@ fn render_search(value: &serde_json::Value) -> String {
             "\n({recording_only} more matched terminal output only, not conversations; not shown)\n"
         ));
     }
+    out.push_str(&pending_note);
     out.trim_end().to_string()
 }
 
@@ -1604,6 +1661,29 @@ fn read_value(cli: &str, status: u16, payload: &str) -> serde_json::Value {
 
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+fn post_reference_stream(url:&str,body:&str,json:bool,writer:&mut impl std::io::Write) -> Result<(),String> {
+    let agent=ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30*60)).redirects(0).try_proxy_from_env(false).build();
+    let response=match agent.post(url).set("Content-Type","application/json").set("Connection","close").send_string(body) {
+        Ok(response)|Err(ureq::Error::Status(_,response))=>response,
+        Err(ureq::Error::Transport(error))=>return Err(format!("cannot read the reference stream: {error}")),
+    };
+    if response.status()!=200 {
+        let mut payload=String::new();response.into_reader().take(512*1024+1).read_to_string(&mut payload).map_err(|e|e.to_string())?;
+        let value=serde_json::from_str::<serde_json::Value>(&payload).unwrap_or_default();
+        return Err(value["error"].as_str().unwrap_or("VelaTerm could not read the requested conversation").into());
+    }
+    let content_type=response.header("Content-Type").unwrap_or_default().split(';').next().unwrap_or_default().trim().to_owned();
+    if (json && content_type=="application/json") || (!json && content_type=="text/plain") {
+        std::io::copy(&mut response.into_reader(),writer).map_err(|e|format!("reference stream ended before completion: {e}"))?;
+    } else if content_type=="application/json" {
+        // Older servers ignore the stream negotiation and answer a text request with JSON.
+        let mut bytes=Vec::new();response.into_reader().read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+        let value:serde_json::Value=serde_json::from_slice(&bytes).map_err(|_|"VelaTerm returned an invalid reference response")?;
+        writer.write_all(if value.get("answer").is_some() {render_answer(&value)} else {render_refer(&value)}.as_bytes()).map_err(|e|e.to_string())?;
+    } else {return Err("VelaTerm returned an unsupported reference response type".into());}
+    writer.write_all(b"\n").map_err(|e|e.to_string())?;Ok(())
+}
+
 fn refer_http_timeout(args: &ReferArgs) -> std::time::Duration {
     if args.ask.is_none() {
         return READ_TIMEOUT;
@@ -1619,6 +1699,32 @@ fn refer_http_timeout(args: &ReferArgs) -> std::time::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference_response(payload:Vec<u8>,content_type:&str,json:bool) -> (Result<(),String>,Vec<u8>) {
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url=format!("http://{}/refer?stream={}",server.server_addr(),if json {"json"} else {"text"});
+        let content_type=content_type.to_owned();
+        let worker=std::thread::spawn(move|| {
+            let request=server.recv().unwrap();
+            let _=request.respond(tiny_http::Response::from_data(payload).with_header(tiny_http::Header::from_bytes("Content-Type",content_type).unwrap()));
+        });
+        let mut output=Vec::new();let result=post_reference_stream(&url,"{}",json,&mut output);worker.join().unwrap();(result,output)
+    }
+
+    #[test]
+    fn reference_stream_keeps_large_transcripts_whole_and_renders_json_for_text_requests() {
+        let value=serde_json::json!({"sessionId":"abcdefgh","name":"Earlier server","kind":"codex","total":1,"range":[0,1],
+            "messages":[{"role":"user","text":"Complete original","tools":[]}]});
+        let (result,output)=reference_response(value.to_string().into_bytes(),"application/json",false);
+        result.unwrap();assert_eq!(String::from_utf8(output).unwrap(),format!("{}\n",render_refer(&value)));
+        // A transcript well past the old 512 KiB limit arrives complete, in JSON and in text.
+        let long=serde_json::json!({"messages":[{"text":"雪😀".repeat(100_000)}]}).to_string();
+        let (result,output)=reference_response(long.as_bytes().to_vec(),"application/json",true);
+        result.unwrap();assert_eq!(output.len(),long.len()+1);assert_eq!(serde_json::from_slice::<serde_json::Value>(&output).unwrap()["messages"][0]["text"],"雪😀".repeat(100_000));
+        let text="雪😀".repeat(100_000);
+        let (result,output)=reference_response(text.as_bytes().to_vec(),"text/plain",false);
+        result.unwrap();assert_eq!(String::from_utf8(output).unwrap(),format!("{text}\n"));
+    }
 
     fn args(rest: &[&str]) -> Vec<String> {
         rest.iter().map(|s| s.to_string()).collect()
@@ -1813,6 +1919,61 @@ mod tests {
             panic!("parsing should succeed");
         };
         assert!(!p.worktree);
+    }
+
+    #[test]
+    fn parse_spawn_selects_pi() {
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--pi", "--", "-wait", "for a task"])) else {
+            panic!("parsing should succeed");
+        };
+        assert_eq!(p.kind.as_deref(), Some("pi"));
+        assert_eq!(p.prompt, "-wait for a task");
+        assert!(!p.no_confirm, "selecting an agent must not skip confirmation");
+        assert!(!p.worktree);
+        let body: serde_json::Value = serde_json::from_str(&build_spawn_body("sid", &p, "/w")).unwrap();
+        assert_eq!(body["kind"], "pi");
+        assert_eq!(body["prompt"], "-wait for a task");
+        assert!(body.get("noConfirm").is_none());
+        // `vspawn-tree` prepends `--worktree`, which must survive the agent choice.
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--worktree", "--pi", "x"])) else {
+            panic!("parsing should succeed");
+        };
+        assert!(p.worktree);
+        assert_eq!(p.kind.as_deref(), Some("pi"));
+    }
+
+    #[test]
+    fn parse_spawn_agent_option() {
+        // Every task-capable agent is reachable, in both spellings.
+        for option in super::super::launch_options::catalog().into_iter().filter(|o| o.accepts_task) {
+            let name = option.id.as_str();
+            let inline = format!("--agent={name}");
+            for a in [vec!["--agent", name, "x"], vec![inline.as_str(), "x"]] {
+                let SpawnParse::Ok(p) = parse_spawn_args(&args(&a)) else { panic!("{a:?} should parse") };
+                assert_eq!(p.kind.as_deref(), Some(name));
+            }
+            assert!(SPAWN_USAGE.contains(&format!(" {name}")), "usage should list {name}");
+        }
+        // The last selection wins, as with the shortcut flags.
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--codex", "--agent", "omp", "x"])) else {
+            panic!("parsing should succeed");
+        };
+        assert_eq!(p.kind.as_deref(), Some("omp"));
+        // A workflow without --plan-agent plans with the selected agent.
+        let SpawnParse::Ok(p) = parse_spawn_args(&args(&["--plan-execute", "--agent", "pi", "x"])) else {
+            panic!("parsing should succeed");
+        };
+        assert_eq!(p.plan_execute.unwrap().plan.agent, Some(crate::models::SessionKind::Pi));
+        for a in [
+            vec!["--agent"],
+            vec!["--agent=", "x"],
+            vec!["--agent", "terminal", "x"],
+            vec!["--agent", "browser", "x"],
+            vec!["--agent", "Pi", "x"],
+            vec!["--agent", "nope", "x"],
+        ] {
+            assert!(matches!(parse_spawn_args(&args(&a)), SpawnParse::Err(_)), "{a:?} should be rejected");
+        }
     }
 
     #[test]
@@ -2642,10 +2803,14 @@ mod tests {
 
     #[test]
     fn build_view_body_shape() {
-        let body = build_view_body("s1", "notes.md", "/work/dir");
+        let body = build_view_body("s1", "notes.md", "/work/dir", false);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["sessionId"], "s1");
         assert_eq!(v["path"], "notes.md");
         assert_eq!(v["cwd"], "/work/dir");
+        assert_eq!(v["beside"], false);
+        let v: serde_json::Value = serde_json::from_str(&build_view_body("s1", "a.html", "/w", true)).unwrap();
+        assert_eq!(v["beside"], true);
     }
+
 }

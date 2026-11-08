@@ -34,10 +34,8 @@ import { DormantPane } from "./DormantPane";
 import { LiveTabsOverLimitDialog } from "./LiveTabsOverLimitDialog";
 import { SearchBar } from "./SearchBar";
 import { TabBar } from "./TabBar";
-import { TerminalView } from "./TerminalView";
-import { ChatPane } from "./session/ChatPane";
-import { TaskView } from "./session/TaskView";
 import { TaskNavigation } from "./session/taskNavigation";
+import { NewSessionNavigation, openNewSessionHere } from "../NewSession/navigation";
 
 // The memory route reaches the same editor stack through MemoryDocument, so it is imported
 // dynamically as well. A static import here would pull Crepe/CodeMirror/mermaid back into the entry
@@ -51,6 +49,26 @@ const MemoryRoute = lazy(() =>
 const DocView = lazy(() =>
   import("./doc/DocView").then((m) => ({ default: m.DocView })),
 );
+// Terminals (xterm and its addons, about 430 KB) and the conversation view are not needed to draw the window,
+// so they load after it: the window paints sooner, and preloadPaneViews fetches both while idle so the first
+// session opened afterwards does not wait for them.
+const loadTerminalView = () => import("./TerminalView");
+const loadChatPane = () => import("./session/ChatPane");
+const TerminalView = lazy(() => loadTerminalView().then((m) => ({ default: m.TerminalView })));
+const ChatPane = lazy(() => loadChatPane().then((m) => ({ default: m.ChatPane })));
+// A background task tab shares the conversation rows and Markdown renderer, so it loads on first use too.
+const TaskView = lazy(() => import("./session/TaskView").then((m) => ({ default: m.TaskView })));
+const NewSessionView = lazy(() => import("../NewSession/NewSessionView").then((m) => ({ default: m.NewSessionView })));
+
+/** Fetch the terminal and conversation views once the window has painted and the page is idle. */
+function preloadPaneViews() {
+  const load = () => {
+    void loadTerminalView().catch(() => {});
+    void loadChatPane().catch(() => {});
+  };
+  if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(load, { timeout: 2000 });
+  else setTimeout(load, 300);
+}
 
 const rectToStyle = (r: Rect): React.CSSProperties => ({
   left: `${r.left}%`,
@@ -58,8 +76,6 @@ const rectToStyle = (r: Rect): React.CSSProperties => ({
   width: `${r.width}%`,
   height: `${r.height}%`,
 });
-
-const FULL: React.CSSProperties = { left: 0, top: 0, width: "100%", height: "100%" };
 
 const FULL_RECT: Rect = { left: 0, top: 0, width: 100, height: 100 };
 
@@ -195,6 +211,7 @@ function StickyDivider({
 
 export function CenterPane() {
   useMemoryTab();
+  useEffect(preloadPaneViews, []);
   const t = useT();
   const projects = useTermStore((s) => s.projects);
   const sessions = useTermStore((s) => s.sessions);
@@ -204,6 +221,7 @@ export function CenterPane() {
   const docTabs = useTermStore((s) => s.docTabs);
   const browserTabs = useTermStore((s) => s.browserTabs);
   const taskTabs = useTermStore((s) => s.taskTabs);
+  const newSessionTabs = useTermStore((s) => s.newSessionTabs);
   const paneTrees = useTermStore((s) => s.paneTrees);
   const activeTabId = useTermStore((s) => s.activeTabId);
   const stickyTabId = useTermStore((s) => s.stickyTabId);
@@ -384,6 +402,7 @@ export function CenterPane() {
   return (
     <div className="col col-mid">
       <TaskNavigation />
+      <NewSessionNavigation />
       <TabBar />
       <div
         className="stage"
@@ -410,10 +429,16 @@ export function CenterPane() {
                 <kbd>{formatCombo(effectiveCombo("newTab", shortcutOverrides))}</kbd>
                 {t("center.noSessionHintPost")}
               </div>
-              <button className="empty-action" onClick={() => void newScratchTab()}>
-                <Icons.terminal size={14} />
-                {t("center.createTerminal")}
-              </button>
+              <div className="empty-actions">
+                <button className="empty-action" onClick={() => void newScratchTab()}>
+                  <Icons.terminal size={14} />
+                  {t("center.createTerminal")}
+                </button>
+                <button className="empty-action" onClick={openNewSessionHere}>
+                  <Icons.sparkle size={14} />
+                  {t("tree.newSession")}
+                </button>
+              </div>
               <div className="empty-split-hints">
                 <div>{t("center.splitHint")}</div>
                 <div className="empty-split-keys">
@@ -447,7 +472,7 @@ export function CenterPane() {
               <DormantPane
                 key={`${id}:${epoch}`}
                 session={session}
-                area={info ? rectToStyle(info.rect) : FULL}
+                area={info ? rectToStyle(info.rect) : MAIN_FULL}
                 hidden={!visible}
                 onActivate={info ? () => handleActivate(info.paneId, id) : undefined}
                 onClose={info ? () => handleClose(info.paneId, id) : undefined}
@@ -458,11 +483,28 @@ export function CenterPane() {
           // pane is its whole interface. Mounting and unmounting it is free, unlike a terminal.
           if (session.engine === "chat") {
             return (
-              <ChatPane
-                key={`${id}:${epoch}`}
+              <Suspense key={`${id}:${epoch}`} fallback={null}>
+                <ChatPane
+                  session={session}
+                  cwd={cwd}
+                  area={info ? rectToStyle(info.rect) : MAIN_FULL}
+                  hidden={!visible}
+                  focused={visible && id === activeSessionId}
+                  multi={multi}
+                  paneId={info?.paneId}
+                  onActivate={handleActivate}
+                  onSplit={handleSplit}
+                  onClose={handleClose}
+                />
+              </Suspense>
+            );
+          }
+          return (
+            <Suspense key={`${id}:${epoch}`} fallback={null}>
+              <TerminalView
                 session={session}
                 cwd={cwd}
-                area={info ? rectToStyle(info.rect) : FULL}
+                area={info ? rectToStyle(info.rect) : MAIN_FULL}
                 hidden={!visible}
                 focused={visible && id === activeSessionId}
                 multi={multi}
@@ -471,22 +513,7 @@ export function CenterPane() {
                 onSplit={handleSplit}
                 onClose={handleClose}
               />
-            );
-          }
-          return (
-            <TerminalView
-              key={`${id}:${epoch}`}
-              session={session}
-              cwd={cwd}
-              area={info ? rectToStyle(info.rect) : MAIN_FULL}
-              hidden={!visible}
-              focused={visible && id === activeSessionId}
-              multi={multi}
-              paneId={info?.paneId}
-              onActivate={handleActivate}
-              onSplit={handleSplit}
-              onClose={handleClose}
-            />
+            </Suspense>
           );
         })}
 
@@ -519,7 +546,18 @@ export function CenterPane() {
         {openTabs
           .filter((tabId) => taskTabs[tabId])
           .map((tabId) => (
-            <TaskView key={tabId} tab={taskTabs[tabId]} hidden={tabId !== activeTabId} />
+            <Suspense key={tabId} fallback={null}>
+              <TaskView tab={taskTabs[tabId]} hidden={tabId !== activeTabId} />
+            </Suspense>
+          ))}
+
+        {/* New Session tabs stay mounted so a typed task and the chosen options survive tab switches. */}
+        {openTabs
+          .filter((tabId) => newSessionTabs[tabId])
+          .map((tabId) => (
+            <Suspense key={tabId} fallback={null}>
+              <NewSessionView tab={newSessionTabs[tabId]} hidden={tabId !== activeTabId} />
+            </Suspense>
           ))}
 
         {/* Browser tabs also remain mounted because unmounting destroys the native child WebView.

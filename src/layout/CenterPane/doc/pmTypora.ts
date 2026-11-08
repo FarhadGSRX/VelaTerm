@@ -19,11 +19,14 @@ import {
 } from "@milkdown/kit/preset/commonmark";
 import { insertTableCommand, toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
 import { toggleLinkCommand } from "@milkdown/kit/component/link-tooltip";
+import { chainCommands } from "@milkdown/kit/prose/commands";
+import { undoInputRule } from "@milkdown/kit/prose/inputrules";
 import { keymap } from "@milkdown/kit/prose/keymap";
 import { liftListItem } from "@milkdown/kit/prose/schema-list";
 import { Plugin, PluginKey, TextSelection, type Command, type EditorState } from "@milkdown/kit/prose/state";
 import { Decoration, DecorationSet, type EditorView } from "@milkdown/kit/prose/view";
 import type { NodeType } from "@milkdown/kit/prose/model";
+import { liftTarget } from "@milkdown/kit/prose/transform";
 
 const IS_MAC = typeof navigator !== "undefined" && /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent || "");
 
@@ -46,6 +49,38 @@ function headingLevel(state: EditorState): number | null {
   if (parent.type.name === "heading") return parent.attrs.level as number;
   return parent.type.name === "paragraph" ? 0 : null;
 }
+
+/**
+ * Move a later block of a list item (an unnumbered paragraph under the marker), together with the
+ * blocks after it in the same item, out of the item: to the top level for a top-level list, or into
+ * the enclosing item for a nested one. Returns false in an item's first block, so Milkdown's own
+ * lift handles the marker there.
+ */
+export const liftListBlock = (itemType: NodeType): Command => (state, dispatch) => {
+  const { $from } = state.selection;
+  if ($from.depth < 2 || $from.node(-1).type !== itemType || $from.index(-1) === 0) return false;
+  const { doc } = state;
+  const range = doc.resolve($from.before()).blockRange(doc.resolve($from.end(-1)));
+  const target = range && liftTarget(range);
+  if (!range || target == null) return false;
+  dispatch?.(state.tr.lift(range, target).scrollIntoView());
+  return true;
+};
+
+/**
+ * Backspace at the very start of a list item's block removes the list structure before joining text,
+ * as in Typora: a numbered paragraph loses its marker (a nested item moves out one level), and an
+ * unnumbered paragraph under the marker moves out of the item. Milkdown's default joins the block into
+ * the text above instead, so the number could never be removed.
+ */
+export const liftListItemAtStart = (itemType: NodeType): Command => (state, dispatch, view) => {
+  const { selection } = state;
+  if (!(selection instanceof TextSelection) || !selection.empty) return false;
+  const { $from } = selection;
+  if ($from.parentOffset !== 0 || $from.depth < 2 || $from.node(-1).type !== itemType) return false;
+  if ($from.index(-1) !== 0) return liftListBlock(itemType)(state, dispatch, view);
+  return liftListItem(itemType)(state, dispatch, view);
+};
 
 /** Formatting shortcuts following Typora's defaults, adjusted where the app already owns a chord. */
 export function typoraKeymap(ctx: Ctx): Plugin {
@@ -94,6 +129,11 @@ export function typoraKeymap(ctx: Ctx): Plugin {
   const inlineCode = run(() => commands().call(toggleInlineCodeCommand.key));
   const strike = run(() => commands().call(toggleStrikethroughCommand.key));
   const common: Record<string, Command> = {
+    // Undoing a just-applied input rule (typing "1. " then Backspace) still takes precedence.
+    Backspace: chainCommands(undoInputRule, liftListItemAtStart(listItemSchema.type(ctx))),
+    // Outdenting an unnumbered paragraph moves only it out; Milkdown's lift would unnumber the whole item.
+    "Shift-Tab": liftListBlock(listItemSchema.type(ctx)),
+    "Mod-[": liftListBlock(listItemSchema.type(ctx)),
     "Mod-=": promote,
     "Mod-Shift-=": promote,
     "Mod--": demote,

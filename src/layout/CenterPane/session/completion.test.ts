@@ -58,6 +58,20 @@ describe("provider skill completion", () => {
     expect(suggest("$vspawn task")).toBeNull();
   });
 
+  it("reaches a plugin skill by its own name, after names that match outright", () => {
+    const commands: ChatCommand[] = [
+      { name: "spreadsheets:excel-live-control", invocation: "$" },
+      { name: "excel", invocation: "$" },
+      { name: "pages:write-page", invocation: "$" },
+    ];
+    const labels = (draft: string) =>
+      buildSuggestions({ draft, commands, configKeys: [] })?.map((s) => s.label);
+    expect(labels("$excel")).toEqual(["$excel", "$spreadsheets:excel-live-control"]);
+    expect(labels("/write")).toEqual(["/pages:write-page"]);
+    expect(labels("$pages:")).toEqual(["$pages:write-page"]);
+    expect(labels("$live")).toBeUndefined();
+  });
+
   it("keeps the full provider catalogue available for scrolling", () => {
     const commands: ChatCommand[] = Array.from({ length: 30 }, (_, i) => ({ name: `skill-${i}`, invocation: "$" }));
     expect(buildSuggestions({ draft: "$", commands, configKeys: [] })).toHaveLength(30);

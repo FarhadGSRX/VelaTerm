@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { normalizeArgDashes } from "../args";
 import { Backdrop } from "../components/Backdrop";
 import Icons from "../components/Icons";
+import AgentSelect from "../components/AgentSelect";
 import Select from "../components/Select";
 import { useGitBranchInfo } from "../hooks/useGitBranch";
 import { useSuspendNativeViews } from "../hooks/nativeViewSuspend";
@@ -25,9 +26,11 @@ import {
   effectiveStatus,
   isVirtualProject,
   projectRoot,
+  worktreeGroup,
   type NodeKind,
   type SessionEngine,
   type SessionKind,
+  hasTerminalInterface,
   supportsChatEngine,
   supportsPermissionToggle,
 } from "../types";
@@ -50,7 +53,6 @@ export function ConfirmDelete({
   kind,
   collection,
   batchCount,
-  worktreePaths = [],
   onConfirm,
   onCancel,
 }: {
@@ -59,14 +61,11 @@ export function ConfirmDelete({
   /** Wording only: a collection is a project row with no directory of its own. */
   collection?: boolean;
   batchCount?: number;
-  worktreePaths?: string[];
-  onConfirm: (removeWorktree: boolean) => void | Promise<void>;
+  onConfirm: () => void | Promise<void>;
   onCancel: () => void;
 }) {
   const t = useT();
   const isBatch = batchCount != null;
-  const hasWt = worktreePaths.length > 0;
-  const [removeWt, setRemoveWt] = useState(false);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +75,7 @@ export function ConfirmDelete({
     busyRef.current = true;
     setBusy(true);
     setError(null);
-    try { await onConfirm(removeWt); }
+    try { await onConfirm(); }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { busyRef.current = false; setBusy(false); }
   };
@@ -121,23 +120,6 @@ export function ConfirmDelete({
         <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 18 }}>
           {body}
         </div>
-        {hasWt && (
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              fontSize: 13,
-              color: "var(--text-secondary)",
-              lineHeight: 1.5,
-              marginBottom: 16,
-              cursor: "pointer",
-            }}
-          >
-            <input type="checkbox" disabled={busy} checked={removeWt} onChange={(e) => setRemoveWt(e.target.checked)} />
-            {t("tree.deleteWorktrees", worktreePaths.length)}
-          </label>
-        )}
         {error && <div role="alert" style={{ color: "var(--status-error)", marginBottom: 12 }}>{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button className="vlx-btn" disabled={busy} onClick={cancel}>
@@ -967,14 +949,11 @@ export function NewGroup({
     return () => { window.removeEventListener("popstate", update); lockGroupNavigation(false); };
   }, [urlBacked]);
 
-  // Resolve repository root once from a parent group's worktree or the project root.
+  // Resolve repository root once from the worktree bound on the parent group or an ancestor, or the project root.
   const [repoRoot] = useState<string | null>(() => {
     const st = useTermStore.getState();
-    const parentGroup = parentGroupId
-      ? st.groups.find((g) => g.id === parentGroupId)
-      : null;
     const project = st.projects.find((p) => p.id === projectId);
-    return parentGroup?.worktreePath || projectRoot(project) || null;
+    return worktreeGroup(st.groups, parentGroupId)?.worktreePath || projectRoot(project) || null;
   });
   const wt = useWorktreeChoice(repoRoot);
 
@@ -1126,16 +1105,13 @@ export function MoveGroupToWorktree({
   const t = useT();
   const group = useTermStore((s) => s.groups.find((g) => g.id === groupId)) ?? null;
 
-  // Repository root comes from the parent group's worktree or the project root, never from this group's own
-  // binding: re-pointing a worktree group must still resolve against the repository it lives in.
+  // Repository root comes from the worktree bound on an ancestor group or the project root, never from this group's
+  // own binding: re-pointing a worktree group must still resolve against the repository it lives in.
   const [repoRoot] = useState<string | null>(() => {
     const st = useTermStore.getState();
     const g = st.groups.find((x) => x.id === groupId);
-    const parentGroup = g?.parentGroupId
-      ? st.groups.find((x) => x.id === g.parentGroupId)
-      : null;
     const project = st.projects.find((p) => p.id === g?.projectId);
-    return parentGroup?.worktreePath || projectRoot(project) || null;
+    return worktreeGroup(st.groups, g?.parentGroupId)?.worktreePath || projectRoot(project) || null;
   });
   const wt = useWorktreeChoice(repoRoot, "new");
 
@@ -1396,6 +1372,8 @@ export function NewAgentSession({
   // The conversation engine speaks one agent's protocol, so the choice only appears for agents that
   // support it rather than as a disabled control on every other type.
   const chatSupported = supportsChatEngine(kind);
+  // An agent without a terminal interface has only the conversation view, so there is nothing to choose.
+  const engineChoice = chatSupported && hasTerminalInterface(kind);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1416,7 +1394,7 @@ export function NewAgentSession({
         name: finalName,
         agentArgs: normalizeArgDashes(agentArgs),
         permissionMode: permSupported ? permissionMode || null : null,
-        engine: chatSupported ? engine : "tui",
+        engine: !chatSupported ? "tui" : engineChoice ? engine : "chat",
         worktree,
         cwd: cwd.trim(),
         execPath: execPath.trim(),
@@ -1487,7 +1465,7 @@ export function NewAgentSession({
               }
             }}
             options={[
-              ...AGENT_ARGS_KINDS.map((k) => ({ value: `k:${k}`, label: kindLabel(k) })),
+              ...AGENT_ARGS_KINDS.map((k) => ({ value: `k:${k}`, label: kindLabel(k), icon: <span aria-hidden="true" style={{ display: "inline-flex" }}>{kindIconEl(k, 14)}</span> })),
               ...presets.map((p, n) => ({
                 value: `p:${p.id}`,
                 label: p.name,
@@ -1502,7 +1480,7 @@ export function NewAgentSession({
 
         {/* How the agent is driven. A terminal session runs the agent's own interface; a conversation runs
             it as a protocol peer, with permission buttons, model switching and command completion. */}
-        {chatSupported && (
+        {engineChoice && (
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
               {t("tree.engineLabel")}
@@ -1909,11 +1887,10 @@ export function ResumeSession({
           {t("resume.agentType")}
         </div>
         <div style={{ marginBottom: 12 }}>
-          <Select
+          <AgentSelect
             value={kind}
-            onChange={changeKind}
-            options={RESUMABLE_KINDS.map((opt) => ({ value: opt.kind, label: opt.label }))}
-            width="100%"
+            onChange={(next) => { if (next) changeKind(next); }}
+            options={RESUMABLE_KINDS.map((opt) => ({ id: opt.kind, label: opt.label }))}
             ariaLabel={t("resume.agentType")}
           />
         </div>

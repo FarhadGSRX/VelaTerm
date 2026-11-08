@@ -6,11 +6,12 @@
 //! into the user-level `~/.cursor/hooks.json` with the user's consent:
 //!
 //! - Unix uses an explicitly invoked POSIX shim that launches the hidden `--cursor-hook` entry.
-//! - Windows registers no hook: a hidden PowerShell launcher triggers antivirus alerts. Installation only
-//!   removes entries written by earlier versions, and Cursor status relies on screen detection.
+//! - Windows calls the VelaTerm executable's hidden `--cursor-hook` entry directly. Earlier versions used a
+//!   hidden PowerShell launcher, which triggered antivirus alerts; installation replaces those entries.
 //! - Merge only VelaTerm commands into `~/.cursor/hooks.json`, preserving user entries and refusing
 //!   malformed configuration. Recognize both separators when migrating legacy script commands.
-//! - Dynamic executable paths, ports, session IDs, and tokens remain in the injected environment.
+//! - Ports, session IDs, and tokens remain in the injected environment. The Unix shim also reads the executable
+//!   path from it; the Windows command names the executable directly and is rewritten when the path changes.
 //! - The native hook bounds stdin and HTTP IO and always returns `{}` with a successful exit.
 //! - Installation is lazy and occurs only when the user actually launches a Cursor session.
 //!
@@ -32,6 +33,8 @@ pub use hook::run;
 /// Legacy marker retained for upgrades from script-based hooks.
 const MARKER: &str = "vlx-term/hook.sh";
 const NATIVE_MARKER: &str = "velaterm-cursor-hook-v1";
+/// Hidden entry argument that the Windows command passes directly to the VelaTerm executable.
+const NATIVE_ARG: &str = "--cursor-hook ";
 /// Prefix of the PowerShell launcher written by earlier Windows versions, recognized only for removal.
 const WINDOWS_COMMAND_PREFIX: &str = "powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ";
 
@@ -48,7 +51,7 @@ exit 0
 
 fn is_vlx_command(command: &str) -> bool {
     let normalized = command.replace('\\', "/");
-    if normalized.contains(MARKER) { return true; }
+    if normalized.contains(MARKER) || command.contains(NATIVE_ARG) { return true; }
     // Recognize our namespace across launcher updates, without matching unrelated PowerShell hooks.
     use base64::Engine;
     let Some(encoded) = command.strip_prefix(WINDOWS_COMMAND_PREFIX) else { return false; };
@@ -81,9 +84,17 @@ const EVENTS: [(&str, &str); 3] = [
     ("stop", "waiting"),
 ];
 
-/// Paths are single-quoted for POSIX shells; apostrophes are escaped without expansion.
-fn hook_entry(script: &Path, event: &str) -> serde_json::Value {
-    let command = format!("sh '{}' {event}", script.to_string_lossy().replace('\'', "'\"'\"'"));
+/// Entry for `target`: the POSIX shim on Unix, the VelaTerm executable on Windows.
+///
+/// Unix paths are single-quoted for POSIX shells; apostrophes are escaped without expansion. Cursor does not
+/// document which shell runs hooks on Windows, so the command uses the form cmd.exe, PowerShell, and POSIX
+/// shells all parse alike.
+fn hook_entry(target: &Path, event: &str) -> serde_json::Value {
+    let command = if cfg!(windows) {
+        super::hook_bridge::command(target, super::hook_bridge::Shell::Any, &format!("{NATIVE_ARG}{event}"))
+    } else {
+        format!("sh '{}' {event}", target.to_string_lossy().replace('\'', "'\"'\"'"))
+    };
     serde_json::json!({ "command": command, "timeout": 6 })
 }
 
@@ -92,7 +103,7 @@ fn hook_entry(script: &Path, event: &str) -> serde_json::Value {
 /// Create the root, `hooks`, and event arrays as needed; return Err without writing when an existing
 /// value has another type. Within each event, replace old commands containing `vlx-term/hook.sh` with
 /// the current entry while preserving user-owned entries unchanged.
-fn merge_into(root: &mut serde_json::Value, script: &Path) -> Result<(), String> {
+fn merge_into(root: &mut serde_json::Value, target: &Path) -> Result<(), String> {
     let obj = root
         .as_object_mut()
         .ok_or("hooks.json root is not a JSON object")?;
@@ -114,23 +125,24 @@ fn merge_into(root: &mut serde_json::Value, script: &Path) -> Result<(), String>
                 .and_then(|c| c.as_str())
                 .is_some_and(|c| is_vlx_command(c))
         });
-        if !cfg!(windows) { arr.push(hook_entry(script, status)); }
+        arr.push(hook_entry(target, status));
     }
     Ok(())
 }
 
-/// Install the hook script, merge `~/.cursor/hooks.json`, and return the configuration path.
+/// Install the bridge, merge `~/.cursor/hooks.json`, and return the configuration path. Unix writes the shim
+/// script; Windows points the entries at `exe`.
 ///
 /// Idempotent: preserve mtime when script and configuration match. Missing home, permissions, or malformed
 /// configuration returns Err for logging; Cursor still starts with neutral screen detection only.
-pub fn install() -> Result<PathBuf, String> {
+pub fn install(exe: &Path) -> Result<PathBuf, String> {
     let script = hook_script_path().ok_or("Failed to resolve user home directory")?;
     let hooks = hooks_json_path().ok_or("Failed to resolve user home directory")?;
-    install_at(&script, &hooks)
+    install_at(&script, &hooks, exe)
 }
 
 /// As `install`, with explicit target paths for tests.
-fn install_at(script: &Path, hooks_json: &Path) -> Result<PathBuf, String> {
+fn install_at(script: &Path, hooks_json: &Path, exe: &Path) -> Result<PathBuf, String> {
     // Validate before changing either file. Only a missing file means a fresh configuration.
     let existing = match std::fs::read_to_string(hooks_json) {
         Ok(text) => Some(text),
@@ -142,11 +154,9 @@ fn install_at(script: &Path, hooks_json: &Path) -> Result<PathBuf, String> {
             "~/.cursor/hooks.json is not valid JSON; not written (please check manually)"
                 .to_string()
         })?,
-        // Windows registers nothing, so a missing file needs no cleanup.
-        None if cfg!(windows) => return Ok(hooks_json.to_path_buf()),
         None => serde_json::json!({}),
     };
-    merge_into(&mut root, script)?;
+    merge_into(&mut root, if cfg!(windows) { exe } else { script })?;
 
     if !cfg!(windows) {
         let script_current = std::fs::read_to_string(script)
@@ -195,9 +205,17 @@ mod tests {
         format!("{WINDOWS_COMMAND_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(bytes))
     }
 
+    /// Executable path handed to `install_at`; only Windows embeds it in the hook commands.
+    const EXE: &str = "/opt/VelaTerm/velaterm";
+
+    /// What the entries point at on the current platform.
+    fn target(script: &Path) -> PathBuf {
+        if cfg!(windows) { PathBuf::from(EXE) } else { script.to_path_buf() }
+    }
+
     /// Entries VelaTerm registers for one event on the current platform.
     fn registered(script: &Path, status: &str) -> Vec<serde_json::Value> {
-        if cfg!(windows) { Vec::new() } else { vec![hook_entry(script, status)] }
+        vec![hook_entry(&target(script), status)]
     }
 
     #[test]
@@ -206,10 +224,16 @@ mod tests {
         let script = dir.join("vlx-term/hook.sh");
         let hooks = dir.join("hooks.json");
 
-        install_at(&script, &hooks).expect("installation should succeed");
+        install_at(&script, &hooks, Path::new(EXE)).expect("installation should succeed");
 
         if cfg!(windows) {
-            assert!(!hooks.exists() && !script.exists(), "Windows should not register hooks");
+            assert!(!script.exists(), "Windows writes no shim script");
+            let raw = std::fs::read_to_string(&hooks).unwrap();
+            assert!(!raw.to_ascii_lowercase().contains("powershell"), "{raw}");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            for (event, status) in EVENTS {
+                assert_eq!(v["hooks"][event][0], hook_entry(Path::new(EXE), status));
+            }
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }
@@ -233,10 +257,10 @@ mod tests {
         let script = dir.join("vlx-term/hook.sh");
         let hooks = dir.join("hooks.json");
 
-        install_at(&script, &hooks).unwrap();
+        install_at(&script, &hooks, Path::new(EXE)).unwrap();
         let mtime1 = std::fs::metadata(&hooks).unwrap().modified().unwrap();
         let smtime1 = std::fs::metadata(&script).ok().and_then(|m| m.modified().ok());
-        install_at(&script, &hooks).unwrap();
+        install_at(&script, &hooks, Path::new(EXE)).unwrap();
         assert_eq!(
             std::fs::metadata(&hooks).unwrap().modified().unwrap(),
             mtime1,
@@ -274,7 +298,7 @@ mod tests {
         )
         .unwrap();
 
-        install_at(&script, &hooks).unwrap();
+        install_at(&script, &hooks, Path::new(EXE)).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&hooks).unwrap()).unwrap();
 
@@ -290,7 +314,7 @@ mod tests {
                 .any(|e| e["command"] == "/Users/me/my-own-hook.sh"),
             "the user's own stop entries should be preserved"
         );
-        // The old entry is replaced by the current registration: one entry on Unix, none on Windows.
+        // The old entry is replaced by the current registration.
         let vlx: Vec<_> = stop
             .iter()
             .filter(|e| is_vlx_command(e["command"].as_str().unwrap()))
@@ -308,7 +332,7 @@ mod tests {
         let hooks = dir.join("hooks.json");
         std::fs::write(&hooks, "{ not json").unwrap();
 
-        assert!(install_at(&script, &hooks).is_err(), "invalid JSON should be refused rather than written");
+        assert!(install_at(&script, &hooks, Path::new(EXE)).is_err(), "invalid JSON should be refused rather than written");
         assert_eq!(
             std::fs::read_to_string(&hooks).unwrap(),
             "{ not json",
@@ -327,7 +351,7 @@ mod tests {
         let original = r#"{"version":1,"hooks":"oops"}"#;
         std::fs::write(&hooks, original).unwrap();
 
-        assert!(install_at(&script, &hooks).is_err());
+        assert!(install_at(&script, &hooks, Path::new(EXE)).is_err());
         assert_eq!(std::fs::read_to_string(&hooks).unwrap(), original);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -337,7 +361,7 @@ mod tests {
     fn merge_respects_existing_version() {
         // Preserve the user's version 2 rather than resetting it to 1.
         let mut root = serde_json::json!({ "version": 2 });
-        merge_into(&mut root, Path::new("/x/vlx-term/hook.sh")).unwrap();
+        merge_into(&mut root, &target(Path::new("/x/vlx-term/hook.sh"))).unwrap();
         assert_eq!(root["version"], 2);
     }
 
@@ -357,9 +381,9 @@ mod tests {
             root["hooks"][event] = entries.into();
         }
         let script = Path::new("/new/vlx-term/hook.sh");
-        merge_into(&mut root, script).unwrap();
+        merge_into(&mut root, &target(script)).unwrap();
         let once = root.clone();
-        merge_into(&mut root, script).unwrap();
+        merge_into(&mut root, &target(script)).unwrap();
         assert_eq!(root, once);
         assert_eq!(root["custom"]["keep"], 1);
         assert_eq!(root["version"], 2);
@@ -378,12 +402,12 @@ mod tests {
         let script = dir.join("vlx-term/hook.sh");
         let invalid = b"{\"custom\":\"\xff\"}";
         std::fs::write(&hooks, invalid).unwrap();
-        assert!(install_at(&script, &hooks).is_err());
+        assert!(install_at(&script, &hooks, Path::new(EXE)).is_err());
         assert_eq!(std::fs::read(&hooks).unwrap(), invalid);
         assert!(!script.exists());
         std::fs::remove_file(&hooks).unwrap();
         std::fs::create_dir(&hooks).unwrap();
-        assert!(install_at(&script, &hooks).is_err());
+        assert!(install_at(&script, &hooks, Path::new(EXE)).is_err());
         assert!(hooks.is_dir());
         assert!(!script.exists());
         std::fs::remove_dir_all(dir).unwrap();
@@ -397,10 +421,17 @@ mod tests {
         let original = r#"{"hooks":{"stop":{},"sessionStart":[]},"custom":1}"#;
         std::fs::write(&hooks, original).unwrap();
         std::fs::write(&script, "old script").unwrap();
-        assert!(install_at(&script, &hooks).is_err());
+        assert!(install_at(&script, &hooks, Path::new(EXE)).is_err());
         assert_eq!(std::fs::read_to_string(hooks).unwrap(), original);
         assert_eq!(std::fs::read_to_string(script).unwrap(), "old script");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_windows_command_is_recognized_for_replacement() {
+        assert!(is_vlx_command("C:/Users/a/AppData/Local/velaterm/velaterm.exe --cursor-hook waiting"));
+        assert!(is_vlx_command(&legacy_windows_command()));
+        assert!(!is_vlx_command("my-hook --keep"));
     }
 
     #[cfg(unix)]
@@ -411,7 +442,7 @@ mod tests {
         let dir = tmp_dir("special-path").join("space & % ! ^ ' ( ) $ ` 中文");
         let script = dir.join("vlx-term/hook.sh");
         let hooks = dir.join("hooks.json");
-        install_at(&script, &hooks).unwrap();
+        install_at(&script, &hooks, Path::new(EXE)).unwrap();
         let exe = dir.join("fake executable");
         std::fs::write(&exe, "#!/bin/sh\n[ \"$1\" = --cursor-hook ] && [ \"$2\" = working ] || exit 1\nprintf '{\"native\":true}\\n'\n").unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();

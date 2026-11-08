@@ -40,11 +40,16 @@ pub fn quit_prompt_ack(state: State<crate::QuitState>) {
         .store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// The user approved the exit. Any workspace snapshot has already been written by the frontend.
+/// The user approved the exit, or closing just the main window. Any workspace snapshot has already been
+/// written by the frontend. Closing the window hands the blocking session teardown to a background thread.
 #[tauri::command]
 pub fn confirm_quit(app: AppHandle, state: State<crate::QuitState>) {
     use std::sync::atomic::Ordering;
     state.pending.store(false, Ordering::SeqCst);
+    if state.close_window.load(Ordering::SeqCst) {
+        crate::close_main_window(&app);
+        return;
+    }
     state.confirmed.store(true, Ordering::SeqCst);
     app.exit(0);
 }
@@ -825,11 +830,15 @@ pub async fn open_account_remote_window(
 /// Count open windows connected to another machine or workspace (URL, SSH, WSL and account Remote). They live
 /// in this process, so quitting closes them too and the quit confirmation says so.
 pub(crate) fn remote_window_count(app: &AppHandle) -> usize {
-    const PREFIXES: [&str; 4] = ["remote-", "ssh-", "wsl-", "account-remote-"];
     app.webview_windows()
         .keys()
-        .filter(|label| PREFIXES.iter().any(|p| label.starts_with(p)))
+        .filter(|label| is_remote_window_label(label))
         .count()
+}
+
+pub(crate) fn is_remote_window_label(label: &str) -> bool {
+    const PREFIXES: [&str; 4] = ["remote-", "ssh-", "wsl-", "account-remote-"];
+    PREFIXES.iter().any(|p| label.starts_with(p))
 }
 
 fn build_account_remote_window(app: &AppHandle, url: url::Url) -> Result<tauri::WebviewWindow, String> {
@@ -970,14 +979,15 @@ pub fn open_devtools(window: tauri::WebviewWindow) {
 /// macOS reserves a strip above the web content for the title bar and paints it with the window's web
 /// background, so the frame color carries the same choice: `apply_window_frame` rewrites that color together
 /// with the window background, which is also what lets a switch take effect without recreating the window.
-/// The resolved scheme is read from the window itself, which keeps `system` live without an app-wide
-/// appearance override.
+/// Under `system`, `dark` carries the scheme the frontend resolved, so the strip matches the page beneath it.
+/// `WebviewWindow::theme()` cannot stand in: tao caches it when the window is built, before the application
+/// has resolved its appearance, and on a dark system it can report Light for the whole session.
 ///
 /// Remembering the value matters as much as applying it: windows opened later (remote/SSH) read it at build
 /// time so they never flash the wrong chrome. `set_theme` only posts a message to the event loop and touches
 /// no I/O, so a synchronous command is correct here.
 #[tauri::command]
-pub fn set_native_theme(app: AppHandle, mode: String) {
+pub fn set_native_theme(app: AppHandle, mode: String, dark: Option<bool>) {
     let _slow = crate::diagnostics::Slow::new(
         "ui_thread_slow",
         UI_THREAD_REPORT_THRESHOLD,
@@ -985,6 +995,7 @@ pub fn set_native_theme(app: AppHandle, mode: String) {
     );
     #[cfg(windows)]
     {
+        let _ = dark;
         let theme = match mode.as_str() {
             "dark" => Some(tauri::Theme::Dark),
             "light" => Some(tauri::Theme::Light),
@@ -999,18 +1010,18 @@ pub fn set_native_theme(app: AppHandle, mode: String) {
     }
     #[cfg(target_os = "macos")]
     {
+        let dark = match mode.as_str() {
+            "dark" => true,
+            "light" => false,
+            // Following the OS: use the scheme the page resolved, falling back to the OS preference.
+            _ => dark.unwrap_or_else(crate::os_prefers_dark),
+        };
         for (_, win) in app.webview_windows() {
-            let dark = match mode.as_str() {
-                "dark" => true,
-                "light" => false,
-                // Following the OS: ask the window which scheme it already renders with.
-                _ => matches!(win.theme(), Ok(tauri::Theme::Dark)),
-            };
             crate::apply_window_frame(&win, dark);
         }
     }
     #[cfg(not(any(windows, target_os = "macos")))]
-    let _ = (app, mode);
+    let _ = (app, mode, dark);
 }
 
 // ─────────────────────────── SSH remote connections ───────────────────────────
@@ -1051,8 +1062,11 @@ pub async fn ssh_connect(
     remember: Option<bool>,
     shared_db: Option<bool>,
     mirror: Option<bool>,
+    connect_id: Option<String>,
     diagnostic_request_id: Option<String>,
 ) -> Result<String, String> {
+    // Registered before the blocking hop so a Stop click that arrives early is not lost.
+    let cancel = crate::connect_cancel::register(connect_id);
     // Data mode defaults to an isolated database; true reuses the remote desktop release database.
     let shared_db = shared_db.unwrap_or(false);
     // Mirror mode defaults off. On, the connection follows the remote desktop app: it attaches to the
@@ -1074,8 +1088,10 @@ pub async fn ssh_connect(
     let identifier_watch = identifier.clone();
     let host_bg = host.clone();
     let app_ev = app.clone();
+    let cancel_scope = cancel.handle();
     let r = tauri::async_runtime::spawn_blocking(move || {
         let _context=crate::diagnostics::Context::enter(diagnostic_request_id.as_deref());
+        let _cancel = cancel_scope.enter();
         // Emit stage code and percentage through ssh://progress for localized frontend display.
         let progress = move |stage: &str, pct: Option<u8>| {
             let _ = app_ev.emit(
@@ -1094,7 +1110,7 @@ pub async fn ssh_connect(
         // If key auth fails without a supplied password, retry once from the keyring. Otherwise
         // preserve AUTH_REQUIRED so the frontend can prompt manually.
         if let Err(e) = &res {
-            if password.is_none() && e.starts_with(crate::ssh_remote::AUTH_REQUIRED_TAG) {
+            if password.is_none() && e.starts_with(crate::ssh_remote::AUTH_REQUIRED_TAG) && crate::connect_cancel::check().is_ok() {
                 if let Some(pw) = crate::ssh_remote::load_password(&identifier, "ssh", &host_bg) {
                     // Adopt the remembered password only after success. On failure, keep AUTH_REQUIRED
                     // so a newly entered and remembered password can replace the stale one.
@@ -1124,6 +1140,17 @@ pub async fn ssh_connect(
     })
     .await
     .map_err(|e| format!("connect task failed: {e}"))??;
+
+    // Stopped after the remote side was already up: tear it down instead of opening a window. A service
+    // this connect just started has no sessions yet, so it is stopped too; a reused one is left running.
+    if cancel.is_cancelled() {
+        let (host_c, session_c, stop) = (host.clone(), r.session.clone(), !r.reused && !r.desktop_link);
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            crate::ssh_remote::disconnect(&host_c, &session_c, stop);
+        })
+        .await;
+        return Err(crate::connect_cancel::CANCELLED_TAG.to_string());
+    }
 
     // Record the successful host in most-recent-first connection history.
     {
@@ -1173,6 +1200,13 @@ pub async fn ssh_connect(
     Ok(session)
 }
 
+/// Stop an in-flight `ssh_connect` / `wsl_connect` started with the same `connect_id`. The flow stops at
+/// its next check and cleans up after itself. Synchronous: it only sets an in-memory flag.
+#[tauri::command]
+pub fn connect_cancel(connect_id: String) {
+    crate::connect_cancel::cancel(&connect_id);
+}
+
 /// Disconnect SSH. With kill_remote, stop the persistent remote service and all its sessions before
 /// closing forwarding/control; otherwise leave it running for reuse.
 #[tauri::command]
@@ -1190,12 +1224,16 @@ pub async fn wsl_connect(
     window: tauri::WebviewWindow,
     distribution: String,
     restart_existing: Option<bool>,
+    connect_id: Option<String>,
     diagnostic_request_id: Option<String>,
 ) -> Result<String, String> {
     if window.label() != "main" { return Err("WSL connections can only be opened from the main window".into()); }
+    let cancel = crate::connect_cancel::register(connect_id);
+    let cancel_scope = cancel.handle();
     let app_bg = app.clone();
     let connection = tauri::async_runtime::spawn_blocking(move || {
         let _context = crate::diagnostics::Context::enter(diagnostic_request_id.as_deref());
+        let _cancel = cancel_scope.enter();
         let mut span = crate::diagnostics::Span::new("wsl_connect", serde_json::json!({"command":"wsl_connect"}));
         let result = crate::wsl_remote::connect(&crate::host::AppCtx::Tauri(app_bg.clone()), &distribution, restart_existing.unwrap_or(false), &|stage, percent| {
             let _ = app_bg.emit_to("main", "wsl://progress", serde_json::json!({"stage":stage,"percent":percent}));
@@ -1203,6 +1241,12 @@ pub async fn wsl_connect(
         span.finish(&result);
         result
     }).await.map_err(|e| format!("WSL connection task failed: {e}"))??;
+    // Stopped after the service came up: release it (stopping it only if this connect created it).
+    if cancel.is_cancelled() {
+        let session = connection.session.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || crate::wsl_remote::connection_failed(&session)).await;
+        return Err(crate::connect_cancel::CANCELLED_TAG.to_string());
+    }
     let (port, password) = connection.address()?;
     // WebView2 creation must run from this async command, leaving the main event loop free.
     if let Err(error) = open_login_window(&app, &connection.distribution, &connection.session, port, &password, false, RemoteWindowKind::Wsl) {

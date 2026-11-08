@@ -3,9 +3,8 @@
 //! ring buffer; this panel only displays them on demand for field diagnosis. WKWebView has no console, making this
 //! the only on-site record.
 //!
-//! Neither entry point is exposed explicitly to ordinary users: Option/Alt-click the title-bar gear (a normal
-//! click still opens Settings), or press Cmd+Ctrl+Opt+E. Controlled by errorLogOpen in the store and mounted at
-//! the App root like other modals.
+//! Open with Cmd+Option+E on macOS or Ctrl+Alt+E on Windows/Linux. Controlled by errorLogOpen in the store
+//! and mounted at the App root like other modals.
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { useT } from "../i18n";

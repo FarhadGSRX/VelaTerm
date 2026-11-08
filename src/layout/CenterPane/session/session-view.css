@@ -2,6 +2,29 @@
  *
  * The view follows the global background, text hierarchy, accent, density, and light/dark scheme. */
 
+.sv-agent-version { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; font-size: 10.5px; color: var(--text-faint); }
+.sv-agent-version-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-agent-version-update { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--accent); white-space: nowrap; text-decoration: none; }
+button.sv-agent-version-update { padding: 0; border: none; background: none; font: inherit; cursor: pointer; }
+a.sv-agent-version-update:hover, button.sv-agent-version-update:hover { text-decoration: underline; }
+.agent-update { display: flex; flex-direction: column; width: min(620px, 92vw); max-height: min(560px, 86vh); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4); overflow: hidden; }
+.agent-update-head { display: flex; align-items: center; gap: 8px; padding: 14px 18px 0; }
+.agent-update-icon { display: grid; color: var(--text-secondary); }
+.agent-update-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.agent-update-versions { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.agent-update-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; padding: 14px 18px; }
+.agent-update-hint { font-size: 12px; line-height: 1.55; color: var(--text-dim); }
+.agent-update-command { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-term); }
+.agent-update-command code { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; color: var(--text); overflow-wrap: anywhere; user-select: text; }
+.agent-update-log { flex: 1 1 auto; min-height: 120px; max-height: 280px; margin: 0; padding: 10px 12px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-term); color: var(--text); font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.agent-update-status { font-size: 12px; line-height: 1.55; color: var(--text-secondary); }
+.agent-update-status.is-done { color: var(--green); }
+.agent-update-status.is-failed { color: var(--red); }
+.agent-update-foot { display: flex; align-items: center; gap: 8px; padding: 0 18px 16px; }
+.agent-update-spacer { flex: 1; }
+.agent-update-link { padding: 0; border: none; background: none; color: var(--text-dim); font-size: 11.5px; text-decoration: underline; cursor: pointer; }
+.agent-update-link:hover { color: var(--text-secondary); }
+
 .sv {
   position: absolute;
   inset: 0;
@@ -10,7 +33,7 @@
   background: var(--bg-term);
   min-height: 0;
   font-family: var(--chat-font);
-  font-kerning: none;
+  font-kerning: normal;
   font-variant-ligatures: none;
   /* The one column everything in the view sits on: the conversation, the permission cards and the
      composer share it, so what you are reading lines up with the box you answer in. Centred rather than
@@ -42,6 +65,7 @@
   padding: 14px 18px 6px;
   /* Conversation typography is independent of interface density and terminal preferences. */
   font-family: var(--chat-font);
+  letter-spacing: var(--chat-tracking);
   font-size: var(--chat-fs);
   line-height: var(--chat-line-height);
   color: var(--text);
@@ -460,7 +484,7 @@
   border: 1px solid transparent;
   border-radius: var(--r-md);
   color: var(--text-dim);
-  font-family: var(--chat-font);
+  font-family: var(--chat-code-font);
   font-size: calc(var(--ui-fs) - 1px);
   text-align: left;
   cursor: pointer;
@@ -478,6 +502,8 @@
 }
 .sv-tool-name {
   flex: none;
+  font-family: var(--chat-font);
+  letter-spacing: var(--chat-tracking);
   color: var(--text-mid);
 }
 .sv-tool-open > .sv-tool-head .sv-tool-name,
@@ -512,6 +538,7 @@
   white-space: nowrap;
 }
 .sv-tool-body {
+  font-family: var(--chat-code-font);
   margin-bottom: 4px;
   padding: 9px 11px;
   border: 1px solid var(--border);
@@ -596,6 +623,8 @@
   margin: 4px 0;
 }
 .sv-tool-empty {
+  font-family: var(--chat-font);
+  letter-spacing: var(--chat-tracking);
   color: var(--text-faint);
   font-size: calc(var(--ui-fs) - 1px);
 }
@@ -603,9 +632,15 @@
   margin-top: 6px;
 }
 .sv-tool-text {
+  font-family: var(--chat-font);
+  letter-spacing: var(--chat-tracking);
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-mid);
+}
+.sv-tool-path {
+  font-family: var(--chat-code-font);
+  letter-spacing: 0;
 }
 
 /* ── Tool output ── */
@@ -615,7 +650,7 @@
   padding: 7px 9px;
   background: var(--bg-1);
   border-radius: var(--r-sm);
-  font-family: var(--chat-font);
+  font-family: var(--chat-code-font);
   font-size: calc(var(--ui-fs) - 1px);
   line-height: 1.55;
   color: var(--term-out);
@@ -679,7 +714,7 @@
   border-radius: var(--r-sm);
   overflow: auto;
   max-height: 420px;
-  font-family: var(--chat-font);
+  font-family: var(--chat-code-font);
   font-size: calc(var(--ui-fs) - 1px);
   line-height: 1.55;
 }
@@ -717,7 +752,7 @@
 /* ── Markdown ──
  *
  * Prose follows the conversation typography settings. Supporting labels, controls, and code retain
- * their original size hierarchy. */
+ * their original size hierarchy; code keeps the monospace face. */
 
 .sv-p {
   margin: 0 0 9px;
@@ -766,12 +801,24 @@
   margin: 14px 0;
   border-top: 1px solid var(--border);
 }
+/* Monospace text keeps its natural width. */
+.sv-tool-head,
+.sv-tool-body,
+.sv-out pre,
+.sv-diff,
+.sv-codespan,
+.sv-code pre,
+.sv-rewind-files,
+.sv-task-code,
+.sv-row-shell {
+  letter-spacing: 0;
+}
 /* Inline code retains its compact size within the surrounding prose. */
 .sv-codespan {
   padding: 1.5px 5px;
   background: var(--bg-hover);
   border-radius: 4px;
-  font-family: var(--chat-font);
+  font-family: var(--chat-code-font);
   font-size: calc(var(--ui-fs) - 1px);
   word-break: break-word;
 }
@@ -831,7 +878,7 @@
   margin: 0;
   padding: 8px 10px;
   background: var(--bg-1);
-  font-family: var(--chat-font);
+  font-family: var(--chat-code-font);
   font-size: calc(var(--ui-fs) - 1px);
   line-height: 1.6;
   white-space: pre-wrap;
@@ -1198,12 +1245,14 @@
   gap: 8px;
   padding: 8px 10px;
   background: var(--bg-1);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+/* Focus thickens the edge with an outer ring rather than a wider border, so nothing inside shifts. */
 .sv-box:focus-within {
-  border-color: var(--accent-line);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
 }
 /* Grab strip on the box's top edge for dragging the text box taller or shorter. It stays clear of the
    rounded corners and draws nothing: the cursor is the affordance, the box border is the edge. */
@@ -1217,17 +1266,27 @@
   z-index: 1;
 }
 .sv-composer textarea {
-  min-height: 34px;
+  /* Includes the height of the running-turn hint, so the box does not change size when the hint appears. */
+  min-height: 83px;
   max-height: 30vh;
   padding: 2px 2px 0;
   background: transparent;
   border: none;
   color: var(--text);
   font-family: var(--chat-font);
+  letter-spacing: var(--chat-tracking);
   font-size: var(--chat-fs);
   line-height: 1.6;
   resize: none;
   outline: none;
+}
+/* The running-turn hint takes its height from the text box. 30px is the hint (22px) plus the box gap (8px). */
+.sv-composer :where(.sv-box:has(> .sv-action-feedback:not(.sv-action-feedback-float))) textarea {
+  min-height: 53px;
+}
+/* A short pane, such as one half of a stacked split, keeps its height for the conversation. */
+.sv-short .sv-composer textarea {
+  min-height: 34px;
 }
 .sv-composer textarea::placeholder {
   color: var(--text-faint);
@@ -1257,25 +1316,15 @@
   outline-offset: 2px;
 }
 .sv-image-preview {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  max-width: none;
-  max-height: none;
-  margin: 0;
-  padding: 3vh 3vw;
-  border: 0;
-  background: transparent;
+  width: calc(100vw - 6vw);
+  max-width: calc(100vw - 32px);
   color: var(--text);
-}
-.sv-image-preview::backdrop {
-  background: rgb(0 0 0 / 70%);
 }
 .sv-image-preview-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: calc(100dvh - 6vh);
+  max-height: calc(100dvh - 32px);
   overflow: hidden;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -1325,31 +1374,15 @@
 
 /* The full text of a queued message, when the composer row can only show its first two lines. */
 .sv-queue-preview {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  max-width: none;
-  max-height: none;
-  margin: 0;
-  padding: 3vh 3vw;
-  border: 0;
-  background: transparent;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
   color: var(--text);
-}
-.sv-queue-preview::backdrop {
-  background: rgb(0 0 0 / 60%);
-}
-/* Flex so the panel's auto margins center it on both axes; a block box would only center horizontally. */
-.sv-queue-preview[open] {
-  display: flex;
-  flex-direction: column;
 }
 .sv-queue-preview-panel {
   display: flex;
   flex-direction: column;
   width: min(720px, 100%);
-  max-height: 100%;
+  max-height: calc(100dvh - 32px);
   margin: auto;
   overflow: hidden;
   background: var(--bg-1);
@@ -1536,6 +1569,10 @@
   max-width: 22ch;
 }
 
+/* A command row under a chip menu's values, e.g. "Import Project" under the project list. */
+.sv-chip-action { color: var(--text-mid); }
+.sv-chip-action:hover { background: var(--bg-hover); color: var(--text); }
+
 /* The filter box above a long chip menu, drawn like the rows under it rather than like a form field. */
 .sv-chip-filter {
   flex: none;
@@ -1630,6 +1667,39 @@ select.sv-pill {
 }
 .sv-row-command > :last-child {
   margin-bottom: 0;
+}
+
+/* Review findings a command printed as JSON, drawn as a numbered list instead of raw text. */
+.sv-findings-head {
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+.sv-findings-list {
+  margin: 0;
+  padding-left: 20px;
+}
+.sv-finding + .sv-finding {
+  margin-top: 8px;
+}
+.sv-finding-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.sv-finding-tag {
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  font-size: calc(var(--ui-fs) - 2px);
+}
+.sv-finding-summary {
+  margin-top: 2px;
+  color: var(--text);
+}
+.sv-finding-scenario {
+  margin-top: 2px;
 }
 
 /* A shell command run with `!` from the composer. Monospace and boxed, so it reads as neither side of
@@ -1743,6 +1813,25 @@ select.sv-pill {
   color: var(--text-faint);
   opacity: 0.75;
 }
+/* A wake-up shares the compaction rule; its summary can be a long sentence, so it gives way to the lines
+   rather than pushing them out, and is cut to one line. */
+.sv-wake-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 85%;
+}
+.sv-wake-title {
+  flex: none;
+}
+.sv-wake-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sv-wake .sv-compaction-line {
+  min-width: 24px;
+}
 /* While it runs, the same row pulses: the agent is busy with it and nothing else is happening. */
 .sv-compaction-running .sv-compaction-label {
   animation: sv-compaction-pulse 1.4s ease-in-out infinite;
@@ -1756,12 +1845,24 @@ select.sv-pill {
 /* Missing-agent guidance inside the conversation. The install itself runs in the terminal view, so this
    notice stays informational: it explains the state and offers the way there. */
 .sv-agent-missing {
-  margin: 10px 0;
-  padding: 10px 12px;
+  position: relative;
+  /* Shares the message text column, like error rows, instead of reaching into the icon gutter. */
+  margin: 10px 0 10px calc(var(--sv-gutter) + var(--sv-gutter-gap));
+  padding: 10px 12px 10px 14px;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
   border-radius: var(--r-md);
   background: var(--bg-hover);
+}
+/* The accent stripe is its own straight line, inset from the rounded corners so it never bends with them. */
+.sv-agent-missing::before {
+  content: "";
+  position: absolute;
+  top: var(--r-md);
+  bottom: var(--r-md);
+  left: -1px;
+  width: 3px;
+  border-radius: 0;
+  background: var(--accent);
 }
 .sv-agent-missing-head {
   display: flex;
@@ -1784,6 +1885,27 @@ select.sv-pill {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+}
+.sv-agent-missing-command {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+.sv-agent-missing-command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(var(--ui-fs) - 1px);
+  /* Some recipes are short scripts; keep their lines and scroll a long one rather than growing the card. */
+  white-space: pre;
+  max-height: 12em;
+  overflow-y: auto;
 }
 .sv-agent-missing-spacer {
   flex: 1;
@@ -1855,7 +1977,7 @@ select.sv-pill {
   border-radius: var(--r-sm);
   background: var(--bg-0);
   color: var(--text-mid);
-  font-family: var(--chat-font);
+  font-family: var(--chat-code-font);
   font-size: calc(var(--ui-fs) - 1.5px);
   line-height: 1.45;
   white-space: pre-wrap;
@@ -2027,6 +2149,20 @@ select.sv-pill {
 .sv-question-option:hover {
   background: var(--bg-1);
 }
+.sv-question-option:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.sv-question-option[aria-disabled="true"] {
+  cursor: default;
+}
+/* The question and its options can be selected and copied; the controls around them stay inert. */
+.sv-question .sv-permission-head,
+.sv-question-text,
+.sv-question-option-text {
+  -webkit-user-select: text;
+  user-select: text;
+}
 .sv-question-option-on {
   border-color: var(--accent-line);
   background: var(--bg-1);
@@ -2129,7 +2265,8 @@ select.sv-pill {
   text-align: left;
   cursor: pointer;
 }
-.sv-complete-item:hover {
+/* The pointer moves the highlight too, so one row is lit at a time. */
+.sv-complete-item.on {
   background: var(--bg-hover);
 }
 .sv-complete-name {
@@ -2195,6 +2332,17 @@ select.sv-pill {
   line-height: 14px;
   text-align: center;
 }
+/* Background tasks still running: the chip takes the color the sidebar uses for the same state. */
+.sv-tasks-running,
+.sv-tasks-running:hover,
+:where([data-theme="dark"]) .sv-tasks-running {
+  color: var(--status-background);
+}
+.sv-tasks-running .sv-chip-badge {
+  background: color-mix(in oklch, var(--status-background) 18%, transparent);
+  color: var(--status-background);
+  font-weight: 600;
+}
 /* The popover is anchored above the chip like the choice menus; its rows are read-only text plus one or
    two small actions on the right. */
 .sv-popover-row {
@@ -2223,6 +2371,12 @@ select.sv-pill {
 .sv-popover-sub {
   color: var(--text-faint);
   font-size: calc(var(--ui-fs) - 2px);
+}
+/* A task still running reads in the same color as the chip, so it stands out from the finished ones kept
+   below it until the next turn. */
+.sv-task-row-running .sv-popover-title,
+.sv-task-row-running .sv-task-row-status {
+  color: var(--status-background);
 }
 .sv-popover-action,
 .sv-popover-wide {
@@ -2380,6 +2534,9 @@ select.sv-pill {
   align-items: center;
   gap: 6px;
 }
+.sv-elicit-field > .sv-elicit-check {
+  display: flex;
+}
 .sv-elicit-label {
   color: var(--text);
 }
@@ -2397,11 +2554,30 @@ select.sv-pill {
 
 .sv-action-feedback {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px 12px;
   padding: 4px 10px;
   color: var(--text-dim);
   font-size: 11px;
+  /* Always one line of fixed height: exactly the 22px the text box gives up; see COMPOSER_FEEDBACK_HEIGHT. */
+  line-height: 14px;
+  white-space: nowrap;
+}
+.sv-action-feedback > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* No room in the text box: float above the composer, over the transcript, rather than resize it. */
+.sv-action-feedback-float {
+  position: absolute;
+  left: 10px;
+  bottom: calc(100% + 6px);
+  max-width: calc(100% - 20px);
+  z-index: 2;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  pointer-events: none;
 }
 .sv-steer {
   flex-shrink: 0;
@@ -2446,7 +2622,18 @@ select.sv-pill {
   font-size: 12px;
 }
 
+.sv-sync-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 10px; color: var(--text-dim); font-size: 11px; }
+.sv-sync-notice .vlx-btn { padding: 2px 8px; font-size: 11px; }
 .sv-sync-state { display: flex; align-items: center; gap: 8px; color: var(--text-muted); padding: 8px 0; font-size: 12px; }
+/* Reading a long conversation in the background: a quiet centered spinner that appears only when the
+   wait is long enough to notice, so a quick load never flashes it. */
+.sv-loading-hint { justify-content: center; opacity: 0; animation: sv-loading-hint-in 0.2s ease 0.4s forwards; }
+.sv-loading-hint::before { content: ""; flex: none; width: 11px; height: 11px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes sv-loading-hint-in { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .sv-loading-hint { animation: none; opacity: 1; }
+  .sv-loading-hint::before { animation: none; }
+}
 .sv-history { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0 14px; }
 .sv-history-more { flex: none; font-size: 12px; }
 .sv-history-error { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
@@ -2801,7 +2988,7 @@ select.sv-pill {
   padding: 7px 9px;
   background: var(--bg-1);
   border-radius: var(--r-sm);
-  font-family: var(--chat-font);
+  font-family: var(--chat-code-font);
   font-size: calc(var(--ui-fs) - 1px);
   line-height: 1.55;
   color: var(--term-out);
@@ -2829,7 +3016,8 @@ select.sv-pill {
   --sv-gutter-gap: 8px;
   --sv-pad: 12px;
   font-family: var(--chat-font);
-  font-kerning: none;
+  letter-spacing: var(--chat-tracking);
+  font-kerning: normal;
   font-variant-ligatures: none;
 }
 

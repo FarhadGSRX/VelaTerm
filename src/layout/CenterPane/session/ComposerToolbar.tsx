@@ -1,8 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import Icons from "../../../components/Icons";
 import { useT } from "../../../i18n";
-import type { ComposerChipId } from "../../../store/settings";
-import { arrangeComposerChips, partitionComposerChips, type ComposerChip } from "./composerLayout";
+import { arrangeComposerChips, partitionComposerChips, type ComposerChip, type ComposerItemId } from "./composerLayout";
 
 /** Matches the flex gap of `.sv-controls-primary` in session-view.css. */
 const CHIP_GAP = 6;
@@ -14,7 +13,7 @@ const CHIP_GAP = 6;
  */
 export function ComposerToolbar({ chips, inline, actions, status, mobile }: {
   chips: ComposerChip[];
-  inline: ComposerChipId[];
+  inline: ComposerItemId[];
   actions: ReactNode;
   status: ReactNode;
   mobile: boolean;
@@ -27,7 +26,7 @@ export function ComposerToolbar({ chips, inline, actions, status, mobile }: {
   const toggle = useRef<HTMLButtonElement>(null);
   // Everything inline plus the toggle as a probe until the first measurement corrects it before paint.
   const [layout, setLayout] = useState({ inlineCount: Infinity, overflow: true });
-  const widths = useRef(new Map<ComposerChipId, number>());
+  const widths = useRef(new Map<ComposerItemId, number>());
   const moreWidth = useRef(0);
   const observer = useRef<ResizeObserver | null>(null);
   const observed = useRef(new Set<Element>());
@@ -68,7 +67,7 @@ export function ComposerToolbar({ chips, inline, actions, status, mobile }: {
     for (const target of observed.current) if (!targets.has(target)) observer.current?.unobserve(target);
     for (const target of targets) if (!observed.current.has(target)) observer.current?.observe(target);
     observed.current = targets;
-    const currentWidths = new Map<ComposerChipId, number>();
+    const currentWidths = new Map<ComposerItemId, number>();
     for (const slot of slots) {
       // A narrow expanded row may clamp the visible chip. Measure its intrinsic width before paint,
       // then restore the clamp so it never overflows the composer or feeds a shrunken width back in.
@@ -79,7 +78,7 @@ export function ComposerToolbar({ chips, inline, actions, status, mobile }: {
       const width = slot.getBoundingClientRect().width;
       slot.style.width = previousWidth;
       slot.style.maxWidth = previousMax;
-      currentWidths.set(slot.dataset.chip as ComposerChipId, width);
+      currentWidths.set(slot.dataset.chip as ComposerItemId, width);
     }
     widths.current = currentWidths;
     const probe = Math.max(toggle.current?.getBoundingClientRect().width ?? 0, toggle.current?.scrollWidth ?? 0);

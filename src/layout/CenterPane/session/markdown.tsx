@@ -49,6 +49,11 @@ export const Markdown = memo(function Markdown({ text }: { text: string }): Reac
   return <>{blocks(tokens)}</>;
 });
 
+/** Render already-parsed document blocks without losing reference-link or container context. */
+export function MarkdownBlocks({ tokens }: { tokens: Token[] }): ReactNode {
+  return <>{blocks(tokens)}</>;
+}
+
 /** Render a list of block-level tokens. */
 function blocks(tokens: Token[]): ReactNode[] {
   return tokens.map((tk, i) => <Block key={i} token={tk} />);

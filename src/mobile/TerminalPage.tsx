@@ -14,10 +14,12 @@ import { t, useT } from "../i18n";
 import { onPtyExit, onPtyKilled } from "../ipc/events";
 import { useTermStore } from "../store/termStore";
 import { injectImageFiles } from "../terminal/imageInput";
-import { effectiveStatus, supportsChatEngine, type Session } from "../types";
-import { MobileSessionBody } from "./MobileSessionBody";
+import { effectiveStatus, type Session } from "../types";
+import { hasMobileHistory, mobileRecordOnly, MobileSessionBody } from "./MobileSessionBody";
+import { AgentVersionBadge } from "../layout/CenterPane/session/AgentVersionBadge";
 import { MobileSessionLink, type MobileSessionView } from "./sessionNavigation";
 import "./sessionNavigation.css";
+import { useShareAccess } from "./shareAccess";
 
 export function TerminalPage({
   session,
@@ -31,7 +33,9 @@ export function TerminalPage({
   view?: MobileSessionView;
 }) {
   const tr = useT();
-  const historyView = session.kind === "kiro" && view === "history";
+  const recordOnly = mobileRecordOnly(session, useShareAccess());
+  const viewLink = hasMobileHistory(session) && recordOnly === false;
+  const historyView = (viewLink && view === "history") || recordOnly === true;
   const status = effectiveStatus(useTermStore((s) => s.runtimes[session.id]));
   const [vvh, setVvh] = useState<number | null>(
     () => window.visualViewport?.height ?? null,
@@ -57,7 +61,7 @@ export function TerminalPage({
   // Return to the session list when the process exits or another client terminates it. usePtySession
   // also invokes closeSession, but mobile has no tab or split state to close, so navigation is handled here.
   useEffect(() => {
-    if (session.engine === "chat" || supportsChatEngine(session.kind) || historyView) return;
+    if (session.engine === "chat" || historyView || recordOnly === null) return;
     let disposed = false;
     const u1 = onPtyExit(session.id, () => {
       if (!disposed) onBack();
@@ -71,7 +75,7 @@ export function TerminalPage({
       void u2.then((fn) => fn());
     };
     // MobileApp stabilizes onBack with useCallback; resubscribe only when the session ID changes.
-  }, [session.id, session.engine, session.kind, historyView, onBack]);
+  }, [session.id, session.engine, historyView, recordOnly, onBack]);
 
   // Shared image-injection path for terminal paste/drop and KeyBar: upload through the
   // `save_pasted_image` WS invocation, write the server path to the terminal, and show failures for five seconds.
@@ -97,18 +101,21 @@ export function TerminalPage({
 
   return (
     <div className="m-page" style={vvh ? { flex: "none", height: vvh } : undefined}>
-      <header className={`m-header${session.kind === "kiro" ? " m-header-kiro" : ""}`}>
+      <header className="m-header">
         <button type="button" className="m-back" onClick={onBack}>
           {tr("mobile.back")}
         </button>
         <span className="m-row-dot">
           <StatusIndicator status={status} />
         </span>
-        <span className="m-title">{session.name}</span>
+        {session.engine === "chat" ? <div className="m-session-heading">
+          <span className="m-title">{session.name}</span>
+          <AgentVersionBadge session={session} hidden={false} />
+        </div> : <span className="m-title">{session.name}</span>}
         <span className="m-kind">{session.kind}</span>
-        {session.kind === "kiro" && <MobileSessionLink sessionId={session.id} view={historyView ? "terminal" : "history"}
+        {viewLink && <MobileSessionLink sessionId={session.id} view={historyView ? "terminal" : "history"}
           className="vlx-btn m-session-view-link">
-          {tr(historyView ? "session.showTerminal" : "session.showConversation")}
+          {tr(historyView ? "mobile.showTerminal" : "mobile.showTranscript")}
         </MobileSessionLink>}
         {(window as Window & { __VELATERM_CONNECTION_MENU__?: boolean }).__VELATERM_CONNECTION_MENU__ && <details className="m-menu">
           <summary aria-label={tr("mobile.more")}>•••</summary>
@@ -121,7 +128,7 @@ export function TerminalPage({
           <button type="button" onClick={retry}>{tr("common.retry")}</button>
         </div>}>
           <MobileSessionBody session={session} cwd={cwd} onBack={onBack}
-            onImages={injectImages} imgError={imgError} view={view} />
+            onImages={injectImages} imgError={imgError} view={view} recordOnly={recordOnly} />
         </ErrorBoundary>
       </div>
     </div>

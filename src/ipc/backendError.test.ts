@@ -13,6 +13,38 @@ vi.mock("../i18n", () => ({
 import { handshakeFailureReason, isAgentNotInstalledError, mapBackendError } from "./backendError";
 
 describe("mapBackendError", () => {
+  it("localizes history errors while retaining the code used for revision recovery", () => {
+    expect(mapBackendError("source_changed: Original path and system error")).toBe("source_changed: chat.history.contentChanged");
+    expect(mapBackendError("cursor_expired: Session generation changed")).toBe("cursor_expired: chat.history.contentChanged");
+    expect(mapBackendError("index_incomplete: Unconfirmed branch")).toBe("index_incomplete: chat.history.incomplete");
+    expect(mapBackendError("read_canceled")).toBe("read_canceled: chat.history.canceled");
+    expect(mapBackendError("storage_pressure: Private native location")).toBe("storage_pressure: chat.history.storagePressure");
+    expect(mapBackendError("image_requires_download: Excessive dimensions")).toBe("image_requires_download: chat.history.imageDownloadRequired");
+    expect(mapBackendError(mapBackendError("index_busy: Another reader"))).toBe("index_busy: chat.history.indexBusy");
+  });
+  it("names the agent an ACP sign-in requirement belongs to", () => {
+    expect(mapBackendError("agent_sign_in_required:copilot")).toBe("chat.signInRequired|Copilot");
+    expect(mapBackendError("agent_sign_in_required:grok")).toBe("chat.signInRequired|Grok Build");
+    expect(mapBackendError("agent_sign_in_required:future")).toBe("chat.signInRequired|future");
+  });
+
+  it("explains where DeepSeek Harness reads its API key from", () => {
+    expect(mapBackendError("agent_api_key_required:deepseek")).toBe("chat.apiKeyRequired");
+  });
+
+  it("names the platform a ZCode account without a usable plan signed in to, keeping the provider's words", () => {
+    expect(mapBackendError("zcode_plan_unavailable:zai")).toBe("chat.auth.zcode.noPlan.zai");
+    expect(mapBackendError("zcode_plan_unavailable:bigmodel:[1113][Insufficient balance][id]"))
+      .toBe("chat.auth.zcode.noPlan.bigmodel ([1113][Insufficient balance][id])");
+    expect(mapBackendError("zcode_plan_unavailable:other")).toBe("zcode_plan_unavailable:other");
+  });
+
+  it("asks a ZCode account ZCode lists no model for to sign in again, without claiming the quota is spent", () => {
+    expect(mapBackendError("zcode_no_models:bigmodel")).toBe("chat.auth.zcode.noModels.bigmodel");
+    expect(mapBackendError("zcode_no_models:zai")).toBe("chat.auth.zcode.noModels.zai");
+    expect(mapBackendError("zcode_no_models:other")).toBe("zcode_no_models:other");
+  });
+
   it("maps the command gate code to its i18n key with the command as detail", () => {
     expect(mapBackendError("remote_cmd_forbidden:web_server_start")).toBe(
       "transport.remoteCmdForbidden|web_server_start",

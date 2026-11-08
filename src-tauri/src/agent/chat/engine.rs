@@ -32,14 +32,21 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+mod acp;
+pub use acp::DEEPSEEK_MODELS_SETTING;
 mod antigravity;
 mod auth;
+mod claude_identity;
 mod codex;
+mod codex_identity;
 mod generation;
 mod opencode;
+mod outgoing_wire;
 mod permission_restart;
 mod pi;
+mod zcode;
 
+use super::acp_protocol;
 use super::codex_protocol;
 use super::pi_protocol;
 use super::skills;
@@ -56,6 +63,8 @@ type RowPath = Vec<String>;
 /// How often dirty rows are swept to the frontend. Short enough to read as live typing.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(60);
 pub(crate) const SNAPSHOT_PAGE_ROWS: usize = 60;
+/// The rows' share of one snapshot response; the rest carries the message outline and control fields.
+const SNAPSHOT_ROW_BYTES: usize = crate::agent::history_store::limits::PAGE_BYTES / 2;
 
 /// How much of stderr to keep. Enough for a stack trace, bounded so a chatty CLI cannot grow without limit.
 const STDERR_LIMIT: usize = 8 * 1024;
@@ -189,6 +198,18 @@ pub enum ChatRow {
         #[serde(skip_serializing_if = "Option::is_none")]
         pre_tokens: Option<u64>,
     },
+    /// A background task finished while the agent was idle, and the agent answered it in a turn of its own.
+    ///
+    /// A boundary like a prompt: without it, everything the agent reports on its own reads as the answer
+    /// to whatever the person said last. `summary` is the agent's one-line account of the task, empty
+    /// when it gave none; the label around it is the view's.
+    #[serde(rename_all = "camelCase")]
+    Wake {
+        id: String,
+        summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+    },
 }
 
 /// Compact, provider-neutral presentation facts for a subagent card.
@@ -220,7 +241,8 @@ impl ChatRow {
             | ChatRow::Command { id, .. }
             | ChatRow::Shell { id, .. }
             | ChatRow::Notice { id, .. }
-            | ChatRow::Compaction { id, .. } => id,
+            | ChatRow::Compaction { id, .. }
+            | ChatRow::Wake { id, .. } => id,
         }
     }
 }
@@ -246,6 +268,13 @@ enum TimelineFlush {
 }
 
 impl Timeline {
+    fn wire_window(&self,rows:&[ChatRow]) -> Vec<Value> {rows.iter().map(snapshot_row).collect()}
+    fn restore_prefix(&mut self,mut history:Vec<ChatRow>) -> bool {
+        if self.reset_revision!=0 {return false;}
+        // Native rows already received in this process take precedence over the earlier snapshot.
+        let live=std::mem::take(&mut self.rows);let current=live.iter().map(|row|row.id().to_owned()).collect::<HashSet<_>>();
+        history.retain(|row|!current.contains(row.id()));history.extend(live);self.replace_all(history);true
+    }
     /// Add a row, or replace the one that already carries this id.
     fn upsert(&mut self, row: ChatRow) {
         let id = row.id().to_string();
@@ -614,13 +643,15 @@ struct CodexPermissionState {
 }
 
 /// Optional bounded synchronization request. Missing options preserve the legacy full snapshot.
-#[derive(Default, serde::Deserialize)]
+#[derive(Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatWindow {
     pub before: Option<String>,
     pub from: Option<String>,
     pub since: Option<u64>,
     pub epoch: Option<u64>,
+    #[serde(default)]
+    pub control_only: bool,
 }
 
 /// A conversation's full state, as handed to a client that just connected or reopened the view.
@@ -944,6 +975,8 @@ struct ChatProcess {
     kind: SessionKind,
     cwd: Option<String>,
     bin: String,
+    /// CLI version captured before this process started, even if its installation later updates.
+    version: Option<String>,
     auth_settings_args: Vec<String>,
     auth_restart: AtomicBool,
     action: Mutex<()>,
@@ -952,6 +985,12 @@ struct ChatProcess {
     timeline: Mutex<Timeline>,
     /// Permission questions waiting for an answer, keyed by the agent's request id.
     permissions: Mutex<HashMap<String, Value>>,
+    /// Native recording sizes captured before launch; rows past them belong to this process's timeline.
+    history_cut:Option<crate::agent::history_store::api::ProcessCut>,
+    /// Earlier rows are served as history pages instead of a restored timeline prefix.
+    history_paged:AtomicBool,
+    codex_client_ids:bool,
+    codex_pending_user_ids:Mutex<HashMap<String,String>>,
     commands: Mutex<Vec<Value>>,
     /// Settings the agent accepts, so the composer can complete `/config`. Filled in the background.
     config_keys: Mutex<Vec<ConfigKey>>,
@@ -969,7 +1008,10 @@ struct ChatProcess {
     opencode: Mutex<opencode::OpencodeState>,
     /// The Pi/OMP side of this conversation: its variant, model catalogue, and pending extension dialogs.
     pi: Mutex<pi::PiState>,
+    zcode: Mutex<zcode::ZcodeState>,
     antigravity: Mutex<super::antigravity_protocol::StreamState>,
+    /// The ACP side of this conversation: its session catalogue, timeline mapper and pending requests.
+    acp: Mutex<acp::AcpState>,
     /// Codex service tier (`fast`, or another id from its model catalogue) for subsequent turns. None
     /// keeps whatever the thread was opened with.
     service_tier: Mutex<Option<String>>,
@@ -1021,6 +1063,8 @@ struct ChatProcess {
     waiters: Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>,
     /// View row id to the provider-native user message/turn it represents.
     user_targets: Mutex<HashMap<String, super::history::RewindTarget>>,
+    /// UUID to client row id until Claude acknowledges that exact submitted message.
+    claude_user_ids:Mutex<HashMap<String,String>>,
     /// Codex user rows sent before `turn/started` reveals their native turn id.
     pending_user_rows: Mutex<Vec<String>>,
     /// The turn in progress and whatever is waiting behind it.
@@ -1073,6 +1117,14 @@ struct TurnQueue {
     /// Whether the running turn was stopped on purpose. The agent reports an interrupted turn as a failed
     /// one, and a failure the user asked for must not be drawn as an error.
     interrupted: bool,
+    /// Claude turns stopped locally whose `result` has not arrived yet.
+    ///
+    /// Stopping a Claude turn ends it here at once instead of waiting for the agent to confirm, so a reader
+    /// that falls behind cannot hold the session on working. Each stopped turn still reports exactly one
+    /// `result` — the aborted turn's, or the one already in the pipe when the agent had finished — and
+    /// that line belongs to the stopped turn, not to whatever started since. Frames before it belong to
+    /// the stopped turn too, so none of them may adopt a new turn.
+    stale_results: u32,
     /// Start of the running logical turn. Steering adds another user row but does not reset this clock.
     started_at: Option<u64>,
     /// When Claude began a request of its own while no turn was running, typically to answer a finished
@@ -1081,6 +1133,14 @@ struct TurnQueue {
 }
 
 impl ChatProcess {
+    /// Version 2 when earlier rows arrive as history pages in front of the live timeline.
+    fn protocol_version(&self) -> u8 {if self.history_paged.load(Ordering::Relaxed) {2} else {1}}
+
+    /// Rows before this process remain to be paged in front of its live timeline.
+    fn paged_history_exists(&self) -> bool {
+        self.history_paged.load(Ordering::Relaxed) && self.history_cut.as_ref().is_some_and(|cut|cut.has_history())
+    }
+
     fn permission_modes(&self) -> (String, Option<PendingPermissionMode>) {
         let selected = self.mode.lock().unwrap();
         if self.kind != SessionKind::Codex {
@@ -1107,13 +1167,22 @@ impl ChatProcess {
     }
 
     fn write(&self, value: &Value) -> Result<(), String> {
+        self.write_source(|writer|serde_json::to_writer(writer,value).map_err(std::io::Error::other))
+    }
+
+    fn write_source(&self,write:impl FnOnce(&mut dyn std::io::Write)->std::io::Result<()>) -> Result<(),String> {
         let mut guard = self.stdin.lock().unwrap();
         let stdin = guard.as_mut().ok_or("The agent is not accepting input")?;
-        let line = format!("{value}\n");
-        stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| stdin.flush())
-            .map_err(|e| format!("Failed to send to the agent: {e}"))
+        let mut writer=std::io::BufWriter::with_capacity(32*1024,stdin);
+        write(&mut writer).and_then(|_|writer.write_all(b"\n")).and_then(|_|writer.flush())
+            .map_err(|e|format!("Failed to send to the agent: {e}"))
+    }
+
+    fn write_codex_input(&self,request:&Value,text:&str,images:&[ChatImage],mode:Option<&str>) -> Result<(),String> {
+        let id=request["id"].as_str().ok_or("Codex request identity is missing")?;
+        if let Some(mode)=mode {self.codex_permission_state.lock().unwrap().requests.insert(id.into(),mode.into());}
+        let result=self.write_source(|writer|outgoing_wire::codex(writer,request,text,images));
+        if result.is_err() && mode.is_some() {self.codex_permission_state.lock().unwrap().requests.remove(id);}result
     }
 
     fn request_id(&self, kind: &'static str) -> String {
@@ -1128,10 +1197,14 @@ impl ChatProcess {
         kind: &'static str,
         make_request: impl FnOnce(&str) -> Value,
     ) -> Result<Value, String> {
+        self.request_and_write(kind,|id|self.write(&make_request(id)))
+    }
+
+    fn request_and_write(&self,kind:&'static str,write:impl FnOnce(&str)->Result<(),String>) -> Result<Value,String> {
         let id = self.request_id(kind);
         let (tx, rx) = mpsc::channel();
         self.waiters.lock().unwrap().insert(id.clone(), tx);
-        if let Err(error) = self.write(&make_request(&id)) {
+        if let Err(error) = write(&id) {
             self.waiters.lock().unwrap().remove(&id);
             self.pending.lock().unwrap().remove(&id);
             return Err(error);
@@ -1165,6 +1238,8 @@ fn initial_mode(kind: SessionKind, stored: Option<&str>) -> String {
         SessionKind::Omp => crate::agent::permission_catalog::normalize(SessionKind::Omp, stored)
             .unwrap_or("default"),
         SessionKind::Pi => "default",
+        SessionKind::Zcode => crate::agent::permission_catalog::normalize(SessionKind::Zcode, stored)
+            .unwrap_or("default"),
         _ => protocol::cli_permission_mode(stored).unwrap_or("default"),
     }
     .to_string()
@@ -1212,6 +1287,16 @@ impl ChatManager {
             terminate_owned(&mut child); let _ = child.wait();
             if let Some(owner) = proc.owner.lock().unwrap().take() { owner.retire(app,&session); }
         }
+    }
+
+    /// Closing the main window stops every agent the way an exit does, but the backend lives on for the
+    /// remote windows, so the next main window must be able to start conversations again from scratch.
+    pub fn stop_all(&self, app: &AppCtx) {
+        self.shutdown(app);
+        let _start = self.starts.lock().unwrap();
+        self.sessions.lock().unwrap().clear();
+        self.permission_restarts.lock().unwrap().clear();
+        self.closing.store(false, Ordering::Relaxed);
     }
 
     pub fn new() -> Self {
@@ -1472,7 +1557,8 @@ impl ChatManager {
             let conn = app.db().conn.lock().unwrap();
             crate::db::repo::get_fork_pending(&conn, session_id)?
         };
-        let mut cmd = crate::host::command(bin);
+        // ZCode's desktop release runs its bundled agent through the app's own binary; see `agent::zcode`.
+        let mut cmd = if kind == SessionKind::Zcode { crate::agent::zcode::command(bin) } else { crate::host::command(bin) };
         // OpenCode is reached over HTTP: the port it listens on and the password that guards it.
         let mut opencode_launch: Option<(u16, String)> = None;
         match kind {
@@ -1483,6 +1569,10 @@ impl ChatManager {
             SessionKind::Antigravity => {
                 if fork { return Err("Antigravity does not support conversation forks".into()); }
                 cmd.args(super::antigravity_protocol::launch_args(resume, model, effort, &mode, extra_args)?);
+            }
+            kind if acp_protocol::supported(kind) => {
+                if fork { return Err(format!("{} does not support conversation forks", acp_protocol::label(kind))); }
+                cmd.args(acp_protocol::launch_args(kind, model, effort, extra_args)?);
             }
             SessionKind::Codex => {
                 cmd.arg("app-server").arg("--stdio");
@@ -1515,6 +1605,12 @@ impl ChatManager {
                 cmd.args(pi_protocol::launch_args(variant, resume, fork, model, bypass));
                 cmd.args(extra_args);
             }
+            SessionKind::Zcode => {
+                if fork { return Err("ZCode conversations cannot be forked from VelaTerm".into()); }
+                // The server takes no launch arguments of the session's: model, effort and mode travel with every
+                // message instead.
+                cmd.arg("app-server").arg("--stdio");
+            }
             _ => return Err(format!("The chat engine does not support {} sessions", kind.as_str())),
         }
         if let Some(cwd) = cwd {
@@ -1537,6 +1633,8 @@ impl ChatManager {
             antigravity::restart_state(self.sessions.lock().unwrap().get(session_id).cloned())
         } else { (TurnQueue::default(), Arc::new(AtomicBool::new(false))) };
         crate::agent::executable::prepare_command(&mut cmd, bin);
+        // Read with the environment the agent gets, which decides where its account is kept.
+        let zcode_account = (kind == SessionKind::Zcode).then(|| crate::agent::zcode_account::Account::for_command(&cmd)).flatten();
         let mut owner = super::ownership::Owner::acquire(app, session_id,
             resume.filter(|_| !fork).map(|id|format!("{}:{id}",kind.as_str())))?;
         // Read again under the writer lease: another client may have completed a view switch.
@@ -1555,10 +1653,17 @@ impl ChatManager {
             cmd.process_group(0);
             owner.inherit(&mut cmd);
         }
+        // Sizes only, taken before the agent can append: everything past them is this process's own.
+        // A fork writes a new recording, so it has no earlier offset to cut at.
+        // ACP agents replay their history through `session/load` instead of a recording offset.
+        let history_cut=resume.filter(|_| !fork && !acp_protocol::supported(kind))
+            .and_then(|id|crate::agent::history_store::api::ProcessCut::capture(kind,id));
+        let version = crate::agent::version::installed(bin);
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(error) => { owner.retire(app,session_id); return Err(spawn_failure(kind,bin,cwd,&error)); }
         };
+        let started_at=now_ms();
         let pid = child.id();
         if let Err(error) = owner.launched(app,session_id,pid) {
             terminate_owned(&mut child); let _ = child.wait(); owner.retire(app,session_id); return Err(error);
@@ -1576,6 +1681,7 @@ impl ChatManager {
             owner: Mutex::new(Some(owner)),
             kind,
             bin: bin.to_string(),
+            version,
             auth_settings_args: auth::claude::settings_args(extra_args),
             auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
@@ -1584,6 +1690,10 @@ impl ChatManager {
             child: Mutex::new(child),
             timeline: Mutex::new(Timeline::default()),
             permissions: Mutex::new(HashMap::new()),
+            history_cut,
+            history_paged:AtomicBool::new(false),
+            codex_client_ids:kind==SessionKind::Codex && codex_identity::supported(bin),
+            codex_pending_user_ids:Mutex::new(HashMap::new()),
             commands: Mutex::new(Vec::new()),
             config_keys: Mutex::new(Vec::new()),
             subagent_ids: Mutex::new(HashMap::new()),
@@ -1591,7 +1701,9 @@ impl ChatManager {
             codex_pending_child_events: Mutex::new(HashMap::new()),
             opencode: Mutex::new(opencode::OpencodeState::default()),
             pi: Mutex::new(pi::PiState::default()),
+            zcode: Mutex::new(zcode::ZcodeState::default()),
             antigravity: Mutex::new(crate::agent::chat::antigravity_protocol::StreamState::default()),
+            acp: Mutex::new(acp::AcpState::default()),
             service_tier: Mutex::new(service_tier),
             personality: Mutex::new(personality),
             codex_turn_error: Mutex::new(None),
@@ -1604,7 +1716,8 @@ impl ChatManager {
             model: Mutex::new(model.map(str::to_string)),
             effort: Mutex::new(effort.map(str::to_string)),
             mode: Mutex::new(mode),
-            permission_confirmed: AtomicBool::new(matches!(kind, SessionKind::Opencode | SessionKind::Omp)),
+            // These engines answer approvals themselves in bypass mode, so the selected mode is the one in force.
+            permission_confirmed: AtomicBool::new(matches!(kind, SessionKind::Opencode | SessionKind::Omp | SessionKind::Zcode) || acp_protocol::supported(kind)),
             bypass_capable,
             codex_permission_state: Mutex::new(CodexPermissionState::default()),
             collaboration_mode: Mutex::new(match kind {
@@ -1615,8 +1728,9 @@ impl ChatManager {
                     }
                     .to_string(),
                 ),
-                // An OpenCode agent name; checked against the server's catalogue once it answers.
-                SessionKind::Opencode => collaboration_mode
+                // An OpenCode agent name or an ACP session mode; checked against the agent's catalogue once
+                // it answers.
+                kind if kind == SessionKind::Opencode || acp_protocol::supported(kind) => collaboration_mode
                     .map(str::trim)
                     .filter(|name| !name.is_empty())
                     .map(str::to_string),
@@ -1632,6 +1746,7 @@ impl ChatManager {
             pending: Mutex::new(HashMap::new()),
             waiters: Mutex::new(HashMap::new()),
             user_targets: Mutex::new(HashMap::new()),
+            claude_user_ids:Mutex::new(HashMap::new()),
             pending_user_rows: Mutex::new(Vec::new()),
             turn: Mutex::new(initial_turn),
             stderr: Mutex::new(String::new()),
@@ -1641,26 +1756,16 @@ impl ChatManager {
             released: AtomicBool::new(false),
             next_request: AtomicU64::new(1),
             pid,
-            started_at: now_ms(),
+            started_at,
             compactions: AtomicU64::new(0),
         });
 
-        // Restore history before notifying clients of the new process. The reset carries this
-        // timeline so a pending submission never becomes the only visible message during replay.
-        if let Some(id) = resume {
-            match super::history::replay(kind, id) {
-                Ok(rows) => {
-                    let mut timeline = proc.timeline.lock().unwrap();
-                    timeline.replace_all(rows);
-                }
-                // A recording that was deleted, or belongs to a conversation held elsewhere, is no reason
-                // to refuse the session: the agent still has the context, only the view starts empty.
-                Err(e) => crate::diagnostic_warn!("chat: no history replayed for {id}: {e}"),
-            }
-        }
-
         let restored_auth = self.sessions.lock().unwrap().get(session_id)
             .is_some_and(|previous| auth::claude::restore(previous, &proc));
+
+        if let Some(native) = resume.filter(|_| acp_protocol::supported(kind)) {
+            acp::prefill(app, &proc, native);
+        }
 
         self.sessions
             .lock()
@@ -1740,7 +1845,14 @@ impl ChatManager {
                 proc.pi.lock().unwrap().variant = pi_protocol::PiVariant::of(kind);
                 pi::bootstrap(&proc);
             }
+            SessionKind::Zcode => zcode::bootstrap(&proc, zcode_account),
+            kind if acp_protocol::supported(kind) => acp::bootstrap(app, &proc, resume, cwd, collaboration_mode),
             _ => unreachable!(),
+        }
+        // ZCode delivers its own history through its subscription, and ACP through `session/load`, which the
+        // handshake already asked for; replaying the store too would draw it twice.
+        if let Some(native)=resume.filter(|_| kind != SessionKind::Zcode && !acp_protocol::supported(kind)) {
+            spawn_history_restore(app.clone(),session_id.into(),proc.clone(),native.into());
         }
         Ok(())
     }
@@ -1755,6 +1867,16 @@ impl ChatManager {
         state.server.clone()
     }
 
+    /// The model catalogue a running ZCode process reported, or None when none owns the session.
+    pub fn zcode_models(&self, session_id: &str) -> Option<Vec<Value>> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        if !proc.alive.load(Ordering::Relaxed) || proc.kind != SessionKind::Zcode {
+            return None;
+        }
+        let models = zcode::chat_models(&proc);
+        (!models.is_empty()).then_some(models)
+    }
+
     /// The model catalogue a running Pi or OMP process reported, or None when none owns the session.
     pub fn pi_models(&self, session_id: &str) -> Option<Vec<Value>> {
         let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
@@ -1763,6 +1885,26 @@ impl ChatManager {
         }
         let models = pi::chat_models(&proc);
         (!models.is_empty()).then_some(models)
+    }
+
+    /// The model catalogue a running ACP session reported, or None when it reported none.
+    pub fn acp_models(&self, session_id: &str) -> Option<Vec<Value>> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        if !proc.alive.load(Ordering::Relaxed) || !acp_protocol::supported(proc.kind) {
+            return None;
+        }
+        acp::chat_models(&proc)
+    }
+
+    /// Whether a running ACP session switches model and reasoning level itself. When it cannot, the choice
+    /// is a launch setting that takes effect when the process next starts.
+    pub fn acp_switchable(&self, session_id: &str) -> (bool, bool) {
+        let Some(proc) = self.sessions.lock().unwrap().get(session_id).cloned() else { return (false, false) };
+        if !proc.alive.load(Ordering::Relaxed) || !acp_protocol::supported(proc.kind) || !proc.ready.load(Ordering::Relaxed) {
+            return (false, false);
+        }
+        let catalog = proc.acp.lock().unwrap().catalog.clone();
+        (catalog.model_switchable(), catalog.effort_switchable())
     }
 
     /// Send a user turn, or decide what to do with it when one is already running.
@@ -1841,6 +1983,9 @@ impl ChatManager {
         if proc.kind == SessionKind::Antigravity {
             super::antigravity_protocol::validate(text, images.len(), behavior)?;
         }
+        if acp_protocol::supported(proc.kind) {
+            acp::validate(proc, behavior, images.len())?;
+        }
         // Steering is a prompt, never a local command or a queued replacement.
         if proc.kind == SessionKind::Opencode && behavior != "steer" && proc.ready.load(Ordering::Relaxed) && opencode::is_local_command(text.trim()) {
             claim_native_writer(app,proc)?;
@@ -1868,23 +2013,28 @@ impl ChatManager {
             }
         }
         if !proc.ready.load(Ordering::Relaxed) {
+            drop(turn);
             let item = QueuedMessage {
                 id: message_id.map(str::to_owned).unwrap_or_else(|| format!("q-{}", proc.next_request.fetch_add(1, Ordering::Relaxed))),
                 text: text.to_string(),
                 images,
             };
+            let mut turn=proc.turn.lock().unwrap();
             *attempted = true;
             turn.waiting.push(item);
             drop(turn);
             emit_queue(app, session_id, &proc);
+            start_waiting_message(app,session_id,proc);
             return Ok("queued");
         }
         if turn.running {
+            drop(turn);
             let item = QueuedMessage {
                 id: message_id.map(str::to_owned).unwrap_or_else(|| format!("q-{}", proc.next_request.fetch_add(1, Ordering::Relaxed))),
                 text: text.to_string(),
                 images,
             };
+            let mut turn=proc.turn.lock().unwrap();
             // Interrupting means "do this instead of what you are doing", so this message goes ahead of
             // anything already waiting rather than behind it.
             *attempted = true;
@@ -1897,15 +2047,19 @@ impl ChatManager {
             // would leave a gap in which the turn ends on its own and sends this very message — and the
             // interrupt, arriving a moment later, would kill the turn it was meant to make room for.
             let stopped = if behavior == "interrupt" {
-                interrupt_locked(&proc, &mut turn)
+                interrupt_locked(app, &proc, &mut turn)
             } else {
-                Ok(())
+                Ok(None)
             };
             drop(turn);
             emit_queue(app, session_id, &proc);
             // The prompt is already queued even if stopping the previous turn failed.
             // An identified retry must not enqueue it again under a new identifier.
-            stopped?;
+            // A Claude turn ends as it is stopped, which sends this message now.
+            if let Some(end) = stopped? {
+                finish_turn_end(app, session_id, proc, "interrupted", None, end);
+            }
+            start_waiting_message(app,session_id,proc);
             return Ok("queued");
         }
         turn.running = true;
@@ -1949,7 +2103,7 @@ impl ChatManager {
             turn.steering = true;
             item
         };
-        let result = dispatch_steer(app, session_id, &proc, &item.text, &item.images, Some(&item.id));
+        let result = dispatch_steer(app,session_id,&proc,&item.text,&item.images,Some(&item.id));
         {
             let mut turn = proc.turn.lock().unwrap();
             turn.steering = false;
@@ -1983,6 +2137,16 @@ impl ChatManager {
         Ok(())
     }
 
+    pub fn queue_read(&self,session:&str,id:&str,revision:Option<&str>,sequence:u64) -> Result<Value,String> {
+        let proc=self.get(session)?;
+        let item=proc.turn.lock().unwrap().waiting.iter().find(|item|item.id==id).cloned().ok_or("cursor_expired: this message is no longer queued")?;
+        let value=queue_piece(&item,revision,sequence)?;
+        let queue=proc.turn.lock().unwrap();let current=queue.waiting.iter().find(|item|item.id==id).ok_or("cursor_expired: this message is no longer queued")?;
+        if current.text!=item.text {
+            return Err("source_changed: queued text was edited during this read".into());
+        }Ok(value)
+    }
+
     /// Rewrite a message that is still waiting. A message already sent is past editing, so an id that is
     /// no longer in the queue simply changes nothing.
     pub fn queue_update(
@@ -1998,26 +2162,39 @@ impl ChatManager {
         if !self.owns_process(session_id,&proc) || !proc.alive.load(Ordering::Relaxed) {
             return Err("The agent changed. Refresh the conversation before changing its queue.".into());
         }
-        {
-            let mut turn = proc.turn.lock().unwrap();
-            for item in turn.waiting.iter_mut() {
-                if item.id == id {
-                    // A delayed editor from another client must not rewrite completed execution facts.
-                    if item.images.is_empty() && super::shell::parse_context(&item.text).is_some() { continue; }
-                    crate::agent::spawn_requests::edit_queued(app, session_id, id, text, &item.images)?;
-                    item.text = text.to_string();
-                }
-            }
-        }
+        let previous=proc.turn.lock().unwrap().waiting.iter().find(|item|item.id==id).cloned();
+        let Some(previous)=previous else {return Ok(());};
+        let input=previous;
+        // A delayed editor from another client must not rewrite completed execution facts.
+        if input.images.is_empty() && super::shell::parse_context(&input.text).is_some() {return Ok(());}
+        let item=QueuedMessage {id:id.into(),text:text.into(),images:input.images};
+        let complete=item.clone();
+        let mut turn=proc.turn.lock().unwrap();
+        let Some(index)=turn.waiting.iter().position(|item|item.id==id) else {return Ok(());};
+        crate::agent::spawn_requests::edit_queued(app,session_id,id,text,&complete.images)?;
+        crate::agent::translation::forget_queued(app,session_id,id)?;
+        turn.waiting[index]=item;drop(turn);
         emit_queue(app, session_id, &proc);
         Ok(())
     }
 
     /// Stop the turn in progress. The conversation stays open.
-    pub fn interrupt(&self, session_id: &str) -> Result<(), String> {
+    pub fn interrupt(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
         let proc = self.get(session_id)?;
-        let mut turn = proc.turn.lock().unwrap();
-        interrupt_locked(&proc, &mut turn)
+        // Ending the turn can send the next queued message, so this is serialized with sends.
+        let _action = proc.action.lock().unwrap();
+        let _callbacks = proc.callbacks.read().unwrap();
+        let ended = interrupt_locked(app, &proc, &mut proc.turn.lock().unwrap())?;
+        if let Some(end) = ended {
+            finish_turn_end(app, session_id, &proc, "interrupted", None, end);
+        }
+        Ok(())
+    }
+
+    /// Read the current proposal without copying the conversation timeline or launching any IO.
+    pub fn pending_permission(&self,session_id: &str,request_id: &str) -> Result<Value,String> {
+        self.get(session_id)?.permissions.lock().unwrap().get(request_id).cloned()
+            .ok_or_else(||"That permission request is no longer waiting for an answer".into())
     }
 
     /// Answer a permission question. Allowing runs the tool as proposed.
@@ -2040,6 +2217,7 @@ impl ChatManager {
         updated_permissions: Option<Value>,
     ) -> Result<(), String> {
         let proc = self.get(session_id)?;
+        let _action=proc.action.lock().unwrap();
         let request = proc
             .permissions
             .lock()
@@ -2070,67 +2248,77 @@ impl ChatManager {
         if proc.kind == SessionKind::Omp {
             return pi::respond_extension_ui(app, session_id, &proc, request_id, allow);
         }
-        proc.permissions.lock().unwrap().remove(request_id);
-        if proc.kind == SessionKind::Codex {
-            // The rule the card adopted, if any, travels inside `updated_permissions`; the wire module
-            // turns it into the matching native decision.
-            proc.write(&codex_protocol::permission_response(
-                &request,
-                allow,
-                updated_input.as_ref(),
-                updated_permissions.as_ref(),
-                message,
-            ))?;
-            if request.get("_codexMethod").and_then(Value::as_str).is_some_and(|m| m.ends_with("requestUserInput")) {
-                let input = updated_input.unwrap_or_else(|| {
-                    request.get("input").cloned().unwrap_or(Value::Null)
-                });
-                proc.timeline.lock().unwrap().upsert(ChatRow::Tool {
-                    id: request
-                        .get("_codexItemId")
-                        .and_then(Value::as_str)
-                        .unwrap_or(request_id)
-                        .to_string(),
-                    name: "AskUserQuestion".to_string(),
-                    input,
-                    output: Some(if allow { "Answered" } else { "Declined" }.to_string()),
-                    is_error: !allow,
-                    status: if allow { "completed" } else { "failed" },
-                    subagent: None,
-                    children: Vec::new(),
-                });
+        if proc.kind == SessionKind::Zcode {
+            return zcode::respond(app, session_id, &proc, request_id, &request, allow,
+                updated_input.as_ref(), message, updated_permissions.as_ref());
+        }
+        if acp_protocol::supported(proc.kind) {
+            return acp::respond(app, session_id, &proc, request_id, allow, updated_permissions.as_ref());
+        }
+        // Claim the request so a late answer from another client is refused, and put it back when this
+        // answer could not be delivered, so the person can answer again.
+        let claimed=proc.permissions.lock().unwrap().remove(request_id)
+            .ok_or("That permission request is no longer waiting for an answer")?;
+        let result=(|| -> Result<(),String> {
+            if proc.kind == SessionKind::Codex {
+                // The rule the card adopted, if any, travels inside `updated_permissions`; the wire module
+                // turns it into the matching native decision.
+                proc.write(&codex_protocol::permission_response(
+                    &request,
+                    allow,
+                    updated_input.as_ref(),
+                    updated_permissions.as_ref(),
+                    message,
+                ))?;
+                proc.permissions.lock().unwrap().remove(request_id);
+                if request.get("_codexMethod").and_then(Value::as_str).is_some_and(|m| m.ends_with("requestUserInput")) {
+                    let input = updated_input.unwrap_or_else(|| {
+                        request.get("input").cloned().unwrap_or(Value::Null)
+                    });
+                    proc.timeline.lock().unwrap().upsert(ChatRow::Tool {
+                        id: request
+                            .get("_codexItemId")
+                            .and_then(Value::as_str)
+                            .unwrap_or(request_id)
+                            .to_string(),
+                        name: "AskUserQuestion".to_string(),
+                        input,
+                        output: Some(if allow { "Answered" } else { "Declined" }.to_string()),
+                        is_error: !allow,
+                        status: if allow { "completed" } else { "failed" },
+                        subagent: None,
+                        children: Vec::new(),
+                    });
+                }
+                emit(app, session_id, json!({"type":"permissionResolved","id":request_id}));
+                emit_state(app, session_id, AgentState::Working);
+                return Ok(());
             }
+            if request.get("subtype").and_then(Value::as_str) == Some("elicitation") {
+                // An MCP server asked the person something. "cancel" is the third answer the protocol knows:
+                // neither the form filled in nor a refusal, just closing the dialog.
+                let action = if allow {
+                    "accept"
+                } else if message == Some("cancel") {
+                    "cancel"
+                } else {
+                    "decline"
+                };
+                proc.write(&protocol::elicitation_response(request_id, action, updated_input))?;
+                proc.permissions.lock().unwrap().remove(request_id);
+                emit(app, session_id, json!({"type":"permissionResolved","id":request_id}));
+                emit_state(app, session_id, AgentState::Working);
+                return Ok(());
+            }
+            let input = updated_input.unwrap_or_else(|| request.get("input").cloned().unwrap_or(Value::Null));
+            proc.write(&protocol::permission_response(request_id,allow,input,message,updated_permissions))?;
+            proc.permissions.lock().unwrap().remove(request_id);
             emit(app, session_id, json!({"type":"permissionResolved","id":request_id}));
             emit_state(app, session_id, AgentState::Working);
-            return Ok(());
-        }
-        if request.get("subtype").and_then(Value::as_str) == Some("elicitation") {
-            // An MCP server asked the person something. "cancel" is the third answer the protocol knows:
-            // neither the form filled in nor a refusal, just closing the dialog.
-            let action = if allow {
-                "accept"
-            } else if message == Some("cancel") {
-                "cancel"
-            } else {
-                "decline"
-            };
-            proc.write(&protocol::elicitation_response(request_id, action, updated_input))?;
-            emit(app, session_id, json!({"type":"permissionResolved","id":request_id}));
-            emit_state(app, session_id, AgentState::Working);
-            return Ok(());
-        }
-        let input = updated_input
-            .unwrap_or_else(|| request.get("input").cloned().unwrap_or(Value::Null));
-        proc.write(&protocol::permission_response(
-            request_id,
-            allow,
-            input,
-            message,
-            updated_permissions,
-        ))?;
-        emit(app, session_id, json!({"type":"permissionResolved","id":request_id}));
-        emit_state(app, session_id, AgentState::Working);
-        Ok(())
+            Ok(())
+        })();
+        if result.is_err() {proc.permissions.lock().unwrap().insert(request_id.to_string(),claimed);}
+        result
     }
 
     /// Save Codex permissions for its next turn; other agents can apply their modes immediately.
@@ -2174,6 +2362,20 @@ impl ChatManager {
             }
             return Ok(());
         }
+        if proc.kind == SessionKind::Zcode {
+            // The mode travels with every message; approvals already waiting are let through here.
+            if mode == "bypassPermissions" {
+                zcode::approve_pending(app, session_id, &proc);
+            }
+            return Ok(());
+        }
+        if acp_protocol::supported(proc.kind) {
+            // ACP leaves approvals to the client, which answers them itself in bypass from now on.
+            if mode == "bypassPermissions" {
+                acp::approve_pending(app, session_id, &proc);
+            }
+            return Ok(());
+        }
         Ok(())
     }
 
@@ -2203,7 +2405,7 @@ impl ChatManager {
         mode: &str,
     ) -> Result<(), String> {
         let proc = self.get(session_id)?;
-        if !matches!(proc.kind, SessionKind::Codex | SessionKind::Opencode) {
+        if !matches!(proc.kind, SessionKind::Codex | SessionKind::Opencode) && !acp_protocol::supported(proc.kind) {
             return Err(format!(
                 "{} does not support collaboration modes",
                 proc.kind.as_str()
@@ -2213,10 +2415,15 @@ impl ChatManager {
         if !supported.iter().any(|preset| preset.mode == mode) {
             return Err(match proc.kind {
                 SessionKind::Opencode => format!("OpenCode has no agent named {mode}"),
-                _ => format!("Codex app-server does not support collaboration mode {mode}"),
+                SessionKind::Codex => format!("Codex app-server does not support collaboration mode {mode}"),
+                kind => format!("{} has no mode named {mode}", acp_protocol::label(kind)),
             });
         }
         drop(supported);
+        // An ACP session switches at once; the other agents apply the choice to their next turn.
+        if acp_protocol::supported(proc.kind) {
+            acp::set_mode(&proc, mode)?;
+        }
         *proc.collaboration_mode.lock().unwrap() = Some(mode.to_string());
         emit(
             app,
@@ -2249,7 +2456,7 @@ impl ChatManager {
         let turn = proc.turn.lock().unwrap();
         if turn.running || !turn.waiting.is_empty() || proc.shell_running.load(Ordering::Relaxed)
             || crate::security::session_active(session_id) || crate::agent::plan_execute::active(app, session_id) {
-            return Err("Wait for Antigravity to finish before changing its launch settings".into());
+            return Err("Wait for the agent to finish before changing its launch settings".into());
         }
         let value = apply()?;
         release_process(app, session_id, &proc);
@@ -2272,6 +2479,10 @@ impl ChatManager {
         } else if matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
             if let Some(model) = model {
                 pi::set_model(&proc, model)?;
+            }
+        } else if acp_protocol::supported(proc.kind) {
+            if let Some(model) = model {
+                acp::set_model(&proc, model)?;
             }
         }
         *proc.model.lock().unwrap() = model.map(str::to_string);
@@ -2311,6 +2522,10 @@ impl ChatManager {
             if let Some(level) = effort {
                 pi::set_effort(&proc, level)?;
             }
+        } else if acp_protocol::supported(proc.kind) {
+            if let Some(level) = effort {
+                acp::set_effort(&proc, level)?;
+            }
         }
         Ok(())
     }
@@ -2336,8 +2551,8 @@ impl ChatManager {
 
     fn account_process(&self, session_id: &str) -> Result<Arc<ChatProcess>, String> {
         let proc = self.get(session_id)?;
-        if !matches!(proc.kind, SessionKind::Claude | SessionKind::Codex) {
-            return Err("Account operations require a Claude or Codex conversation.".into());
+        if !matches!(proc.kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Zcode) {
+            return Err("Account operations require a Claude, Codex or ZCode conversation.".into());
         }
         if proc.kind == SessionKind::Codex {
             for _ in 0..500 {
@@ -2348,15 +2563,24 @@ impl ChatManager {
         Ok(proc)
     }
 
-    pub fn auth_start(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
+    /// Whether the session's agent is installed and signed in. Runs commands, so it stays off the UI thread.
+    pub fn agent_readiness(&self, app: &AppCtx, session_id: &str) -> Result<auth::readiness::AgentReadiness, String> {
+        auth::readiness::check(app, session_id)
+    }
+
+    /// `provider` picks ZCode's account provider (`zai` or `bigmodel`); the other agents have one each.
+    pub fn auth_start(&self, app: &AppCtx, session_id: &str, provider: Option<&str>) -> Result<(), String> {
         let _change = self.auth_change.lock().unwrap();
         let proc = self.account_process(session_id)?;
         let _action = proc.action.lock().unwrap();
         if self.sessions.lock().unwrap().iter().any(|(id, other)| id != session_id && other.kind == proc.kind && auth::active(other)) {
             return Err("An account operation for this provider is already in progress in another conversation.".into());
         }
-        if proc.kind == SessionKind::Claude { auth::claude::start(app, session_id, &proc) }
-        else { auth::start(app, session_id, &proc) }
+        match proc.kind {
+            SessionKind::Claude => auth::claude::start(app, session_id, &proc),
+            SessionKind::Zcode => auth::zcode::start(app, session_id, &proc, provider),
+            _ => auth::start(app, session_id, &proc),
+        }
     }
 
     pub fn auth_logout(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
@@ -2366,15 +2590,21 @@ impl ChatManager {
         if self.sessions.lock().unwrap().iter().any(|(id, other)| id != session_id && other.kind == proc.kind && auth::active(other)) {
             return Err("An account operation for this provider is already in progress in another conversation.".into());
         }
-        if proc.kind == SessionKind::Claude { auth::claude::logout(app, session_id, &proc) }
-        else { auth::logout(app, session_id, &proc) }
+        match proc.kind {
+            SessionKind::Claude => auth::claude::logout(app, session_id, &proc),
+            SessionKind::Zcode => auth::zcode::logout(app, session_id, &proc),
+            _ => auth::logout(app, session_id, &proc),
+        }
     }
 
     pub fn auth_cancel(&self, app: &AppCtx, session_id: &str) -> Result<(), String> {
         let proc = self.account_process(session_id)?;
         let _action = proc.action.lock().unwrap();
-        if proc.kind == SessionKind::Claude { auth::claude::cancel(app, session_id, &proc) }
-        else { auth::cancel(app, session_id, &proc) }
+        match proc.kind {
+            SessionKind::Claude => auth::claude::cancel(app, session_id, &proc),
+            SessionKind::Zcode => auth::zcode::cancel(app, session_id, &proc),
+            _ => auth::cancel(app, session_id, &proc),
+        }
     }
 
     pub fn auth_submit(&self, app: &AppCtx, session_id: &str, code: &str) -> Result<(), String> {
@@ -2390,6 +2620,7 @@ impl ChatManager {
         match proc.kind {
             SessionKind::Codex => codex::compact(&proc),
             SessionKind::Pi | SessionKind::Omp => pi::compact(&proc),
+            SessionKind::Zcode => zcode::compact(&proc),
             other => Err(format!(
                 "{} does not support manual compaction",
                 other.as_str()
@@ -2474,6 +2705,11 @@ impl ChatManager {
         Ok(())
     }
 
+    /// Whether the session's agent still has background work that will wake it when it reports back.
+    pub fn background_pending(&self, session_id: &str) -> bool {
+        self.get(session_id).is_ok_and(|proc| background_pending(&proc.turn.lock().unwrap()))
+    }
+
     /// Move every foreground task to the background so the turn continues without waiting on them.
     pub fn background_tasks(&self, session_id: &str) -> Result<(), String> {
         let proc = self.claude(session_id)?;
@@ -2545,14 +2781,20 @@ impl ChatManager {
     /// Model and context usage from the running Claude or Codex process, for the Info panel.
     pub fn context_info(&self, session_id: &str) -> Option<crate::agent::transcript::AgentContextInfo> {
         let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
-        // Codex reports the same two numbers through `thread/tokenUsage/updated`, into the same fields.
-        if !matches!(proc.kind, SessionKind::Claude | SessionKind::Codex) {
+        // Codex reports the same two numbers through `thread/tokenUsage/updated`, and ZCode through its
+        // conversation's `usage` state, into the same fields.
+        if !matches!(proc.kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Zcode) {
             return None;
         }
         let extras = proc.extras.lock().unwrap().clone();
-        // Codex token-usage notifications omit the model; the session stores it separately.
+        // Codex token-usage notifications omit the model; the session stores it separately. ZCode's model id
+        // is `<provider>/<model>`, and the panel names the model alone, as ZCode's own store records it.
         let model = extras.usage_model.clone()
-            .or_else(|| proc.model.lock().unwrap().clone());
+            .or_else(|| proc.model.lock().unwrap().clone())
+            .map(|model| match proc.kind {
+                SessionKind::Zcode => model.split_once('/').map_or(model.clone(), |(_, name)| name.to_string()),
+                _ => model,
+            });
         if let Some(usage) = &extras.context_usage {
             let limit = usage.get("maxTokens").and_then(Value::as_u64)?;
             return Some(crate::agent::transcript::AgentContextInfo {
@@ -2590,7 +2832,38 @@ impl ChatManager {
         if epoch.is_some_and(|value| value != proc.started_at) { return Err("Chat history changed; synchronize the conversation again".into()); }
         let timeline = proc.timeline.lock().unwrap();
         let row = find_row(&timeline.rows, row_id).ok_or("Chat row is no longer available")?;
-        Ok(detail_row(row))
+        bounded_detail_row(row)
+    }
+
+    /// The launch cut and the count of live rows already dropped from memory, for a running
+    /// conversation whose earlier rows are history pages. Pure memory read.
+    pub fn paged_history(&self,session:&str) -> Option<crate::agent::history_store::live_view::Live> {
+        let proc=self.get(session).ok()?;
+        if !proc.history_paged.load(Ordering::Relaxed) {return None;}
+        let cut=proc.history_cut.clone()?;
+        Some(crate::agent::history_store::live_view::Live {cut,dropped:0,row_protocol:1})
+    }
+
+    /// Retained live rows following `after`, or from the first retained row, oldest first within the
+    /// page byte budget. Paging forward out of history continues here. Pure memory read.
+    pub fn timeline_after(&self,session:&str,after:Option<&str>) -> Option<Value> {
+        let proc=self.get(session).ok()?;
+        let timeline=proc.timeline.lock().unwrap();
+        let start=match after {Some(id)=>*timeline.at.get(id)?+1,None=>0};
+        let end=(start+SNAPSHOT_PAGE_ROWS).min(timeline.rows.len());
+        let mut rows=Vec::new();let mut positions=serde_json::Map::new();
+        for (offset,row) in timeline.rows[start..end].iter().enumerate() {
+            positions.insert(row.id().into(),json!(start+offset));
+            rows.push(snapshot_row(row));
+        }
+        let has_newer=start+rows.len()<timeline.rows.len();
+        Some(json!({"rows":rows,"positions":positions,"hasNewer":has_newer,"rowsRevision":timeline.revision}))
+    }
+
+    pub fn decorate_runtime_snapshot(&self,session:&str,value:&mut Value) {
+        let Ok(proc)=self.get(session) else {return;};
+        if proc.protocol_version()!=2 {return;}
+        value["protocolVersion"]=json!(2);
     }
 
     /// The command a background shell task runs and the tail of what it has printed so far.
@@ -2627,6 +2900,12 @@ impl ChatManager {
         Ok(TaskOutput { command, output, truncated })
     }
 
+    /// A running peer retains its startup version; None means there is no live peer.
+    pub fn agent_version(&self, session_id: &str) -> Option<Option<String>> {
+        let proc = self.sessions.lock().unwrap().get(session_id).cloned()?;
+        proc.alive.load(Ordering::Relaxed).then(||proc.version.clone())
+    }
+
     pub fn snapshot(&self, session_id: &str) -> ChatSnapshot {
         self.snapshot_window(session_id, None)
     }
@@ -2635,7 +2914,7 @@ impl ChatManager {
         let Some(proc) = self.sessions.lock().unwrap().get(session_id).cloned() else {
             return ChatSnapshot {
                 user_messages: Some(Vec::new()),
-                positions: HashMap::new(), page_kind: "full", has_more: false, total_rows: 0,
+                positions: HashMap::new(), page_kind: if window.is_some_and(|w|w.control_only) {"control"} else {"full"}, has_more: false, total_rows: 0,
                 submission_receipts: true,
                 rows_revision: 0,
                 queue_revision: 0,
@@ -2669,6 +2948,9 @@ impl ChatManager {
         let running = proc.alive.load(Ordering::Relaxed);
         let (rows, positions, rows_revision, page_kind, has_more, total_rows, user_messages) = {
             let mut timeline = proc.timeline.lock().unwrap();
+            if window.is_some_and(|w|w.control_only) {
+                (Vec::new(), HashMap::new(), timeline.revision, "control", false, timeline.rows.len(), None)
+            } else {
             timeline.revision += 1;
             let total = timeline.rows.len();
             let mut start = 0;
@@ -2686,15 +2968,27 @@ impl ChatManager {
                         }
                     }
                 }
-                start = end.saturating_sub(SNAPSHOT_PAGE_ROWS);
+                start = bounded_window_start(&timeline.rows, end);
             }
-            let selected: Vec<ChatRow> = if let Some(since) = delta {
-                start = window.and_then(|w| w.from.as_ref()).and_then(|id| timeline.at.get(id)).copied().unwrap_or(start);
-                timeline.rows[start..].iter().filter(|row| timeline.row_versions.get(row.id()).copied().unwrap_or(0) > since).cloned().collect()
+            // A client away for a long time can owe more rows than one response carries. It gets the
+            // recent window instead, which replaces its stale copy; older rows stay reachable by paging.
+            let changed = delta.and_then(|since| {
+                let from = window.and_then(|w| w.from.as_ref()).and_then(|id| timeline.at.get(id)).copied().unwrap_or(start);
+                let changed: Vec<ChatRow> = timeline.rows[from..].iter()
+                    .filter(|row| timeline.row_versions.get(row.id()).copied().unwrap_or(0) > since)
+                    .take(SNAPSHOT_PAGE_ROWS + 1).cloned().collect();
+                let fits = changed.len() <= SNAPSHOT_PAGE_ROWS && bounded_window_start(&changed, changed.len()) == 0;
+                fits.then_some((from, changed))
+            });
+            if delta.is_some() && changed.is_none() { kind = "recent"; }
+            let selected: Vec<ChatRow> = if let Some((from, changed)) = changed {
+                start = from;
+                changed
             } else { timeline.rows[start..end].to_vec() };
             let positions = selected.iter().filter_map(|row| timeline.at.get(row.id()).map(|index| (row.id().to_owned(), *index))).collect();
             let user_messages = if kind == "history" { None } else { Some(super::user_messages::outline(&timeline.rows)) };
             (selected, positions, timeline.revision, kind, start > 0, total, user_messages)
+            }
         };
         let (queue, turn_started_at, queue_revision) = {
             let mut turn = proc.turn.lock().unwrap();
@@ -2795,6 +3089,56 @@ impl ChatManager {
     }
 
     /// Rewind a conversation, file checkpoints, or both from one visible user row.
+    pub fn rewind_indexed_preview(&self,app:&AppCtx,session:&str,row:&str,generation:&str) -> Result<Value,String> {
+        let proc=self.get(session)?;let _action=proc.action.lock().unwrap();ensure_rewind_idle(&proc)?;
+        let selection=crate::agent::history_store::rewind::select(crate::agent::history_store::api::prepare(app,session)?,row,Some(generation))?;
+        if proc.agent_session_id.lock().unwrap().as_deref()!=Some(selection.branch.native_id.as_str()) {return Err("source_changed: running conversation branch changed".into());}
+        let mut value=match proc.kind {
+            SessionKind::Claude=>proc.request_and_wait("rewind_files",|id|protocol::control_request(id,protocol::rewind_files(&selection.target.message_id,true)))?,
+            SessionKind::Opencode=>json!({"canRewind":true}),
+            SessionKind::Codex=>return Err("Codex does not expose native file restore through app-server".into()),
+            _=>return Err("Conversation rewind is unavailable for this provider".into()),
+        };
+        value["historyGeneration"]=json!(selection.branch.generation);Ok(value)
+    }
+
+    pub fn rewind_indexed(&self,app:&AppCtx,session:&str,row:&str,scope:&str,generation:&str) -> Result<Value,String> {
+        let proc=self.get(session)?;let _action=proc.action.lock().unwrap();ensure_rewind_idle(&proc)?;
+        let conversation=matches!(scope,"conversation"|"both") || proc.kind==SessionKind::Opencode;
+        let files=matches!(scope,"files"|"both");
+        if !matches!(scope,"conversation"|"files"|"both") {return Err(format!("Unknown rewind scope: {scope}"));}
+        if proc.kind==SessionKind::Codex && files {return Err("Codex does not expose native file restore through app-server".into());}
+        let selection=crate::agent::history_store::rewind::select(crate::agent::history_store::api::prepare(app,session)?,row,Some(generation))?;
+        if proc.agent_session_id.lock().unwrap().as_deref()!=Some(selection.branch.native_id.as_str()) {return Err("source_changed: running conversation branch changed".into());}
+        let prefill=if conversation {Some(selection.prefill()?)} else {None};
+        let latest=if conversation && proc.kind==SessionKind::Claude {Some(selection.latest()?)} else {None};
+        let turns=if conversation && proc.kind==SessionKind::Codex {Some(selection.turn_count()?)} else {None};
+        // Finish all reads and revalidate immediately before the first provider operation.
+        crate::agent::history_store::rewind::select(crate::agent::history_store::api::prepare(app,session)?,row,Some(generation))?;
+        let file_result=if files && proc.kind==SessionKind::Claude {
+            Some(proc.request_and_wait("rewind_files",|id|protocol::control_request(id,protocol::rewind_files(&selection.target.message_id,false)))?)
+        } else {None};
+        if conversation {
+            match proc.kind {
+                SessionKind::Claude=>{
+                    let latest=latest.unwrap();let last=latest.target.last_message_id.as_deref().unwrap_or(&latest.target.message_id);
+                    let response=proc.request_and_wait("rewind_conversation",|id|protocol::control_request(id,protocol::rewind_conversation(&selection.target.message_id,last)))?;
+                    if response["rewound"]!=true {return Err(format!("Claude refused the conversation rewind: {}",response["error"].as_str().unwrap_or("No rewind confirmation was returned")));}
+                },
+                SessionKind::Codex=>{
+                    let thread=fork_codex_for_rewind(&proc,&selection.target,&[],turns)?;activate_rewound_codex(app,session,&proc,&thread);
+                },
+                SessionKind::Opencode=>opencode::rewind(&proc,&selection.target)?,
+                _=>return Err("Conversation rewind is unavailable for this provider".into()),
+            }
+            // The provider owns the branch mutation. Clients locate a fresh bounded page afterwards.
+            proc.timeline.lock().unwrap().replace_all(Vec::new());proc.user_targets.lock().unwrap().clear();
+            emit_state(app,session,AgentState::Waiting);
+        }
+        Ok(json!({"prefillText":prefill,"files":file_result}))
+    }
+
+    /// Rewind a conversation using the legacy runtime row mapping.
     pub fn rewind(
         &self,
         app: &AppCtx,
@@ -3298,6 +3642,33 @@ fn release_process(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
     terminate_owned(&mut proc.child.lock().unwrap());
 }
 
+/// A large tool input sent without its bulk. Short string fields (paths, commands, descriptions) survive, so
+/// a collapsed card can still name the file a big `Write` touched; the full input loads with the details.
+fn slim_tool_input(input: &Value, encoded: &str) -> Value {
+    match input.as_object() {
+        Some(map) => Value::Object(
+            map.iter()
+                .filter(|(_, v)| v.as_str().is_some_and(|s| s.len() <= 512))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        ),
+        None => Value::String(encoded.chars().take(1024).collect()),
+    }
+}
+
+/// Where a window ending at `end` starts: at most one page of rows within the rows' byte share.
+/// The row next to `end` always counts, so paging moves forward even past an oversized row.
+fn bounded_window_start(rows: &[ChatRow], end: usize) -> usize {
+    let mut start = end;
+    let mut bytes = 0;
+    while start > 0 && end - start < SNAPSHOT_PAGE_ROWS {
+        bytes += serde_json::to_vec(&snapshot_row(&rows[start - 1])).map_or(0, |wire| wire.len());
+        if bytes > SNAPSHOT_ROW_BYTES && start < end { break; }
+        start -= 1;
+    }
+    start
+}
+
 /// Serialize a timeline row for a snapshot without embedding image bytes.
 fn snapshot_row(row: &ChatRow) -> Value {
     match row {
@@ -3306,10 +3677,11 @@ fn snapshot_row(row: &ChatRow) -> Value {
             "images":images.iter().enumerate().map(|(index,image)| json!({"mimeType":image.mime_type,"attachmentId":row_attachment_id(id,index)})).collect::<Vec<_>>()
         }),
         ChatRow::Tool { id, name, input, output, is_error, status, subagent, children } if name != "AskUserQuestion" => {
-            let encoded = input.to_string();
-            let deferred = encoded.len() > 4096 || output.as_ref().is_some_and(|text| text.len() > 4096) || !children.is_empty();
+            let mut encoded=RowBytes {bytes:Vec::new(),limit:4096};
+            let fits=serde_json::to_writer(&mut encoded,input).is_ok();
+            let deferred = !fits || output.as_ref().is_some_and(|text| text.len() > 4096) || !children.is_empty();
             let mut value = json!({"kind":"tool", "id":id,"name":name,
-                "input":if encoded.len() > 4096 { Value::String(encoded.chars().take(1024).collect()) } else { input.clone() },
+                "input":if !fits { slim_tool_input(input,&String::from_utf8_lossy(&encoded.bytes)) } else { input.clone() },
                 "output":if deferred { None } else { output.as_ref() },
                 "isError":is_error,"status":status,"subagent":subagent,
                 "detailAvailable":deferred,"childCount":children.len(),"children":[]});
@@ -3318,6 +3690,62 @@ fn snapshot_row(row: &ChatRow) -> Value {
         }
         _ => serde_json::to_value(row).unwrap_or(Value::Null),
     }
+}
+
+struct RowBytes {bytes:Vec<u8>,limit:usize}
+impl std::io::Write for RowBytes {
+    fn write(&mut self,bytes:&[u8]) -> std::io::Result<usize> {
+        let keep=bytes.len().min(self.limit.saturating_sub(self.bytes.len()));self.bytes.extend_from_slice(&bytes[..keep]);
+        if keep!=bytes.len() {return Err(std::io::Error::other(crate::agent::history_store::compat::UPGRADE));}Ok(keep)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {Ok(())}
+}
+
+struct DetailRow<'a>(&'a ChatRow);
+impl serde::Serialize for DetailRow<'_> {
+    fn serialize<S:serde::Serializer>(&self,serializer:S) -> Result<S::Ok,S::Error> {
+        use serde::ser::SerializeMap;
+        if let ChatRow::Tool {id,name,input,output,is_error,status,subagent,children}=self.0 {
+            let mut map=serializer.serialize_map(None)?;map.serialize_entry("kind","tool")?;map.serialize_entry("id",id)?;map.serialize_entry("name",name)?;
+            map.serialize_entry("input",input)?;if let Some(output)=output {map.serialize_entry("output",output)?;}
+            map.serialize_entry("isError",is_error)?;map.serialize_entry("status",status)?;if let Some(subagent)=subagent {map.serialize_entry("subagent",subagent)?;}
+            map.serialize_entry("children",&DetailChildren(children))?;return map.end();
+        }
+        if let ChatRow::User {id,text,images,at}=self.0 {
+            let mut map=serializer.serialize_map(None)?;map.serialize_entry("kind","user")?;map.serialize_entry("id",id)?;
+            map.serialize_entry("text",text)?;map.serialize_entry("at",at)?;map.serialize_entry("images",&DetailImages(id,images))?;return map.end();
+        }
+        self.0.serialize(serializer)
+    }
+}
+struct DetailChildren<'a>(&'a [ChatRow]);
+impl serde::Serialize for DetailChildren<'_> {
+    fn serialize<S:serde::Serializer>(&self,serializer:S) -> Result<S::Ok,S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence=serializer.serialize_seq(Some(self.0.len()))?;
+        for row in self.0 {
+            // Tool children stay summaries. Other rows serialize directly into the enclosing byte
+            // guard so a long child body is rejected before any complete JSON value is allocated.
+            if matches!(row,ChatRow::User {..}) || matches!(row,ChatRow::Tool {name,..} if name=="AskUserQuestion") {sequence.serialize_element(&DetailRow(row))?;}
+            else if matches!(row,ChatRow::Tool {..}) {sequence.serialize_element(&snapshot_row(row))?;}
+            else {sequence.serialize_element(row)?;}
+        }
+        sequence.end()
+    }
+}
+struct DetailImages<'a>(&'a str,&'a [ChatImage]);
+impl serde::Serialize for DetailImages<'_> {
+    fn serialize<S:serde::Serializer>(&self,serializer:S) -> Result<S::Ok,S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence=serializer.serialize_seq(Some(self.1.len()))?;
+        for (index,image) in self.1.iter().enumerate() {sequence.serialize_element(&json!({"mimeType":image.mime_type,"attachmentId":row_attachment_id(self.0,index)}))?;}
+        sequence.end()
+    }
+}
+fn bounded_detail_row(row:&ChatRow) -> Result<Value,String> {
+    let mut writer=RowBytes {bytes:Vec::new(),limit:crate::agent::history_store::limits::PAGE_BYTES};
+    serde_json::to_writer(&mut writer,&DetailRow(row)).map_err(|_|crate::agent::history_store::compat::UPGRADE)?;
+    serde_json::from_slice(&writer.bytes).map_err(|e|e.to_string())
 }
 
 fn detail_row(row: &ChatRow) -> Value {
@@ -3337,7 +3765,10 @@ where
 }
 
 fn snapshot_queue_item(item: &QueuedMessage) -> Value {
-    let mut value = serde_json::to_value(item).unwrap_or(Value::Null);
+    let mut value = json!({"id":item.id,"text":item.text});
+    if item.images.is_empty() {
+        if let Some(context)=super::shell::parse_context(&item.text) {value["shellCommand"]=json!(context.command);}
+    }
     if !item.images.is_empty() {
         value["images"] = Value::Array(
             item.images
@@ -3440,7 +3871,7 @@ fn rewind_target(proc: &ChatProcess, row_id: &str) -> Result<super::history::Rew
         if let Some(message_id) = row_id.strip_prefix("u:") {
             let text = match proc.timeline.lock().unwrap().get(row_id) {
                 Some(ChatRow::User { text, .. }) => text.clone(),
-                _ => String::new(),
+                _ => return Err("The native user message is outside the current conversation window".into()),
             };
             return Ok(super::history::RewindTarget {
                 message_id: message_id.to_string(),
@@ -3449,32 +3880,7 @@ fn rewind_target(proc: &ChatProcess, row_id: &str) -> Result<super::history::Rew
             });
         }
     }
-    let agent_id = proc
-        .agent_session_id
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("The agent has not recorded this conversation yet")?;
-    let targets = super::history::rewind_targets(proc.kind, &agent_id)?;
-    let mut known = proc.user_targets.lock().unwrap();
-    let row_messages = proc.timeline.lock().unwrap().user_messages();
-    let mut cursor = targets.len();
-    for (id, text) in row_messages.iter().rev() {
-        if known.contains_key(id) {
-            continue;
-        }
-        while cursor > 0 {
-            cursor -= 1;
-            if targets[cursor].text.trim() == text.trim() {
-                known.insert(id.clone(), targets[cursor].clone());
-                break;
-            }
-        }
-    }
-    known
-        .get(row_id)
-        .cloned()
-        .ok_or_else(|| "The native recording does not contain that user message".to_string())
+    Err("The native user identity is not confirmed; refresh the indexed conversation before rewinding".into())
 }
 
 fn rewind_codex(
@@ -3484,7 +3890,7 @@ fn rewind_codex(
     target: &super::history::RewindTarget,
     drop_rows: &[(String, String)],
 ) -> Result<(), String> {
-    let thread = fork_codex_for_rewind(proc, target, drop_rows)?;
+    let thread = fork_codex_for_rewind(proc, target, drop_rows,None)?;
     activate_rewound_codex(app, session_id, proc, &thread);
     Ok(())
 }
@@ -3496,7 +3902,7 @@ fn activate_rewound_codex(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess
 }
 
 fn fork_codex_for_rewind(
-    proc: &Arc<ChatProcess>, target: &super::history::RewindTarget, drop_rows: &[(String, String)],
+    proc: &Arc<ChatProcess>, target: &super::history::RewindTarget, drop_rows: &[(String, String)],indexed_turns:Option<usize>,
 ) -> Result<String, String> {
     let thread_id = proc
         .agent_session_id
@@ -3559,7 +3965,7 @@ fn fork_codex_for_rewind(
                 }
             }
             let rolled_back = proc.request_and_wait("thread_rollback", |id| {
-                codex_protocol::thread_rollback(id, &forked_id, turns.len())
+                codex_protocol::thread_rollback(id, &forked_id, indexed_turns.unwrap_or(turns.len()))
             })?;
             rolled_back
                 .pointer("/thread/id")
@@ -3574,6 +3980,94 @@ fn fork_codex_for_rewind(
 }
 
 // ─────────────────────────── Threads ───────────────────────────
+
+fn spawn_history_restore(app:AppCtx,session:String,proc:Arc<ChatProcess>,native:String) {
+    std::thread::spawn(move|| {
+        // Registration, pipe readers, and the provider handshake precede all historical IO.
+        {
+            match super::history::replay(proc.kind,&native) {
+                Ok(rows)=>{
+                    let _callback=proc.callbacks.read().unwrap();
+                    if proc.released.load(Ordering::Relaxed) || !app.chat().owns_process(&session,&proc)
+                        || proc.agent_session_id.lock().unwrap().as_deref()!=Some(native.as_str()) {return;}
+                    let restored=proc.timeline.lock().unwrap().restore_prefix(rows);
+                    if restored {emit(&app,&session,reset_event(&proc));}
+                    return;
+                },
+                // Too large for the compatibility reader: page it in front of the timeline instead.
+                Err(message) if message.starts_with("detail_requires_paging:") && proc.history_cut.is_some() => {},
+                Err(message)=>{
+                    if app.chat().owns_process(&session,&proc) {emit(&app,&session,json!({"type":"historyReadError","message":message}));}
+                    return;
+                },
+            }
+        }
+        if proc.history_cut.is_none() {
+            if let Err(message)=crate::agent::history_store::api::prepare(&app,&session) {
+                if app.chat().owns_process(&session,&proc) {emit(&app,&session,json!({"type":"historyReadError","message":message}));}
+            }return;
+        }
+        proc.history_paged.store(true,Ordering::Relaxed);
+        announce_paged_history(&app,&session,&proc);
+    });
+}
+
+/// Replace the client's rows once the earlier history can be paged, so a conversation resumed with
+/// its view open shows what came before instead of an empty timeline. Waits on the index in this
+/// background thread; the process and its controls are already running.
+fn announce_paged_history(app:&AppCtx,session:&str,proc:&Arc<ChatProcess>) {
+    let head=loop {
+        if proc.released.load(Ordering::Relaxed) || !app.chat().owns_process(session,proc) {return;}
+        let Some(live)=app.chat().paged_history(session) else {return;};
+        match crate::agent::history_store::live_view::head(app,session,&live) {
+            Ok(Some(head))=>break head,
+            Ok(None)=>std::thread::sleep(Duration::from_millis(500)),
+            Err(message)=>{
+                if app.chat().owns_process(session,proc) {emit(app,session,json!({"type":"historyReadError","message":message}));}
+                return;
+            },
+        }
+    };
+    let _callback=proc.callbacks.read().unwrap();
+    if proc.released.load(Ordering::Relaxed) || !app.chat().owns_process(session,proc) {return;}
+    // Hold the timeline while the reset is built and sent: a row update emitted in between would
+    // carry a newer revision, and the client would then discard this reset as stale.
+    let mut timeline=proc.timeline.lock().unwrap();
+    timeline.revision+=1;
+    let start=timeline.rows.len().saturating_sub(SNAPSHOT_PAGE_ROWS);
+    let rows=&timeline.rows[start..];
+    let wire=timeline.wire_window(rows);
+    let first=rows.len()-wire.len();
+    let positions=wire.iter().enumerate().filter_map(|(offset,row)|row["id"].as_str()
+        .map(|id|(id.to_owned(),json!(start+first+offset)))).collect::<serde_json::Map<_,_>>();
+    let complete=start+first==0;
+    let protocol=1;
+    match crate::agent::history_store::live_view::compose(&head,wire,positions,complete,protocol) {
+        Ok(value)=>emit(app,session,json!({"type":"reset","epoch":proc.started_at,"revision":timeline.revision,
+            // Messages recorded before the launch come first on the rail.
+            "userMessages":head["userMessages"].as_array().cloned().unwrap_or_default().into_iter()
+                .chain(super::user_messages::outline(&timeline.rows).into_iter().filter_map(|message|serde_json::to_value(message).ok())).collect::<Vec<_>>(),
+            "rows":value["rows"],"protocolVersion":protocol,
+            "positions":value["positions"],"hasMore":value["hasMore"]})),
+        Err(message)=>emit(app,session,json!({"type":"historyReadError","message":message})),
+    }
+}
+
+/// One bounded piece of a waiting message's text, so a long draft is read without a page-sized frame.
+fn queue_piece(item:&QueuedMessage,expected:Option<&str>,sequence:u64) -> Result<Value,String> {
+    const PIECE:usize=crate::agent::history_store::limits::CHECKPOINT_BYTES;
+    if expected.is_some_and(|expected|expected!=item.id) {return Err("source_changed: queued text was edited".into());}
+    let mut start=0usize;let mut index=0u64;
+    loop {
+        let mut end=(start+PIECE).min(item.text.len());while !item.text.is_char_boundary(end) {end-=1;}
+        if index==sequence {
+            return Ok(json!({"id":item.id,"text":&item.text[start..end],"contentRevision":item.id,"chunkSequence":sequence,
+                "eof":end>=item.text.len(),"sizeBytes":item.text.len()}));
+        }
+        if end>=item.text.len() {return Err("cursor_expired: queued text cursor is outside this message".into());}
+        start=end;index+=1;
+    }
+}
 
 /// Message for a failed agent spawn. A missing executable becomes a stable code the conversation view
 /// turns into installation guidance; the OS text for that case is unreadable and varies by platform.
@@ -3605,6 +4099,7 @@ fn spawn_stdout_reader(
         auth::claude::exited(&app, &session_id, &proc);
         let _exit_callback = proc.callbacks.read().unwrap();
         if proc.kind == SessionKind::Antigravity { antigravity::finish_rows(&proc); }
+        if acp_protocol::supported(proc.kind) { acp::finish(&proc); }
         proc.alive.store(false, Ordering::Relaxed);
         for (_, waiter) in proc.waiters.lock().unwrap().drain() {
             let _ = waiter.send(Err("The agent exited before answering the request".to_string()));
@@ -3687,15 +4182,22 @@ fn spawn_config_lookup(
 
 fn spawn_stderr_reader(proc: Arc<ChatProcess>, stderr: std::process::ChildStderr) {
     std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines() {
-            let Ok(line) = line else { break };
-            let mut buf = proc.stderr.lock().unwrap();
-            if buf.len() < STDERR_LIMIT {
-                buf.push_str(&line);
-                buf.push('\n');
-            }
-        }
+        let _=drain_stderr(stderr,STDERR_LIMIT,|text|*proc.stderr.lock().unwrap()=text);
     });
+}
+
+fn drain_stderr(mut reader:impl std::io::Read,limit:usize,mut publish:impl FnMut(String)) -> std::io::Result<()> {
+    let mut retained=Vec::with_capacity(limit);let mut block=[0;16*1024];
+    loop {
+        let count=match reader.read(&mut block) {Err(error) if error.kind()==std::io::ErrorKind::Interrupted=>continue,result=>result?};
+        if count==0 {return Ok(());}
+        let keep=count.min(limit.saturating_sub(retained.len()));
+        if keep==0 {continue;}
+        retained.extend_from_slice(&block[..keep]);
+        let mut text=String::from_utf8_lossy(&retained).replace("\r\n","\n");
+        let mut end=text.len().min(limit.saturating_sub(1));while !text.is_char_boundary(end) {end-=1;}text.truncate(end);
+        if !text.is_empty() && !text.ends_with('\n') {text.push('\n');}publish(text);
+    }
 }
 
 /// Replace the previous process's rows atomically, using the same bounded window as live replacements.
@@ -3703,12 +4205,13 @@ fn reset_event(proc: &ChatProcess) -> Value {
     let timeline = proc.timeline.lock().unwrap();
     let start = timeline.rows.len().saturating_sub(SNAPSHOT_PAGE_ROWS);
     let rows = &timeline.rows[start..];
-    let positions: HashMap<_, _> = rows.iter().enumerate()
+    let mut positions: HashMap<_, _> = rows.iter().enumerate()
         .map(|(index, row)| (row.id(), start + index)).collect();
+    let wire=timeline.wire_window(rows);positions.retain(|id,_|wire.iter().any(|row|row["id"].as_str()==Some(id)));
     json!({"type":"reset", "epoch":proc.started_at, "revision":timeline.revision,
         "userMessages":super::user_messages::outline(&timeline.rows),
-        "rows":rows.iter().map(snapshot_row).collect::<Vec<_>>(),
-        "positions":positions, "hasMore":start > 0})
+        "rows":wire,"protocolVersion":1,
+        "positions":positions, "hasMore":start > 0 || proc.paged_history_exists()})
 }
 
 fn spawn_flusher(app: AppCtx, session_id: String, proc: Arc<ChatProcess>) {
@@ -3717,22 +4220,25 @@ fn spawn_flusher(app: AppCtx, session_id: String, proc: Arc<ChatProcess>) {
             std::thread::sleep(FLUSH_INTERVAL);
             let _callback = proc.callbacks.read().unwrap();
             if proc.released.load(Ordering::Relaxed) || !app.chat().owns_process(&session_id,&proc) { return; }
-            let (flush, revision, positions) = {
+            let (flush, revision, positions,wire_rows,has_more) = {
                 let mut timeline = proc.timeline.lock().unwrap();
                 timeline.revision += 1;
                 let flush = timeline.take_flush();
                 let rows = match &flush { TimelineFlush::Rows(rows) => rows.as_slice(), TimelineFlush::Replace(rows) => &rows[rows.len().saturating_sub(SNAPSHOT_PAGE_ROWS)..], TimelineFlush::None => &[] };
-                let positions: HashMap<_, _> = rows.iter().filter_map(|row| timeline.at.get(row.id()).map(|index| (row.id().to_owned(), *index))).collect();
-                (flush, timeline.revision, positions)
+                let mut positions: HashMap<_, _> = rows.iter().filter_map(|row| timeline.at.get(row.id()).map(|index| (row.id().to_owned(), *index))).collect();
+                let wire_rows=timeline.wire_window(rows);let has_more=rows.len()<timeline.rows.len() || wire_rows.len()<rows.len()
+                    || proc.paged_history_exists();
+                positions.retain(|id,_|wire_rows.iter().any(|row|row["id"].as_str()==Some(id)));
+                (flush, timeline.revision, positions,wire_rows,has_more)
             };
             match flush {
                 TimelineFlush::None => {}
                 TimelineFlush::Rows(rows) => {
-                    emit(&app, &session_id, json!({"type":"rows","positions":positions,"rows":rows.iter().map(snapshot_row).collect::<Vec<_>>(),"revision":revision,"epoch":proc.started_at}));
+                    let _=rows;
+                    emit(&app, &session_id, json!({"type":"rows","positions":positions,"rows":wire_rows,"protocolVersion":1,"revision":revision,"epoch":proc.started_at}));
                 }
                 TimelineFlush::Replace(rows) => {
-                    let start = rows.len().saturating_sub(SNAPSHOT_PAGE_ROWS);
-                    emit(&app, &session_id, json!({"type":"replaceRows","userMessages":super::user_messages::outline(&rows),"positions":positions,"rows":rows[start..].iter().map(snapshot_row).collect::<Vec<_>>(),"hasMore":start > 0,"revision":revision,"epoch":proc.started_at}));
+                    emit(&app, &session_id, json!({"type":"replaceRows","userMessages":super::user_messages::outline(&rows),"positions":positions,"rows":wire_rows,"hasMore":has_more,"protocolVersion":1,"revision":revision,"epoch":proc.started_at}));
                 }
             }
             if !proc.alive.load(Ordering::Relaxed) {
@@ -3757,12 +4263,21 @@ fn handle_line(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, line: &s
         pi::handle_line(app, session_id, proc, line);
         return;
     }
+    if proc.kind == SessionKind::Zcode {
+        zcode::handle_line(app, session_id, proc, line);
+        return;
+    }
+    if acp_protocol::supported(proc.kind) {
+        acp::handle_line(app, session_id, proc, line);
+        return;
+    }
     if proc.kind == SessionKind::Codex {
         handle_codex_line(app, session_id, proc, line);
         return;
     }
     auth::claude::observe(app, session_id, proc, line);
     if let Ok(value) = serde_json::from_str::<Value>(line) {
+        claude_identity::observe(proc,&value);
         // Before the generation clock sees the frame: adopting a turn restarts that clock.
         if opens_agent_turn(&value) {
             adopt_agent_turn(app, session_id, proc);
@@ -3783,9 +4298,10 @@ fn handle_line(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, line: &s
             if !verify_native_identity(app,session_id,proc,&agent_id) { return; }
             // Claude opens every turn with this frame. Outside a turn it is answering something of its own,
             // such as a finished background task, and the response follows once its request is served.
+            // Before a stopped turn's result, the frame still belongs to that turn.
             {
                 let mut turn = proc.turn.lock().unwrap();
-                if !turn.running {
+                if !turn.running && turn.stale_results == 0 {
                     turn.waking = Some(std::time::Instant::now());
                 }
             }
@@ -3983,6 +4499,9 @@ fn handle_line(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>, line: &s
 /// protocol adds the facts those frames cannot provide reliably: identity before the first frame,
 /// progress for background children, and a terminal status even when no child frame was emitted.
 fn handle_claude_task(proc: &Arc<ChatProcess>, subtype: &str, message: &Value) {
+    if subtype == "task_notification" {
+        mark_wake(proc, message);
+    }
     let task_id = message.get("task_id").and_then(Value::as_str).filter(|id| !id.is_empty());
     if subtype == "task_started" {
         let task_type = message.get("task_type").and_then(Value::as_str);
@@ -4180,6 +4699,11 @@ fn handle_codex_response(
         return;
     }
     if let Some(message) = error {
+        // Without account plugins, such as under an API key, the local skills already listed are all there is.
+        if kind == Some("plugin_sync") {
+            crate::diagnostic_warn!("chat: Codex plugin sync failed for {session_id}: {message}");
+            return;
+        }
         auth::require(app, session_id, proc, &json!(message));
         // Collaboration modes are experimental. An older app-server may not expose their catalogue; the
         // conversation still works in its native Default mode. Clear the selection as well as the
@@ -4259,6 +4783,10 @@ fn handle_codex_response(
                 return;
             }
             request_codex_skills(app, session_id, proc);
+            let id = proc.request_id("plugin_sync");
+            if let Err(message) = proc.write(&skills::plugin_sync_request(&id)) {
+                crate::diagnostic_warn!("chat: Codex plugin sync not requested for {session_id}: {message}");
+            }
             // Query first so a restored Plan selection is validated against the installed app-server
             // before the first queued turn can start.
             let id = proc.request_id("collaboration_mode_list");
@@ -4303,6 +4831,7 @@ fn handle_codex_response(
             );
             open_codex_thread(app, session_id, proc);
         }
+        Some("plugin_sync") => request_codex_skills(app, session_id, proc),
         Some("skills_list") => {
             match skills::codex_commands(&result) {
                 Ok(commands) => {
@@ -4420,6 +4949,24 @@ fn remember_codex_thread(
     );
 }
 
+/// Mark where a finished background task wakes an idle agent, so the turn that follows has a start.
+///
+/// Claude answers such a notification in a turn of its own, and the recording keeps the notification as
+/// the message that opened it; replay draws a wake row from that. A notification that lands while a turn
+/// runs is folded into that turn and opens nothing, so it gets no row here either.
+fn mark_wake(proc: &Arc<ChatProcess>, message: &Value) {
+    if proc.turn.lock().unwrap().running
+        || message.get("parent_tool_use_id").is_some_and(|parent| !parent.is_null())
+    {
+        return;
+    }
+    let Some(task_id) = message.get("task_id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let summary = message.get("summary").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    proc.timeline.lock().unwrap().upsert(ChatRow::Wake { id: format!("w-{task_id}"), summary, at: Some(now_ms() as i64) });
+}
+
 /// Whether a Claude frame begins a model response in the main conversation.
 ///
 /// Every response opens with `message_start` while partial messages are on, which the engine always
@@ -4436,10 +4983,12 @@ fn opens_agent_turn(value: &Value) -> bool {
 /// turn of its own. Nothing was dispatched, so nothing marked that turn running and the session read as
 /// waiting until it ended. Adopting the turn at its first response gives it the bookkeeping a dispatched
 /// turn has: the session reports working, and a message sent meanwhile queues behind it.
+///
+/// A turn stopped locally keeps streaming until its result arrives; those responses are not a new turn.
 fn adopt_agent_turn(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
     let started_at = {
         let mut turn = proc.turn.lock().unwrap();
-        if turn.running {
+        if turn.running || turn.stale_results > 0 {
             return;
         }
         let now = now_ms();
@@ -4467,7 +5016,7 @@ fn start_waiting_message(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>
         emit_extras(app, session_id, proc);
     }
     emit_queue(app, session_id, &proc);
-    if let Err(message) = dispatch(app, session_id, proc, &next.text, &next.images, Some(&next.id)) {
+    if let Err(message) = dispatch(app,session_id,proc,&next.text,&next.images,Some(&next.id)) {
         if message.written {
             emit(app, session_id, json!({"type":"error","message":message.message}));
             return;
@@ -4476,6 +5025,7 @@ fn start_waiting_message(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>
         turn.running = false;
         turn.started_at = None;
         drop(turn);
+        emit_queue(app,session_id,proc);
         emit(app, session_id, json!({"type":"error","message":message.message}));
         emit(app, session_id, json!({"type":"turnCompleted"}));
         emit_state(app, session_id, AgentState::Waiting);
@@ -4697,8 +5247,7 @@ fn handle_codex_notification(
             if let Some(id) = params.pointer("/turn/id").and_then(Value::as_str) {
                 *proc.current_turn.lock().unwrap() = Some(id.to_string());
                 for row_id in proc.pending_user_rows.lock().unwrap().drain(..) {
-                    proc.user_targets.lock().unwrap().insert(
-                        row_id,
+                    proc.user_targets.lock().unwrap().entry(row_id).or_insert(
                         super::history::RewindTarget {
                             message_id: id.to_string(),
                             last_message_id: None, turn_id: Some(id.to_string()),
@@ -4747,11 +5296,24 @@ fn handle_codex_notification(
             }
         }
         "item/started" => {
+            codex_identity::observe(app,session_id,proc,&params);
+            if params["item"]["type"]=="userMessage" {
+                if let Some(native)=params["item"]["id"].as_str() {
+                    let turn=params["turnId"].as_str();
+                    let targets=proc.user_targets.lock().unwrap();
+                    let rows=proc.timeline.lock().unwrap().user_messages().into_iter()
+                        .filter(|(id,_)|targets.get(id).is_some_and(|target|target.turn_id.as_deref()==turn))
+                        .map(|(id,_)|id).collect::<Vec<_>>();
+                    drop(targets);
+                    super::super::translation::bind_native_message(app,session_id,native,&rows);
+                }
+            }
             if let Some(item) = params.get("item") {
                 upsert_codex_item_at(proc, item, true, None);
             }
         }
         "item/completed" => {
+            codex_identity::observe(app,session_id,proc,&params);
             if let Some(item) = params.get("item") {
                 upsert_codex_item_at(proc, item, false, None);
             }
@@ -5315,25 +5877,55 @@ fn handle_turn_end(
     subtype: &str,
     reported_duration_ms: Option<u64>,
 ) {
-    let completed_at = now_ms();
-    let (next, interrupted, started_at, background) = {
+    let end = {
         let mut turn = proc.turn.lock().unwrap();
-        let interrupted = std::mem::take(&mut turn.interrupted);
-        let started_at = turn.started_at.take();
-        turn.waking = None;
-        let TurnQueue { active_tasks, foreground_tasks, .. } = &mut *turn;
-        for id in foreground_tasks.drain() {
-            active_tasks.remove(&id);
+        // The result of a turn already stopped here. That turn was concluded when it was stopped, and
+        // ending again now would end whatever was sent since.
+        if turn.stale_results > 0 {
+            turn.stale_results -= 1;
+            return;
         }
-        let next = if app.chat().closing.load(Ordering::Relaxed) || turn.steering || turn.waiting.is_empty() || auth::blocks_queue(proc) {
-            turn.running = false;
-            None
-        } else {
-            // Stays running: the message about to go out is the next turn, without an idle gap between.
-            Some(turn.waiting.remove(0))
-        };
-        (next, interrupted, started_at, background_pending(&turn))
+        take_turn_end(app, proc, &mut turn)
     };
+    finish_turn_end(app, session_id, proc, subtype, reported_duration_ms, end);
+}
+
+/// What ending a turn decided under the turn lock, carried out by `finish_turn_end` once it is released.
+struct TurnEnd {
+    next: Option<QueuedMessage>,
+    interrupted: bool,
+    started_at: Option<u64>,
+    background: bool,
+}
+
+fn take_turn_end(app: &AppCtx, proc: &Arc<ChatProcess>, turn: &mut TurnQueue) -> TurnEnd {
+    let interrupted = std::mem::take(&mut turn.interrupted);
+    let started_at = turn.started_at.take();
+    turn.waking = None;
+    let TurnQueue { active_tasks, foreground_tasks, .. } = &mut *turn;
+    for id in foreground_tasks.drain() {
+        active_tasks.remove(&id);
+    }
+    let next = if app.chat().closing.load(Ordering::Relaxed) || turn.steering || turn.waiting.is_empty() || auth::blocks_queue(proc) {
+        turn.running = false;
+        None
+    } else {
+        // Stays running: the message about to go out is the next turn, without an idle gap between.
+        Some(turn.waiting.remove(0))
+    };
+    TurnEnd { next, interrupted, started_at, background: background_pending(turn) }
+}
+
+fn finish_turn_end(
+    app: &AppCtx,
+    session_id: &str,
+    proc: &Arc<ChatProcess>,
+    subtype: &str,
+    reported_duration_ms: Option<u64>,
+    end: TurnEnd,
+) {
+    let completed_at = now_ms();
+    let TurnEnd { next, interrupted, started_at, background } = end;
     if let Some(duration_ms) = reported_duration_ms.or_else(|| {
         started_at.map(|started| completed_at.saturating_sub(started))
     }) {
@@ -5367,7 +5959,7 @@ fn handle_turn_end(
         return;
     };
     emit_queue(app, session_id, &proc);
-    if let Err(e) = dispatch(app, session_id, proc, &item.text, &item.images, Some(&item.id)) {
+    if let Err(e) = dispatch(app,session_id,proc,&item.text,&item.images,Some(&item.id)) {
         if e.written {
             emit(app, session_id, json!({"type":"error","message":e.message}));
             return;
@@ -5376,6 +5968,7 @@ fn handle_turn_end(
         turn.running = false;
         turn.started_at = None;
         drop(turn);
+        emit_queue(app,session_id,proc);
         emit(app, session_id, json!({"type":"error","message":e.message}));
         emit(app, session_id, json!({"type":"turnCompleted"}));
         emit_state(app, session_id, AgentState::Waiting);
@@ -5425,6 +6018,10 @@ fn report_auto_continue(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>,
                 }
             });
         }
+        // OpenCode Go v2 errors carry no reset time; the pane then says the task will not continue on its own.
+        SessionKind::Opencode => {
+            auto_continue::turn_ended(app, session_id, TurnOutcome::LimitReached(opencode::take_usage_limit_reset(proc)))
+        }
         _ => auto_continue::turn_ended(app, session_id, TurnOutcome::Other),
     }
 }
@@ -5434,11 +6031,22 @@ fn report_auto_continue(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>,
 /// The agent ends an interrupted turn by reporting a failure. That failure is the interrupt working, so
 /// the turn is marked as asked-for and the timeline grows no error row for it — but only when a turn was
 /// actually running, or the mark would sit there and swallow the next real failure.
-fn interrupt_locked(proc: &Arc<ChatProcess>, turn: &mut TurnQueue) -> Result<(), String> {
+///
+/// A running Claude turn ends here, without waiting for its result: under load the reader can trail the
+/// agent by minutes, and the session would keep showing working long after the agent stopped. The caller
+/// carries out the returned end with `finish_turn_end` once the lock is released; its result, whenever it
+/// arrives, is then passed over (see `stale_results`).
+fn interrupt_locked(app: &AppCtx, proc: &Arc<ChatProcess>, turn: &mut TurnQueue) -> Result<Option<TurnEnd>, String> {
     let previous = turn.interrupted;
-    let result = send_interrupt_locked(proc, turn);
-    if result.is_err() { turn.interrupted = previous; }
-    result
+    if let Err(error) = send_interrupt_locked(proc, turn) {
+        turn.interrupted = previous;
+        return Err(error);
+    }
+    if proc.kind != SessionKind::Claude || !turn.running {
+        return Ok(None);
+    }
+    turn.stale_results += 1;
+    Ok(Some(take_turn_end(app, proc, turn)))
 }
 
 fn send_interrupt_locked(proc: &Arc<ChatProcess>, turn: &mut TurnQueue) -> Result<(), String> {
@@ -5466,6 +6074,18 @@ fn send_interrupt_locked(proc: &Arc<ChatProcess>, turn: &mut TurnQueue) -> Resul
             return Ok(());
         }
         return pi::abort(proc);
+    }
+    if proc.kind == SessionKind::Zcode {
+        if !turn.running {
+            return Ok(());
+        }
+        return zcode::stop(proc);
+    }
+    if acp_protocol::supported(proc.kind) {
+        if !turn.running {
+            return Ok(());
+        }
+        return acp::cancel(proc);
     }
     if proc.kind == SessionKind::Codex {
         if !turn.running {
@@ -5534,6 +6154,13 @@ fn claim_native_writer(app: &AppCtx, proc: &ChatProcess) -> Result<(), String> {
     Ok(())
 }
 
+/// A translated Claude message carries the UUID its translation is recorded under; any other message
+/// gets one derived from its row. Either is registered so Claude's replay acknowledgement confirms it.
+fn write_claude_user_message(app: &AppCtx, session_id: &str, proc: &ChatProcess, row: &str, text: &str, images: &[ChatImage]) -> Result<(),String> {
+    let preset=if proc.kind==SessionKind::Claude {super::super::translation::claude_message_uuid(app,session_id,row)?} else {None};
+    claude_identity::write(session_id,proc,row,text,images,preset)
+}
+
 /// Submit a prompt to the active turn without changing its clock or draining its queue.
 fn dispatch_steer(
     app: &AppCtx,
@@ -5546,6 +6173,9 @@ fn dispatch_steer(
     if app.chat().closing.load(Ordering::Relaxed) { return Err("The application is shutting down.".into()); }
     if proc.kind == SessionKind::Antigravity {
         super::antigravity_protocol::validate(text, images.len(), "steer")?;
+    }
+    if acp_protocol::supported(proc.kind) {
+        acp::validate(proc, "steer", images.len())?;
     }
     let commands = proc.commands.lock().unwrap().clone();
     let normalized = skills::native_text(text, &commands);
@@ -5564,22 +6194,29 @@ fn dispatch_steer(
                 .ok_or("Codex has not opened its thread yet")?;
             let turn_id = proc.current_turn.lock().unwrap().clone()
                 .ok_or("Codex is still starting its turn. Retry steering once the turn has started.")?;
+            let client=codex_identity::client(proc,&row_id,&thread_id)?;
             // A refusal belongs to this submission, not to the running turn.
-            proc.request_and_wait("turn_steer", |id| {
-                skills::with_inputs(codex_protocol::turn_steer(id, &thread_id, &turn_id, text, images), text, &commands)
+            proc.request_and_write("turn_steer", |id| {
+                let envelope=codex_identity::request(skills::with_inputs(codex_protocol::turn_steer(id, &thread_id, &turn_id, "", &[]), text, &commands),client.as_deref());
+                proc.write_codex_input(&envelope,text,images,None)
             })?;
-            proc.user_targets.lock().unwrap().insert(row_id.clone(), super::history::RewindTarget {
+            proc.user_targets.lock().unwrap().entry(row_id.clone()).or_insert(super::history::RewindTarget {
                 message_id: turn_id.clone(), last_message_id: None, turn_id: Some(turn_id), text: text.to_string(),
             });
         }
         SessionKind::Opencode => opencode::steer(proc, &row_id, text, images)?,
         SessionKind::Pi | SessionKind::Omp => pi::steer(proc, text, images)?,
-        _ => proc.write(&protocol::user_message(text, images))?,
+        // `guide` delivery joins the running turn at its next tool boundary; ZCode queues the message
+        // itself when the turn has no boundary left, so the receipt below stays honest either way.
+        SessionKind::Zcode => zcode::steer(app, session_id, proc, &row_id, text, images)?,
+        SessionKind::Claude => write_claude_user_message(app,session_id,proc,&row_id,text,images)?,
+        _ => proc.write_source(|writer|outgoing_wire::claude(writer,text,images,None))?,
     }
     if proc.kind != SessionKind::Opencode && !super::shell::is_tagged(text) {
         crate::agent::server::try_auto_rename(app, session_id, text);
     }
-    proc.timeline.lock().unwrap().upsert(user_row(row_id, text, images.to_vec(), Some(sent_at as i64)));
+    let row=user_row(row_id,text,images.to_vec(),Some(sent_at as i64));
+    proc.timeline.lock().unwrap().upsert(row);
     if let Some(id) = message_id {
         let receipt = if proc.permissions.lock().unwrap().is_empty() { "steered" } else { "blocked" };
         super::submissions::finish_dispatch(&app.db().conn.lock().unwrap(), session_id, id, receipt)?;
@@ -5632,7 +6269,8 @@ fn dispatch(
     if newly_started { proc.extras.lock().unwrap().generation = generation::GenerationTiming::default(); }
     let row_id = message_id.map(str::to_owned).unwrap_or_else(|| format!("u-{}", proc.next_request.fetch_add(1, Ordering::Relaxed)));
     if let Some(id) = message_id { super::submissions::begin_dispatch(&app.db().conn.lock().unwrap(), session_id, id)?; }
-    proc.timeline.lock().unwrap().upsert(user_row(row_id.clone(), text, images.to_vec(), Some(sent_at as i64)));
+    let row=user_row(row_id.clone(),text,images.to_vec(),Some(sent_at as i64));
+    proc.timeline.lock().unwrap().upsert(row);
     // Publish the clock before a fast provider can complete the turn on its reader thread.
     if newly_started {
         emit(app, session_id, json!({"type":"turnStarted","startedAt":turn_started_at}));
@@ -5641,11 +6279,15 @@ fn dispatch(
     if proc.kind == SessionKind::Antigravity {
         super::antigravity_protocol::validate(text, images.len(), "queue")?;
         proc.antigravity.lock().unwrap().begin_turn();
-        proc.write(&super::antigravity_protocol::user_message(text))?;
+        proc.write_source(|writer|outgoing_wire::antigravity(writer,text))?;
     } else if proc.kind == SessionKind::Opencode {
         opencode::dispatch(app, session_id, proc, &row_id, text, images)?;
     } else if matches!(proc.kind, SessionKind::Pi | SessionKind::Omp) {
         pi::dispatch(proc, text, images)?;
+    } else if proc.kind == SessionKind::Zcode {
+        zcode::dispatch(app, session_id, proc, &row_id, text, images)?;
+    } else if acp_protocol::supported(proc.kind) {
+        acp::dispatch(proc, text, images)?;
     } else if proc.kind == SessionKind::Codex {
         let thread_id = proc
             .agent_session_id
@@ -5654,19 +6296,20 @@ fn dispatch(
             .clone()
             .ok_or("Codex has not opened its thread yet")?;
         let current_turn = proc.current_turn.lock().unwrap().clone();
+        let client=codex_identity::client(proc,&row_id,&thread_id)?;
         let id = proc.request_id(if current_turn.is_some() { "turn_steer" } else { "turn_start" });
         if let Some(turn_id) = current_turn {
-            proc.user_targets.lock().unwrap().insert(
-                row_id,
+            proc.user_targets.lock().unwrap().entry(row_id.clone()).or_insert(
                 super::history::RewindTarget {
                     message_id: turn_id.clone(),
                     last_message_id: None, turn_id: Some(turn_id.clone()),
                     text: text.to_string(),
                 },
             );
-            proc.write(&skills::with_inputs(codex_protocol::turn_steer(&id, &thread_id, &turn_id, text, images), text, &commands))?;
+            let envelope=codex_identity::request(skills::with_inputs(codex_protocol::turn_steer(&id, &thread_id, &turn_id, "", &[]), text, &commands),client.as_deref());
+            proc.write_codex_input(&envelope,text,images,None)?;
         } else {
-            proc.pending_user_rows.lock().unwrap().push(row_id);
+            proc.pending_user_rows.lock().unwrap().push(row_id.clone());
             let model = proc.model.lock().unwrap().clone();
             let effort = proc.effort.lock().unwrap().clone();
             let mode = proc.mode.lock().unwrap().clone();
@@ -5681,11 +6324,11 @@ fn dispatch(
             });
             let service_tier = proc.service_tier.lock().unwrap().clone();
             let personality = proc.personality.lock().unwrap().clone();
-            proc.write_codex_mode_request(&id, &mode, &skills::with_inputs(codex_protocol::turn_start(
+            let envelope=codex_identity::request(skills::with_inputs(codex_protocol::turn_start(
                 &id,
                 &thread_id,
-                text,
-                images,
+                "",
+                &[],
                 codex_protocol::TurnOptions {
                     model: model.as_deref(),
                     effort: effort.as_deref(),
@@ -5695,10 +6338,11 @@ fn dispatch(
                     service_tier: service_tier.as_deref(),
                     personality: personality.as_deref(),
                 },
-            ), text, &commands))?;
+            ), text, &commands),client.as_deref());
+            proc.write_codex_input(&envelope,text,images,Some(&mode))?;
         }
     } else {
-        proc.write(&protocol::user_message(text, images))?;
+        write_claude_user_message(app,session_id,proc,&row_id,text,images)?;
     }
     let receipt = message_id.map(|id|super::submissions::finish_dispatch(&app.db().conn.lock().unwrap(), session_id, id, "sent"))
         .transpose().map_err(|message|DispatchFailure { message, written:true });
@@ -5802,9 +6446,7 @@ fn handle_delta(proc: &Arc<ChatProcess>, delta: Delta) {
 
 fn append(proc: &Arc<ChatProcess>, id: &str, text: &str) -> String {
     let mut buffers = proc.buffers.lock().unwrap();
-    let buf = buffers.entry(id.to_string()).or_default();
-    buf.push_str(text);
-    buf.clone()
+    let buffer=buffers.entry(id.into()).or_default();buffer.push_str(text);buffer.clone()
 }
 
 /// Apply a complete assistant message, replacing whatever its fragments built.
@@ -6174,6 +6816,7 @@ fn frame_context_tokens(message: &Value) -> Option<u64> {
 // ─────────────────────────── Emission ───────────────────────────
 
 fn emit(app: &AppCtx, session_id: &str, mut payload: Value) {
+    super::super::translation::observe(app, session_id, &payload);
     super::super::plan_execute::observe(app, session_id, &payload);
     super::super::tell::decorate(app, session_id, &mut payload);
     app.emit(&event_name(session_id), payload);
@@ -6306,6 +6949,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn agent_version_keeps_the_running_peers_startup_version() {
+        let manager = ChatManager::new();
+        let mut proc = inert_process(SessionKind::Codex);
+        Arc::get_mut(&mut proc).unwrap().version = Some("0.100.0".into());
+        manager.sessions.lock().unwrap().insert("s".into(), proc.clone());
+        assert_eq!(manager.agent_version("s"), Some(Some("0.100.0".into())));
+        proc.alive.store(false, Ordering::Relaxed);
+        assert_eq!(manager.agent_version("s"), None);
+        assert_eq!(manager.agent_version("unknown"), None);
+    }
+
     /// Pi and OMP leave the context limit to the model catalogue: a running process answers with the one
     /// the CLI itself reports, and every other kind has nothing to add.
     #[test]
@@ -6335,6 +6990,7 @@ mod tests {
             owner: Mutex::new(None),
             kind,
             bin: "true".into(),
+            version: None,
             auth_settings_args: Vec::new(),
             auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
@@ -6343,6 +6999,10 @@ mod tests {
             child: Mutex::new(Command::new("true").spawn().unwrap()),
             timeline: Mutex::new(Timeline::default()),
             permissions: Mutex::new(HashMap::new()),
+            history_cut:None,
+            history_paged:AtomicBool::new(false),
+            codex_client_ids:false,
+            codex_pending_user_ids:Mutex::new(HashMap::new()),
             commands: Mutex::new(Vec::new()),
             config_keys: Mutex::new(Vec::new()),
             subagent_ids: Mutex::new(HashMap::new()),
@@ -6350,7 +7010,9 @@ mod tests {
             codex_pending_child_events: Mutex::new(HashMap::new()),
             opencode: Mutex::new(opencode::OpencodeState::default()),
             pi: Mutex::new(pi::PiState::default()),
+            zcode: Mutex::new(zcode::ZcodeState::default()),
             antigravity: Mutex::new(crate::agent::chat::antigravity_protocol::StreamState::default()),
+            acp: Mutex::new(acp::AcpState::default()),
             service_tier: Mutex::new(None),
             personality: Mutex::new(None),
             codex_turn_error: Mutex::new(None),
@@ -6375,6 +7037,7 @@ mod tests {
             pending: Mutex::new(HashMap::new()),
             waiters: Mutex::new(HashMap::new()),
             user_targets: Mutex::new(HashMap::new()),
+            claude_user_ids:Mutex::new(HashMap::new()),
             pending_user_rows: Mutex::new(Vec::new()),
             turn: Mutex::new(TurnQueue::default()),
             stderr: Mutex::new(String::new()),
@@ -6419,6 +7082,22 @@ mod tests {
         }
         let rows = proc.timeline.lock().unwrap().rows.clone();
         rows
+    }
+
+    /// A task that finishes while the agent is idle wakes it into a turn of its own, so the timeline marks
+    /// where that turn starts. One that finishes mid-turn is folded into the running turn and marks nothing.
+    #[test]
+    fn task_notification_marks_a_wake_only_while_idle() {
+        const DONE: &str = r#"{"type":"system","subtype":"task_notification","task_id":"b1","status":"completed","summary":"Background command \"Watch CI\" completed (exit code 0)"}"#;
+        let rows = timeline_of(&[DONE]);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0], ChatRow::Wake { id, summary, at: Some(_) }
+            if id == "w-b1" && summary == "Background command \"Watch CI\" completed (exit code 0)"));
+
+        let proc = inert_process(SessionKind::Claude);
+        proc.turn.lock().unwrap().running = true;
+        handle_claude_task(&proc, "task_notification", &serde_json::from_str(DONE).unwrap());
+        assert!(proc.timeline.lock().unwrap().rows.is_empty());
     }
 
     /// Fragments build a row, and the complete message replaces it in place rather than adding a second one.
@@ -7031,6 +7710,109 @@ mod tests {
         assert!(rows.iter().any(|row| matches!(row, ChatRow::Assistant { text, .. } if text == "done")));
     }
 
+    /// A ZCode turn followed through its V4 frames, shaped like a live `zcode app-server` 0.17.0 run: the
+    /// engine's own input is not drawn twice, deltas stream into rows, an approval becomes a card and leaves
+    /// with the server's list, and the turn header's terminal state ends the turn.
+    #[test]
+    fn zcode_frames_build_the_timeline_and_end_the_turn() {
+        let app = ctx("zcode-frames");
+        let proc = inert_process(SessionKind::Zcode);
+        *proc.agent_session_id.lock().unwrap() = Some("sess_1".into());
+        proc.turn.lock().unwrap().running = true;
+        zcode::test_await(&proc, "cmd-1", "u-1");
+        proc.timeline.lock().unwrap().upsert(ChatRow::User { id: "u-1".into(), text: "please use a tool".into(), images: Vec::new(), at: None });
+        let frame = |from: u64, to: u64, payload: Value| json!({"method":"v4/conversation/frame","params":{"wireVersion":3,"kind":"complete",
+            "frame":{"topic":"conversation/sess_1","fromSeq":from,"toSeq":to,"payload":payload}}}).to_string();
+        let deltas = |list: Value| json!({"kind":"deltas","deltas":list});
+        let lines = [
+            frame(0, 2, json!({"kind":"snapshot","snapshot":{"revision":1,"control":{"phase":"draft","lastError":null},
+                "config":{"provider":"fake","model":"fake-model","thought":"enabled","mode":"build"},
+                "usage":{"contextWindow":null,"cumulative":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0}},
+                "pendingInteractions":[],"rows":{"window":[],"totalCount":0}}})),
+            frame(2, 6, deltas(json!([
+                {"op":"row.appended","row":{"rowId":1,"kind":"turnHeader","state":"running","sourceCommandId":"cmd-1","visibility":"visible"}},
+                {"op":"row.appended","row":{"rowId":2,"kind":"userInput","text":"please use a tool","sourceCommandId":"cmd-1","visibility":"visible"}},
+                {"op":"row.appended","row":{"rowId":3,"kind":"reasoning","text":"","state":"streaming","visibility":"visible"}},
+                {"op":"row.delta","rowId":3,"path":"text","append":"Need a tool."},
+            ]))),
+            frame(6, 9, deltas(json!([
+                {"op":"row.appended","row":{"rowId":4,"kind":"toolCall","toolCallId":"call_1","toolName":"Bash","status":"pendingApproval",
+                    "inputText":"{\"command\":\"touch made.txt\"}","input":{"command":"touch made.txt"},"visibility":"visible"}},
+                {"op":"state.updated","patch":{"pendingInteractions":[{"interactionId":"perm_1","kind":"permission","payload":{"kind":"permission",
+                    "toolName":"Bash","summary":"High risk tools require explicit approval","detail":{"command":"touch made.txt"},
+                    "options":[{"optionId":"allowOnce","kind":"allowOnce"},{"optionId":"deny","kind":"deny"}]}}]}},
+            ]))),
+        ];
+        for line in &lines {
+            zcode::handle_line(&app, "s", &proc, line);
+        }
+        assert!(proc.permissions.lock().unwrap().contains_key("perm_1"), "the approval waits as a card");
+        assert_eq!(proc.extras.lock().unwrap().context_window, None, "no window before the model answers");
+        for line in [
+            frame(9, 12, deltas(json!([
+                {"op":"state.updated","patch":{"pendingInteractions":[]}},
+                {"op":"row.upserted","row":{"rowId":4,"kind":"toolCall","toolCallId":"call_1","toolName":"Bash","status":"success",
+                    "input":{"command":"touch made.txt"},"output":{"text":"(Bash completed with no output)"},"visibility":"visible"}},
+                {"op":"row.appended","row":{"rowId":5,"kind":"assistantText","text":"","state":"streaming","visibility":"visible"}},
+                {"op":"row.delta","rowId":5,"path":"text","append":"Done"},
+            ]))),
+            frame(12, 14, deltas(json!([
+                {"op":"row.upserted","row":{"rowId":5,"kind":"assistantText","text":"Done.","state":"complete","visibility":"visible"}},
+                {"op":"row.upserted","row":{"rowId":1,"kind":"turnHeader","state":"completedSuccess","sourceCommandId":"cmd-1","visibility":"visible"}},
+                {"op":"state.updated","patch":{"usage":{"contextWindow":{"usedTokens":75349,"maxTokens":200000,"autoCompactThresholdTokens":null},
+                    "cumulative":{"inputTokens":73009,"outputTokens":2340,"cacheReadTokens":72768,"cacheWriteTokens":0}}}},
+            ]))),
+        ] {
+            zcode::handle_line(&app, "s", &proc, &line);
+        }
+        assert!(proc.permissions.lock().unwrap().is_empty(), "the card leaves with the server's list");
+        assert!(!proc.turn.lock().unwrap().running, "the terminal turn header ends the turn");
+        assert_eq!(proc.model.lock().unwrap().as_deref(), Some("fake/fake-model"));
+        assert_eq!(proc.effort.lock().unwrap().as_deref(), Some("enabled"));
+        let extras = proc.extras.lock().unwrap().clone();
+        assert_eq!((extras.context_tokens, extras.context_window), (Some(75349), Some(200000)), "the measured window feeds the meter");
+        let rows = proc.timeline.lock().unwrap().rows.clone();
+        assert_eq!(rows.iter().filter(|row| matches!(row, ChatRow::User { .. })).count(), 1, "the echo is not drawn twice");
+        assert!(rows.iter().any(|row| matches!(row, ChatRow::Reasoning { text, .. } if text == "Need a tool.")));
+        assert!(rows.iter().any(|row| matches!(row, ChatRow::Tool { id, name, output, status, .. }
+            if id == "z-4" && name == "Bash" && output.as_deref() == Some("(Bash completed with no output)") && *status == "completed")));
+        assert!(rows.iter().any(|row| matches!(row, ChatRow::Assistant { text, streaming: false, .. } if text == "Done.")));
+        assert!(!rows.iter().any(|row| row.id() == "z-1"), "turn headers are not drawn");
+    }
+
+    /// A steered message asks ZCode for `guide` delivery, so it joins the turn in flight rather than
+    /// waiting behind it, and the command is claimed so the projected echo is not drawn twice.
+    #[test]
+    fn a_zcode_steer_requests_guide_delivery() {
+        use std::io::BufRead as _;
+        let app = ctx("zcode-steer");
+        let proc = inert_process(SessionKind::Zcode);
+        *proc.agent_session_id.lock().unwrap() = Some("sess_1".into());
+        // A live pipe stands in for the agent: whatever the engine writes comes back out to be read.
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let stdin = child.stdin.take().unwrap();
+        *proc.child.lock().unwrap() = child;
+        *proc.stdin.lock().unwrap() = Some(stdin);
+        zcode::steer(&app, "s", &proc, "u-9", "and this too", &[]).unwrap();
+        assert!(zcode::test_claimed(&proc, "u-9"), "the command is claimed before anything is written");
+        let mut written = String::new();
+        stdout.read_line(&mut written).unwrap();
+        let request: Value = serde_json::from_str(written.trim()).unwrap();
+        assert_eq!(request["method"], "v4/command");
+        assert_eq!(request["params"]["type"], "sendText");
+        assert_eq!(request["params"]["sessionId"], "sess_1");
+        assert_eq!(request["params"]["payload"]["text"], "and this too");
+        assert_eq!(request["params"]["payload"]["requestedDelivery"], "guide");
+        // Acknowledge the command so the sending thread ends instead of waiting out its timeout.
+        zcode::handle_line(&app, "s", &proc, &json!({"id": request["id"], "result": {"status": "accepted"}}).to_string());
+    }
+
     /// An OMP approval dialog becomes a permission card, and the answer travels back as its response.
     #[test]
     fn omp_extension_dialog_becomes_a_permission_card() {
@@ -7153,7 +7935,9 @@ mod tests {
             r#"{"type":"system","subtype":"task_updated","task_id":"task-a","patch":{"status":"completed"}}"#,
             r#"{"type":"system","subtype":"task_notification","task_id":"task-a","tool_use_id":"tool-a","status":"completed","summary":"Parser inspected","usage":{"total_tokens":1500,"tool_uses":4,"duration_ms":120}}"#,
         ]);
-        assert_eq!(rows.len(), 1);
+        // No turn runs here, so the finished subagent wakes the agent and the timeline marks it.
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[1], ChatRow::Wake { summary, .. } if summary == "Parser inspected"));
         match &rows[0] {
             ChatRow::Tool { status, output, subagent: Some(facts), children, .. } => {
                 assert_eq!(*status, "completed");
@@ -7213,6 +7997,20 @@ mod tests {
         let queue_ref = wire["queue"][0]["images"][0]["attachmentId"].as_str().unwrap();
         assert_eq!(manager.attachment(session_id, row_ref).unwrap(), image);
         assert_eq!(manager.attachment(session_id, queue_ref).unwrap().data, "QUJDREVGR0g=");
+    }
+
+    #[test]
+    fn delayed_history_keeps_new_native_rows_and_cannot_cross_a_clear_or_rewind() {
+        let row=|id:&str,text:&str|ChatRow::User {id:id.into(),text:text.into(),images:vec![],at:None};
+        let mut timeline=Timeline::default();timeline.upsert(row("same-native","Live confirmation"));timeline.upsert(row("new","New user input"));
+        assert!(timeline.restore_prefix(vec![row("old","Older original"),row("same-native","Earlier snapshot")]));
+        assert_eq!(timeline.user_messages(),vec![("old".into(),"Older original".into()),("same-native".into(),"Live confirmation".into()),("new".into(),"New user input".into())]);
+        assert!(matches!(timeline.take_flush(),TimelineFlush::Replace(rows) if rows.len()==3));
+        assert!(!timeline.restore_prefix(vec![row("stale","Stale second restoration")]));
+        let mut cleared=Timeline::default();cleared.upsert(row("live","Before clear"));cleared.replace_all(vec![]);
+        assert!(!cleared.restore_prefix(vec![row("old","Must stay cleared")]));assert!(cleared.rows.is_empty());
+        let mut rewound=Timeline::default();rewound.upsert(row("keep","Keep"));rewound.upsert(row("drop","Rewind boundary"));
+        assert!(rewound.trim_from_user("drop"));assert!(!rewound.restore_prefix(vec![row("drop","Must stay removed")]));assert_eq!(rewound.rows.len(),1);
     }
 
     #[test]
@@ -7279,6 +8077,58 @@ mod tests {
     }
 
     #[test]
+    fn stderr_without_line_breaks_is_drained_with_a_fixed_retention_budget() {
+        use std::io::Read;
+        let mut input=std::io::repeat(b'x').take(3*1024*1024);let mut updates=Vec::new();
+        drain_stderr(&mut input,8192,|text|updates.push(text)).unwrap();
+        assert_eq!(input.limit(),0);assert_eq!(updates.len(),1);assert_eq!(updates[0],format!("{}\n","x".repeat(8191)));
+        let mut updates=Vec::new();drain_stderr("雪😀\r\nsecond line".as_bytes(),8192,|text|updates.push(text)).unwrap();
+        assert_eq!(updates.last().unwrap(),"雪😀\nsecond line\n");
+    }
+
+    #[test]
+    fn control_snapshot_does_not_copy_rows_or_build_the_message_directory() {
+        let proc = inert_process(SessionKind::Claude);
+        let manager = ChatManager::new();
+        manager.sessions.lock().unwrap().insert("control".into(), proc.clone());
+        proc.timeline.lock().unwrap().upsert(ChatRow::User {
+            id: "large-original".into(), text: "x".repeat(2*1024*1024), images: vec![], at: None,
+        });
+        let revision = proc.timeline.lock().unwrap().revision;
+        let snapshot = manager.snapshot_window("control", Some(&ChatWindow {control_only:true,..Default::default()}));
+        assert_eq!(snapshot.page_kind,"control");
+        assert_eq!(snapshot.total_rows,1);
+        assert!(snapshot.rows.is_empty() && snapshot.positions.is_empty() && snapshot.user_messages.is_none());
+        assert_eq!(snapshot.rows_revision,revision);
+        assert_eq!(proc.timeline.lock().unwrap().revision,revision);
+        assert!(serde_json::to_vec(&snapshot).unwrap().len()<8*1024);
+        proc.child.lock().unwrap().wait().unwrap();
+    }
+
+    #[test]
+    fn legacy_details_are_bounded_before_constructing_a_complete_json_value() {
+        let original="雪😀 original input\n".repeat(200_000);
+        let row=ChatRow::Tool {id:"large".into(),name:"Write".into(),input:json!({"file_path":"/project/notes.md","content":original,"late":719}),output:None,
+            is_error:false,status:"completed",subagent:None,children:vec![]};
+        // The preview keeps only short string fields, so the collapsed card still names the file.
+        let preview=snapshot_row(&row);assert_eq!(preview["detailAvailable"],true);
+        assert_eq!(preview["input"],json!({"file_path":"/project/notes.md"}));
+        assert_eq!(bounded_detail_row(&row).unwrap_err(),crate::agent::history_store::compat::UPGRADE);
+        let mut writer=RowBytes {bytes:Vec::new(),limit:64*1024};assert!(serde_json::to_writer(&mut writer,&DetailRow(&row)).is_err());assert_eq!(writer.bytes.len(),64*1024);
+        let small=ChatRow::Tool {id:"small".into(),name:"Bash".into(),input:json!({"command":"pwd"}),output:Some("/project".into()),
+            is_error:false,status:"completed",subagent:None,children:vec![]};assert_eq!(bounded_detail_row(&small).unwrap(),detail_row(&small));
+    }
+
+    #[test]
+    fn legacy_child_details_keep_image_bytes_out_of_the_wire_and_reject_giant_prose() {
+        let child=ChatRow::User {id:"user".into(),text:"Question".into(),images:vec![ChatImage {mime_type:"image/png".into(),data:"Only original attachment bytes".into()}],at:Some(1)};
+        let mut row=ChatRow::Tool {id:"task".into(),name:"Task".into(),input:Value::Null,output:None,is_error:false,status:"completed",subagent:None,children:vec![child]};
+        let detail=bounded_detail_row(&row).unwrap();assert_eq!(detail["children"][0]["images"][0]["attachmentId"],row_attachment_id("user",0));assert!(!detail.to_string().contains("Only original attachment bytes"));
+        if let ChatRow::Tool {children,..}=&mut row {children.push(ChatRow::Assistant {id:"long".into(),text:"x".repeat(3*1024*1024),streaming:false,at:None,model:None,duration_ms:None});}
+        assert_eq!(bounded_detail_row(&row).unwrap_err(),crate::agent::history_store::compat::UPGRADE);
+    }
+
+    #[test]
     fn remote_windows_page_and_reconnect_without_skipping_history() {
         let proc = inert_process(SessionKind::Claude);
         let manager = ChatManager::new();
@@ -7305,6 +8155,40 @@ mod tests {
         assert_eq!(reset.rows.len(), 1);
     }
 
+    /// A client away for a long time owes more than one response carries, by row count or by bytes.
+    /// Either way it gets a bounded recent window, and the rows before it stay reachable by paging.
+    #[test]
+    fn a_backlog_too_large_for_one_response_falls_back_to_the_recent_window() {
+        let limit = crate::agent::history_store::limits::PAGE_BYTES;
+        let proc = inert_process(SessionKind::Claude);
+        let manager = ChatManager::new();
+        manager.sessions.lock().unwrap().insert("away".into(), proc.clone());
+        let user = |i: usize, size: usize| ChatRow::User { id: format!("r{i}"), text: "x".repeat(size), images: vec![], at: None };
+        proc.timeline.lock().unwrap().upsert(user(0, 1));
+        let known = manager.snapshot_window("away", Some(&ChatWindow::default()));
+        let missed = |since: u64| ChatWindow { since: Some(since), from: Some("r0".into()), epoch: known.started_at, ..Default::default() };
+
+        for i in 1..=100 { proc.timeline.lock().unwrap().upsert(user(i, 1)); }
+        let by_count = manager.snapshot_window("away", Some(&missed(known.rows_revision)));
+        assert_eq!(by_count.page_kind, "recent");
+        assert_eq!(by_count.rows.len(), SNAPSHOT_PAGE_ROWS);
+        assert_eq!(by_count.rows[0].id(), "r41");
+        assert!(by_count.has_more);
+
+        for i in 101..=140 { proc.timeline.lock().unwrap().upsert(user(i, 20_000)); }
+        let by_bytes = manager.snapshot_window("away", Some(&missed(by_count.rows_revision)));
+        assert_eq!(by_bytes.page_kind, "recent");
+        assert_eq!(by_bytes.rows.last().unwrap().id(), "r140");
+        assert!(by_bytes.rows.len() < 40 && by_bytes.has_more);
+        assert!(serde_json::to_vec(&by_bytes).unwrap().len() <= limit);
+
+        let first = by_bytes.positions[by_bytes.rows[0].id()];
+        let older = manager.snapshot_window("away", Some(&ChatWindow { before: Some(by_bytes.rows[0].id().into()), epoch: known.started_at, ..Default::default() }));
+        assert_eq!(older.page_kind, "history");
+        assert_eq!(older.positions[older.rows.last().unwrap().id()], first - 1);
+        assert!(serde_json::to_vec(&older).unwrap().len() <= limit);
+    }
+
     #[test]
     fn large_tool_details_are_deferred_and_epoch_checked() {
         let proc = inert_process(SessionKind::Claude);
@@ -7317,6 +8201,15 @@ mod tests {
         assert!(wire.to_string().len() < 5000);
         assert_eq!(manager.row_detail("detail", "tool", Some(proc.started_at)).unwrap()["output"].as_str().unwrap().len(), 100_000);
         assert!(manager.row_detail("detail", "tool", Some(proc.started_at + 1)).is_err());
+    }
+
+    /// A deferred Write keeps its path, so the collapsed card and the artifact card can still name the file.
+    #[test]
+    fn deferred_tool_input_keeps_short_fields() {
+        let row = ChatRow::Tool { id: "w".into(), name: "Write".into(), input: json!({"content":"x".repeat(10_000),"file_path":"/p/page.html"}), output: None, is_error: false, status: "completed", children: vec![], subagent: None };
+        let wire = snapshot_row(&row);
+        assert_eq!(wire["detailAvailable"], true);
+        assert_eq!(wire["input"], json!({"file_path":"/p/page.html"}));
     }
 
     /// Compaction draws one row that changes, not two rows that repeat each other.
@@ -7512,7 +8405,7 @@ mod tests {
     }
 
     /// A session whose "agent" is `cat`, with its stdout handed back so a test can run the real reader.
-    fn cat_process() -> (Arc<ChatProcess>, std::process::ChildStdout) {
+    pub(super) fn cat_process() -> (Arc<ChatProcess>, std::process::ChildStdout) {
         let mut child = Command::new("cat")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -7527,6 +8420,7 @@ mod tests {
             owner: Mutex::new(None),
             kind: SessionKind::Claude,
             bin: "true".into(),
+            version: None,
             auth_settings_args: Vec::new(),
             auth_restart: AtomicBool::new(false),
             action: Mutex::new(()),
@@ -7535,6 +8429,10 @@ mod tests {
             child: Mutex::new(child),
             timeline: Mutex::new(Timeline::default()),
             permissions: Mutex::new(HashMap::new()),
+            history_cut:None,
+            history_paged:AtomicBool::new(false),
+            codex_client_ids:false,
+            codex_pending_user_ids:Mutex::new(HashMap::new()),
             commands: Mutex::new(Vec::new()),
             config_keys: Mutex::new(Vec::new()),
             subagent_ids: Mutex::new(HashMap::new()),
@@ -7542,7 +8440,9 @@ mod tests {
             codex_pending_child_events: Mutex::new(HashMap::new()),
             opencode: Mutex::new(opencode::OpencodeState::default()),
             pi: Mutex::new(pi::PiState::default()),
+            zcode: Mutex::new(zcode::ZcodeState::default()),
             antigravity: Mutex::new(crate::agent::chat::antigravity_protocol::StreamState::default()),
+            acp: Mutex::new(acp::AcpState::default()),
             service_tier: Mutex::new(None),
             personality: Mutex::new(None),
             codex_turn_error: Mutex::new(None),
@@ -7567,6 +8467,7 @@ mod tests {
             pending: Mutex::new(HashMap::new()),
             waiters: Mutex::new(HashMap::new()),
             user_targets: Mutex::new(HashMap::new()),
+            claude_user_ids:Mutex::new(HashMap::new()),
             pending_user_rows: Mutex::new(Vec::new()),
             turn: Mutex::new(TurnQueue::default()),
             stderr: Mutex::new(String::new()),
@@ -7978,7 +8879,10 @@ mod tests {
         assert_eq!(stopped["run"]["state"],"stopped");
         assert!(stopped["interruptErrors"].as_array().unwrap().is_empty());
         assert!(app.chat().snapshot("planner").queue.is_empty());
-        assert_eq!(app.chat().snapshot("executor").queue.len(),2);
+        // The stop keeps the user's own messages. The stopped turn ends at once, so the first goes out.
+        let executor=app.chat().snapshot("executor");
+        assert_eq!(executor.queue.len(),1);
+        assert!(executor.rows.iter().any(|row|matches!(row,ChatRow::User{text,..} if text=="Unrelated user message")));
         assert!(flow::action(&app,&flow_request("planner","dispatch",3,"Too late")).is_err());
         for id in ["planner","executor"] {app.chat().stop(&app,id).unwrap();}
         let dir=app.data_dir().unwrap();drop(app);std::fs::remove_dir_all(dir).unwrap();
@@ -8117,7 +9021,10 @@ mod tests {
         assert_eq!(tell::send(&app,&normal).unwrap()["delivery"],"queued");
         tell::send(&app,&normal).unwrap(); assert_eq!(app.chat().snapshot("planner").queue.len(),1);
         flow::action(&app,&flow_request("owner","stop",0,"")).unwrap();
-        assert_eq!(app.chat().snapshot("planner").queue.len(),1); // A workflow stop preserves ordinary tells.
+        // A workflow stop preserves ordinary tells; the stopped turn ends at once, so the tell goes out.
+        let planner=app.chat().snapshot("planner");
+        assert!(planner.queue.is_empty());
+        assert!(planner.rows.iter().any(|row|matches!(row,ChatRow::User{text,..} if text.contains("Still working"))));
         req.round=Some(2); req.message_id=format!("msg-{}",uuid::Uuid::new_v4());
         assert!(tell::send(&app,&req).is_err()); // Blocking permits reports; explicitly stopping does not.
         for id in ["planner","executor"] {app.chat().stop(&app,id).unwrap();}
@@ -8532,6 +9439,35 @@ mod tests {
     }
 
     #[test]
+    fn opencode_usage_limit_shows_one_error_and_reaches_auto_continue() {
+        let app = ctx("oc-usage-limit");
+        let manager = manager_with_session("s");
+        let proc = manager.get("s").unwrap();
+        *proc.agent_session_id.lock().unwrap() = Some("ses_q".into());
+        manager.send(&app, "s", "say hi", Vec::new(), "queue").unwrap();
+        // The events OpenCode 2.0.32 sent when an exhausted OpenCode Go window refused the turn.
+        let error = json!({"type":"provider.quota","message":"Go usage limit exceeded","status":429,"response":{"body":
+            "{\"error\":{\"type\":\"GoUsageLimitError\"},\"metadata\":{\"limitName\":\"5 hour\"}}"}});
+        for event in [
+            json!({"type":"session.execution.started","data":{"sessionID":"ses_q"}}),
+            json!({"type":"session.step.started","created":1,"data":{"sessionID":"ses_q","agent":"build",
+                "model":{"id":"glm-5.3","providerID":"opencode-go"},"assistantMessageID":"msg_a"}}),
+            json!({"type":"session.step.failed","created":2,"data":{"sessionID":"ses_q","assistantMessageID":"msg_a","error":error.clone()}}),
+            json!({"type":"session.execution.failed","created":3,"data":{"sessionID":"ses_q","error":error.clone()}}),
+        ] {
+            opencode::handle_event(&app, "s", &proc, event);
+        }
+        let errors: Vec<String> = manager.snapshot("s").rows.into_iter().filter_map(|row| match row {
+            ChatRow::Error { message, .. } => Some(message),
+            _ => None,
+        }).collect();
+        assert_eq!(errors, vec!["Go usage limit exceeded (5 hour limit)".to_string()]);
+        assert!(!proc.turn.lock().unwrap().running, "the failed turn ended");
+        assert!(!proc.extras.lock().unwrap().usage_limit_hit, "turn end handed the limit to auto-continue");
+        manager.stop(&app, "s").unwrap();
+    }
+
+    #[test]
     fn opencode_duplicate_idle_does_not_complete_the_next_queued_turn() {
         let app = ctx("oc-idle");
         let m = manager_with_session("s");
@@ -8598,10 +9534,15 @@ mod tests {
         m.send(&app, "s", "first", Vec::new(), "queue").unwrap();
         m.send(&app, "s", "waiting", Vec::new(), "queue").unwrap();
         assert_eq!(m.send(&app, "s", "urgent", Vec::new(), "interrupt").unwrap(), "queued");
-        assert_eq!(queued(&m, "s"), vec!["urgent", "waiting"]);
-        // The agent ends an interrupted turn by reporting a failure; the interrupting message follows it.
+        // The stopped Claude turn ends at once, so the interrupting message goes out without waiting.
+        assert_eq!(said(&m, "s"), vec!["first", "urgent"]);
+        assert_eq!(queued(&m, "s"), vec!["waiting"]);
+        // The agent ends an interrupted turn by reporting a failure. That result is the stopped turn's,
+        // so it does not end the turn the interrupting message started.
         finish_turn(&m, &app, "s", "error_during_execution");
         assert_eq!(said(&m, "s"), vec!["first", "urgent"]);
+        finish_turn(&m, &app, "s", "success");
+        assert_eq!(said(&m, "s"), vec!["first", "urgent", "waiting"]);
     }
 
     /// A turn stopped on purpose is not a fault, and must not leave an error row behind.
@@ -8625,6 +9566,55 @@ mod tests {
             .rows
             .iter()
             .any(|r| matches!(r, ChatRow::Error { .. })));
+    }
+
+    const MAIN_RESPONSE: &str = r#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"m"}},"parent_tool_use_id":null}"#;
+
+    /// Stopping a Claude turn ends it at once. When the reader falls behind, the agent's result for that
+    /// turn can trail by minutes; the late line must neither hold the session nor end the turn after it.
+    #[test]
+    fn a_stopped_turn_ends_without_waiting_for_its_result() {
+        let _state_guard = crate::session_state::test_lock();
+        let app = ctx("stop-local");
+        let m = manager_with_session("s");
+        let proc = m.get("s").unwrap();
+        m.send(&app, "s", "first", Vec::new(), "queue").unwrap();
+        m.interrupt(&app, "s").unwrap();
+        assert!(!proc.turn.lock().unwrap().running, "stopped here, not when the result comes");
+        assert_eq!(m.send(&app, "s", "next", Vec::new(), "queue").unwrap(), "sent");
+
+        // The stopped turn's remaining output and result arrive after the new message went out.
+        handle_line(&app, "s", &proc, MAIN_RESPONSE);
+        handle_line(&app, "s", &proc, r#"{"type":"result","subtype":"error_during_execution","duration_ms":5}"#);
+        assert!(proc.turn.lock().unwrap().running, "that result belongs to the stopped turn");
+        assert!(!m.snapshot("s").rows.iter().any(|r| matches!(r, ChatRow::Error { .. })));
+
+        handle_line(&app, "s", &proc, TURN_DONE);
+        assert!(!proc.turn.lock().unwrap().running);
+        assert_eq!(said(&m, "s"), vec!["first", "next"]);
+    }
+
+    /// With nothing sent after the stop, the stopped turn's remaining output does not reopen it, and a
+    /// second stop has no second result to wait for.
+    #[test]
+    fn a_stopped_turns_late_output_does_not_open_a_turn() {
+        let _state_guard = crate::session_state::test_lock();
+        let app = ctx("stop-late-output");
+        let m = manager_with_session("s");
+        let proc = m.get("s").unwrap();
+        m.send(&app, "s", "first", Vec::new(), "queue").unwrap();
+        m.interrupt(&app, "s").unwrap();
+        m.interrupt(&app, "s").unwrap();
+        assert_eq!(proc.turn.lock().unwrap().stale_results, 1);
+
+        handle_line(&app, "s", &proc, MAIN_RESPONSE);
+        assert!(!proc.turn.lock().unwrap().running);
+        handle_line(&app, "s", &proc, TURN_DONE);
+        assert_eq!(proc.turn.lock().unwrap().stale_results, 0);
+
+        // A turn Claude opens afterwards, such as an answer to finished background work, is adopted.
+        handle_line(&app, "s", &proc, MAIN_RESPONSE);
+        assert!(proc.turn.lock().unwrap().running);
     }
 
     /// Steering is the deliberate exception: the message is written into the turn already running.
@@ -9004,6 +9994,28 @@ mod tests {
         assert_eq!(crate::db::repo::get_session(&app.db().conn.lock().unwrap(),"s").unwrap().unwrap().engine,"chat");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_reused_child_pid_that_leads_an_unrelated_group_does_not_block_the_conversation() {
+        use std::os::unix::process::CommandExt;
+        struct Group(u32);
+        impl Drop for Group { fn drop(&mut self) { unsafe { libc::kill(-(self.0 as i32),libc::SIGKILL); } } }
+        let app=ctx("reused-child-pid");
+        app.db().conn.lock().unwrap().execute_batch("INSERT INTO projects(id,name,root_path,created_at) VALUES ('p','Recovery','/tmp',0); INSERT INTO sessions(id,project_id,name,kind,engine,created_at) VALUES ('s','p','Recovery','claude','chat',0);").unwrap();
+        // An unrelated process now holds the recorded child PID and leads a group with that ID.
+        let mut unrelated=std::process::Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
+        let _cleanup=Group(unrelated.id());
+        app.db().conn.lock().unwrap().execute("INSERT INTO chat_process_owners(session_id,token,host_pid,host_birth,child_pid,child_birth) VALUES ('s','stale',?1,1,?2,1)",
+            rusqlite::params![std::process::id(),unrelated.id()]).unwrap();
+        drop(super::super::ownership::idle_guard(&app,"s").unwrap());
+        let left: i64=app.db().conn.lock().unwrap().query_row("SELECT COUNT(*) FROM chat_process_owners WHERE session_id='s'",[],|r|r.get(0)).unwrap();
+        assert_eq!(left,0);
+        app.db().conn.lock().unwrap().execute("INSERT INTO chat_process_owners(session_id,token,host_pid,host_birth,child_pid,child_birth) VALUES ('s','stale',?1,1,?2,1)",
+            rusqlite::params![std::process::id(),unrelated.id()]).unwrap();
+        assert!(super::super::ownership::Owner::acquire(&app,"s",None).is_ok());
+        unrelated.kill().unwrap(); unrelated.wait().unwrap();
+    }
+
     #[test]
     fn application_shutdown_stops_agents_and_rejects_new_work() {
         let app=ctx("durable-queue-shutdown");
@@ -9271,6 +10283,87 @@ mod tests {
         serde_json::from_str(&line).unwrap()
     }
 
+    #[test]
+    fn claude_question_translation_preserves_wire_identity_and_rejects_late_answers() {
+        use crate::agent::translation;
+        use std::time::Instant;
+        let app=ctx("claude-question-translation");
+        {
+            let conn=app.db().conn.lock().unwrap();
+            conn.execute("INSERT INTO projects(id,name,root_path,created_at) VALUES ('p','test','/tmp',0)",[]).unwrap();
+            conn.execute("INSERT INTO sessions(id,project_id,name,kind,engine,created_at) VALUES ('s','p','Questions','claude','chat',0)",[]).unwrap();
+        }
+        let (proc,stdout)=cat_process();app.chat().sessions.lock().unwrap().insert("s".into(),proc.clone());
+        let mut reader=BufReader::new(stdout);
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url=format!("http://{}/v1",server.server_addr());
+        let service=translation::dispatch(&app,"translation_service_save",&json!({"service":{"name":"fixture","baseUrl":url,"model":"fixture"}}),true).unwrap();
+        translation::dispatch(&app,"translation_save",&json!({"config":{"engine":"api","serviceId":service}}),true).unwrap();
+        translation::dispatch(&app,"translation_enable",&json!({"enabled":true}),true).unwrap();
+        let prefs=json!({"outgoing":true,"replies":true,"source":"en","target":"de","replySource":"en","replyTarget":"de","display":"immersive","repliesSince":0});
+        translation::dispatch(&app,"translation_session_save",&json!({"sessionId":"s","preferences":prefs}),true).unwrap();
+        let worker=std::thread::spawn(move || {
+            for index in 0..4 {
+                let mut req=server.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+                let mut body=String::new();req.as_reader().read_to_string(&mut body).unwrap();
+                let body:Value=serde_json::from_str(&body).unwrap();
+                let prompt=body["messages"][0]["content"].as_str().unwrap();
+                let lines:Vec<String>=serde_json::from_str(prompt.split("INPUT JSON:\n").nth(1).unwrap()).unwrap();
+                if index>0 {assert_eq!(lines.len(),1);}
+                let content=json!({"sourceLanguage":"en","lines":lines.iter().map(|s|s.replace("Hello","Hallo")).collect::<Vec<_>>()});
+                req.respond(tiny_http::Response::from_string(json!({"choices":[{"message":{"content":content.to_string()}}]}).to_string())).unwrap();
+            }
+        });
+        let input=json!({"metadata":{"source":"fixture"},"questions":[{"header":"Hello","question":"Hello plan?","options":[{"label":"Original option","description":"Hello install.sh"}],"multiSelect":false}]});
+        let request=json!({"id":"ask","tool_name":"AskUserQuestion","input":input});
+        proc.permissions.lock().unwrap().insert("ask".into(),request.clone());
+        // With automatic reply translation off, only an explicit request from the card translates the question.
+        let manual_prefs=json!({"outgoing":true,"replies":false,"source":"en","target":"de","replySource":"en","replyTarget":"de","display":"immersive","repliesSince":0});
+        translation::dispatch(&app,"translation_session_save",&json!({"sessionId":"s","preferences":manual_prefs}),true).unwrap();
+        assert_eq!(translation::dispatch(&app,"translation_question",&json!({"sessionId":"s","requestId":"ask"}),false).unwrap_err(),"translation:disabled");
+        let display=translation::dispatch(&app,"translation_question",&json!({"sessionId":"s","requestId":"ask","manual":true}),false).unwrap();
+        translation::dispatch(&app,"translation_session_save",&json!({"sessionId":"s","preferences":prefs}),true).unwrap();
+        assert_eq!(display["input"]["questions"][0]["question"],"Hallo plan?");
+        assert_eq!(display["originalInput"],input);
+        assert_eq!(translation::dispatch(&app,"translation_question",&json!({"sessionId":"s","requestId":"ask"}),false).unwrap()["input"],display["input"]);
+        let args=json!({"sessionId":"s","requestId":"ask","allow":true,"questionAnswers":[{"selected":[0],"text":""}]});
+        crate::web::dispatch::dispatch(&app,"chat_permission",&args,"test",crate::web::dispatch::CallOrigin::Local).unwrap();
+        let wire=read_codex_request(&mut reader);
+        assert_eq!(wire["response"]["request_id"],"ask");
+        assert_eq!(wire["response"]["response"]["updatedInput"]["questions"],input["questions"]);
+        assert_eq!(wire["response"]["response"]["updatedInput"]["answers"],json!({"Hello plan?":"Original option"}));
+        assert!(translation::answer_question(&app,"s","ask",&json!([{"text":"late"}]),false).is_err());
+        for (index,change) in ["none","language","resolved"].iter().enumerate() {
+            proc.permissions.lock().unwrap().insert("ask".into(),request.clone());
+            let text=format!("Hello typed {index}");
+            if *change=="none" {
+                translation::answer_question(&app,"s","ask",&json!([{"text":text}]),false).unwrap();
+                assert_eq!(read_codex_request(&mut reader)["response"]["response"]["updatedInput"]["answers"]["Hello plan?"],"Hallo typed 0");
+            } else {
+                // Change authoritative state before the completion guard, using the shared gate.
+                let gate=translation::GATE.lock().unwrap();let app2=app.clone();
+                let task=std::thread::spawn(move ||translation::answer_question(&app2,"s","ask",&json!([{"text":text}]),false));
+                let deadline=Instant::now()+Duration::from_secs(5);
+                while app.db().conn.lock().unwrap().query_row("SELECT COUNT(*) FROM translation_cache",[],|r|r.get::<_,u64>(0)).unwrap()<(index+2) as u64 {
+                    assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+                }
+                if *change=="language" {
+                    let mut changed=prefs.clone();changed["target"]=json!("fr");
+                    app.db().conn.lock().unwrap().execute("UPDATE translation_preferences SET value=?1 WHERE session_id='s'",[changed.to_string()]).unwrap();
+                } else {proc.permissions.lock().unwrap().remove("ask");}
+                drop(gate);assert!(task.join().unwrap().is_err());
+                app.db().conn.lock().unwrap().execute("UPDATE translation_preferences SET value=?1 WHERE session_id='s'",[prefs.to_string()]).unwrap();
+            }
+        }
+        worker.join().unwrap();
+        proc.permissions.lock().unwrap().insert("ask".into(),request);
+        assert!(translation::answer_question(&app,"s","ask",&json!([{"text":"Unavailable service"}]),false).is_err());
+        assert!(proc.permissions.lock().unwrap().contains_key("ask"));
+        translation::answer_question(&app,"s","ask",&json!([{"text":"Send original"}]),true).unwrap();
+        assert_eq!(read_codex_request(&mut reader)["response"]["response"]["updatedInput"]["answers"]["Hello plan?"],"Send original");
+        *proc.stdin.lock().unwrap()=None;proc.child.lock().unwrap().wait().unwrap();
+    }
+
     fn accept_codex_permission_turn(app: &AppCtx, proc: &Arc<ChatProcess>, request: &Value, turn_id: &str) {
         handle_codex_line(app, "s", proc, &json!({
             "id":request["id"], "result":{"turn":{"id":turn_id,"status":"inProgress"}}
@@ -9307,8 +10400,8 @@ mod tests {
     fn claude_auth_validates_code_and_preserves_the_native_conversation() {
         let (app, proc, mut reader) = claude_auth_fixture("claude-auth-submit");
         let manager = app.chat();
-        manager.auth_start(&app, "s").unwrap();
-        manager.auth_start(&app, "s").unwrap();
+        manager.auth_start(&app, "s", None).unwrap();
+        manager.auth_start(&app, "s", None).unwrap();
         let request = read_codex_request(&mut reader);
         assert_eq!(request["request"]["subtype"], "claude_authenticate");
         assert_eq!(request["request"]["loginWithClaudeAi"], true);
@@ -9365,15 +10458,15 @@ mod tests {
         assert!(proc.extras.lock().unwrap().auth.is_none());
         // Valid credentials wait for background work, and the refusal names what to wait for.
         proc.turn.lock().unwrap().active_tasks.insert("task".into());
-        assert!(app.chat().auth_start(&app, "s").unwrap_err().ends_with(": task"));
+        assert!(app.chat().auth_start(&app, "s", None).unwrap_err().ends_with(": task"));
         assert!(app.chat().auth_logout(&app, "s").is_err());
         proc.turn.lock().unwrap().running = true;
         auth::claude::observe(&app, "s", &proc, &json!({"type":"assistant","error":"authentication_failed"}).to_string());
         assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "required");
-        assert!(app.chat().auth_start(&app, "s").is_err());
+        assert!(app.chat().auth_start(&app, "s", None).is_err());
         // Rejected credentials no longer wait for background work that cannot reach the model anyway.
         proc.turn.lock().unwrap().running = false;
-        app.chat().auth_start(&app, "s").unwrap();
+        app.chat().auth_start(&app, "s", None).unwrap();
         assert_eq!(read_codex_request(&mut reader)["request"]["subtype"], "claude_authenticate");
         proc.child.lock().unwrap().kill().unwrap();
         proc.child.lock().unwrap().wait().unwrap();
@@ -9382,7 +10475,7 @@ mod tests {
     #[test]
     fn claude_auth_unsupported_controls_fail_without_losing_history() {
         let (app, proc, mut reader) = claude_auth_fixture("claude-auth-unsupported");
-        app.chat().auth_start(&app, "s").unwrap();
+        app.chat().auth_start(&app, "s", None).unwrap();
         let request = read_codex_request(&mut reader);
         claude_auth_answer(&app, &proc, &request, Value::Null, Some("Unknown request subtype"));
         assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "failed");
@@ -9428,7 +10521,7 @@ mod tests {
     fn claude_auth_cancel_waits_for_a_native_outcome_and_success_wins_the_race() {
         for succeeded in [false, true] {
             let (app, proc, mut reader) = claude_auth_fixture(if succeeded { "claude-auth-race" } else { "claude-auth-cancel" });
-            app.chat().auth_start(&app, "s").unwrap();
+            app.chat().auth_start(&app, "s", None).unwrap();
             let request = read_codex_request(&mut reader);
             app.chat().auth_cancel(&app, "s").unwrap();
             assert_eq!(app.chat().snapshot("s").extras.auth.unwrap().status, "canceling");
@@ -9449,8 +10542,8 @@ mod tests {
         let original = manager.snapshot("s").agent_session_id;
         auth::require(&app, "s", &proc, &json!({"codexErrorInfo":"unauthorized","message":"refresh token was revoked"}));
         assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "required");
-        manager.auth_start(&app, "s").unwrap();
-        manager.auth_start(&app, "s").unwrap();
+        manager.auth_start(&app, "s", None).unwrap();
+        manager.auth_start(&app, "s", None).unwrap();
         let request = read_codex_request(&mut reader);
         assert_eq!(request["method"], "account/login/start");
         assert_eq!(request["params"]["type"], "chatgptDeviceCode");
@@ -9483,7 +10576,7 @@ mod tests {
     fn codex_auth_cancels_late_login_responses_and_rejects_invalid_destinations() {
         let (app, proc, mut reader) = codex_permission_fixture("codex-auth-cancel");
         let manager = app.chat();
-        manager.auth_start(&app, "s").unwrap();
+        manager.auth_start(&app, "s", None).unwrap();
         let request = read_codex_request(&mut reader);
         manager.auth_cancel(&app, "s").unwrap();
         handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{
@@ -9493,7 +10586,7 @@ mod tests {
         assert_eq!(cancel["method"], "account/login/cancel");
         assert_eq!(cancel["params"]["loginId"], "late");
         assert_eq!(manager.snapshot("s").extras.auth.unwrap().status, "canceled");
-        manager.auth_start(&app, "s").unwrap();
+        manager.auth_start(&app, "s", None).unwrap();
         let request = read_codex_request(&mut reader);
         handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{
             "type":"chatgptDeviceCode","loginId":"unsafe","verificationUrl":"javascript:alert(1)","userCode":"ABCD-1234"
@@ -9518,7 +10611,7 @@ mod tests {
         handle_codex_notification(&app, "s", &proc, "turn/completed", json!({"turn":{"status":"failed","error":{"codexErrorInfo":"unauthorized","message":"refresh token revoked"}}}));
         assert!(!proc.turn.lock().unwrap().running);
         assert_eq!(app.chat().snapshot("s").queue.len(), 1);
-        app.chat().auth_start(&app, "s").unwrap();
+        app.chat().auth_start(&app, "s", None).unwrap();
         let request = read_codex_request(&mut reader);
         handle_codex_line(&app, "s", &proc, &json!({"id":request["id"],"result":{
             "type":"chatgptDeviceCode","loginId":"pending","verificationUrl":"https://auth.openai.com/codex/device","userCode":"ABCD-1234"
@@ -9540,7 +10633,7 @@ mod tests {
     #[test]
     fn codex_auth_rejected_by_an_older_cli_releases_a_detached_peer() {
         let (app, proc, mut reader) = codex_permission_fixture("codex-auth-unsupported");
-        app.chat().auth_start(&app, "s").unwrap();
+        app.chat().auth_start(&app, "s", None).unwrap();
         let request = read_codex_request(&mut reader);
         app.chat().detach(&app, "s");
         assert!(app.chat().is_alive("s"));
@@ -9575,7 +10668,7 @@ mod tests {
         start_waiting_message(&app, "s", &proc);
         assert_eq!(app.chat().snapshot("s").queue.len(), 1);
         app.chat().auth_logout(&app, "s").unwrap(); // Already signed out; no duplicate provider request.
-        app.chat().auth_start(&app, "s").unwrap();
+        app.chat().auth_start(&app, "s", None).unwrap();
         assert_eq!(read_codex_request(&mut reader)["method"], "account/login/start");
         app.chat().auth_cancel(&app, "s").unwrap();
         proc.child.lock().unwrap().kill().unwrap();
@@ -9588,7 +10681,7 @@ mod tests {
         proc.turn.lock().unwrap().running = true;
         assert!(app.chat().auth_logout(&app, "s").is_err());
         proc.turn.lock().unwrap().running = false;
-        app.chat().auth_start(&app, "s").unwrap();
+        app.chat().auth_start(&app, "s", None).unwrap();
         assert_eq!(read_codex_request(&mut reader)["method"], "account/login/start");
         assert!(app.chat().auth_logout(&app, "s").is_err());
         app.chat().auth_cancel(&app, "s").unwrap();

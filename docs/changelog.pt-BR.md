@@ -1,3 +1,161 @@
+## v0.3.0 — 2026-11-08
+
+- 🔏 A versão para macOS agora é assinada com o certificado da Vlinx Software, Inc. em vez do anterior; após a atualização, talvez seja preciso conceder novamente algumas permissões do macOS, e os itens salvos nas Chaves, como senhas de conexões remotas, precisam ser autorizados de novo: quando solicitado, digite sua senha de login e escolha “Sempre Permitir”.
+- 🗂️ As sessões agora têm três tipos, “Tarefa”, “Projeto” e “Chat”, escolhidos no topo da página “Nova sessão”, e a barra lateral esquerda passa a ser organizada nas coleções fixas “Projetos”, “Terminais”, “Tarefas” e “Chats”, sendo que “Terminais” lista todos os terminais em execução e os agentes detectados neles.
+- 🧭 Uma nova barra de atividades na borda esquerda alterna entre “Projetos”, “Terminais”, “Tarefas”, “Chats”, “Sessões arquivadas” e “Base de conhecimento”, e reúne na parte inferior “Configurações”, “Conta”, “Feedback”, “Compartilhar” e “Central de jogos”.
+- 📦 Coleções podem ser arquivadas por inteiro com “Arquivar coleção” no menu de contexto, e restaurar qualquer uma de suas sessões traz a coleção de volta.
+- 🆕 Na página “Nova sessão”, o projeto, o agente, o modelo, o esforço de raciocínio e as permissões são escolhidos em um cartão de configurações acima da caixa de entrada, e a lista de projetos permite criar, importar ou clonar um projeto sem sair da página.
+- 🩺 Ao abrir uma conversa, o VelaTerm verifica se o agente dela está instalado e conectado à conta: caso não esteja, aparece um aviso de instalação ou um painel para entrar, e o botão “Enviar” fica desativado até que o agente esteja pronto.
+- 🔧 Um agente só é considerado instalado quando realmente é executado; assim, uma instalação inacabada ou uma atualização com defeito mostra o guia de instalação, as instalações em um clique só são concluídas quando o agente é iniciado, e uma atualização que deixa o agente sem conseguir iniciar é informada como incompleta.
+- 🪟 O novo comando `vartifact <file|URL>` abre um arquivo em um painel ao lado da conversa, com prévia ao vivo para HTML e visualizações editáveis para Markdown, imagens e código, que podem ser salvas com ⌘S, enquanto `vopen` agora sempre abre uma aba.
+- 💤 As sugestões em cinza em linha no terminal agora vêm desativadas por padrão e o preenchimento volta a ser “Apenas Tab”; esta atualização muda uma única vez a configuração “Em linha + Tab” existente para “Apenas Tab”, e você pode reativá-las nas configurações.
+- ⌨️ No modo “Em linha + Tab”, a nova configuração “Tecla Tab” permite aceitar a sugestão em cinza com Tab, e um segundo Tab desfaz a aceitação e lista as correspondências; enquanto houver uma sugestão visível, a barra de título do terminal mostra quais teclas estão disponíveis.
+- 🎨 Editar uma linha de comando do Zsh não deixa mais cinza o texto já digitado, e a descrição de “Sugestões de comandos” em “Configurações” corresponde ao modo selecionado.
+- 📡 O preenchimento com Tab em conexões remotas responde em uma única ida e volta.
+- 💬 As sessões do ZCode permitem adicionar uma instrução durante a resposta com Option/Alt+Enter, e a mensagem entra no turno em andamento depois da próxima chamada de ferramenta.
+- 🔑 No ZCode 3.15 e versões posteriores, é possível entrar com OAuth, e um GLM Coding Plan adquirido não é mais informado como ausente ou esgotado.
+- 📥 É possível importar sessões do Pi, do OMP, do ZCode e do DeepSeek Harness, e a caixa de diálogo “Importar sessões” permite filtrar por agente.
+- 🔤 A interface usa Inter em todos os lugares, enquanto código, saída de ferramentas, caminhos e terminais continuam em JetBrains Mono, e a configuração de fonte da interface foi removida.
+- 📚 A base de conhecimento exibe as entradas em uma coluna centralizada, lista as sessões arquivadas em uma árvore de projetos, grupos e sessões pai, com uma visão “Por data”, e permite alternar a base de conhecimento local entre cartões e lista.
+- 🔔 No macOS e no Windows, clicar em uma notificação traz para a frente a janela de onde ela veio, de modo que uma notificação de uma janela remota não coloca mais a janela principal por cima dela.
+- 📋 No macOS, colar não trava mais o aplicativo quando o aplicativo de origem da área de transferência para de responder: o VelaTerm desiste após 5 segundos e avisa você.
+- 📝 No editor de código-fonte, “Selecionar tudo” no menu do macOS ou no menu de contexto seleciona o arquivo inteiro, e copiar não deixa mais de fora as linhas fora da tela.
+- 📏 A caixa de entrada não aumenta mais e depois volta a diminuir quando você envia uma mensagem.
+- 📂 “Terminais”, “Tarefas” e “Chats” mostram seu conteúdo expandido, independentemente do que estiver recolhido em “Projetos”.
+- 🔄 As novas sessões não falham mais ao sincronizar com `cursor_expired` depois que você abre a conversa de uma subtarefa.
+- 🧯 Reconectar após uma longa desconexão com muito conteúdo acumulado não deixa mais a conversa travada com o botão “Enviar” desativado.
+- 🪞 Conexões remotas com hosts Windows que usam Cygwin ou Git Bash passam a usar o aplicativo de desktop do VelaTerm já em execução lá, e enviar uma mensagem não falha mais enquanto esse aplicativo executa a sessão.
+- ⚡ A indexação de conversas longas do Codex consome cerca da metade do tempo de CPU de antes.
+- 🔗 Os links para artefatos do Claude abrem no seu navegador padrão.
+- 🗄️ O botão “Sessões arquivadas” saiu da barra de abas e foi para a barra de atividades.
+
+## v0.2.15 — 2026-11-03
+
+- 🆕 A aba “Nova sessão” permite escolher o projeto, o agente, o modelo, o esforço de raciocínio, as permissões, a visão e um worktree isolado em torno de uma caixa de entrada centralizada, e inicia a sessão com a sua primeira tarefa; ela pode ser aberta pelo item “Nova sessão…” dos menus de nova sessão, pelo botão de estrela na barra de abas ou pelo painel central vazio.
+- 🐋 O DeepSeek Harness (`dsh`) passa a funcionar como agente na visão de conversa, com cartões de ferramentas, raciocínio, solicitações de permissão, troca de modelo e de esforço, uso do contexto e um histórico que é retomado ao reabrir.
+- 🧩 Copilot, Cursor, Kimi e Grok agora podem ser executados na visão de conversa.
+- 🤖 O Zhipu ZCode passa a funcionar como agente na visão de conversa: quando o aplicativo de desktop ZCode está instalado, ele usa o agente integrado desse aplicativo, e é possível entrar com Z.ai ou Zhipu BigModel, ou alternar entre os dois, sem sair da conversa.
+- 📊 No painel Info, as sessões do ZCode mostram os tokens, a taxa de acertos de cache e a velocidade de geração deste turno, o uso do contexto e o uso de 5 horas e semanal do GLM Coding Plan.
+- 📦 O ZCode (no macOS e no Windows) e o DeepSeek Harness podem ser instalados pela própria conversa com “Instalar agora”, e a mensagem que falhou é enviada novamente assim que a instalação termina.
+- ⬆️ Clicar em “Atualização” no selo de versão de um agente abre uma caixa de diálogo que executa o comando de atualização do próprio agente com a saída ao vivo e oferece “Reiniciar agente” para que a conversa continue na nova versão.
+- 🔌 As conexões remotas com muitos terminais em atividade não caem mais repetidamente depois de se reconectarem.
+- 🔄 Depois que um servidor remoto é reiniciado, as sessões não ficam mais presas na sincronização enquanto seus terminais são iniciados.
+- 🔁 Quando a sincronização de uma conversa falha, ela é repetida automaticamente, e a área abaixo da caixa de entrada mostra o status com um botão “Tentar novamente”.
+- 🐢 As conexões SSH com um host remoto muito sobrecarregado não expiram mais enquanto aguardam a resposta do servidor.
+- 🔗 “Reconectar agora” em uma janela remota recria o túnel SSH imediatamente, em vez de esperar a próxima tentativa automática.
+- 🪟 No macOS e no Windows, fechar a janela principal pede confirmação e mantém as janelas remotas abertas; no macOS, o aplicativo permanece no Dock, e reabrir a janela principal restaura o espaço de trabalho salvo.
+- 🧾 Os arquivos alterados na lista “This turn” e no painel Git abrem seus diffs em uma aba, e não mais em uma caixa de diálogo.
+- ⌨️ As sugestões de comandos do terminal não aparecem mais enquanto você digita: no Zsh, o comando mais recente do histórico que corresponde ao texto aparece em cinza na própria linha e pode ser aceito com → ou End, e a lista só aparece quando você pressiona Tab; escolha “Em linha + Tab”, “Apenas Tab” ou “Desativadas” em Configurações.
+- 💬 Nas prévias de Artifact, é possível clicar em elementos da página para deixar comentários para a sessão, e as opções marcadas na página são listadas acima da prévia para que você navegue entre elas e escolha uma.
+- 🔍 A busca em uma conversa usa pesquisa de texto completo, que encontra todas as suas palavras em qualquer ordem, e mostra “Sem resultados” em vez de “Carregando a conversa…” quando não há correspondências.
+- 🧰 As habilidades incluídas, como vspawn e vrefer, agora são instaladas na pasta compartilhada `~/.agents/skills`, para que o Pi, o ZCode e o DeepSeek Harness possam usá-las, e o Codex não lista mais cada habilidade duas vezes.
+- 📋 Na visão de conversa, os resultados de `/code-review` aparecem como uma lista de problemas encontrados com locais de arquivo clicáveis.
+- 🌐 Quando a tradução de respostas está desativada em uma sessão, os cartões de pergunta oferecem um botão “Tradução” que traduz apenas aquele cartão.
+- ✂️ As perguntas e as opções dos cartões de pergunta podem ser selecionadas e copiadas.
+- 🌳 A árvore de sessões coloca sob a linha de um worktree os grupos e as sessões pai que pertencem a ele, inclusive as sessões iniciadas diretamente na pasta do worktree.
+- 🌲 Para novas sessões, ações do Git e merges, os grupos aninhados usam o worktree do grupo pai mais próximo que tiver um.
+- 🔎 Renomear um item enquanto a árvore de sessões está filtrada não faz mais com que ele desapareça dos resultados.
+- ⏳ Quando o OpenCode atinge um limite de uso, uma única linha de erro indica qual é o limite, e a conversa continua automaticamente após a redefinição quando o OpenCode informa o horário em que ela ocorre.
+- 📸 A sobreposição de captura de tela aparece mais rápido depois que você pressiona o atalho.
+- 🚀 As janelas mostram um esboço do layout assim que abrem e carregam na inicialização menos da metade do código de antes.
+- ⚡ `vspawn --yes` cria a sessão filha diretamente, sem mostrar o cartão de inicialização.
+- 🛡️ As auditorias de código usam o Codex Security 0.8.2 e podem ser executadas com o DeepSeek, e os formulários de auditoria e de “Adicionar à base de conhecimento” usam os mesmos campos de agente, modelo e esforço das novas sessões, aceitando modelos que não estão na lista.
+- 🌗 No macOS, quando o tema acompanha o sistema, a barra de título fica escura junto com o restante da janela.
+- 📥 As instalações em um clique só informam a conclusão depois que o comando de instalação termina, e uma instalação incompleta do Zoo Code é tratada como não instalada, em vez de causar uma falha na inicialização.
+- 🖥️ Mudar uma sessão para a visão de terminal não falha mais com “The initial task was already claimed”.
+- 🧟 As sessões não informam mais “The previous agent is still running” depois que o ID de processo do agente antigo é reutilizado por outro programa.
+- 🧯 Depois que o navegador se reconecta, as conversas não mantêm mais uma linha TransportError da desconexão.
+- 🪞 Com o espelhamento ativado, abrir e fechar abas não transforma mais as sessões de conversa em espaços reservados “Restaurado do espaço de trabalho salvo”.
+- 📜 As conversas do Claude que contêm uma resposta descartada voltam a carregar o histórico normalmente.
+- 🧠 Os modelos integrados do Claude que não constam do catálogo de modelos do site continuam aparecendo nos formulários de nova sessão e de inicialização.
+
+## v0.2.14 — 2026-10-23
+
+- 🔌 As conexões remotas não caem nem se reconectam mais a cada segundo quando várias conversas longas estão abertas, e essas conversas voltam a abrir normalmente.
+- ⏹️ As conexões SSH e WSL mostram um botão “Parar” durante a conexão, para interrompê-la em qualquer etapa, inclusive enquanto o servidor é preparado; durante uma conexão, “Cancelar” na caixa de diálogo de senha também a interrompe.
+- 🌿 A árvore de sessões e os rótulos de branch não acumulam mais processos do Git em repositórios grandes, e as leituras do Git em segundo plano são encerradas após 30 segundos em vez de ficarem travadas.
+- 🧩 O painel Git atualiza muito mais rápido em repositórios com submódulos: alterações dentro de um submódulo não fazem mais com que ele apareça no repositório principal, e um submódulo que aponta para um novo commit continua aparecendo.
+- 📁 Os grupos podem ser arrastados para outros projetos junto com seus grupos aninhados e suas sessões, que passam a iniciar na pasta do novo projeto.
+- ⏳ Ao abrir uma conversa longa, aparece um pequeno indicador “Carregando a conversa…” em vez de “O histórico ainda está sendo indexado”.
+- 🖱️ O menu de contexto da sessão mostra “Encerrar processo” enquanto o processo da sessão está em execução, inclusive quando foi iniciado por outro cliente, e deixa de mostrá-lo quando o processo termina.
+
+## v0.2.13 — 2026-10-22
+
+- 📱 No celular, agentes em execução na visão de terminal abrem direto no terminal, com uma caixa de entrada flutuante para escrever ou ditar mensagens inteiras; os pequenos botões “Transcrição” e “Terminal” no cabeçalho alternam entre os dois, e a transcrição não sugere mais mudar para a visão de conversa.
+- 🔑 Em conexões compartilhadas, o proprietário do host pode abrir o terminal de agentes em execução na visão de terminal e digitar nele, e a lista de sessões também mostra agentes sem visão de conversa, como o Kiro; contas convidadas continuam vendo uma transcrição somente leitura.
+- 🌐 Traduzir manualmente uma resposta em uma sessão ociosa mostra a tradução em vez de “A tradução está indisponível”.
+- 📜 Enquanto você rola para cima em uma conversa longa, as novas respostas não ficam mais presas atrás de “Carregar mensagens mais recentes”, e rolar para baixo a partir do histórico anterior carrega automaticamente as mensagens mais recentes.
+- 🧭 A visão para celular não oferece mais “Mudar para a versão desktop”, e os celulares que mudaram antes voltam automaticamente à visão para celular.
+- 🧹 Os registros de execução do `vrun` são excluídos automaticamente 24 horas depois que a tarefa termina.
+
+## v0.2.12 — 2026-10-20
+
+- 🛑 Interromper um turno do Claude na visão de conversa tem efeito imediato, e a próxima mensagem é enviada na hora, mesmo quando o computador está muito sobrecarregado.
+- 🪟 Atalhos de menu como Cmd+D e cliques em notificações agem apenas na janela correspondente, então as janelas remotas não são mais divididas junto com a janela principal.
+- 🔎 A busca global retorna resultados enquanto a indexação ainda está em andamento e mostra quantas sessões ainda estão sendo indexadas.
+- ⚡ A busca global indexa as conversas do Claude, Codex, Pi e OMP diretamente dos arquivos, de forma muito mais rápida e sem encher o cache do histórico de conversas, e abrir um resultado leva exatamente à mensagem correspondente.
+- 🧠 O histórico de conversas é lido diretamente dos registros originais dos agentes, em vez de uma cópia separada no disco, e as pastas `chat-index` e `chat-spool` são removidas na inicialização para liberar espaço em disco.
+- 📱 No celular, sessões em execução na visão de terminal sugerem mudar para a visão de conversa; depois da confirmação, o aplicativo desktop também muda a sessão.
+- 👀 Conexões compartilhadas listam as sessões em execução na visão de terminal como somente leitura, e só o proprietário do host pode mudá-las para a visão de conversa.
+- 🌐 As configurações de tradução ganham “Ativar tradução por padrão”, que define o estado inicial da tradução nas sessões sem uma escolha salva.
+- 🌳 A árvore de sessões agrupa sob uma única linha de worktree as sessões que usam o mesmo worktree.
+- 📄 Respostas curtas na visão de conversa, inclusive mensagens com imagens, não exibem mais o link “Ler o conteúdo completo”.
+- 🔕 O botão que limpa todos os indicadores de notificação passou para a extremidade esquerda da barra inferior da árvore de sessões.
+- 🤖 As caixas de diálogo de nova sessão e de retomar sessão mostram o ícone de cada agente na lista de tipos de agente, e a lista de permissões abre para cima quando não há espaço suficiente abaixo.
+- 🩹 A visão de conversa não informa mais que o histórico contém registros corrompidos quando o armazenamento está ocupado, e continua carregando logo em seguida.
+- 📝 No editor de Markdown, Backspace e Shift+Tab removem a numeração de um item de lista vazio ou de um parágrafo sem numeração dentro de uma lista.
+- 🔵 O chip “Tarefas” na visão de conversa fica ciano, a cor que a árvore de sessões usa para trabalho em segundo plano, enquanto ainda houver tarefas em segundo plano em execução, e na lista de tarefas as que estão em execução também aparecem em ciano com o rótulo “Em execução”.
+- 🗑️ Excluir uma sessão não oferece mais a remoção de worktrees do git; para remover um, use “Delete worktree…”.
+- 🔁 O status da tradução é atualizado quando muda, e não mais a cada 10 segundos, e as configurações de tradução verificam novamente os agentes instalados sempre que são abertas.
+- 💤 O painel Info pausa a coleta de recursos do processo enquanto a janela está oculta.
+- ⏱️ O indicador de trabalho e o cronômetro do turno na visão de conversa não somem mais nem ficam visíveis indevidamente quando um turno começa ou termina enquanto você troca de sessão.
+- 🔗 `vrefer` numera as mensagens da mesma forma que `vsearch`, e nas sessões do Codex bifurcadas, `vrefer` e a busca global incluem o histórico da conversa de origem.
+
+## v0.2.11 — 2026-10-18
+
+- 🧪 As prévias HTML experimentais abrem ao lado das conversas ou em abas, atualizam com as alterações dos arquivos e oferecem controles de código, console e versões; a validação nativa e entre plataformas ainda está pendente.
+- 📜 Conversas longas carregam mensagens antigas em páginas e expandem conteúdos extensos sob demanda, sem duplicar mensagens ou ferramentas nas conversas ao vivo do Claude e do Codex.
+- 🔎 A busca global atualiza conversas alteradas mais rapidamente, retoma a indexação após interrupções e ignora conversas ilegíveis enquanto seus arquivos não mudam.
+- 📊 A contagem de arquivos alterados no painel Info abre uma lista dos arquivos editados neste turno com as linhas adicionadas e removidas, quando disponíveis.
+- 🗂️ Conversas arquivadas seguem seus projetos, grupos e sessões superiores originais em linhas compactas, com projetos recolhíveis e controles para expandir ou recolher tudo.
+- 🧩 As habilidades dos plugins da conta Codex aparecem nas sugestões de preenchimento, e os menus permitem selecionar com as teclas de seta.
+- ⌨️ No Windows e no Linux, Ctrl+Shift+C copia o texto selecionado no terminal, e o atalho pode ser alterado em Configurações ▸ Atalhos.
+- 🧹 Após `/clear` no terminal do Claude, reabrir a sessão ou mudar para a visualização de conversa não retoma mais a conversa apagada.
+- 📏 O painel Info mostra o limite de contexto do modelo nas conversas do OpenCode.
+- 🌐 A tradução inclui Bing Translator sem chave de API, configurações compactas de idioma e tradução antes de reenviar mensagens editadas do Claude e do Codex.
+- 🔤 As traduções existentes continuam visíveis após mudar o mecanismo ou modelo de tradução e podem ser traduzidas novamente.
+- ⏱️ `vrun` informa o progresso a cada 180 segundos com o código de saída 75, permite continuar a espera com `--wait` e protege tarefas em execução contra a reutilização do mesmo nome.
+- 🧵 Respostas do Claude iniciadas pela conclusão de tarefas em segundo plano têm seu próprio resumo da tarefa e separação de conversa, inclusive no histórico.
+- ⚠️ A troca entre as visualizações de terminal e conversa pede confirmação enquanto houver tarefas em segundo plano em execução.
+- 🏠 Sessões sem diretório de trabalho ou cujo diretório não existe mais iniciam na pasta pessoal em ambas as visualizações.
+- 🪟 No Windows, iniciar o VelaTerm ou abrir o painel de conexão não solicita mais a instalação do WSL quando não há distribuições registradas.
+- 🔐 Falhas de login remoto contam para o limite de tentativas mesmo quando a conexão fecha durante a verificação da senha.
+- 🏷️ Os indicadores de versão dos agentes mostram um link explícito `Update: vX` quando há uma versão mais recente do CLI.
+- 🔵 Os indicadores de tarefas em segundo plano ficam em ciano contínuo, e os pontos de status permanecem nas abas e na barra lateral, sem aparecer nos títulos dos painéis.
+- ✍️ As bordas da entrada de conversa estão mais nítidas, com um contorno externo ao receber foco, e os valores do painel Info têm o mesmo brilho dos rótulos no tema escuro.
+- 🌿 Os botões para clonar projetos usam um ícone de ramificação com um marcador de projeto.
+
+## v0.2.10 — 2026-10-13
+
+- 🧩 O OpenCode v2 é compatível junto com o v1, e a lista de modelos carrega corretamente no OpenCode v2.0.26.
+- 🏷️ O cabeçalho da sessão mostra a versão da CLI do agente; quando há uma versão mais nova, o número da versão leva às instruções oficiais de atualização.
+- 🗂️ O painel Git mostra até 1.000 arquivos alterados e sugere adicionar pastas grandes, como `node_modules`, ao `.gitignore`.
+- 🔤 O painel Git exibe corretamente nomes de arquivo com caracteres não ASCII, prepara, remove da preparação e descarta apenas os arquivos escolhidos, e agrupa os conflitos separadamente.
+- 📜 O histórico do Git mantém o intervalo carregado, os itens expandidos e a posição de rolagem ao ser atualizado.
+- 🌿 O branch exibido no painel direito, na barra de status, no título do terminal e na barra lateral é atualizado assim que você troca de branch, sem reiniciar.
+- 📁 A árvore de arquivos atualiza automaticamente as pastas abertas e marca as que contêm alterações do Git.
+- 🧹 Windows: as atualizações automáticas não deixam mais instaladores na pasta Temp, e as sobras de atualizações anteriores são removidas.
+- 🪝 Windows: Codex, Crush, Kiro, Cursor, Kimi, Antigravity, Copilot e Grok informam o status da sessão diretamente ao VelaTerm, sem scripts do PowerShell.
+- 🖱️ Windows: programas de terminal em tela cheia, como o vim, recebem cliques e rolagem do mouse; a roda do mouse não vira mais teclas de seta.
+- 🕘 Os terminais zsh voltam a ler e gravar o seu próprio `~/.zsh_history`, então `history` e a seta para cima também mostram os comandos de outros terminais.
+- 🖥️ Novas sessões do Claude e do Codex abrem na visualização de conversa; os demais agentes abrem no terminal por padrão.
+- 🚀 O `vspawn` aceita `--pi` e `--agent <nome>` e pode iniciar qualquer agente que aceite tarefas.
+- ⏱️ Se a lista de modelos não carregar em 30 segundos, aparece um erro com Retry.
+- 🗑️ Predefinições salvas podem ser excluídas em Configurações ▸ Agentes.
+- ⌨️ A dica do botão de captura de tela mostra o atalho atual, e o ícone ficou mais fácil de distinguir do botão de compartilhar.
+- 🧭 O painel direito volta a alternar de Conhecimento para Info e outras abas.
+- ✍️ macOS: digitar `/` no terminal com um método de entrada não insere mais o caractere duas vezes.
+
 ## v0.2.9 — 2026-10-07
 
 - ✨ A renomeação com IA lembra o modelo e o nível de raciocínio escolhidos para cada agente.

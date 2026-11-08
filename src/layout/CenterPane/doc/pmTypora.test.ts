@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Schema } from "@milkdown/kit/prose/model";
 import { EditorState, TextSelection } from "@milkdown/kit/prose/state";
 import { EditorView } from "@milkdown/kit/prose/view";
-import { autoPairPlugin, focusBlockPlugin } from "./pmTypora";
+import { autoPairPlugin, focusBlockPlugin, liftListBlock, liftListItemAtStart } from "./pmTypora";
 
 const schema = new Schema({
   nodes: {
@@ -91,5 +91,80 @@ describe("focus mode", () => {
     const blocks = view.dom.querySelectorAll("p");
     expect(blocks[0].classList.contains("vlx-current-block")).toBe(false);
     expect(blocks[1].classList.contains("vlx-current-block")).toBe(true);
+  });
+});
+
+describe("list backspace", () => {
+  const listSchema = new Schema({
+    nodes: {
+      doc: { content: "block+" },
+      paragraph: { content: "text*", group: "block", toDOM: () => ["p", 0] },
+      ordered_list: { content: "list_item+", group: "block", toDOM: () => ["ol", 0] },
+      list_item: { content: "paragraph block*", defining: true, toDOM: () => ["li", 0] },
+      text: { group: "inline" },
+    },
+  });
+  const p = (text = "") => listSchema.node("paragraph", null, text ? listSchema.text(text) : undefined);
+  const li = (...content: ReturnType<typeof p>[]) => listSchema.node("list_item", null, content);
+  const ol = (...items: ReturnType<typeof li>[]) => listSchema.node("ordered_list", null, items);
+  const lift = liftListItemAtStart(listSchema.nodes.list_item);
+  // Run the command with the caret at `pos` and describe the resulting block structure.
+  const run = (doc: ReturnType<typeof p>, pos: number, command = lift) => {
+    let state = EditorState.create({ doc });
+    state = state.apply(state.tr.setSelection(TextSelection.create(doc, pos)));
+    const handled = command(state, tr => { state = state.apply(tr); });
+    return { handled, doc: state.doc.toString() };
+  };
+
+  it("turns an empty last item into a paragraph after the list", () => {
+    const doc = listSchema.node("doc", null, [ol(li(p("one")), li(p("two")), li(p()))]);
+    // doc > ol > li(3rd) > p: the empty paragraph opens at 1 + 7 + 7 + 2.
+    expect(run(doc, 17)).toEqual({
+      handled: true,
+      doc: 'doc(ordered_list(list_item(paragraph("one")), list_item(paragraph("two"))), paragraph)',
+    });
+  });
+
+  it("splits the list around a non-empty middle item", () => {
+    const doc = listSchema.node("doc", null, [ol(li(p("one")), li(p("two")), li(p("three")))]);
+    expect(run(doc, 10).doc).toBe(
+      'doc(ordered_list(list_item(paragraph("one"))), paragraph("two"), ordered_list(list_item(paragraph("three"))))',
+    );
+  });
+
+  it("outdents a nested item by one level", () => {
+    const doc = listSchema.node("doc", null, [ol(li(p("one"), ol(li(p("inner")))))]);
+    expect(run(doc, 10).doc).toBe(
+      'doc(ordered_list(list_item(paragraph("one")), list_item(paragraph("inner"))))',
+    );
+  });
+
+  it("moves an unnumbered paragraph under an item out of the list", () => {
+    const doc = listSchema.node("doc", null, [ol(li(p("one")), li(p("two"), p("tail"), p("more")), li(p("three")))]);
+    // Caret at the start of "tail", the second paragraph of the second item.
+    expect(run(doc, 15).doc).toBe(
+      'doc(ordered_list(list_item(paragraph("one")), list_item(paragraph("two"))), paragraph("tail"), paragraph("more"), '
+        + 'ordered_list(list_item(paragraph("three"))))',
+    );
+  });
+
+  it("moves an unnumbered paragraph under a nested item into the enclosing item", () => {
+    const doc = listSchema.node("doc", null, [ol(li(p("one"), ol(li(p("inner"), p("tail")))))]);
+    expect(run(doc, 17).doc).toBe(
+      'doc(ordered_list(list_item(paragraph("one"), ordered_list(list_item(paragraph("inner"))), paragraph("tail"))))',
+    );
+  });
+
+  it("leaves mid-text carets to the default behavior", () => {
+    const doc = listSchema.node("doc", null, [ol(li(p("one"), p("two")))]);
+    expect(run(doc, 4).handled).toBe(false);
+    expect(run(doc, 9).handled).toBe(false);
+  });
+
+  it("outdents an unnumbered paragraph from anywhere in it but leaves numbered ones to Milkdown", () => {
+    const doc = listSchema.node("doc", null, [ol(li(p("one"), p("two")))]);
+    const outdent = liftListBlock(listSchema.nodes.list_item);
+    expect(run(doc, 10, outdent).doc).toBe('doc(ordered_list(list_item(paragraph("one"))), paragraph("two"))');
+    expect(run(doc, 4, outdent).handled).toBe(false);
   });
 });

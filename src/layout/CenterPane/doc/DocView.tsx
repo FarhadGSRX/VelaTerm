@@ -13,7 +13,7 @@ import { isTauri } from "../../../ipc/transport";
 import { env, platform } from "../../../platform";
 import { DOC_EXPORT_PDF_EVENT, DOC_SAVE_EVENT } from "../../../hooks/useKeyboardShortcuts";
 import { labelWithCombo } from "../../../hooks/shortcutRegistry";
-import { useTermStore, type DocTab } from "../../../store/termStore";
+import { findDocTab, useTermStore, type DocTab } from "../../../store/termStore";
 import Icons from "../../../components/Icons";
 import { ContextMenu, type MenuItem } from "../../../components/ContextMenu";
 import { Splitter } from "../../../components/Splitter";
@@ -21,9 +21,13 @@ import { DocFileTree } from "./DocFileTree";
 import { DocOutline, parseOutline, type OutlineHeading } from "./DocOutline";
 import { DocSearchBar } from "./DocSearchBar";
 import type { DocSearchControl } from "./docSearch";
+import { ChangesView } from "../../../components/diff/ChangesView";
+import { DiffDocView } from "./DiffDocView";
 import { ImageDocView } from "./ImageDocView";
 import { SourceEditor, type SourceHandle } from "./SourceEditor";
-import { MarkdownEditor, type MarkdownHandle } from "./MarkdownEditor";
+import { MarkdownEditor, type MarkdownHandle, type MarkdownViewMode } from "./MarkdownEditor";
+import { ArtifactHeaderControls, ArtifactPane } from "./artifact/ArtifactParts";
+import { useArtifact, type ArtifactState } from "./artifact/useArtifact";
 import { countDocument, type DocStats } from "./docStats";
 import { splitFrontMatter } from "./frontMatter";
 import { toggleWritingMode, useWritingModes } from "./writingModes";
@@ -46,14 +50,51 @@ const OUTLINE_DEBOUNCE_MS = 600;
 /** Debounce status-bar statistics while typing; counting serializes the visual document. */
 const STATS_DEBOUNCE_MS = 500;
 
-/** Routes images to ImageViewer and markdown/code to the TextDocView editing path. */
+/** Routes images to ImageViewer, HTML pages to the artifact preview, diffs to DiffDocView, comparisons to
+ *  ChangesView, and markdown/code to TextDocView. */
 export function DocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
   if (tab.kind === "image") return <ImageDocView tab={tab} hidden={hidden} />;
+  if (tab.kind === "diff") return <DiffDocView tab={tab} hidden={hidden} />;
+  if (tab.kind === "changes") return <ChangesView tab={tab} hidden={hidden} />;
+  if (tab.kind === "artifact") return <ArtifactDocView tab={tab} hidden={hidden} />;
   return <TextDocView tab={tab} hidden={hidden} />;
 }
 
-function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
+/** An artifact's mode, treating anything else a tab carried over (a Save As from a draft) as preview. */
+export function artifactMode(mode: DocTab["mode"]): "preview" | "source" | "split" {
+  return mode === "source" || mode === "split" ? mode : "preview";
+}
+
+/** HTML pages: the text editing path plus the sandboxed preview, whose state lives here so hooks stay unconditional. */
+function ArtifactDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
+  const artifact = useArtifact(tab.path, { hidden: hidden || artifactMode(tab.mode) === "source" });
+  // Refresh from the tab menu, or `vopen` on an open page, reloads the preview as well as the text.
+  const reload = artifact.reload;
+  const firstNonce = useRef(tab.reloadNonce);
+  useEffect(() => {
+    if (tab.reloadNonce !== firstNonce.current) reload();
+  }, [tab.reloadNonce, reload]);
+  return <TextDocView tab={tab} hidden={hidden} artifact={artifact} />;
+}
+
+/** Split share of the source side, inherited by new artifact tabs. */
+let lastSplitPct = 50;
+
+const ARTIFACT_MODES = [
+  { mode: "preview", label: "artifact.preview", Icon: Icons.eye },
+  { mode: "source", label: "artifact.source", Icon: Icons.code },
+  { mode: "split", label: "artifact.split", Icon: Icons.columns },
+] as const;
+
+function TextDocView({ tab, hidden, artifact }: { tab: DocTab; hidden: boolean; artifact?: ArtifactState }) {
   const t = useT();
+  const setDocTabViewport = useTermStore((s) => s.setDocTabViewport);
+  const artMode = artifact ? artifactMode(tab.mode) : null;
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [splitPct, setSplitPct] = useState(lastSplitPct);
+  const splitRef = useRef<HTMLDivElement | null>(null);
+  const artifactRef = useRef(!!artifact);
+  artifactRef.current = !!artifact;
   const shortcutOverrides = useTermStore((s) => s.shortcutOverrides);
   const setDocTabMode = useTermStore((s) => s.setDocTabMode);
   const setDocTabDirty = useTermStore((s) => s.setDocTabDirty);
@@ -240,6 +281,21 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     });
   }, [load, tab.mode]);
 
+  /** Artifacts follow the file without a banner: an agent rewriting the page is the expected case. */
+  const quietReload = useCallback(async () => {
+    try {
+      const f = await readTextFile(tab.path);
+      baselineMtimeRef.current = f.mtimeMs;
+      editedRef.current = false;
+      setTruncatedSize(f.truncated ? f.fullSize : null);
+      setText(f.content);
+      setExternalMtime(null);
+      setEditorEpoch((n) => n + 1);
+    } catch {
+      /* The preview shows its own missing-file state; keep the last text here. */
+    }
+  }, [tab.path]);
+
   // Explicit refresh (reloadNonce increments when viewing the same file again or choosing Refresh File).
   // With no edits, always reread disk because refresh explicitly asks for the latest content. With unsaved edits,
   // never discard silently; show the external-change banner only if disk truly changed. Clear any ignored-mtime
@@ -250,7 +306,7 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     if (tab.reloadNonce === lastReloadNonceRef.current) return;
     lastReloadNonceRef.current = tab.reloadNonce;
     ignoredMtimeRef.current = null;
-    if (useTermStore.getState().docTabs[tab.id]?.dirty) {
+    if (findDocTab(useTermStore.getState(), tab.id)?.dirty) {
       void statFile(tab.path)
         .then((st) => {
           if (st.mtimeMs !== baselineMtimeRef.current) setExternalMtime(st.mtimeMs);
@@ -276,6 +332,10 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
         const baseline = baselineMtimeRef.current;
         if (baseline == null || st.mtimeMs === baseline) return;
         if (st.mtimeMs === ignoredMtimeRef.current) return;
+        if (artifactRef.current && !findDocTab(useTermStore.getState(), tab.id)?.dirty) {
+          void quietReload();
+          return;
+        }
         setExternalMtime(st.mtimeMs);
       } catch {
         /* Keep polling if the file is deleted or temporarily unreadable; save reports its own error. */
@@ -287,7 +347,7 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
       stopped = true;
       clearInterval(timer);
     };
-  }, [hidden, loading, error, tab.path]);
+  }, [hidden, loading, error, tab.path, tab.id, quietReload]);
 
   // Save with optimistic mtime locking; force means the user confirmed overwriting an external change.
   const save = useCallback(
@@ -375,7 +435,7 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     // Mode switching rebuilds the editor, invalidating its search state; close the search bar until Cmd+F reopens it.
     setSearchOpen(false);
     // Record the reading position so the next view opens at the same place.
-    markdownRef.current?.prepareModeChange(mode);
+    if (tab.kind === "markdown") markdownRef.current?.prepareModeChange(mode as MarkdownViewMode);
     // Keep Markdown editor instances and their undo history across view changes.
     setDocTabMode(tab.id, mode);
   };
@@ -470,7 +530,7 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
 
   const onEdited = useCallback(() => {
     editedRef.current = true;
-    const cur = useTermStore.getState().docTabs[tab.id];
+    const cur = findDocTab(useTermStore.getState(), tab.id);
     if (cur && !cur.dirty) setDocTabDirty(tab.id, true);
     // Refresh the visible outline after the edit debounce expires.
     if (outlineOnRef.current) {
@@ -539,6 +599,79 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
     },
   ];
 
+  /** Loading, error, or the editor: the whole document area for text files, the source side for artifacts. */
+  const textArea = (
+    <>
+      {loading && <div className="docview-state">{t("doc.loadingFile", tab.title)}</div>}
+
+      {!loading && error && (
+        <div className="docview-state">
+          <div style={{ color: "var(--red)" }}>{error}</div>
+          <div className="actions">
+            <button className="vlx-btn" onClick={() => void load()}>
+              {t("common.retry")}
+            </button>
+            <button className="vlx-btn" onClick={() => closeTab(tab.id)}>
+              {t("doc.closeTab")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && text != null && (
+        <div
+          className="docview-body"
+          onContextMenu={onEditorContextMenu}
+        >
+          {/* Truncated files retain the existing read-only CodeMirror fallback. */}
+          {useMarkdownEditor ? (
+            <MarkdownEditor
+              key={`md:${editorEpoch}`}
+              ref={markdownRef}
+              defaultValue={text}
+              docPath={tab.path}
+              mode={tab.mode as MarkdownViewMode}
+              modes={writingModes}
+              onEdited={onEdited}
+              onReady={() => setEditorReadyEpoch(n => n + 1)}
+              onImageError={showImagePasteError}
+              onRequestSearch={() => setSearchOpen(true)}
+            />
+          ) : (
+            <SourceEditor
+              key={`s:${editorEpoch}`}
+              ref={sourceRef}
+              defaultValue={text}
+              path={tab.path}
+              kind={tab.kind === "markdown" ? "markdown" : "code"}
+              onEdited={onEdited}
+              onRequestSearch={() => setSearchOpen(true)}
+              readOnly={readonlyTrunc}
+              onImagePasteError={(failed, lastError) =>
+                showImagePasteError(t("term.imgUploadFailed", failed, lastError))
+              }
+              onImageClipboardUnavailable={() =>
+                showImagePasteError(t("term.imgClipboardUnavailable"))
+              }
+            />
+          )}
+        </div>
+      )}
+    </>
+  );
+
+  const artifactPane = artifact && (
+    <ArtifactPane
+      state={artifact}
+      path={tab.path}
+      title={tab.title}
+      viewport={tab.viewport ?? "fit"}
+      consoleOpen={consoleOpen}
+      onCloseConsole={() => setConsoleOpen(false)}
+      onCloseTab={() => closeTab(tab.id)}
+    />
+  );
+
   return (
     <div
       ref={rootRef}
@@ -564,7 +697,7 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
         if ((e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F" || e.code === "KeyF")) {
           e.preventDefault();
           e.stopPropagation();
-          if (text != null && !error) setSearchOpen(true);
+          if (text != null && !error && artMode !== "preview") setSearchOpen(true);
         }
       }}
     >
@@ -596,6 +729,26 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
                 onClick={() => switchMode(mode)}
               >
                 {t(mode === "visual" ? "doc.visual" : mode === "compare" ? "doc.compare" : "doc.source")}
+              </button>
+            ))}
+          </div>
+        )}
+        {artifact && (
+          <ArtifactHeaderControls
+            state={artifact}
+            path={tab.path}
+            viewport={artMode !== "source" ? tab.viewport ?? "fit" : undefined}
+            onViewport={(v) => setDocTabViewport(tab.id, v)}
+            consoleOpen={consoleOpen}
+            onToggleConsole={() => setConsoleOpen((v) => !v)}
+          />
+        )}
+        {artifact && (
+          <div className="docview-seg">
+            {ARTIFACT_MODES.map(({ mode, label, Icon }) => (
+              <button key={mode} className={artMode === mode ? "on" : ""} aria-pressed={artMode === mode} onClick={() => switchMode(mode)}>
+                <Icon size={12} />
+                {t(label)}
               </button>
             ))}
           </div>
@@ -708,60 +861,28 @@ function TextDocView({ tab, hidden }: { tab: DocTab; hidden: boolean }) {
           </>
         )}
 
-        {loading && <div className="docview-state">{t("doc.loadingFile", tab.title)}</div>}
-
-        {!loading && error && (
-          <div className="docview-state">
-            <div style={{ color: "var(--red)" }}>{error}</div>
-            <div className="actions">
-              <button className="vlx-btn" onClick={() => void load()}>
-                {t("common.retry")}
-              </button>
-              <button className="vlx-btn" onClick={() => closeTab(tab.id)}>
-                {t("doc.closeTab")}
-              </button>
+        {artMode === "preview" ? (
+          artifactPane
+        ) : artMode === "split" ? (
+          <div className="artifact-body" ref={splitRef}>
+            <div className="artifact-source" style={{ width: `${splitPct}%` }}>
+              {textArea}
             </div>
+            <Splitter
+              onDrag={(dx) => {
+                const width = splitRef.current?.clientWidth ?? 0;
+                if (width <= 0) return;
+                setSplitPct((pct) => {
+                  const next = Math.min(80, Math.max(20, pct + (dx / width) * 100));
+                  lastSplitPct = next;
+                  return next;
+                });
+              }}
+            />
+            {artifactPane}
           </div>
-        )}
-
-        {!loading && !error && text != null && (
-          <div
-            className="docview-body"
-            onContextMenu={onEditorContextMenu}
-          >
-            {/* Truncated files retain the existing read-only CodeMirror fallback. */}
-            {useMarkdownEditor ? (
-              <MarkdownEditor
-                key={`md:${editorEpoch}`}
-                ref={markdownRef}
-                defaultValue={text}
-                docPath={tab.path}
-                mode={tab.mode}
-                modes={writingModes}
-                onEdited={onEdited}
-                onReady={() => setEditorReadyEpoch(n => n + 1)}
-                onImageError={showImagePasteError}
-                onRequestSearch={() => setSearchOpen(true)}
-              />
-            ) : (
-              <SourceEditor
-                key={`s:${editorEpoch}`}
-                ref={sourceRef}
-                defaultValue={text}
-                path={tab.path}
-                kind={tab.kind === "markdown" ? "markdown" : "code"}
-                onEdited={onEdited}
-                onRequestSearch={() => setSearchOpen(true)}
-                readOnly={readonlyTrunc}
-                onImagePasteError={(failed, lastError) =>
-                  showImagePasteError(t("term.imgUploadFailed", failed, lastError))
-                }
-                onImageClipboardUnavailable={() =>
-                  showImagePasteError(t("term.imgClipboardUnavailable"))
-                }
-              />
-            )}
-          </div>
+        ) : (
+          textArea
         )}
 
         {/* The search bar is anchored to docview-main, which does not scroll, rather than inside

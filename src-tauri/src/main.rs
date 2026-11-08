@@ -28,6 +28,13 @@ fn exit_with_parent() {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Hidden: the paste gate runs this as a helper process on every paste, so it comes first to keep
+    // the startup cost out of the shortcut's latency.
+    #[cfg(all(feature = "gui", target_os = "macos"))]
+    if args.get(1).map(String::as_str) == Some("--clipboard-probe") {
+        velaterm_lib::run_clipboard_probe();
+        return;
+    }
     #[cfg(any(feature = "gui", feature = "sidecar"))]
     if args.get(1).map(String::as_str) == Some("--font-catalog") {
         velaterm_lib::print_font_catalog();
@@ -60,11 +67,13 @@ fn main() {
     if matches!(
         args.get(1).map(String::as_str),
         Some("--notify") | Some("--notify-env") | Some("--codex-hook") | Some("--grok-hook") | Some("--cursor-hook")
+            | Some("--agent-hook")
     ) {
         match args.get(1).map(String::as_str) {
             Some("--codex-hook") => velaterm_lib::run_codex_hook(&args),
             Some("--grok-hook") => velaterm_lib::run_grok_hook(&args),
             Some("--cursor-hook") => velaterm_lib::run_cursor_hook(&args),
+            Some("--agent-hook") => velaterm_lib::run_agent_hook(&args),
             _ => velaterm_lib::run_notify(&args),
         }
         return;

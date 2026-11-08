@@ -11,11 +11,13 @@
 //!   the `PAIRING_STORES` pattern from auth.rs), so a dual-instance `--serve` setup no longer doubles an
 //!   attacker's budget. [`allow`](LoginRateLimiter::allow) *reserves* an attempt atomically, so N
 //!   parallel requests from one IP cannot slip under the limit before any of them records a failure.
-//!   The reservation is an RAII [`AttemptGuard`]: dropping it without an explicit outcome (a client
-//!   disconnecting mid-verify cancels the request future) releases the slot immediately instead of
-//!   leaking it until the window prune.
+//!   The reservation is an RAII [`AttemptGuard`]: dropping it without an explicit outcome releases the
+//!   slot instead of leaking it until the window prune. `AuthState::verify_attempt` moves the guard
+//!   into the Argon2 task, so a client disconnecting mid-verify cannot release it early: the slot
+//!   stays reserved until the hash finishes, and a wrong password is still counted as a failure.
 //! - [`VERIFY_SEMAPHORE`]: a process-wide cap on concurrent Argon2 verifications, combined with
-//!   `spawn_blocking` in `AuthState::verify_password_async` so the async executor is never blocked.
+//!   `spawn_blocking` in `AuthState::verify_attempt` so the async executor is never blocked. The
+//!   permit moves into the blocking task too, so cancelled requests cannot exceed the cap.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -87,9 +89,8 @@ impl LoginRateLimiter {
 
     /// Whether this IP may attempt a login now. `Some` **reserves** one attempt against the window
     /// immediately and hands it back as an RAII [`AttemptGuard`]: resolve it with
-    /// [`AttemptGuard::failure`] or [`AttemptGuard::success`]; merely dropping it (the request future
-    /// was cancelled, e.g. a client disconnect during the Argon2 await) releases the reservation at
-    /// once instead of leaking it until the window prune.
+    /// [`AttemptGuard::failure`] or [`AttemptGuard::success`]; merely dropping it releases the
+    /// reservation at once instead of leaking it until the window prune.
     pub fn allow(self: &Arc<Self>, ip: IpAddr) -> Option<AttemptGuard> {
         if self.allow_at(ip, Instant::now()) {
             Some(AttemptGuard {
@@ -159,7 +160,7 @@ impl LoginRateLimiter {
 /// RAII reservation handle returned by [`LoginRateLimiter::allow`]. Exactly one of [`failure`]
 /// (converts the reservation into a counted failure) or [`success`] (releases the reservation
 /// surgically, see [`LoginRateLimiter::release_pending`]) should be called; dropping the guard
-/// unresolved — the request future was cancelled — releases the reservation immediately.
+/// unresolved releases the reservation immediately.
 ///
 /// [`failure`]: AttemptGuard::failure
 /// [`success`]: AttemptGuard::success

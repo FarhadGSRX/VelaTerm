@@ -3,8 +3,88 @@
 import type en from "./en";
 
 const ja: typeof en = {
-  "panel.averageOutput": "平均出力速度",
-  "panel.averageOutputHint": "計測した応答時間から推定した、1秒あたりの出力トークン数です。報告された推論トークンを含み、ツールの実行時間とユーザーを待つ時間は除外します。使用量と計測時間を正しく対応付けられない場合は表示しません。モデル自体のデコード速度ではありません。",
+  "panel.turnStats": "ターンの統計",
+  "panel.fileCount": (n: number) => `${n} 個のファイル`,
+  "panel.showChangedFiles": "このターンで変更したファイルを表示",
+  "panel.noFilesChanged": "このターンで編集したファイルはありません。",
+  "panel.shellEditsNotListed": "シェルコマンドによる変更は一覧に含まれません。",
+  "translation.swap": "言語を入れ替え",
+  "translation.openai": "OpenAI 互換",
+  "translation.bing": "Bing 翻訳（API キー不要）",
+  "translation.bingHint": "Bing の無料翻訳を利用します。API キーや Microsoft アカウントは不要です。",
+  "translation.google": "Google 翻訳（API キー不要）",
+  "translation.googleHint": "Google の無料翻訳を利用します。API キーや Google アカウントは不要です。",
+  "translation.rateLimited": "翻訳リクエストが多すぎます。しばらくしてからもう一度お試しください。",
+  "translation.saved": "設定を保存しました。",
+
+  "translation.title": "翻訳",
+  "translation.enable": "翻訳を有効にする",
+  "translation.visibility": "この機能を有効にすると、会話に翻訳用の操作が表示されます。",
+  "translation.defaultEnabled": "翻訳を初期設定で有効にする",
+  "translation.defaultEnabledHint": "翻訳設定を個別に保存していない会話に適用されます。変更は自動的に保存されます。",
+  "translation.conversationKinds": "翻訳を使用するエージェントの種類",
+  "translation.conversationKindsHint": "選択した種類のエージェントとの会話でのみ、翻訳の操作と自動翻訳が有効になります。変更は自動的に保存されます。",
+  "translation.chooseConversationKinds": "エージェントの種類を選択",
+  "translation.allConversationKinds": "すべてのエージェントの種類",
+  "translation.kindSaveFailed": "エージェントの種類を保存できませんでした。現在の選択はまだ保存されていません。",
+  "translation.noConversationKinds": "エージェントの種類が選択されていないため、すべての会話で翻訳の操作が非表示になります。",
+  "translation.engine": "翻訳エンジン",
+  "translation.api": "API サービス",
+  "translation.service": "保存済みサービス",
+  "translation.newService": "サービスを追加",
+  "translation.editService": "サービスを編集",
+  "translation.name": "サービス名",
+  "translation.protocol": "プロトコル",
+  "translation.apiKey": "API キー",
+  "translation.copyKey": "APIキーをコピー",
+  "translation.keyCopied": "APIキーをコピーしました",
+  "translation.showKey": "APIキーを表示",
+  "translation.hideKey": "APIキーを非表示",
+  "translation.keyConfigured": "APIキー設定済み",
+  "translation.keyNotConfigured": "APIキー未設定",
+  "translation.deleteServiceConfirm": "このサービスと保存済みのAPIキーを削除しますか？",
+  "translation.saveConfig": "設定を保存",
+  "translation.test": "接続をテスト",
+  "translation.testHint": "保存済みの設定を使って、英語の例文「Connection test.」をドイツ語に翻訳します。",
+  "translation.testSuccess": "接続テストに成功しました。",
+  "translation.hostOnly": "翻訳サービスはホストのデスクトップで設定してください。",
+  "translation.configure": "設定で翻訳を構成してください。",
+  "translation.languages": "翻訳言語",
+  "translation.moreSettings": "その他の設定",
+  "translation.source": "翻訳元の言語",
+ "translation.target": "翻訳先の言語",
+  "translation.chooseTarget": "翻訳する前に、翻訳先の言語を選択してください。",
+  "translation.auto": "自動検出",
+  "translation.outgoing": "送信前に翻訳",
+  "translation.replies": "返信を翻訳",
+  "translation.replySource": "返信の翻訳元言語",
+  "translation.replyTarget": "返信の翻訳先言語",
+  "translation.replyDisplay": "返信の表示方法",
+  "translation.original": "原文",
+  "translation.translation": "訳文",
+  "translation.both": "両方",
+  "translation.immersive": "原文と訳文を交互に表示",
+  "translation.copyBoth": "原文と訳文をコピー",
+  "translation.copyTranslation": "訳文をコピー",
+  "translation.copiedBoth": "原文と訳文をコピーしました",
+  "translation.copiedTranslation": "訳文をコピーしました",
+  "translation.duration": (time: string) => `翻訳時間: ${time}`,
+  "translation.translating": "翻訳中…",
+  "translation.failed": "翻訳に失敗しました。メッセージは送信されていません。",
+  "translation.canceled": "翻訳をキャンセルしました。メッセージは送信されていません。",
+  "translation.cancel": "翻訳をキャンセル",
+  "translation.retry": "翻訳を再試行",
+  "translation.sendOriginal": "原文を送信",
+  "translation.sent": "送信した訳文",
+  "translation.showSent": "送信した訳文を表示",
+  "translation.hideSent": "送信した訳文を閉じる",
+  "translation.stale": "この訳文は以前の原文、言語設定またはエンジン設定に対応しています。",
+  "translation.unavailable": "翻訳を利用できません。選択したエージェントまたはサービスを確認してください。",
+  "translation.invalid": "翻訳設定と言語の選択を確認してください。",
+  "translation.structure": "訳文でメッセージの構造を保持できませんでした。再試行してください。",
+  "translation.network": "翻訳サービスを利用できません。もう一度お試しください。",
+  "translation.paymentRequired": "翻訳サービスの利用にはお支払いが必要です（HTTP 402）。API アカウントの残高または支払い状況を確認してください。",
+
   "tree.newPlanExecuteSession": "計画・実行セッションを新規作成…",
   "launch.splitTasks": "複数のタスクに自動分割",
   "launch.splitTasksHint": "計画セッションが独立したタスクを提案します。実行前に、各タスクの指示、エージェント、モデル、推論の強度を確認できます。",
@@ -120,20 +200,20 @@ const ja: typeof en = {
   "nb.attach": "添付ファイルを追加",
   "nb.browse": "参照",
   "nb.chooseNote": "最初のノートを作成",
-  "nb.closeHint": "この保管庫を一覧から外します。ディスク上のファイルは残ります。",
-  "nb.closeVault": "保管庫を閉じる",
+  "nb.closeHint": "このナレッジベースを一覧から外します。ディスク上のファイルは残ります。",
+  "nb.closeVault": "ナレッジベースを閉じる",
   "nb.conflict": "ファイルが外部で変更されました。編集中の内容は保持されています。ファイルを再読み込みするか、新しいノートとして保存してください。",
-  "nb.copyTo": "ローカル保管庫にコピー",
+  "nb.copyTo": "ローカルナレッジベースにコピー",
   "nb.createVault": "ナレッジベースを作成",
   "nb.destination": "移動先のパス",
   "nb.download": "ダウンロード",
   "nb.downloadHint": "添付ファイルをダウンロードして、別のアプリで開けます。",
-  "nb.empty": "フォルダーを開くか、保管庫を新規作成して記録を始めましょう。",
+  "nb.empty": "フォルダーを開くか、ナレッジベースを新規作成して記録を始めましょう。",
   "nb.emptyImport": "読み込み可能なファイルが選択されていません。",
   "nb.emptyNotes": "ノートは Markdown ファイルとして保存されます。",
   "nb.emptyOutline": "文書の見出しがここに表示されます。",
   "nb.emptyTrash": "ごみ箱は空です。",
-  "nb.error": "保管庫にアクセスできません。接続とフォルダーを確認して、もう一度お試しください。",
+  "nb.error": "ナレッジベースにアクセスできません。接続とフォルダーを確認して、もう一度お試しください。",
   "nb.exists": "移動先または同名のファイルが既に存在します。別の名前かフォルダーを選んでください。",
   "nb.favorites": "お気に入り",
   "nb.files": "ファイル",
@@ -141,6 +221,9 @@ const ja: typeof en = {
   "nb.generatedHint": "セッションから整理されたナレッジで、出典と変更履歴も確認できます。",
   "nb.homeHint": "セッションナレッジベースとローカルナレッジベースを閲覧できます。",
   "nb.homeSearch": "セッションのナレッジとローカルノートを検索…",
+  "nb.layout": "レイアウト",
+  "nb.layoutCards": "カード",
+  "nb.layoutList": "リスト",
   "nb.loadMore": "さらに読み込む",
   "nb.import": "読み込む",
   "nb.importFiles": "ファイルを選択",
@@ -174,7 +257,7 @@ const ja: typeof en = {
   "nb.local": "ローカルファイル",
   "nb.localVaults": "ローカルナレッジベース",
   "nb.move": "名前の変更・移動",
-  "nb.moveHint": "保管庫のルートからの相対パスを入力してください。ファイルやフォルダーの移動時に、既存のノートのリンクも更新します。",
+  "nb.moveHint": "ナレッジベースのルートからの相対パスを入力してください。ファイルやフォルダーの移動時に、既存のノートのリンクも更新します。",
   "nb.name": "名前",
   "nb.newFolder": "新規フォルダー",
   "nb.newNote": "新規ノート",
@@ -208,25 +291,26 @@ const ja: typeof en = {
   "nb.searchThisVault": "このナレッジベース",
   "nb.skipped": "スキップ済み",
   "nb.split": "分割表示",
-  "nb.tooLarge": "ファイルまたは選択した内容が保管庫の上限を超えています。",
+  "nb.tooLarge": "ファイルまたは選択した内容がナレッジベースの上限を超えています。",
   "nb.trash": "ごみ箱",
-  "nb.trashHint": "この項目を保管庫のごみ箱に移動します。後で復元できます。",
+  "nb.trashHint": "この項目をナレッジベースのごみ箱に移動します。後で復元できます。",
   "nb.unsaved": "未保存の変更",
   "nb.vaults": "ナレッジベース",
   "nb.view": "表示モード",
-  "nb.welcome": "自分のノート保管庫",
-  "nb.welcomeText": "自由に書き、考えをつなぎ、通常のローカルファイルでノートを管理できます。既存の Markdown フォルダーを開くか、新しい保管庫に資料を読み込みましょう。",
+  "nb.welcome": "自分のナレッジベース",
+  "nb.welcomeText": "自由に書き、考えをつなぎ、通常のローカルファイルでノートを管理できます。既存の Markdown フォルダーを開くか、新しいナレッジベースに資料を読み込みましょう。",
   "memory.globalMemory": "セッションナレッジベース",
   "memory.collections": "アーカイブ済みセッション",
   "memory.collectionConversation": "会話",
   "memory.collectionEmptyEntries": "この会話にはまだナレッジ記事がありません。",
+  "memory.collapseAllProjects": "すべてのプロジェクトを折りたたむ",
+  "memory.expandAllProjects": "すべてのプロジェクトを展開する",
   "memory.title": "ナレッジベース",
   "memory.add": "ナレッジベースに追加",
   "memory.intro": "プロジェクトとセッションごとに知識を整理します。保存された記事は元の情報の変更に連動せず、手動で編集できます。",
   "memory.entries": "ナレッジ記事",
   "memory.emptyJobs": "整理履歴はまだありません。",
   "memory.jobs": "整理履歴",
-  "memory.search": "記事のタイトルと本文を検索…",
   "memory.empty": "一致する記事はありません。セッションから記事を生成するか、手動で作成してください。",
   "memory.emptyDetail": "記事を選択すると、内容、関連項目、出典を確認できます。",
   "memory.new": "記事を新規作成",
@@ -235,7 +319,6 @@ const ja: typeof en = {
   "memory.content": "本文（Markdown）",
   "memory.tags": "タグ（カンマ区切り）",
   "memory.related": "関連記事",
-  "memory.backlinks": "この記事へのリンク",
   "memory.sources": "出典",
   "memory.history": "変更履歴",
   "memory.restore": "この版を復元",
@@ -294,6 +377,8 @@ const ja: typeof en = {
   "chat.imageCopy": "画像をコピー",
   "chat.imageSave": "画像を保存",
   "chat.imageActionFailed": "画像の操作に失敗しました。もう一度お試しください。",
+  "clipboard.unresponsive":
+    "クリップボードの提供元アプリが応答しないため、貼り付けできませんでした。しばらくしてからもう一度お試しください。",
   "common.copy": "コピー", // Copy
   "common.cut": "切り取り", // Cut
   "common.paste": "貼り付け", // Paste
@@ -417,6 +502,8 @@ const ja: typeof en = {
     `起動時に ${flag} を付与し、すべての権限確認をスキップします。慎重に使用してください。`, // YOLO flag hint
   "settings.permViaEnvHint":
     "設定ファイル経由ですべての権限確認をスキップします（CLI フラグなし）。このセッションの起動時に適用されます。",
+  "settings.permViaAnswerHint":
+    "会話ビューでのすべての権限リクエストを自動的に許可します。ワークスペースの外に及ぶコマンドも含まれるため、慎重に使用してください。",
   "settings.catGeneral": "一般", // General
   "settings.cliLabel": "シェルコマンド",
   "settings.cliInstall": "‘vela’ コマンドをインストール",
@@ -562,7 +649,9 @@ const ja: typeof en = {
   "changes.loading": "読み込み中…",
   "changes.loadingDiff": "差分を読み込み中…",
   "changes.noChanges": "変更なし",
+  "changes.unchangedLines": "未変更の $ 行を表示",
   "changes.refresh": "更新",
+  "changes.openFile": "ファイルを開く",
   "changes.notRepo": "Git リポジトリではありません",
   "changes.selectFile": "ファイルを選択してください",
   "changes.binary": "バイナリファイル — 行差分は表示できません",
@@ -571,7 +660,30 @@ const ja: typeof en = {
   "git.staged": "ステージ済み",
   "git.changes": "変更",
   "git.untracked": "未追跡ファイル",
-  "git.committed": "コミット済みの変更",
+  "git.committed": "コミット履歴",
+  "git.conflicts": "競合",
+  "git.conflictNotice": "コミットする前に競合を解決してください。",
+  "git.filterFiles": "ファイル名またはパスで絞り込み",
+  "git.noMatchingFiles": "一致するファイルはありません",
+  "changes.compareAll": "HEAD → 作業ツリー",
+  "changes.compareStaged": "HEAD → インデックス",
+  "changes.compareUnstaged": "インデックス → 作業ツリー",
+  "changes.compareCommit": "コミット前 → コミット後",
+  "changes.compareBranch": (base: string) => `${base} とのマージベース → HEAD`,
+  "changes.ignoreWhitespace": "空白を無視",
+  "changes.collapseUnchanged": "変更のない行を折りたたむ",
+  "changes.tooLarge": "このファイルはプレビューの上限（2 MiB）を超えています。",
+  "git.fileStatus.modified": "変更済み",
+  "git.fileStatus.added": "追加済み",
+  "git.fileStatus.deleted": "削除済み",
+  "git.fileStatus.renamed": "名前変更済み",
+  "git.fileStatus.untracked": "未追跡",
+  "git.fileStatus.conflicted": "競合あり",
+  "git.changedFiles": (n: number) => `変更されたファイル：${n}`,
+  "git.changedFilesOver": (n: number) => `変更されたファイル：${n} 件超`,
+  "git.tooManyChanges": (n: number) => `変更が多すぎるため、最初の ${n} 件のみを行数なしで表示しています。`,
+  "git.ignoreSuggestion": (folder: string) => `これらのファイルの多くは ${folder}/ にあります。`,
+  "git.addToGitignore": ".gitignore に追加",
   "git.stage": "ステージ",
   "git.unstage": "ステージ解除",
   "git.stageAll": "すべてステージ",
@@ -581,7 +693,6 @@ const ja: typeof en = {
   "git.viewAll": "すべて表示",
   "git.detached": "(detached)",
   "git.repository": "リポジトリ",
-  "git.aheadBehind": "上流ブランチに対する先行・遅延コミット数",
   "git.commitPlaceholder": "コミットメッセージ",
   "git.amend": "直前のコミットを修正",
   "git.amendCommit": "コミットを修正",
@@ -589,8 +700,76 @@ const ja: typeof en = {
   "git.commitNoFiles": "このコミットにファイルの変更はありません",
   "git.noCommits": "コミットがありません",
   "git.loadMore": "さらに読み込む",
-  "git.allBranches": "すべてのブランチ",
-  "git.currentBranch": "現在のブランチ",
+  "git.upstreamTitle": (u: string) => `上流ブランチ: ${u}`,
+  "git.fetch": "フェッチ",
+  "git.pull": "プル",
+  "git.pullTitle": (u: string) => `${u} からプル（早送りのみ）`,
+  "git.pullRebase": "プル（リベース）",
+  "git.pullMerge": "プル（マージ）",
+  "git.divergedHint": "ローカルブランチと上流ブランチの両方に新しいコミットがあります。統合方法を選んでください:",
+  "git.branchChanges": "このブランチのコミット",
+  "git.compareBase": "比較対象",
+  "git.compareAheadBehind": (ahead: number, behind: number, base: string) => `${base} から分岐後、このブランチに ${ahead} 件、${base} に ${behind} 件の新しいコミットがあります`,
+  "git.noBranchChanges": "ベースから分岐して以降、ファイルの変更はありません",
+  "git.pr.open": "プルリクエストを作成",
+  "git.pr.opening": "作成中…",
+  "git.pr.formTitle": "Gitea のプルリクエストを作成",
+  "git.pr.formDescription": (branch: string, base: string) => `${branch} を origin にプッシュし、${base} へのプルリクエストを作成します。`,
+  "git.pr.titleField": "タイトル",
+  "git.pr.bodyField": "説明",
+  "git.pr.noToken": "ここでプルリクエストを作成するには、設定で Gitea トークンを追加してください。",
+  "git.pr.unreachable": "現在 Gitea サーバーに接続できません。",
+  "git.pr.opened": "プルリクエストを作成しました",
+  "git.push": "プッシュ",
+  "git.pushTitle": (u: string) => `${u} へプッシュ`,
+  "git.publish": "ブランチを公開",
+  "git.publishTitle": "このブランチをリモートにプッシュして追跡します",
+  "git.forcePush": "強制プッシュ…",
+  "git.forcePushAction": "強制プッシュ",
+  "git.forcePushConfirm": (u: string) => `${u} をローカルブランチで置き換えますか？ まだフェッチしていないコミットがリモートにある場合、強制プッシュは中止されます。`,
+  "git.moreActions": "その他の Git 操作",
+  "git.running.fetch": "フェッチ中…",
+  "git.running.pull": "プル中…",
+  "git.running.push": "プッシュ中…",
+  "git.running.publish": "公開中…",
+  "git.operation.merge": "マージ中",
+  "git.operation.rebase": "リベース中",
+  "git.operation.cherry-pick": "チェリーピック中",
+  "git.operation.revert": "リバート中",
+  "git.operationHint": (n: number) => `競合している ${n} 個のファイルを解決してステージしてから、続行してください。`,
+  "git.operationReady": "すべての競合が解決されました。続行して完了するか、中止して元に戻してください。",
+  "git.continue": "続行",
+  "git.abort": "中止",
+  "git.abortConfirm": "中止して操作開始前の状態に戻しますか？ これまでに解決した競合は失われます。",
+  "git.amendTarget": (hash: string, subject: string) => `${hash} を修正: ${subject}`,
+  "git.amendUnavailable": "修正できるコミットがまだありません",
+  "git.conflictKind.both-modified": "双方で変更",
+  "git.conflictKind.both-added": "双方で追加",
+  "git.conflictKind.both-deleted": "双方で削除",
+  "git.conflictKind.added-by-us": "自分側で追加",
+  "git.conflictKind.added-by-them": "相手側で追加",
+  "git.conflictKind.deleted-by-us": "自分側で削除",
+  "git.conflictKind.deleted-by-them": "相手側で削除",
+  "git.markResolved": "解決済みにする",
+  "git.openChanges": "変更を開く",
+  "git.discardAll": "すべての変更を破棄",
+  "git.deleteAll": "未追跡ファイルをすべて削除",
+  "git.discardConfirm": (n: number) => `${n} 個のファイルの変更を破棄しますか？ この操作は元に戻せません。`,
+  "git.deleteConfirm": (n: number) => `未追跡ファイル ${n} 個を削除しますか？ この操作は元に戻せません。`,
+  "git.selectedCount": (n: number) => `${n} 個を選択中`,
+  "git.clearSelection": "選択を解除",
+  "git.viewAsTree": "ツリーで表示",
+  "git.viewAsList": "リストで表示",
+  "git.copyCommitHash": "コミットハッシュをコピー",
+  "git.copyCommitMessage": "コミットメッセージをコピー",
+  "git.ask.resolve": (agent: string) => `${agent} に解決を依頼`,
+  "git.ask.resolvePrompt": (files: string) => `次のファイルの Git の競合を、双方の変更の意図を残して解決し、解決した各ファイルを git add でステージしてください。コミットはせず、マージ・リベース・チェリーピックの続行や中止もしないでください。結果を確認してから自分で完了します。\n\n${files}`,
+  "git.ask.fix": (agent: string) => `${agent} に修正を依頼`,
+  "git.ask.fixPrompt": (error: string) => `Git パネルから実行した Git コマンドが次のエラーで失敗しました:\n\n${error}\n\n原因を調べ、安全であれば修正してください。強制プッシュ、履歴の書き換え、変更の破棄を行う前には必ず確認してください。`,
+  "git.ask.commit": (agent: string) => `${agent} にコミットメッセージの作成とステージ済み変更のコミットを依頼`,
+  "git.ask.commitPrompt": "ステージ済みの変更（git diff --cached）を確認し、このリポジトリの慣例に沿った簡潔でわかりやすいコミットメッセージでコミットしてください。コミットするのはステージ済みの内容だけにし、ファイルのステージ、ステージ解除、編集は行わないでください。",
+  "git.ask.explain": (agent: string) => `${agent} に説明を依頼`,
+  "git.ask.explainPrompt": (hash: string, subject: string) => `git show ${hash} を使って、コミット ${hash}（「${subject}」）で何がなぜ変更されたのかを説明してください。何も変更しないでください。`,
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",
@@ -659,10 +838,9 @@ const ja: typeof en = {
   "settings.recordSessionsHint":
     "既定はオフ。オンにするとターミナル出力をログファイルに保存し、アーカイブ再生と検索に使います。通常のターミナルセッションは記録しません。エージェントセッションは独自の会話記録を読み込みます。", // Record session logs hint
   "settings.fonts": "Fonts", // TODO translate
-  "settings.uiFont": "Interface font", // TODO translate
-  "settings.uiFontSize": "Interface size", // TODO translate
-  "settings.termFont": "Terminal font", // TODO translate
-  "settings.termFontSize": "Terminal size", // TODO translate
+  "settings.uiFontSize": "インターフェースの文字サイズ",
+  "settings.termFont": "ターミナルのフォント",
+  "settings.termFontSize": "ターミナルの文字サイズ",
   "settings.termLineHeight": "ターミナルの行の高さ",
   "settings.chatTypography": "会話ビュー",
   "settings.chatTypographyHint": "フォント設定はターミナルとは別に保存され、変更はすぐに反映されます。",
@@ -685,7 +863,7 @@ const ja: typeof en = {
   "settings.composerChip.tasks": "バックグラウンドタスク",
   "settings.composerChip.account": "アカウント",
   "settings.composerChip.codexCredits": "Codex リセット券",
-  "settings.fontDefault": "Default", // TODO translate
+  "settings.fontDefault": "デフォルト",
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontListUnavailable": "システムフォントの一覧を取得できません。フォント名を手動で入力できます。",
   "settings.fontUnconfirmed": "このフォントが利用可能か確認できません。",
@@ -730,6 +908,7 @@ const ja: typeof en = {
   "settings.scSplitDown": "下に分割", // Split down
   "settings.scSearch": "ターミナル内を検索", // Find in terminal
   "settings.scGlobalSearch": "全セッションを検索", // Search all sessions
+  "settings.scCopyTerminal": "ターミナルの選択内容をコピー", // Copy terminal selection
   "settings.scSelectAllTerminal": "ターミナル内をすべて選択", // Select all in terminal
   "settings.scSaveDoc": "ドキュメントを保存", // Save document
   "settings.scFocusSidebar": "サイドバーにフォーカス", // Focus sidebar
@@ -835,6 +1014,7 @@ const ja: typeof en = {
   "connect.portPlaceholder": "ポート", // Port
   "connect.connecting": "接続中…", // Connecting…
   "connect.connect": "接続", // Connect
+  "connect.stop": "中止",
   "connect.stagePreparing": "サーバーを準備中…",
   "connect.stageTransferring": "サーバーを転送中…",
   "connect.stageStarting": "サーバーを起動中…",
@@ -916,6 +1096,7 @@ const ja: typeof en = {
   "tree.presetLink": "プリセット (presets.json)", // Preset (presets.json) / Not linked
   "tree.presetNone": "リンクなし",
   "tree.projectInfo": "プロジェクト情報", // Project Info
+  "tree.codeAudit": "コード監査", // Code audit
   "info.branch": "ブランチ", // Branch
   "info.path": "パス", // Path
   "info.recentCommits": "最近のコミット", // Recent Commits
@@ -924,6 +1105,7 @@ const ja: typeof en = {
   "tree.killProcessConfirm": (name: string) => `「${name}」のプロセスを終了しますか？実行中のタスクは中断されます。保存済みの会話履歴とファイルは保持されます。`,
   "tree.archiveSession": "セッションをアーカイブ", // Archive Session
   "tree.archiveGroup": "グループをアーカイブ", // Archive Group
+  "tree.archiveCollection": "コレクションをアーカイブ", // Archive Collection
   // Temporary (draft) sessions
   "tree.scratchTag": "一時", // scratch
   "tree.persistSession": "永続セッションに変換…", // Make Permanent Session…
@@ -1054,6 +1236,11 @@ const ja: typeof en = {
   // Working directory / Leave empty for the default
   "tree.workingDirLabel": "作業ディレクトリ",
   "tree.workingDirPlaceholder": "空欄なら既定のディレクトリ",
+  "preset.savedTitle": "保存済みプリセット",
+  "preset.empty": "保存済みのプリセットはありません。",
+  "preset.deleteHint": "プリセットを削除しても、既存のセッションは削除されません。",
+  "preset.deleteNamed": (name: string) => `プリセット「${name}」を削除`,
+  "preset.deleteConfirm": (name: string) => `プリセット「${name}」を削除しますか？`,
   "preset.execPathLabel": "実行ファイル（任意）",
   "preset.execPathPlaceholder": "/usr/local/bin/claude",
   "preset.execPathHint":
@@ -1089,8 +1276,6 @@ const ja: typeof en = {
     `グループ「${name}」を削除しますか？配下のサブグループとセッションもすべて削除されます。この操作は取り消せません。`, // Delete group "{name}"?…
   "tree.deleteSessionBody": (name) =>
     `セッション「${name}」（およびすべての子セッション）を削除しますか？この操作は取り消せません。`, // Delete session "{name}"…
-  "tree.deleteWorktrees": (n) =>
-    `関連する git worktree も削除する（計 ${n} 件。作業ツリーに変更があると削除に失敗することがあります）`, // Also remove associated git worktrees…
 
   // Session information dialog
   "info.name": "名前", // Name
@@ -1113,10 +1298,12 @@ const ja: typeof en = {
   "importSessions.results": ({ count }: { count: number }) => `${count} 件の結果`,
   "importSessions.selected": ({ count }: { count: number }) => `${count} 件選択中`,
   "importSessions.clearSelection": "選択を解除",
-  "importSessions.clearSearch": "検索をクリア",
+  "importSessions.clearFilters": "絞り込みを解除",
+  "importSessions.agentFilter": "エージェントで絞り込む",
+  "importSessions.allAgents": "すべてのエージェント",
   "importSessions.noHistory": "このプロジェクトのディレクトリにセッション履歴はありません。",
   "importSessions.title": "セッションをインポート",
-  "importSessions.description": "作業ディレクトリがこのプロジェクトと一致する Codex、Claude、OpenCode、Kiro の既存セッションを検索します。セッションを選択してプロジェクトに追加し、開くと会話を再開できます。現在、Kiro の履歴はテキストのみの記録を表示できます。",
+  "importSessions.description": "作業ディレクトリがこのプロジェクトと一致する Codex、Claude、OpenCode、Pi、OMP、ZCode、DeepSeek、Kiro の既存セッションを検索します。セッションを選択してプロジェクトに追加し、開くと会話を再開できます。現在、Kiro の履歴はテキストのみの記録を表示できます。",
   "importSessions.search": "タイトル、エージェント、セッション ID で検索",
   "importSessions.empty": "一致するセッションが見つかりません。",
   "importSessions.imported": "インポート済み",
@@ -1139,9 +1326,9 @@ const ja: typeof en = {
     "このプロジェクトには利用可能な git リポジトリのパスがありません。", // This project has no usable git repository path.
   // ── Worktree selector for custom session creation ──
   "worktreeSel.label": "Worktree",
-  "worktreeSel.modeNone": "なし", // None
-  "worktreeSel.modeNew": "新規", // New
-  "worktreeSel.modeExisting": "既存", // Existing
+  "worktreeSel.modeNone": "使用しない", // None
+  "worktreeSel.modeNew": "新規作成", // New
+  "worktreeSel.modeExisting": "既存を選択", // Existing
   "worktreeSel.loading": "worktree を読み込み中…", // Loading worktrees…
   "worktreeSel.empty": "このリポジトリには既存の worktree がありません。", // No existing worktrees in this repository.
   "worktreeSel.loadFailed":
@@ -1182,6 +1369,7 @@ const ja: typeof en = {
   "search.includeArchivedHint":
     "アーカイブ済みセッションも検索対象に含める（既定ではオフ）", // Also search archived sessions (off by default)
   "search.searching": "検索中…", // Searching…
+  "search.progress": (sessions, bytes) => `検索中… ${sessions} 件のセッションを確認済み · ${bytes} を読み込み済み`,
   "search.noResults": "一致する項目が見つかりません", // No matches found
   "search.sessionCount": (n) => `${n} 件のセッション`, // n sessions
   "search.matchCount": (n) => `${n} 件の一致`, // n matches
@@ -1190,6 +1378,7 @@ const ja: typeof en = {
   "search.backToResults": "結果に戻る", // Back to results
   "search.archivedBadge": "アーカイブ済み", // Archived
   "search.summary": (m, s) => `${m} 件の一致 · ${s} 件のセッション`, // X matches · N sessions
+  "search.pending": (n) => `${n} 件のセッションがまだインデックス作成中のため、結果が一部欠けている可能性があります。`, // N sessions are still being indexed, so results may be incomplete
   "search.matchPosition": (n, total) => `${n} / ${total}`, // N of M
   "search.roleTerminal": "ターミナル", // Terminal
   "search.collapseGroup": "折りたたむ", // Collapse
@@ -1230,6 +1419,7 @@ const ja: typeof en = {
   "browser.loading": "読み込み中…", // Loading…
   // Application-exit confirmation and dormant restored sessions.
   "quit.title": "VelaTerm を終了しますか？", // Quit VelaTerm?
+  "quit.closeWindowTitle": "メインウィンドウを閉じますか？", // Close the main window?
   "quit.body":
     "実行中のターミナルとエージェントのセッションはすべて停止します。", // Any running terminal and agent sessions will be stopped.
   "quit.remoteWindows": "開いている接続先の画面もすべて閉じます。", // Open remote windows will also be closed.
@@ -1276,6 +1466,31 @@ const ja: typeof en = {
   "term.startFailed": (err) => `起動に失敗: ${err}`, // Failed to start: {err}
 
   // ── Agent installation guidance ──
+  "agentVersion.label": "エージェントのバージョン",
+  "agentVersion.loading": "バージョンを確認中…",
+  "agentVersion.unavailable": "バージョンを取得できません",
+  "agentVersion.running": (version) => `実行中のバージョン：${version}`,
+  "agentVersion.installed": (version) => `インストール済みのバージョン：${version}`,
+  "agentVersion.update": (version) => `更新あり：v${version}`,
+  "agentVersion.upgrade": (version) => `バージョン ${version} が公開されています。公式の更新手順を開きます。`,
+  "agentVersion.checkFailed": "更新を確認できません。",
+  "agentVersion.upgradeAction": (version) => `バージョン ${version} が公開されています。クリックすると更新します。`,
+  "agentUpdate.title": (label) => `${label} を更新`,
+  "agentUpdate.commandHint": "VelaTerm がエージェント付属の更新コマンドを実行します：",
+  "agentUpdate.confirm": "更新",
+  "agentUpdate.docs": "公式の手順",
+  "agentUpdate.running": "更新しています…",
+  "agentUpdate.background": "このウィンドウを閉じても更新は続行されます。",
+  "agentUpdate.waiting": "出力を待っています…",
+  "agentUpdate.succeeded": (label, version) => `${label} を v${version} に更新しました。`,
+  "agentUpdate.unchanged": (version) => `コマンドは終了しましたが、インストール済みのバージョンは v${version} のままです。上の出力を確認してください。`,
+  "agentUpdate.finished": "更新コマンドが終了しました。上の出力を確認してください。",
+  "agentUpdate.failed": "更新を完了できませんでした。上の出力を確認するか、コマンドをコピーしてターミナルで実行してください。",
+  "agentUpdate.broken": (label) => `更新後に ${label} を起動できないため、更新は完了していません。上の出力を確認するか、${label} を再インストールしてください。`,
+  "agentUpdate.timedOut": "15 分経っても終わらなかったため、更新を停止しました。コマンドをコピーしてターミナルで実行してください。",
+  "agentUpdate.restartHint": "この会話はまだ以前のバージョンで動いています。エージェントを再起動すると切り替わります。会話の内容はそのまま残り、次のメッセージを送ると新しいバージョンで起動します。",
+  "agentUpdate.restart": "エージェントを再起動",
+  "agentUpdate.startFailed": "更新を開始できませんでした。もう一度お試しください。",
   "agentInstall.title": (label) => `${label} がインストールされていません`, // {label} is not installed
   "agentInstall.desc": (label) =>
     `VelaTerm は PATH 上で ${label} を見つけられませんでした。インストールするとこのセッションを起動できます。`, // couldn't find {label} on PATH
@@ -1284,6 +1499,10 @@ const ja: typeof en = {
   "agentInstall.dismiss": "自分でインストールする", // I'll do it myself
   "agentInstall.docs": "インストール手順", // Install docs
   "agentInstall.needsNode": "Node.js / npm が必要です", // Requires Node.js / npm
+  "agentInstall.runInTerminal": "ターミナルで次のコマンドを実行してインストールしてから、メッセージをもう一度送信してください。",
+  "agentInstall.installing": "インストール中…", // Installing…
+  "agentInstall.installingDesc": "ダウンロードしてインストールしています。数分かかる場合があります。", // Downloading and installing. This can take a few minutes.
+  "agentInstall.installFailed": "インストールが完了しませんでした。ターミナルで次のコマンドを実行して原因を確認してから、メッセージをもう一度送信してください。", // Installation didn't finish. Run this command in a terminal to see what went wrong, then send your message again.
   "agentInstall.afterInstall": "インストール後：", // After install:
   "agentInstall.pathSaved": (label: string) =>
     `${label} の実行ファイルパスを設定に保存しました:`, // executable path saved to Settings
@@ -1589,7 +1808,6 @@ const ja: typeof en = {
   "mobile.inputOptions": "入力オプション",
   "mobile.connections": "接続管理",
   "mobile.more": "その他の操作",
-  "mobile.toDesktop": "デスクトップ版に切り替え", // Switch to desktop
   "mobile.empty1": "セッションがありません。", // No sessions.
   "mobile.noMatch": "一致するセッションがありません", // No matching sessions
   "mobile.empty2":
@@ -1597,6 +1815,10 @@ const ja: typeof en = {
   "mobile.back": "‹ 戻る", // ‹ Back
   "mobile.selCopy": "コピー", // Copy
   "mobile.selCancel": "キャンセル", // Cancel
+  "mobile.compose": "メッセージを作成",
+  "mobile.composePlaceholder": "ターミナルに送信するメッセージを入力",
+  "mobile.showTranscript": "履歴",
+  "mobile.showTerminal": "ターミナル",
 
   // ── Mobile connection client (apps/mobile start page) ──
   "mobile.phaseConnecting": "SSH で接続中…",
@@ -1795,6 +2017,7 @@ const ja: typeof en = {
   "skills.vspawn": "子セッションを作成してタスクを任せます。",
   "skills.vspawnTree": "専用のワークツリーを持つ子セッションを作成します。",
   "skills.vopen": "ファイルや Web ページを VelaTerm で開きます。",
+  "skills.vartifact": "視覚的な成果を、セッションの横にライブの HTML ページとして表示します。", // Show visual work as a live HTML page beside the conversation.
   "skills.vrefer": "ほかのセッションの会話を読み取ります。",
   "skills.vask": "ほかのセッションについて質問し、簡潔な回答を得ます。",
   "skills.vsearch": "すべてのセッションの会話を検索します。",
@@ -1813,6 +2036,7 @@ const ja: typeof en = {
   "session.showTerminal": "ターミナルビュー",
   "session.switchTitle": "ビューを切り替えるとエージェントが再起動します",
   "session.switchBody": "進行中のターンは中断されます。会話の内容は残ります。",
+  "session.switchBodyBackground": "エージェントが開始したバックグラウンドタスクは停止する場合があり、終了してもエージェントには通知されません。会話の内容は残ります。",
   "session.switchConfirm": "切り替える",
   "session.terminalViewHint": "ここをクリックすると、ターミナルビューに戻れます。",
   "session.loading": "会話を読み込んでいます…",
@@ -1941,6 +2165,8 @@ const ja: typeof en = {
   "chat.attach.tooLarge": (name: string, mb: number) => `${name} は ${mb} MB を超えるため添付しませんでした`,
   "chat.attach.unreadable": (name: string) => `${name} を読み込めませんでした`,
   // ── Shell mode: `!` runs a command in the session's shell ──
+  "chat.findings.count": (n: number) => `${n} 件の問題が見つかりました`,
+  "chat.findings.none": "問題は見つかりませんでした",
   "chat.shell.title": "シェルコマンド",
   "chat.shell.running": "実行中…",
   "chat.shell.cancel": "キャンセル",
@@ -1958,6 +2184,7 @@ const ja: typeof en = {
   "chat.compaction.manual": "コンテキストを圧縮しました",
   "chat.compaction.auto": "コンテキストを自動で圧縮しました",
   "chat.compaction.from": (tokens: string) => `圧縮前 ${tokens} トークン`,
+  "chat.wake.label": "バックグラウンドタスク終了",
   // N steps
   "chat.subagent.steps": (n: number) => `${n} ステップ`,
   "chat.subagent.tokens": (tokens: string) => `${tokens}トークン`,
@@ -2056,6 +2283,15 @@ const ja: typeof en = {
   "chat.auth.claude.invalidCode": "今回の認証ページに表示されたコードを、# 以降も含めて貼り付けてください。",
   "chat.auth.claude.externalAuth": "API キーやその他の設定済みの認証方法は変更されません。",
   "chat.auth.open": "認証ページを開く",
+  "chat.auth.zcode.required": "この会話を使うには、Z.ai または BigModel のアカウントで ZCode にログインしてください。",
+  "chat.auth.zcode.pending": "認証ページを開き、アクセスを許可してください。ログインが完了すると、この画面が自動的に更新されます。",
+  "chat.auth.zcode.failed": "ログインを完了できませんでした。もう一度お試しください。",
+  "chat.auth.zcode.zai": "Z.ai でログイン",
+  "chat.auth.zcode.bigmodel": "BigModel でログイン",
+  "chat.auth.zcode.noPlan.zai": "ZCode には Z.ai アカウントでログインしていますが、このアカウントには利用できる GLM Coding Plan がないか、プランの利用枠を使い切っています。プランを BigModel で購入した場合は、「ZCode アカウント」メニューを開き、「BigModel でログイン」を選んでください。",
+  "chat.auth.zcode.noPlan.bigmodel": "ZCode には BigModel アカウントでログインしていますが、このアカウントには利用できる GLM Coding Plan がないか、プランの利用枠を使い切っています。プランを Z.ai で購入した場合は、「ZCode アカウント」メニューを開き、「Z.ai でログイン」を選んでください。",
+  "chat.auth.zcode.noModels.zai": "ZCode は現在の Z.ai のログインから GLM Coding Plan を確認できなかったため、利用できるモデルがありません。「ZCode アカウント」メニューを開き、「Z.ai でログイン」を選んでログインし直してください。プランを BigModel で購入した場合は、「BigModel でログイン」を選んでください。",
+  "chat.auth.zcode.noModels.bigmodel": "ZCode は現在の BigModel のログインから GLM Coding Plan を確認できなかったため、利用できるモデルがありません。「ZCode アカウント」メニューを開き、「BigModel でログイン」を選んでログインし直してください。プランを Z.ai で購入した場合は、「Z.ai でログイン」を選んでください。",
   "chat.resetCredits.label": (n: string) => `リセット券：${n} 枚`,
   "chat.resetCredits.title": "Codex 利用上限のリセット券",
   "chat.resetCredits.unknown": "リセット券の枚数を取得できません。",
@@ -2136,11 +2372,20 @@ const ja: typeof en = {
     `${seconds} 秒後に再試行します（${attempt}/${max}）: ${message}`,
   "chat.notify.dismiss": "閉じる",
   "settings.completionMode": "コマンドの補完候補",
-  "settings.completionAuto": "自動表示",
-  "settings.completionTab": "Tab で表示",
+  "settings.completionAuto": "インライン + Tab",
+  "settings.completionTab": "Tab のみ",
   "settings.completionOff": "オフ",
   "settings.completionUnavailable": "設定を読み込めないか、保存できませんでした。",
-  "settings.completionHint": "新しい Zsh、Bash 4+、Fish、PowerShell のターミナルに適用されます。CMD では標準の Tab 動作を維持します。Tab で選択した候補を入力し、Enter で候補を適用せずに現在のコマンドを実行します。",
+  "settings.completionHint": "Zsh で入力していると、履歴の中で一致する最新のコマンドがカーソルの後ろに薄く表示され、→ または End で確定できます。Tab はシェル本来の動作と同じで、候補が 1 つならそのまま入力し、候補に共通する部分があれば先に補完し、複数の候補が残るときに一覧を表示します。新しい Zsh、Bash 4+、Fish、PowerShell のターミナルに適用されます。",
+  "settings.completionTabOnlyHint": "入力中に候補は表示されません。Tab を押すとシェル本来の動作と同じように補完し、候補が 1 つならそのまま入力し、候補に共通する部分があれば先に補完し、複数の候補が残るときに一覧を表示します。新しい Zsh、Bash 4+、Fish、PowerShell のターミナルに適用されます。",
+  "settings.completionTabKey": "Tab キー",
+  "settings.completionTabAccept": "候補を確定",
+  "settings.completionTabComplete": "コマンドを補完",
+  "settings.completionTabAcceptHint": "候補が薄く表示されているときは、Tab で確定します。続けてもう一度 Tab を押すと取り消して、一致する候補の一覧を表示します。→ または End でも確定できます。",
+  "settings.completionTabCompleteHint": "候補が薄く表示されていても、Tab は常にコマンドを補完します。候補を確定するには → または End を押します。",
+  "term.completionTipAccept": "候補を確定",
+  "term.completionTipComplete": "コマンドを補完",
+  "term.completionTipUndo": "取り消して候補を一覧表示",
 
   // Native texts of the mobile remote plugin (iOS, Android, download bridge). They reach the apps through native-text.json; {name} placeholders are replaced natively.
   "mobile.native.trustTitle": "接続先のフィンガープリントを確認",
@@ -2247,8 +2492,186 @@ const ja: typeof en = {
   "term.runs.logEmpty": "まだ出力はありません",
   "chat.antigravity.placeholder": "Antigravity にメッセージを送信。@ファイル でファイルを参照できます",
   "chat.antigravity.textOnly": "Antigravity の会話ビューは現在、テキストメッセージのみに対応しています。",
+  "chat.textOnly": (agent: string) => `${agent} の会話ビューはテキストメッセージのみに対応しています。`,
+  "chat.signInRequired": (agent: string) => `会話ビューを使うには ${agent} へのログインが必要です。ターミナルビューに切り替えてログインしてから、メッセージをもう一度送信してください。`,
+  "chat.apiKeyRequired": "DeepSeek Harness には API キーが必要です。環境変数 DEEPSEEK_API_KEY を設定するか、`dsh web` を実行して Models ページでキーを保存してから、メッセージをもう一度送信してください。",
   "chat.antigravity.permissionsHint": "承認が必要なツールは、Antigravity の設定で事前に許可するか、ターミナルビューで使用してください。",
   "chat.antigravity.settingsHint": "モデル、推論の強度、権限はターンの合間に変更してください。",
+  "chat.history.imageDownloadRequired": "この画像はここでは開けません。元の画像をダウンロードしてご確認ください。",
+  "chat.history.readBody": "全文を読む",
+  "chat.history.selectDetail": "ファイルまたは項目を選択",
+  "chat.history.part": "パート",
+  "chat.history.copyPart": "このパートをコピー",
+
+  "chat.history.searchMore": "他の検索結果",
+  "chat.history.indexing": "会話を読み込んでいます…",
+  "chat.history.newer": "新しいメッセージを読み込む",
+
+  "chat.history.copyComplete": "内容をすべてコピー",
+  "chat.history.downloadComplete": "内容をすべてダウンロード",
+  "chat.history.unavailable": "このセッションの履歴の詳細は利用できません。",
+  "chat.history.openViewer": "詳細ビューを開いて内容をすべて表示してください。",
+  "chat.history.copyBusy": "内容全体をコピーしています。",
+  "chat.history.clipboardLimit": "この内容はクリップボードの容量制限を超えています。ファイル全体をダウンロードしてください。",
+  "chat.history.contentChanged": "転送中に内容が変更されました。再度読み込んでください。",
+  "export.preparing": "セッションのエクスポートを準備しています…",
+  "chat.history.windowLimit": "このメッセージは表示上限を超えています。全文を読み込むか、ダウンロードしてください。",
+
+  "chat.history.incomplete": "会話の読み込みが完了していません。しばらくしてから再試行してください。",
+  "chat.history.indexBusy": "別のプロセスが履歴の索引を使用しています。しばらくしてから再試行してください。",
+  "chat.history.unsupported": "一部の履歴の形式には対応していません。元の内容は保存されています。",
+  "chat.history.canceled": "履歴の読み込みをキャンセルしました。",
+  "chat.history.pagedRequired": "この内容は履歴のページ表示または詳細ビューアーで読み込んでください。",
+  "chat.history.sourceMissing": "履歴の参照元が見つからないか、アクセスできません。",
+  "chat.history.updateServer": "会話履歴を安全に読み込むには、サーバーを更新してください。",
+  "chat.history.storagePressure": "履歴の保存先に空き容量がないか、保存先を利用できません。空き容量を確保して再試行してください。エージェントの操作は引き続き利用できます。",
+
+  "artifact.preview": "プレビュー", // Preview
+  "artifact.source": "ソース", // Source
+  "artifact.split": "分割", // Split
+  "artifact.live": "ライブ", // Live
+  "artifact.liveTitle": "ファイルが変更されると自動で再読み込みします", // Reloads automatically when the file changes
+  "artifact.offline": "オフライン", // Offline
+  "artifact.offlineTitle": "このページはインターネットから何も読み込めません。クリックすると、このファイルに限り許可します。", // This page cannot load anything from the internet. Click to allow it for this file.
+  "artifact.online": "オンライン", // Online
+  "artifact.onlineTitle": "このページはインターネットからファイルを読み込めます。クリックすると再びブロックします。", // This page can load files from the internet. Click to block them again.
+  "artifact.netBlocked": (n: number) => `このページがインターネットから ${n} 件のファイルを読み込もうとしたため、ブロックしました。`, // This page tried to load ${n} files from the internet. They were blocked.
+  "artifact.allowForFile": "このファイルを許可", // Allow for this file
+  "artifact.errorCount": (n: number) => `エラー ${n} 件`, // ${n} errors
+  "artifact.warningCount": (n: number) => `警告 ${n} 件`, // ${n} warnings
+  "artifact.console": "コンソール", // Console
+  "artifact.consoleEmpty": "エラーや警告はありません。", // No errors or warnings.
+  "artifact.clearConsole": "クリア", // Clear
+  "artifact.closeConsole": "コンソールを閉じる", // Close console
+  "artifact.sendToSession": "セッションに送る", // Send to session
+  "artifact.sendToSessionTitle": "このページを書いたセッションの入力欄にエラーを入れます", // Put these errors in the message box of the session that wrote this page
+  "artifact.fileGone": "このファイルは利用できなくなりました", // This file is no longer available
+  "artifact.fileGoneBody": (name: string) => `${name} は移動または削除されました。新しい場所から開き直すか、このタブを閉じてください。`, // ${name} was moved or deleted. Open it again from its new location, or close this tab.
+  "artifact.reload": "再読み込み", // Reload
+  "artifact.openInBrowser": "ブラウザで開く", // Open in browser
+  "artifact.viewportFit": "タブに合わせる", // Fit to tab
+  "artifact.viewportDesktop": "デスクトップ", // Desktop
+  "artifact.viewportTablet": "タブレット", // Tablet
+  "artifact.viewportPhone": "スマートフォン", // Phone
+  "artifact.goToSession": "セッションへ移動", // Go to session
+  "artifact.versionTitle": (n: number, time: string) => `バージョン ${n} · ${time}`, // Version ${n} · ${time}
+  "artifact.viewingVersion": (n: number, time: string) => `バージョン ${n}（${time} に保存）を表示しています`, // Viewing version ${n}, saved ${time}
+  "artifact.restoreVersion": "このバージョンに戻す", // Restore this version
+  "artifact.backToLatest": "最新版に戻る", // Back to latest
+  "artifact.restoreBody": (n: number) => `ファイルをバージョン ${n} の内容で置き換えます。現在の内容はバージョン履歴に残ります。`, // The file will be replaced with version ${n}. Its current content stays in the version history.
+  "artifact.restore": "戻す", // Restore
+  "artifact.restoreFailed": "このバージョンに戻せませんでした。もう一度お試しください。", // The version could not be restored. Please try again.
+  "artifact.openAsTab": "タブで開く", // Open as tab
+  "artifact.closePanel": "プレビューを閉じる", // Close preview
+  "artifact.cardOpen": "開く", // Open
+  "artifact.cardOpenTitle": "このセッションの横に開く", // Open beside this session
+  "artifact.cardKind": "HTML ページ", // HTML page
+  "artifact.frameTitle": (name: string) => `${name} のプレビュー`, // Preview of ${name}
+  "newSession.menu": "新規セッション…", // New Session…
+  "newSession.heading": "何に取り組みますか？", // What should we work on?
+  "newSession.terminalOnly": "ターミナルビューのみ", // Terminal view only
+  "newSession.conversationOnly": "会話ビューのみ", // Conversation view only
+  "newSession.noConversationView": "このエージェントには会話ビューがないため、セッションはターミナルビューで開きます。", // This agent has no conversation view, so the session opens in the terminal view.
+  "newSession.noTerminalView": "このエージェントにはターミナルビューがないため、セッションは会話ビューで開きます。", // This agent has no terminal view, so the session opens in the conversation view.
+  "newSession.taskLabel": "最初のタスク", // First task
+  "newSession.placeholder": "タスクの説明や質問を入力", // Describe a task or ask a question
+  "newSession.enterHint": "Enter で開始 · Shift+Enter で改行", // Enter to start · Shift+Enter for a new line
+  "newSession.start": "開始", // Start
+  "newSession.starting": "開始しています…", // Starting…
+  "newSession.viewLabel": "表示", // View
+  "newSession.worktreeHint": "このセッションを専用のブランチと別フォルダーで実行します。", // Runs this session on its own branch in a separate folder.
+  "newSession.worktreeNotRepo": "独立したワークツリーには Git リポジトリが必要です。", // A separate worktree needs a Git repository.
+  "newSession.worktreeName": "ワークツリー名（任意）", // Worktree name (optional)
+  "newSession.worktreeNameHint": "新しいフォルダーとブランチの名前に使います。空欄の場合はセッション名を使います。", // Names the new folder and branch. Leave empty to use the session name.
+  "newSession.typeLabel": "セッションの種類",
+  "newSession.typeTask": "タスク",
+  "newSession.typeProject": "プロジェクト",
+  "newSession.typeChat": "チャット",
+  "newSession.typeTaskHint": "プロジェクトを選ばずに作業を実行します。プロジェクトのインポートなどに使えます。",
+  "newSession.typeProjectHint": "プロジェクトのフォルダで作業します。",
+  "newSession.typeChatHint": "プロジェクトやファイルを使わない、普通の会話です。",
+  "newSession.location": "プロジェクトまたはコレクション",
+  "newSession.locationSearch": "プロジェクトとコレクションを絞り込む",
+  "newSession.collectionOption": "コレクション",
+  "newSession.newTask": "新規タスクセッション",
+  "newSession.newChat": "新規チャットセッション",
+  "systemCollection.projects": "プロジェクト",
+  "systemCollection.agents": "エージェント",
+  "systemCollection.terminals": "ターミナル",
+  "systemCollection.tasks": "タスク",
+  "systemCollection.chat": "チャット",
+  "systemCollection.projectsHint": "すべてのプロジェクト。組み込みのため削除できません。",
+  "systemCollection.agentsHint": "ターミナルで実行中のエージェント。終了すると一覧から消えます。",
+  "systemCollection.terminalsHint": "実行中のターミナル。",
+  "systemCollection.tasksHint": "どのプロジェクトにも属さないタスクセッション。",
+  "systemCollection.chatHint": "チャットセッション。",
+  "sidebarSection.nav": "サイドバーのセクション",
+  "sidebarSection.noTasks": "タスクセッションはまだありません。",
+  "sidebarSection.noChats": "チャットセッションはまだありません。",
+  "artifact.comment": "コメント", // Comment
+  "artifact.commentTitle": "ページの要素を選んで、エージェントへのコメントを残します", // Click elements in the page to leave comments for the agent
+  "artifact.pickHint": "ページ内の要素をクリックしてコメントします。Esc で終了します。", // Click an element in the page to comment on it. Press Esc to stop.
+  "artifact.commentOn": (target: string) => `${target} へのコメント`, // Comment on ${target}
+  "artifact.commentPlaceholder": "ここをどう変えますか？", // What should change here?
+  "artifact.commentAdd": "コメントを追加", // Add comment
+  "artifact.commentMore": "別の要素にコメント", // Comment on another element
+  "artifact.commentRemove": "コメントを削除", // Remove comment
+  "artifact.showInPage": "ページで表示", // Show in page
+  "artifact.sendCommentsTitle": "このページを書いたセッションの入力欄にコメントを入れます", // Put these comments in the message box of the session that wrote this page
+  "artifact.copyCommentsTitle": "エージェントに送るためにコメントをコピーします", // Copy these comments to send to an agent
+  "artifact.options": "案", // Options
+  "artifact.useOption": (id: string) => `${id} を採用`, // Use ${id}
+  "artifact.useOptionTitle": "この案を残すよう依頼するメッセージを、このページを書いたセッションの入力欄に入れます", // Put a message asking to keep this option in the message box of the session that wrote this page
+  "artifact.useOptionCopyTitle": "この案を残すよう依頼するメッセージをコピーします", // Copy a message asking to keep this option
+  // Knowledge base and archived sessions pages.
+  "kb.overview": "概要",
+  "kb.sources": "ソース",
+  "kb.searchAll": "ナレッジとノートを検索…",
+  "kb.localHint": "このコンピューター上の Markdown フォルダーです。ここでも他のエディターでも編集できます。",
+  "kb.archiveHint": "終了した会話です。残す価値があるものはナレッジベースに追加できます。",
+  "kb.recent": "最近の更新",
+  "kb.openArchived": "アーカイブ済みセッションを開く",
+  "kb.editDetails": "詳細を編集",
+  "kb.moreActions": "その他の操作",
+  "archive.allSessions": "すべてのセッション",
+  "archive.projects": "プロジェクト",
+  "archive.allProjects": "すべてのプロジェクト",
+  "archive.allAgents": "すべてのエージェント",
+  "archive.anyKnowledge": "ナレッジの有無を問わない",
+  "archive.withKnowledge": "ナレッジベースに追加済み",
+  "archive.withoutKnowledge": "未追加",
+  "archive.view": "表示",
+  "archive.viewTree": "ツリー",
+  "archive.viewTime": "日付順",
+  "archive.newest": "新しい順",
+  "archive.oldest": "古い順",
+  "archive.colSession": "セッション",
+  "archive.colProject": "プロジェクト",
+  "archive.colAgent": "エージェント",
+  "archive.colKnowledge": "ナレッジ",
+  "archive.colArchived": "アーカイブ日",
+  "archive.restoreShort": "復元",
+  "kb.needsAttention": (count: string) => `要対応 ${count} 件`,
+  "kb.statusAttention": "要対応",
+  "kb.statusOrganized": "整理済み",
+  "kb.organizedCount": (count: string) => `整理済み ${count} 件`,
+  "kb.failedTimes": (count: string) => `${count} 回失敗しました`,
+  "kb.succeededAfter": (count: string) => `${count} 回の失敗後に成功しました`,
+  "kb.fromSession": "元のセッション",
+  "kb.showAllTags": "すべてのタグを表示",
+  "kb.inKnowledgeBase": (count: string) => `ナレッジベースに ${count} 件`,
+  "kb.entriesCount": (count: string) => `${count} 件の記事`,
+  "kb.entriesFrom": (_count: string, sessions: string) => `件の記事（${sessions} 件のセッションから）`,
+  "kb.notesIn": (_count: string, folders: string) => `件のノート（${folders} 個のフォルダー）`,
+  "kb.sessionsIn": (_count: string, projects: string) => `件のセッション（${projects} 件のプロジェクト）`,
+  "kb.lastArchived": "最終アーカイブ",
+  "nb.notesWord": (_count: string) => "件のノート",
+  "archive.sessionsInProjects": (sessions: string, projects: string) => `${sessions} 件のセッション（${projects} 件のプロジェクト）`,
+  "archive.collapseAll": "すべて折りたたむ",
+  "kb.andMore": (count: string) => `他 ${count} 件`,
+  "kb.searchEntries": "記事を検索…",
+  "kb.updatedOn": (date: string) => `${date} に更新`,
+  "archive.sessionsCount": (count: string) => `${count} セッション`,
 };
 
 export default ja;

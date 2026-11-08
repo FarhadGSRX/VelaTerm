@@ -21,9 +21,23 @@ release_clean_rust() {
   printf 'Rust release artifacts removed: %s\n' "$target"
 }
 
+# bash 3.2 (macOS /bin/bash) hands an EXIT trap $?=0 when `set -u` aborts the script on an unset variable, and
+# the script then exits 0, so a caller's `|| die` never fires. In v0.2.12 this let release.sh stop before deploying
+# while publish.sh packaged the stale app left in ~/Soft. Scripts that install the trap call release_mark_done
+# right before every successful exit; reaching the trap without it counts as a failure.
+__RELEASE_DONE=0
+release_mark_done() { __RELEASE_DONE=1; }
+
 # Preserve the original failure while attempting cleanup of partially compiled artifacts.
 release_cleanup_on_failure() {
   local rc="$1"
-  if [ "$rc" -ne 0 ]; then release_clean_rust || return 1; fi
-  return "$rc"
+  if [ "$rc" -eq 0 ] && [ "$__RELEASE_DONE" -ne 1 ]; then
+    echo "Script stopped before finishing (for example on an unset variable); treating it as a failure" >&2
+    rc=1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    release_clean_rust || true
+    exit "$rc"
+  fi
+  return 0
 }

@@ -884,9 +884,204 @@ pub fn remote_binary_ok(
     }
 }
 
-/// Upload through the transport, verify remote SHA-256, atomically rename, and chmod executable. Delete
-/// mismatched temporary files so partial data never appears installed. This integrity flow is transport-neutral.
+/// Install the supplied vela-server on the remote host. The zip goes first when there is one: it is less
+/// than half the size of the binary, which no longer stores its frontend compressed. A host that cannot
+/// unpack it, or any failure on that path, falls back to uploading the raw binary. Either way the
+/// installed file must match `supplied.sha256` before it is moved into place. Returns how it was
+/// installed: `zip:<tool>` or `binary`.
 pub fn push_binary(
+    t: &dyn SshTransport,
+    sys: &RemoteSystem,
+    version: &str,
+    supplied: &crate::server_supply::Supplied,
+    progress: Progress,
+) -> Result<String, String> {
+    if !valid_version(version) {
+        return Err(format!("Invalid version: {version}"));
+    }
+    if !supplied.bin.is_file() {
+        return Err(format!("local binary not found: {}", supplied.bin.display()));
+    }
+    ensure_remote_layout(t, sys, version)?;
+    if let Some(zip) = supplied.zip.as_deref().filter(|z| z.is_file()) {
+        match push_zip(t, sys, version, zip, &supplied.sha256, progress) {
+            Ok(tool) => return Ok(format!("zip:{tool}")),
+            Err(_) => crate::diagnostic_warn!(
+                "[ssh] zip install of vela-server failed; uploading the binary instead"
+            ),
+        }
+    }
+    push_raw(t, sys, version, &supplied.bin, &supplied.sha256, progress)?;
+    Ok("binary".to_string())
+}
+
+/// Remote paths used while installing from the zip: the uploaded archive (home-relative for the
+/// transport, and absolute in the shell's syntax), the scratch directory it is unpacked into, and the
+/// unpacked binary.
+struct ZipPaths {
+    zip_rel: String,
+    zip_abs: String,
+    unpack_dir: String,
+    unpacked: String,
+}
+
+fn zip_paths(sys: &RemoteSystem, version: &str) -> ZipPaths {
+    let name = if sys.is_windows() { "vela-server.exe" } else { "vela-server" };
+    let zip_rel = format!(".velaterm/versions/{version}/.vela-server.zip");
+    match sys.shell {
+        RemoteShell::Posix => ZipPaths {
+            zip_abs: format!("$HOME/{zip_rel}"),
+            unpack_dir: format!("$HOME/.velaterm/versions/{version}/.unpack"),
+            unpacked: format!("$HOME/.velaterm/versions/{version}/.unpack/{name}"),
+            zip_rel,
+        },
+        RemoteShell::Powershell => {
+            let dir = format!("$env:USERPROFILE\\.velaterm\\versions\\{version}");
+            ZipPaths {
+                zip_abs: format!("{dir}\\.vela-server.zip"),
+                unpack_dir: format!("{dir}\\.unpack"),
+                unpacked: format!("{dir}\\.unpack\\{name}"),
+                zip_rel,
+            }
+        }
+    }
+}
+
+/// Remote script that unpacks the uploaded zip into a fresh scratch directory with the first tool that
+/// works, printing `unpacked:<tool>`; it fails when none does.
+///
+/// No single tool is present everywhere, so each OS gets an ordered list:
+/// - Windows: the system `tar.exe` (bsdtar, shipped since Windows 10 1803 and Server 2019) comes first in
+///   both shells. PowerShell then has `Expand-Archive` (5.0+, so Server 2016 too), which runs inside the
+///   login PowerShell rather than starting another. A Cygwin/MSYS shell goes on to the POSIX list; its own
+///   `tar` is GNU tar, which cannot read zip, so the system one is called by its full path.
+/// - macOS: `unzip` and `ditto` ship with the OS.
+/// - Linux: `unzip`, `bsdtar`, `python3` and `busybox` are each common but none universal. `gzip`, present
+///   in every base install, is the last resort: GNU gzip decodes a zip holding a single deflated file,
+///   which is exactly how the release zip is built. Cygwin and MSYS ship GNU gzip as well; macOS's gzip
+///   is not GNU and cannot, which is fine since its own tools always exist.
+fn unpack_zip_script(sys: &RemoteSystem, p: &ZipPaths) -> String {
+    match sys.shell {
+        RemoteShell::Posix => {
+            let name = p.unpacked.rsplit('/').next().unwrap_or("vela-server");
+            let mut tools: Vec<(&str, String)> = Vec::new();
+            if sys.is_windows() {
+                tools.push((
+                    "tar.exe",
+                    "\"$(cygpath -u \"$SYSTEMROOT\")/System32/tar.exe\" -xf \"$(cygpath -w \"$z\")\" -C \"$(cygpath -w \"$u\")\"".to_string(),
+                ));
+            }
+            tools.push(("unzip", "unzip -o -q \"$z\" -d \"$u\"".to_string()));
+            if sys.os == "macos" {
+                tools.push(("ditto", "ditto -x -k \"$z\" \"$u\"".to_string()));
+            }
+            tools.push(("bsdtar", "bsdtar -xf \"$z\" -C \"$u\"".to_string()));
+            if sys.os == "linux" {
+                tools.push((
+                    "python3",
+                    "python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \"$z\" \"$u\"".to_string(),
+                ));
+                tools.push(("busybox", "busybox unzip -o -q \"$z\" -d \"$u\"".to_string()));
+            }
+            if sys.os != "macos" {
+                tools.push(("gzip", "sh -c 'gzip -dc <\"$1\" >\"$2\"' sh \"$z\" \"$u/$n\"".to_string()));
+            }
+            let chain = tools
+                .iter()
+                .map(|(label, cmd)| format!("if vx {cmd}; then echo unpacked:{label}; exit 0; fi; "))
+                .collect::<String>();
+            // Each attempt starts without a leftover file, so success means this tool produced it.
+            format!(
+                "z=\"{z}\"; u=\"{u}\"; n=\"{name}\"; \
+                 rm -rf \"$u\" && mkdir -p \"$u\" || exit 1; \
+                 vx() {{ rm -f \"$u/$n\"; \"$@\" >/dev/null 2>&1 && [ -s \"$u/$n\" ]; }}; \
+                 {chain}echo 'no zip extractor worked' >&2; exit 1",
+                z = p.zip_abs,
+                u = p.unpack_dir,
+            )
+        }
+        // A native command's failure is not a PowerShell error, so tar.exe is judged by its exit code
+        // and output file; stderr from it would be a terminating error under 'Stop', hence the try.
+        RemoteShell::Powershell => format!(
+            "$ErrorActionPreference='Stop'; \
+             $z=\"{z}\"; $u=\"{u}\"; $o=\"{o}\"; \
+             if(Test-Path -LiteralPath $u){{ Remove-Item -Recurse -Force -LiteralPath $u }}; \
+             New-Item -ItemType Directory -Force -Path $u | Out-Null; \
+             $w=\"$env:SystemRoot\\System32\\tar.exe\"; $ok=$false; \
+             if(Test-Path -LiteralPath $w){{ try {{ & $w -xf $z -C $u 2>&1 | Out-Null; $ok=($LASTEXITCODE -eq 0) -and (Test-Path -LiteralPath $o) }} catch {{ $ok=$false }} }}; \
+             if($ok){{ Write-Output 'unpacked:tar.exe' }} else {{ \
+               Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $o; \
+               Expand-Archive -Force -LiteralPath $z -DestinationPath $u; \
+               if(-not (Test-Path -LiteralPath $o)){{ throw 'no zip extractor worked' }}; \
+               Write-Output 'unpacked:Expand-Archive' }}",
+            z = p.zip_abs,
+            u = p.unpack_dir,
+            o = p.unpacked,
+        ),
+    }
+}
+
+/// Remote command removing the uploaded zip and its scratch directory, ignoring missing paths.
+fn zip_cleanup_cmd(sys: &RemoteSystem, p: &ZipPaths) -> String {
+    match sys.shell {
+        RemoteShell::Posix => format!("rm -rf \"{}\" \"{}\"", p.unpack_dir, p.zip_abs),
+        RemoteShell::Powershell => format!(
+            "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath \"{}\",\"{}\"",
+            p.unpack_dir, p.zip_abs
+        ),
+    }
+}
+
+/// Upload the zip, unpack it remotely, verify the unpacked binary's SHA-256, and move it into place.
+/// Returns the tool that unpacked it. The archive and scratch directory are removed on every outcome.
+fn push_zip(
+    t: &dyn SshTransport,
+    sys: &RemoteSystem,
+    version: &str,
+    local_zip: &Path,
+    expected_sha256: &str,
+    progress: Progress,
+) -> Result<String, String> {
+    let p = zip_paths(sys, version);
+    let result = (|| {
+        t.upload(local_zip, &p.zip_rel, progress)?;
+        let out = shell_exec(t, sys, &unpack_zip_script(sys, &p))?;
+        let tool = out
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("unpacked:"))
+            .ok_or_else(|| format!("remote unpack reported no result: {out:?}"))?
+            .to_string();
+        let got = remote_sha256(t, sys, &p.unpacked)?;
+        if !got.eq_ignore_ascii_case(expected_sha256) {
+            return Err(format!(
+                "unpacked hash mismatch (refusing to place): expected {expected_sha256}, got {got}"
+            ));
+        }
+        install_file(t, sys, &p.unpacked, &sys.bin_path(version))?;
+        Ok(tool)
+    })();
+    let _ = shell_exec(t, sys, &zip_cleanup_cmd(sys, &p));
+    result
+}
+
+/// Atomically move a verified file to the final binary path; only POSIX needs an executable bit.
+fn install_file(t: &dyn SshTransport, sys: &RemoteSystem, from: &str, to: &str) -> Result<(), String> {
+    shell_exec(t, sys, &install_file_cmd(sys, from, to)).map(|_| ())
+}
+
+fn install_file_cmd(sys: &RemoteSystem, from: &str, to: &str) -> String {
+    match sys.shell {
+        RemoteShell::Posix => format!("mv -f \"{from}\" \"{to}\" && chmod +x \"{to}\""),
+        RemoteShell::Powershell => format!(
+            "$ErrorActionPreference='Stop'; Move-Item -Force -LiteralPath \"{from}\" -Destination \"{to}\""
+        ),
+    }
+}
+
+/// Upload the raw binary through the transport, verify remote SHA-256, atomically rename, and chmod
+/// executable. Delete mismatched temporary files so partial data never appears installed. This integrity
+/// flow is transport-neutral.
+fn push_raw(
     t: &dyn SshTransport,
     sys: &RemoteSystem,
     version: &str,
@@ -894,13 +1089,6 @@ pub fn push_binary(
     expected_sha256: &str,
     progress: Progress,
 ) -> Result<(), String> {
-    if !valid_version(version) {
-        return Err(format!("Invalid version: {version}"));
-    }
-    if !local_bin.is_file() {
-        return Err(format!("local binary not found: {}", local_bin.display()));
-    }
-    ensure_remote_layout(t, sys, version)?;
 
     // Upload paths are home-relative and bypass shell expansion. Forward slashes are correct for both
     // sftp-server implementations, including the Windows one.
@@ -924,16 +1112,7 @@ pub fn push_binary(
         ));
     }
 
-    // Atomically install; only POSIX needs an executable bit.
-    let final_abs = sys.bin_path(version);
-    let install = match sys.shell {
-        RemoteShell::Posix => format!("mv -f \"{tmp_abs}\" \"{final_abs}\" && chmod +x \"{final_abs}\""),
-        RemoteShell::Powershell => format!(
-            "$ErrorActionPreference='Stop'; Move-Item -Force -LiteralPath \"{tmp_abs}\" -Destination \"{final_abs}\""
-        ),
-    };
-    shell_exec(t, sys, &install)?;
-    Ok(())
+    install_file(t, sys, &tmp_abs, &sys.bin_path(version))
 }
 
 /// Delete one remote file, ignoring a missing path, in the detected shell's own syntax.
@@ -1097,8 +1276,22 @@ fn read_file_cmd(sys: &RemoteSystem, path: &str) -> String {
 
 /// Remote command that prints `alive` when `pid` is a running process of the given kind. Windows reuses
 /// PIDs quickly, so there the process name must also match one of `names` (case-insensitive prefixes).
-fn pid_alive_cmd(sys: &RemoteSystem, pid: u32, names: &[&str]) -> String {
+///
+/// `win_pid` says the PID was recorded by a native Windows process (the desktop app's local link), as
+/// opposed to `$!` from the start script (run.json), which under Cygwin or Git Bash is the shell's own PID.
+fn pid_alive_cmd(sys: &RemoteSystem, pid: u32, names: &[&str], win_pid: bool) -> String {
     match sys.shell {
+        // Cygwin and Git Bash on Windows: their `kill` cannot see a Windows PID. `ps -W` lists every
+        // Windows process with its WINPID in the fourth column (fifth when a Cygwin status flag leads the
+        // row) and the executable path last.
+        RemoteShell::Posix if win_pid && sys.os == "windows" => {
+            let pat = names.join("|");
+            format!(
+                "ps -W 2>/dev/null | awk -v p={pid} '{{o=($1~/^[0-9]+$/)?0:1}} $(4+o)==p \
+                 {{c=tolower($0); gsub(/\\\\/,\"/\",c); n=split(c,a,\"/\"); \
+                 if(a[n]~/^({pat})/){{print \"alive\"; exit}}}}'"
+            )
+        }
         RemoteShell::Posix => format!("kill -0 {pid} 2>/dev/null && echo alive"),
         RemoteShell::Powershell => {
             let cond = names
@@ -1124,7 +1317,7 @@ fn read_local_link(t: &dyn SshTransport, sys: &RemoteSystem) -> Option<crate::we
     let path = shell_join(sys, &desktop_data_dir_expr(sys), crate::web::local_link::FILENAME);
     let out = shell_exec(t, sys, &read_file_cmd(sys, &path)).ok()?;
     let link = crate::web::local_link::parse(&out)?;
-    let alive = shell_exec(t, sys, &pid_alive_cmd(sys, link.pid, &["velaterm", "vlx-term"]))
+    let alive = shell_exec(t, sys, &pid_alive_cmd(sys, link.pid, &["velaterm", "vlx-term"], true))
         .map(|o| o.trim() == "alive")
         .unwrap_or(false);
     if alive {
@@ -1320,7 +1513,7 @@ fn detect_running(t: &dyn SshTransport, sys: &RemoteSystem) -> Option<RunState> 
         return None;
     }
     // Windows reuses PIDs quickly, so there the process must actually be vela-server.
-    let alive = shell_exec(t, sys, &pid_alive_cmd(sys, rs.pid, &["vela-server"]))
+    let alive = shell_exec(t, sys, &pid_alive_cmd(sys, rs.pid, &["vela-server"], false))
         .map(|o| o.trim() == "alive")
         .unwrap_or(false);
     if alive {
@@ -1364,11 +1557,17 @@ pub fn kill_remote_service(host: &str, session: &str) {
 ///
 /// TCP alone is insufficient because ssh -L listens before the remote service is ready. Send a real HTTP
 /// request; any status, including 401/404, proves serving and prevents false-positive readiness.
+///
+/// Each probe may use all the time left before the deadline. A service that is up but slow (a remote
+/// desktop app under heavy load can take 5-15 s per request) must not be cut off and retried forever; a
+/// service that is not up yet fails the probe at once (the tunnel closes the connection), so retries
+/// stay quick in that case.
 pub(crate) fn wait_port_healthy(port: u16, timeout: Duration) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{port}/");
     let deadline = Instant::now() + timeout;
     loop {
-        match ureq::get(&url).timeout(Duration::from_secs(3)).call() {
+        let left = deadline.saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
+        match ureq::get(&url).timeout(left).call() {
             Ok(_) => return Ok(()),
             // Any HTTP status means the remote service is serving.
             Err(ureq::Error::Status(_, _)) => return Ok(()),
@@ -1537,6 +1736,11 @@ impl SshTransport for OpensshTransport {
         // While SCP runs, poll remote temporary-file size and emit transfer percentage until exit.
         progress("transfer", Some(0));
         loop {
+            if let Err(e) = crate::connect_cancel::check() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
             match child.try_wait() {
                 Ok(Some(status)) => {
                     if !status.success() {
@@ -1762,8 +1966,23 @@ fn sleep_wanted(ctl: &TunnelCtl, total: Duration) -> bool {
     ctl.wanted.load(Ordering::SeqCst)
 }
 
-/// Start a monitor for the original local port. Notify reconnecting only after the first failed attempt,
-/// up on recovery, and down after automatic retries give up.
+/// Backoff wait that a manual kick cuts short, consuming the kick so the next attempt starts at once.
+/// Returns false immediately when no longer wanted.
+fn sleep_until_kick(ctl: &TunnelCtl, total: Duration) -> bool {
+    let deadline = Instant::now() + total;
+    loop {
+        if !ctl.wanted.load(Ordering::SeqCst) {
+            return false;
+        }
+        if ctl.kick.swap(false, Ordering::SeqCst) || Instant::now() >= deadline {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Start a monitor for the original local port. Notify reconnecting after each failed attempt (never
+/// before the first one), up on recovery, and down after automatic retries give up.
 pub fn watch_tunnel(
     host: String,
     session: String,
@@ -1811,9 +2030,9 @@ pub fn watch_tunnel(
             // ── Dead child and port: bounded automatic rebuild with backoff ──
             crate::diagnostic_warn!("[ssh] tunnel for {host} ({session}) died; rebuilding…");
             let mut recovered = false;
-            let mut notified = false;
             for (i, secs) in BACKOFF_SECS.iter().enumerate() {
-                if !sleep_wanted(&ctl, Duration::from_secs(*secs)) {
+                // A manual kick skips the rest of the backoff instead of waiting for the down state.
+                if !sleep_until_kick(&ctl, Duration::from_secs(*secs)) {
                     return;
                 }
                 match rebuild_tunnel(&host, &session, &identifier, local_port) {
@@ -1829,14 +2048,15 @@ pub fn watch_tunnel(
                     Err(RebuildErr::Retryable(e)) => {
                         crate::diagnostic_warn!("[ssh] tunnel rebuild attempt {} failed: {e}", i + 1);
                         // Show the red banner only after the immediate attempt fails, avoiding brief flicker.
-                        if !notified {
-                            notify("reconnecting");
-                            notified = true;
-                        }
+                        // Repeat on every failure so a pending manual attempt in the banner settles.
+                        notify("reconnecting");
                     }
                 }
             }
             if recovered {
+                // A kick that arrived during the successful attempt is stale; drop it so the healthy
+                // phase does not rebuild a working tunnel.
+                ctl.kick.store(false, Ordering::SeqCst);
                 // Always emit up so the frontend replaces a potentially half-open old WebSocket.
                 notify("up");
                 continue;
@@ -1936,6 +2156,10 @@ pub fn connect(
     progress("connect", None);
     // Authenticate and connect through the selected OpenSSH/russh backend.
     let transport = connect_transport(host, &session, auth, progress)?;
+    if let Err(e) = crate::connect_cancel::check() {
+        transport.close();
+        return Err(e);
+    }
 
     // Register successful transport to keep it alive; on failure stop forwarding and disconnect cleanly.
     match connect_inner(app_data_dir, transport.as_ref(), shared_db, mirror, progress) {
@@ -1964,6 +2188,7 @@ fn connect_inner(
     let session = t.session();
     progress("probe", None);
     let sys = probe_system(t)?;
+    crate::connect_cancel::check()?;
     // Linux, macOS, and Windows are supported; each shell's command differences are handled by the
     // builders above. Anything else (BSD, Solaris, …) has no published vela-server artifact.
     if sys.os != "linux" && sys.os != "macos" && sys.os != "windows" {
@@ -2024,26 +2249,29 @@ fn connect_inner(
         let _ = shell_exec(t, &sys, &kill_service_cmd(&sys));
     }
 
+    crate::connect_cancel::check()?;
     progress("supply", None);
     let platkey = crate::server_supply::platform_key(&sys.os, &sys.arch);
     // Use a verified local cache or download/verify from R2. VLX_DEV_SERVER_BIN bypasses publication for
     // development-only end-to-end testing.
-    let local_bin = match std::env::var("VLX_DEV_SERVER_BIN") {
+    // A `.zip` override is unpacked locally and exercises the zip upload path.
+    let supplied = match std::env::var("VLX_DEV_SERVER_BIN") {
         Ok(p) if !p.is_empty() && Path::new(&p).is_file() => {
             crate::diagnostic_warn!("[ssh] using dev-bypass vela-server: {p}");
-            PathBuf::from(p)
+            crate::server_supply::supply_dev_override(app_data_dir, Path::new(&p), &platkey)?
         }
         _ => crate::server_supply::ensure_supplied(app_data_dir, version, &platkey, &|pct| {
             progress("supply", Some(pct))
         })?,
     };
-    let sha = crate::server_supply::cached_sha256(&local_bin)?;
 
     // Skip upload for an integrity-valid remote binary; otherwise verify and atomically install it.
-    if !remote_binary_ok(t, &sys, version, &sha) {
-        push_binary(t, &sys, version, &local_bin, &sha, progress)?;
+    crate::connect_cancel::check()?;
+    if !remote_binary_ok(t, &sys, version, &supplied.sha256) {
+        push_binary(t, &sys, version, &supplied, progress)?;
     }
     // Retry executable verification around transient ETXTBSY immediately after SCP.
+    crate::connect_cancel::check()?;
     progress("start", None);
     wait_remote_executable(t, &sys, version)?;
 
@@ -2087,6 +2315,27 @@ mod tests {
         assert_eq!(a.arch, "x86_64");
         assert!(parse_uname("").is_none());
         assert!(parse_uname("Plan9").is_none()); // Missing architecture field.
+    }
+
+    #[test]
+    fn manual_kick_cuts_backoff_short() {
+        let ctl = TunnelCtl { wanted: AtomicBool::new(true), kick: AtomicBool::new(true) };
+        // A pending kick ends a long wait at once and is consumed.
+        let start = Instant::now();
+        assert!(sleep_until_kick(&ctl, Duration::from_secs(16)));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(!ctl.kick.load(Ordering::SeqCst));
+        // A zero wait still consumes a kick, so it cannot linger into the healthy phase.
+        ctl.kick.store(true, Ordering::SeqCst);
+        assert!(sleep_until_kick(&ctl, Duration::ZERO));
+        assert!(!ctl.kick.load(Ordering::SeqCst));
+        // Without a kick the full wait elapses.
+        let start = Instant::now();
+        assert!(sleep_until_kick(&ctl, Duration::from_millis(400)));
+        assert!(start.elapsed() >= Duration::from_millis(400));
+        // A monitor that is no longer wanted stops waiting.
+        ctl.wanted.store(false, Ordering::SeqCst);
+        assert!(!sleep_until_kick(&ctl, Duration::from_secs(16)));
     }
 
     #[test]
@@ -2255,18 +2504,29 @@ mod tests {
 
     #[test]
     fn pid_alive_cmd_checks_the_process_name_only_on_windows() {
-        let posix = pid_alive_cmd(&sys_of("linux", "x86_64", RemoteShell::Posix), 77, &["velaterm"]);
+        let posix = pid_alive_cmd(&sys_of("linux", "x86_64", RemoteShell::Posix), 77, &["velaterm"], true);
         assert_eq!(posix, "kill -0 77 2>/dev/null && echo alive");
         // Windows reuses PIDs quickly, so the desktop's two possible names are both accepted and nothing else.
         let win = pid_alive_cmd(
             &sys_of("windows", "x86_64", RemoteShell::Powershell),
             77,
             &["velaterm", "vlx-term"],
+            true,
         );
         assert!(win.contains("Get-Process -Id 77"));
         assert!(win.contains("$q.ProcessName -like 'velaterm*' -or $q.ProcessName -like 'vlx-term*'"));
-        let server = pid_alive_cmd(&sys_of("windows", "x86_64", RemoteShell::Powershell), 9, &["vela-server"]);
+        let server = pid_alive_cmd(&sys_of("windows", "x86_64", RemoteShell::Powershell), 9, &["vela-server"], false);
         assert!(server.contains("($q.ProcessName -like 'vela-server*')"));
+        // Cygwin and Git Bash: a Windows PID is invisible to `kill -0`, so look it up by WINPID instead.
+        let cygwin = pid_alive_cmd(&sys_of("windows", "x86_64", RemoteShell::Posix), 77, &["velaterm", "vlx-term"], true);
+        assert!(!cygwin.contains("kill -0"));
+        assert!(cygwin.starts_with("ps -W 2>/dev/null | awk -v p=77 '"));
+        assert!(cygwin.contains("$(4+o)==p"));
+        assert!(cygwin.contains("gsub(/\\\\/,\"/\",c)"));
+        assert!(cygwin.contains("if(a[n]~/^(velaterm|vlx-term)/){print \"alive\"; exit}}'"));
+        // run.json holds `$!` from the start script, which is the shell's own PID there.
+        let started = pid_alive_cmd(&sys_of("windows", "x86_64", RemoteShell::Posix), 9, &["vela-server"], false);
+        assert_eq!(started, "kill -0 9 2>/dev/null && echo alive");
     }
 
     #[test]
@@ -2277,6 +2537,78 @@ mod tests {
         assert_eq!(session_target(s), ServiceTarget::DesktopLink);
         clear_session_target(s);
         assert_eq!(session_target(s), ServiceTarget::Headless);
+    }
+
+    #[test]
+    fn zip_unpack_script_orders_tools_per_os() {
+        let order = |script: &str, tools: &[&str]| {
+            let at: Vec<usize> = tools
+                .iter()
+                .map(|t| script.find(&format!("unpacked:{t}")).unwrap_or_else(|| panic!("{t} missing")))
+                .collect();
+            assert!(at.windows(2).all(|w| w[0] < w[1]), "wrong order: {tools:?}");
+        };
+        let linux = sys_of("linux", "x86_64", RemoteShell::Posix);
+        let s = unpack_zip_script(&linux, &zip_paths(&linux, "0.2.10"));
+        order(&s, &["unzip", "bsdtar", "python3", "busybox", "gzip"]);
+        assert!(!s.contains("tar.exe") && !s.contains("ditto"));
+        assert!(s.contains("n=\"vela-server\""));
+
+        let mac = sys_of("macos", "aarch64", RemoteShell::Posix);
+        let s = unpack_zip_script(&mac, &zip_paths(&mac, "0.2.10"));
+        order(&s, &["unzip", "ditto", "bsdtar"]);
+        assert!(!s.contains("gzip"), "macOS gzip is not GNU gzip and cannot read zip");
+
+        // Cygwin/MSYS: the system bsdtar by full path first, since the shell's own tar is GNU tar.
+        let cyg = sys_of("windows", "x86_64", RemoteShell::Posix);
+        let s = unpack_zip_script(&cyg, &zip_paths(&cyg, "0.2.10"));
+        order(&s, &["tar.exe", "unzip", "bsdtar", "gzip"]);
+        assert!(s.contains("System32/tar.exe") && s.contains("n=\"vela-server.exe\""));
+
+        // Native PowerShell: tar.exe, then Expand-Archive inside the same PowerShell, all ASCII.
+        let ps = sys_of("windows", "x86_64", RemoteShell::Powershell);
+        let p = zip_paths(&ps, "0.2.10");
+        assert_eq!(p.zip_rel, ".velaterm/versions/0.2.10/.vela-server.zip");
+        assert_eq!(p.unpacked, "$env:USERPROFILE\\.velaterm\\versions\\0.2.10\\.unpack\\vela-server.exe");
+        let s = unpack_zip_script(&ps, &p);
+        order(&s, &["tar.exe", "Expand-Archive"]);
+        assert!(ps_stdin(&s).is_ok());
+        assert!(!s.to_ascii_lowercase().contains("powershell"), "must not start another PowerShell");
+    }
+
+    /// Run the POSIX unpack script under a real `sh` against a scratch HOME, as the remote shell would.
+    #[cfg(unix)]
+    #[test]
+    fn zip_unpack_script_runs_under_sh() {
+        use std::io::Write;
+        let home = std::env::temp_dir().join(format!("vlx-unpack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let vdir = home.join(".velaterm/versions/0.2.10");
+        std::fs::create_dir_all(&vdir).unwrap();
+        let body = b"vela-server test body\n".repeat(1000);
+        let mut w = zip::ZipWriter::new(std::fs::File::create(vdir.join(".vela-server.zip")).unwrap());
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        w.start_file("vela-server", opts).unwrap();
+        w.write_all(&body).unwrap();
+        w.finish().unwrap();
+
+        let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
+        let sys = sys_of(os, "x86_64", RemoteShell::Posix);
+        let p = zip_paths(&sys, "0.2.10");
+        let run = |script: &str| {
+            Command::new("sh").arg("-c").arg(script).env("HOME", &home).output().unwrap()
+        };
+        let out = run(&unpack_zip_script(&sys, &p));
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(String::from_utf8_lossy(&out.stdout).starts_with("unpacked:"));
+        assert_eq!(std::fs::read(vdir.join(".unpack/vela-server")).unwrap(), body);
+
+        assert!(run(&install_file_cmd(&sys, &p.unpacked, &sys.bin_path("0.2.10"))).status.success());
+        assert!(run(&zip_cleanup_cmd(&sys, &p)).status.success());
+        assert_eq!(std::fs::read(vdir.join("vela-server")).unwrap(), body);
+        assert!(!vdir.join(".unpack").exists() && !vdir.join(".vela-server.zip").exists());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -2510,6 +2842,38 @@ mod tests {
             login_status, 200,
             "/api/login with the random password should return 200, logging into the backend automatically"
         );
+    }
+
+    /// Ignored real-host test of the zip install path: remove this version's remote binary, push the zip
+    /// named by VLX_DEV_SERVER_BIN, and require that it was unpacked remotely rather than replaced by the
+    /// raw-binary fallback, then run `--version`. VLX_TEST_SSH_PUSH_HOST may be any supported OS.
+    #[test]
+    #[ignore = "requires VLX_TEST_SSH_PUSH_HOST and a .zip VLX_DEV_SERVER_BIN; run with cargo test -- --ignored"]
+    fn integration_push_zip_to_real_host() {
+        let (host, zip) = match (std::env::var("VLX_TEST_SSH_PUSH_HOST"), std::env::var("VLX_DEV_SERVER_BIN")) {
+            (Ok(h), Ok(z)) if !h.is_empty() && z.ends_with(".zip") => (h, PathBuf::from(z)),
+            _ => return,
+        };
+        let tmp = std::env::temp_dir().join("vlx-ssh-it-push");
+        let _ = std::fs::create_dir_all(&tmp);
+        let session = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
+        let t = OpensshTransport::connect(&host, &session, SshAuth::Auto, &|_, _| {})
+            .expect("connecting to the host should succeed");
+        let sys = probe_system(&t).expect("probing the remote system should succeed");
+        let platkey = crate::server_supply::platform_key(&sys.os, &sys.arch);
+        let supplied = crate::server_supply::supply_dev_override(&tmp, &zip, &platkey)
+            .expect("the dev zip should unpack locally");
+        let version = crate::VERSION;
+        let _ = shell_exec(&t, &sys, &remove_file_cmd(&sys, &sys.bin_path(version)));
+        assert!(!remote_binary_ok(&t, &sys, version, &supplied.sha256));
+
+        let how = push_binary(&t, &sys, version, &supplied, &|_, _| {}).expect("push should succeed");
+        let installed = remote_binary_ok(&t, &sys, version, &supplied.sha256);
+        let runs = wait_remote_executable(&t, &sys, version);
+        close_master(&host, &session);
+        assert!(how.starts_with("zip:"), "the zip path should be used, got {how}");
+        assert!(installed, "the installed binary should match the unpacked hash");
+        runs.expect("the installed vela-server should run --version");
     }
 
     /// Ignored real-host PTY password-auth regression test requiring host/password environment variables.

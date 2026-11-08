@@ -10,6 +10,13 @@ use rusqlite::{params, Connection};
 
 use crate::db::table_exists;
 
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 pub const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS session_private (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     set_at INTEGER NOT NULL
@@ -42,7 +49,7 @@ pub fn set(conn: &Connection, session_id: &str, private: bool) -> Result<(), Str
     if private {
         conn.execute(
             "INSERT OR IGNORE INTO session_private(session_id, set_at) VALUES (?1, ?2)",
-            params![session_id, super::index::now_secs()],
+            params![session_id, now_secs()],
         )
     } else {
         conn.execute("DELETE FROM session_private WHERE session_id = ?1", [session_id])

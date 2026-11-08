@@ -45,8 +45,9 @@ pub(crate) struct Busy {
 }
 
 /// The sessions that are not quiet. A plain shell terminal or a browser tab never blocks. A chat is busy
-/// only mid-turn. Any other session is judged by `vstop`'s rules without `--force`, so a Claude with a
-/// running PTY and no reported state counts as busy, since it may be starting.
+/// only mid-turn. Any other session is judged by `vstop`'s rules without `--force`. The candidate's state
+/// is already the decision from `prompt_ready::quit_state`, so a Claude with no state here may still be
+/// starting: no saved conversation and under 10 minutes up, or a saved one under 15 s up.
 pub(crate) fn busy_sessions(candidates: &[Candidate]) -> Vec<Busy> {
     candidates
         .iter()
@@ -78,7 +79,18 @@ fn candidates(app: &AppCtx) -> Result<Vec<Candidate>, String> {
         if !alive {
             continue;
         }
-        let state = states.iter().find(|row| row.session_id == session.id).map(|row| row.state);
+        let reported = states.iter().find(|row| row.session_id == session.id).map(|row| row.state);
+        // A resumed Claude that never reported counts as at its prompt (see `prompt_ready`).
+        let state = if chat {
+            reported
+        } else {
+            super::prompt_ready::quit_state(
+                session.kind,
+                session.agent_session_id.as_deref().is_some_and(|id| !id.trim().is_empty()),
+                app.pty().uptime(&session.id),
+                reported,
+            )
+        };
         let shell_found = super::stop::shell_below_claude(app, &session.id, chat, state);
         out.push(Candidate {
             marked: super::stop::is_marked(&session.id),

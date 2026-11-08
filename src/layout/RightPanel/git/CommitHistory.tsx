@@ -2,13 +2,10 @@
 //! touched. Clicking a file opens the Changes modal in commit mode, so committed and uncommitted
 //! diffs are read in the same viewer.
 //!
-//! A graph rail runs down the left of the list, drawn one row at a time from the lane layout in
-//! `commitGraph.ts`, with the branch and tag labels each commit carries.
-//!
 //! History is loaded on demand rather than with the rest of the tab: a repository can hold hundreds
 //! of thousands of commits, and the tab polls every few seconds.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Icons from "../../../components/Icons";
 import { statusLetter } from "../../../components/diff/changeStatus";
 import { useT } from "../../../i18n";
@@ -19,111 +16,10 @@ import {
   type CommitInfo,
 } from "../../../ipc/commands";
 import { useTermStore } from "../../../store/termStore";
-import {
-  laneColor,
-  lanesBelow,
-  layoutGraph,
-  refLabels,
-  type GraphRow,
-} from "./commitGraph";
+import { layoutGraph, parseRefs, type GraphRow } from "./gitGraph";
 
 /** Commits fetched per page. Enough to fill the panel without holding a whole history in memory. */
 const PAGE = 30;
-
-/** Height of one commit row; the rail is drawn to the same height so its lines meet across rows. */
-const ROW_H = 22;
-/** Preferred gap between lanes, and the width the rail may grow to before lanes squeeze together. */
-const LANE_W = 8;
-const RAIL_MAX = 48;
-/** Space left of the first lane and right of the last. */
-const RAIL_PAD = 5;
-/** Ref labels shown inline before the rest collapse into a "+n" count; the panel is narrow. */
-const MAX_REFS = 1;
-
-/**
- * Lane geometry for the loaded commits. Wide graphs squeeze lanes closer, down to a floor; past
- * that the rail stops growing and the outermost lanes are clipped, so a busy repository cannot push
- * the commit subjects out of a narrow panel.
- */
-function railGeometry(maxLanes: number) {
-  const lanes = Math.max(1, maxLanes);
-  const gap = lanes > 1 ? Math.max(4, Math.min(LANE_W, RAIL_MAX / (lanes - 1))) : LANE_W;
-  const width = Math.min(RAIL_MAX, (lanes - 1) * gap) + RAIL_PAD * 2;
-  return { width, x: (lane: number) => RAIL_PAD + lane * gap };
-}
-
-type Geometry = ReturnType<typeof railGeometry>;
-
-/** One row's slice of the graph: lines passing through, edges in and out, and the commit's node. */
-function Rail({ row, geo, merge }: { row: GraphRow; geo: Geometry; merge: boolean }) {
-  const cx = geo.x(row.lane);
-  const cy = ROW_H / 2;
-  const paths: React.ReactNode[] = [];
-  for (const j of row.passes) {
-    paths.push(<path key={`p${j}`} d={`M ${geo.x(j)} 0 V ${ROW_H}`} stroke={laneColor(j)} />);
-  }
-  for (const j of row.ins) {
-    const d =
-      j === row.lane ? `M ${cx} 0 V ${cy}` : `M ${geo.x(j)} 0 Q ${geo.x(j)} ${cy} ${cx} ${cy}`;
-    paths.push(<path key={`i${j}`} d={d} stroke={laneColor(j)} />);
-  }
-  for (const j of row.outs) {
-    const d =
-      j === row.lane
-        ? `M ${cx} ${cy} V ${ROW_H}`
-        : `M ${cx} ${cy} Q ${geo.x(j)} ${cy} ${geo.x(j)} ${ROW_H}`;
-    paths.push(<path key={`o${j}`} d={d} stroke={laneColor(j)} />);
-  }
-  const c = laneColor(row.lane);
-  return (
-    <svg className="git-rail" width={geo.width} height={ROW_H} aria-hidden="true">
-      <g fill="none" strokeWidth={1.5}>{paths}</g>
-      {merge ? (
-        <circle cx={cx} cy={cy} r={3} strokeWidth={1.5} stroke={c} fill="var(--bg-1)" />
-      ) : (
-        <circle cx={cx} cy={cy} r={3} fill={c} />
-      )}
-    </svg>
-  );
-}
-
-/** The rail behind an expanded commit's file list: the lanes still open below it, run straight down. */
-function RailContinue({ lanes, geo }: { lanes: number[]; geo: Geometry }) {
-  return (
-    <div className="git-rail-cont" style={{ width: geo.width }} aria-hidden="true">
-      {lanes.map((j) => (
-        <span key={j} style={{ left: geo.x(j) - 0.75, background: laneColor(j) }} />
-      ))}
-    </div>
-  );
-}
-
-/** Branch and tag labels for one commit, the first few inline and the rest counted. */
-function RefPills({ refs }: { refs: string[] }) {
-  const labels = refLabels(refs);
-  if (labels.length === 0) return null;
-  const extra = labels.length - MAX_REFS;
-  return (
-    <>
-      {labels.slice(0, MAX_REFS).map((r) => (
-        <span key={r.kind + r.name} className={"git-ref git-ref-" + r.kind} title={r.name}>
-          {r.name}
-        </span>
-      ))}
-      {extra > 0 && (
-        <span
-          className="git-ref git-ref-more"
-          title={labels
-            .slice(MAX_REFS)
-            .map((r) => r.name)
-            .join(", ")}
-        >
-          +{extra}
-        </span>
-      )}
-    </>
-  );
-}
 
 /** Files of one commit, loaded the first time that commit is expanded. */
 function CommitFiles({ cwd, hash }: { cwd: string; hash: string }) {
@@ -148,7 +44,7 @@ function CommitFiles({ cwd, hash }: { cwd: string; hash: string }) {
 
   if (err) return <div className="insp-empty git-err">{err}</div>;
   if (!files) return <div className="insp-empty">{t("changes.loading")}</div>;
-  // A merge commit has no diff against a single parent, so there is nothing to list.
+  // The backend compares against the first parent, including merge commits.
   if (files.length === 0) return <div className="insp-empty">{t("git.commitNoFiles")}</div>;
 
   return (
@@ -180,136 +76,182 @@ function CommitFiles({ cwd, hash }: { cwd: string; hash: string }) {
   );
 }
 
-export function CommitHistory({
-  cwd,
-  total,
-  tick,
-  allBranches,
-}: {
+/** Full object identity stays stable when Git changes its abbreviation length. */
+const commitId = (commit: CommitInfo) => commit.oid ?? commit.hash;
+
+/** Graph geometry, in pixels: one lane per column, one row per commit line. */
+const LANE = 10;
+const ROW = 24;
+const MID = ROW / 2;
+/** Lanes drawn at most; wider histories clip on the right rather than squeezing the subject. */
+const MAX_LANES = 8;
+const laneX = (i: number) => i * LANE + LANE / 2;
+
+/** One row of the history graph: lines through, into, and out of this commit's node. */
+function GraphCell({ row, lanes, merge }: { row: GraphRow; lanes: number; merge: boolean }) {
+  const x = laneX(row.col);
+  const curve = (x1: number, y1: number, x2: number, y2: number) =>
+    x1 === x2 ? `M${x1} ${y1}V${y2}` : `M${x1} ${y1}C${x1} ${(y1 + y2) / 2} ${x2} ${(y1 + y2) / 2} ${x2} ${y2}`;
+  return (
+    <svg className="git-graph" width={lanes * LANE} height={ROW} viewBox={`0 0 ${lanes * LANE} ${ROW}`} aria-hidden="true">
+      {row.through.map((i) => <path key={"t" + i} className={"lane-" + (i % 6)} d={`M${laneX(i)} 0V${ROW}`} />)}
+      {row.incoming.map((i) => <path key={"i" + i} className={"lane-" + (i % 6)} d={curve(laneX(i), 0, x, MID)} />)}
+      {row.outgoing.map((i) => <path key={"o" + i} className={"lane-" + (i % 6)} d={curve(x, MID, laneX(i), ROW)} />)}
+      <circle className={"node lane-" + row.color + (merge ? " merge" : "")} cx={x} cy={MID} r={3.5} />
+    </svg>
+  );
+}
+
+/** Lanes still running below a commit, drawn beside its expanded file list so the lines continue. */
+function GraphContinuation({ row, lanes }: { row: GraphRow; lanes: number }) {
+  const live = [...new Set([...row.through, ...row.outgoing])].filter((i) => i < lanes);
+  return (
+    <svg className="git-graph git-graph-cont" width={lanes * LANE} preserveAspectRatio="none" aria-hidden="true">
+      {live.map((i) => <line key={i} className={"lane-" + (i % 6)} x1={laneX(i)} x2={laneX(i)} y1="0" y2="100%" />)}
+    </svg>
+  );
+}
+
+export function CommitHistory({ cwd, total, head, refreshToken = 0, onContextMenu }: {
   cwd: string;
   total: number;
-  /** Panel refresh counter. A new commit shifts every offset, so paged rows must be reloaded, not appended. */
-  tick: number;
-  /** Walk every branch, remote, and tag instead of the current branch's history alone. */
-  allBranches: boolean;
+  head: string | null;
+  refreshToken?: number;
+  /** Right-click on a commit row, for copy and agent actions. */
+  onContextMenu?: (commit: CommitInfo, e: React.MouseEvent) => void;
 }) {
   const t = useT();
   const [commits, setCommits] = useState<CommitInfo[]>([]);
+  const [limit, setLimit] = useState(PAGE);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const rowsRef = useRef<{ cwd: string; rows: CommitInfo[] }>({ cwd, rows: [] });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<{ parent: HTMLElement; oid: string; offset: number } | null>(null);
 
-  const loadPage = useCallback(
-    (offset: number) => {
-      setLoading(true);
-      gitLogPage(cwd, PAGE, offset, allBranches)
-        .then((page) => {
-          // Replacing at offset 0 and appending otherwise keeps a refresh from duplicating rows.
-          setCommits((cur) => (offset === 0 ? page : [...cur, ...page]));
-          setErr("");
-        })
-        .catch((e) => setErr(String(e)))
-        .finally(() => setLoading(false));
-    },
-    [cwd, allBranches],
-  );
-
-  // The layout runs over every loaded page at once: a lane opened on one page can close on the next.
-  const graph = useMemo(() => layoutGraph(commits), [commits]);
-  const geo = railGeometry(graph.maxLanes);
-
-  // Rows on screen, read by the refresh below without making it re-run on every page load.
-  const shownRef = useRef(commits);
-  shownRef.current = commits;
-
-  // Load the first page when the section mounts, and start over when the repository or the branch scope
-  // changes: those are a different history, so nothing on screen carries over.
   useEffect(() => {
     setCommits([]);
     setExpanded(null);
-    loadPage(0);
-  }, [loadPage]);
+    setLimit(PAGE);
+    rowsRef.current = { cwd, rows: [] };
+    anchorRef.current = null;
+  }, [cwd]);
 
-  // A panel refresh (polled every few seconds) reloads in the background. Committing shifts the whole
-  // history by one, so the rows are fetched again from the top, as many as are shown, rather than kept or
-  // appended — but the list is not emptied first, and an unchanged history leaves the state untouched, so
-  // the graph does not blink, an expanded commit stays open, and pages loaded with "Load more" survive.
-  const refreshSeq = useRef(0);
   useEffect(() => {
-    if (tick === 0 || shownRef.current.length === 0) return;
-    const seq = ++refreshSeq.current;
-    gitLogPage(cwd, Math.max(shownRef.current.length, PAGE), 0, allBranches)
-      .then((rows) => {
-        if (seq !== refreshSeq.current) return;
-        const shown = shownRef.current;
-        // Refs move on push and fetch, and relative times age, without the hashes changing.
-        const same =
-          rows.length === shown.length &&
-          rows.every(
-            (c, i) =>
-              c.id === shown[i].id &&
-              c.relative === shown[i].relative &&
-              c.refs.join("|") === shown[i].refs.join("|"),
-          );
-        if (!same) {
-          setCommits(rows);
-          setExpanded((open) => (open && rows.some((c) => c.hash === open) ? open : null));
+    let cancelled = false;
+    const previous = rowsRef.current.cwd === cwd ? rowsRef.current.rows : [];
+    setLoading(true);
+    void (async () => {
+      let wanted = Math.max(limit, previous.length);
+      const rows: CommitInfo[] = [];
+      while (rows.length < wanted) {
+        const size = Math.min(200, wanted - rows.length);
+        const page = await gitLogPage(cwd, size, rows.length, head);
+        if (cancelled) return;
+        rows.push(...page);
+        // Preserve the old loaded range when commits are prepended to its same history.
+        if (previous.length) {
+          const shift = rows.findIndex((row) => commitId(row) === commitId(previous[0]));
+          if (shift >= 0) wanted = Math.max(wanted, previous.length + shift);
         }
-        setErr("");
-      })
-      .catch((e) => {
-        if (seq === refreshSeq.current) setErr(String(e));
-      });
-    // Only a refresh tick re-runs this; repository and scope changes are the reset above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick]);
+        if (page.length < size) break;
+      }
+      if (cancelled) return;
+      const unique = [...new Map(rows.map((row) => [commitId(row), row])).values()];
+      const parent = containerRef.current?.closest<HTMLElement>("[data-git-scroll]");
+      if (parent) {
+        const top = parent.getBoundingClientRect().top;
+        const bottom = parent.getBoundingClientRect().bottom;
+        const visible = Array.from(containerRef.current!.querySelectorAll<HTMLElement>("[data-commit-oid]"))
+          .find((row) => row.getBoundingClientRect().bottom > top && row.getBoundingClientRect().top < bottom);
+        if (visible?.dataset.commitOid) anchorRef.current = {
+          parent, oid: visible.dataset.commitOid, offset: visible.getBoundingClientRect().top - top,
+        };
+      }
+      rowsRef.current = { cwd, rows: unique };
+      setCommits(unique);
+      setExpanded((current) => current && unique.some((row) => commitId(row) === current) ? current : null);
+      setErr("");
+    })().catch((e) => { if (!cancelled) setErr(String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [cwd, head, limit, refreshToken, retry]);
 
-  if (err) return <div className="insp-empty git-err">{err}</div>;
-  if (commits.length === 0) {
-    return <div className="insp-empty">{loading ? t("changes.loading") : t("git.noCommits")}</div>;
-  }
+  // Retry transient failures only after the previous request finishes, preserving readable rows.
+  useEffect(() => {
+    if (!err || loading || document.hidden) return;
+    const timer = setTimeout(() => setRetry((n) => n + 1), 5000);
+    return () => clearTimeout(timer);
+  }, [err, loading, retry]);
+
+  // The graph needs parents for every commit; an older server without them gets the plain list.
+  const graph = useMemo(() => commits.every((c) => c.parents)
+    ? layoutGraph(commits.map((c) => ({ oid: commitId(c), parents: c.parents ?? [] }))) : null, [commits]);
+  const lanes = graph ? Math.min(MAX_LANES, Math.max(1, ...graph.map((r) => r.width))) : 0;
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    anchorRef.current = null;
+    if (!anchor) return;
+    const row = Array.from(containerRef.current?.querySelectorAll<HTMLElement>("[data-commit-oid]") ?? [])
+      .find((item) => item.dataset.commitOid === anchor.oid);
+    if (row) anchor.parent.scrollTop += row.getBoundingClientRect().top
+      - anchor.parent.getBoundingClientRect().top - anchor.offset;
+  }, [commits]);
 
   return (
-    <div>
-      {commits.map((c, i) => {
-        const open = expanded === c.hash;
-        const row = graph.rows[i];
+    <div ref={containerRef} aria-busy={loading}>
+      {err && <div className="insp-empty git-err" role="status">{err}</div>}
+      {commits.length === 0 && !err && (
+        <div className="insp-empty">{loading ? t("changes.loading") : t("git.noCommits")}</div>
+      )}
+      {commits.map((c, index) => {
+        const oid = commitId(c);
+        const open = expanded === oid;
+        const row = graph?.[index];
+        const refs = parseRefs(c.refs);
         return (
-          <div key={c.hash} className="git-commit-item">
-            <div className="git-commit-line">
-              <Rail row={row} geo={geo} merge={c.parents.length > 1} />
-              <button
-                type="button"
-                className="git-commit-row"
-                onClick={() => setExpanded(open ? null : c.hash)}
-                aria-expanded={open}
-                // The subject is usually cut off in this narrow panel, so the tooltip leads with it in full.
-                title={`${c.subject}\n${c.hash} · ${c.author} · ${c.relative}`}
-              >
-                <span className="tw">
-                  {open ? <Icons.chevD size={11} /> : <Icons.chevR size={11} />}
-                </span>
-                <span className="hash">{c.hash}</span>
-                <RefPills refs={c.refs} />
-                <span className="subj">{c.subject}</span>
-                <span className="when">{c.relative}</span>
-              </button>
-            </div>
+          <div key={oid} data-commit-oid={oid} className={"git-commit-item" + (row ? " graphed" : "")}>
+            <button
+              type="button"
+              className="git-commit-row"
+              onClick={() => setExpanded(open ? null : oid)}
+              onContextMenu={onContextMenu ? (e) => onContextMenu(c, e) : undefined}
+              aria-expanded={open}
+              title={`${c.message ?? c.subject}\n\n${c.hash} · ${c.author}`}
+            >
+              <span className="tw">
+                {open ? <Icons.chevD size={11} /> : <Icons.chevR size={11} />}
+              </span>
+              {row && <GraphCell row={row} lanes={lanes} merge={(c.parents?.length ?? 0) > 1} />}
+              <span className="hash">{c.hash}</span>
+              {/* One label keeps the subject readable in a narrow panel; the rest are one hover away. */}
+              {refs.slice(0, 1).map((r) => (
+                <span key={r.kind + r.name} className={"git-ref git-ref-" + r.kind} title={r.name}>{r.name}</span>
+              ))}
+              {refs.length > 1 && (
+                <span className="git-ref git-ref-more" title={refs.slice(1).map((r) => r.name).join("\n")}>+{refs.length - 1}</span>
+              )}
+              <span className="subj">{c.subject}</span>
+              <span className="when">{c.relative}</span>
+            </button>
             {open && (
-              <div className="git-commit-line">
-                <RailContinue lanes={lanesBelow(row)} geo={geo} />
-                <CommitFiles cwd={cwd} hash={c.hash} />
+              <div className="git-commit-expanded" style={row ? { paddingLeft: lanes * LANE } : undefined}>
+                {row && <GraphContinuation row={row} lanes={lanes} />}
+                <CommitFiles cwd={cwd} hash={oid} />
               </div>
             )}
           </div>
         );
       })}
-      {commits.length < total && (
+      {commits.length > 0 && commits.length < total && (
         <button
           type="button"
           className="git-more"
           disabled={loading}
-          onClick={() => loadPage(commits.length)}
+          onClick={() => setLimit(Math.max(limit, commits.length) + PAGE)}
         >
           {loading ? t("changes.loading") : t("git.loadMore")}
         </button>

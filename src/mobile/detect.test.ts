@@ -1,4 +1,4 @@
-//! Unit tests for isMobileView: Tauri exclusion, URL-parameter/localStorage override precedence, and automatic
+//! Unit tests for isMobileView: Tauri exclusion, URL-parameter override, ignoring the legacy localStorage choice, and automatic
 //! narrow-touchscreen detection. jsdom has no real device characteristics, so defineProperty stages each one.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -93,21 +93,10 @@ describe("isMobileView manual override", () => {
     expect(isMobileView()).toBe(false);
   });
 
-  it("localStorage remembering mobile also enters the mobile view on a desktop", () => {
-    localStorage.setItem("vlx-view-mode", "mobile");
-    expect(isMobileView()).toBe(true);
-  });
-
-  it("localStorage remembering desktop also enters the desktop view on a phone", () => {
+  it("ignores a view choice stored in localStorage by earlier builds", () => {
     setCoarsePointer(true);
     setViewport(430, 932);
     localStorage.setItem("vlx-view-mode", "desktop");
-    expect(isMobileView()).toBe(false);
-  });
-
-  it("the URL parameter takes precedence over localStorage", () => {
-    localStorage.setItem("vlx-view-mode", "desktop");
-    setSearch("view=mobile");
     expect(isMobileView()).toBe(true);
   });
 

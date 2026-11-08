@@ -18,6 +18,8 @@ import {
   resolveChatImage,
   loadChatTool,
   chatToolContextKey,
+  chatHistorySessionId,
+  hasBoundedChatDetails,
   type ChatRow,
   type ChatImage,
   type ChatImageValue,
@@ -28,8 +30,13 @@ import { attachImages, dataUrl, MAX_IMAGES, MAX_IMAGE_BYTES } from "./attachment
 import { useImageMenu } from "./useImageMenu";
 import { ChatImagePreview } from "./ChatImagePreview";
 import { Markdown } from "./markdown";
+import { ReplyTranslation, SentTranslation, useOriginalMessage } from "../../../translation/Message";
 import { parseAnsweredQuestions, type AnsweredQuestion } from "./questionForm";
-import { ToolBody, toolSummary } from "./toolCards";
+import { artifactPaths, ToolBody, toolSummary } from "./toolCards";
+import { ArtifactCards } from "../doc/artifact/ArtifactCard";
+import { DeferredContents } from "./DeferredContents";
+import { ChildConversation } from "./ChildConversation";
+import { CommandFindings, parseCommandFindings } from "./CommandFindings";
 import { runSummaryText, type ToolRow, type TurnFold } from "./toolRuns";
 import { copyAttributes } from "./selectionCopy";
 import { handleMessageCopy, useMessageCopyMenu } from "./useMessageCopyMenu";
@@ -136,9 +143,12 @@ export function ChatImageView({
 }) {
   const t = useT();
   const [preview, setPreview] = useState(false);
+  const [imageError,setImageError]=useState<string | null>(null);
   const [resolved, setResolved] = useState<ChatImage | null>(() => ("data" in image ? image : null));
   useEffect(() => {
     setPreview(false);
+    setImageError(null);
+    const controller=new AbortController();
     let disposed = false;
     if ("data" in image) {
       setResolved(image);
@@ -147,18 +157,25 @@ export function ChatImageView({
       };
     }
     setResolved(null);
-    void resolveChatImage(image)
+    void resolveChatImage(image,false,controller.signal)
       .then((value) => {
         if (!disposed) setResolved(value);
       })
-      .catch(() => {});
+      .catch(cause => {if (!disposed) setImageError(String(cause));});
     return () => {
       disposed = true;
+      controller.abort();
     };
   }, [image]);
   const src = resolved ? dataUrl(resolved) : "";
-  const { onContextMenu, imageMenu } = useImageMenu(src, () => setPreview(true));
-  if (!resolved) return null;
+  const original=async()=>dataUrl(await resolveChatImage(image,true));
+  const { onContextMenu, imageMenu } = useImageMenu(src, () => setPreview(true),original);
+  if (!resolved) return imageError ? <span>
+    <span role="alert">{imageError}</span>
+    <button className="vlx-btn" onClick={()=>{
+      void original().then(async src=>(await import("../../../platform/imageActions")).saveImage(src)).catch(cause=>setImageError(String(cause)));
+    }}>{t("chat.imageSave")}</button>
+  </span> : null;
   return (
     <>
       <img
@@ -181,7 +198,8 @@ export function ChatImageView({
         }}
       />
       {imageMenu}
-      {preview && <ChatImagePreview src={src} alt={alt} onClose={() => setPreview(false)} />}
+      {preview && <ChatImagePreview src={src} alt={alt} original={original}
+        loadOriginal={"data" in image ? undefined:async(signal)=>dataUrl(await resolveChatImage(image,"view",signal))} onClose={() => setPreview(false)} />}
     </>
   );
 }
@@ -278,14 +296,17 @@ export function TurnHead({
  * Both start their text on the same left edge, so an answer and the question above it read as one exchange.
  */
 export function MessageBubble({
+  rowId,
   who,
   isUser,
   icon,
   at,
   text,
+  copyAvailable=true,
   images,
   durationMs,
   showHead = true,
+  streaming,
   renderText,
   footnote,
   onRewind,
@@ -296,6 +317,7 @@ export function MessageBubble({
   openRewindToken,
   onRewindMenuOpened,
 }: {
+  rowId?: string;
   who: string;
   isUser: boolean;
   /** The agent's mark, shown in the margin beside its answers. */
@@ -303,11 +325,13 @@ export function MessageBubble({
   /** When it was written: epoch milliseconds from the live engine, an ISO string from a recording. */
   at?: string | number;
   text: string;
+  copyAvailable?:boolean;
   images?: ChatImageValue[];
   /** Total wall-clock time for a completed assistant turn. */
   durationMs?: number;
   /** Draw the author line. Inside a marked turn the turn's own line already names the speaker. */
   showHead?: boolean;
+  streaming?: boolean;
   /** Draw the body from the raw text instead of Markdown; the archive marks search literals in it. */
   renderText?: (text: string) => ReactNode;
   /** A muted line under the body, such as the tools an archived turn used. */
@@ -323,6 +347,7 @@ export function MessageBubble({
   /** Acknowledge the one-shot request after the target message has opened its menu. */
   onRewindMenuOpened?: (token: number) => void;
 }) {
+  text = useOriginalMessage(rowId, text);
   const t = useT();
   const [rewindMenu, setRewindMenu] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -348,7 +373,8 @@ export function MessageBubble({
         ))}
       </div>
     ) : null;
-  const body = text ? (renderText ? renderText(text) : <Markdown text={text} />) : null;
+  const originalBody = text ? (renderText ? renderText(text) : <Markdown text={text} />) : null;
+  const body = rowId && !isUser ? <ReplyTranslation rowId={rowId} text={text} original={originalBody} streaming={streaming} /> : originalBody;
 
   if (isUser) {
     const rewind =
@@ -390,11 +416,11 @@ export function MessageBubble({
             {!editing && (text || rewind || onEditSend) ? <div className="sv-message-tools" {...copyAttributes.ignore}>
               {rewind}
               {onEditSend ? <button className="sv-message-edit-button" disabled={!!editDisabledReason} title={editDisabledReason || t("chat.rewind.edit")} aria-label={t("chat.rewind.edit")} onClick={() => setEditing(true)}><Icons.rename size={16} /></button> : null}
-              {text ? <MessageCopyButton text={text} /> : null}
+              {text && copyAvailable ? <MessageCopyButton text={text} /> : null}
             </div> : null}
             <div className="sv-message-content">
             {editing ? <MessageEditor text={text} images={images} disabled={!!editDisabledReason}
-              onCancel={() => setEditing(false)} onSend={onEditSend} /> : <>{pictures}{body}{footnote}</>}
+              onCancel={() => setEditing(false)} onSend={onEditSend} /> : <>{pictures}{rowId ? <SentTranslation rowId={rowId} original={body} /> : body}{footnote}</>}
             </div>
             {copyMenu}
           </div>
@@ -556,7 +582,15 @@ export function ToolCard({
   const [retry, setRetry] = useState(0);
   const contextKey = source ? chatToolContextKey(source) : undefined;
   useEffect(() => {
-    if (!open || !source?.detailAvailable) return;
+    const update = () => {
+      const query = new URLSearchParams(window.location.search);
+      if (source && (query.get("chatRow") === source.id || query.getAll("chatChild").includes(source.id)) && (!query.has("chatSession") || query.get("chatSession") === chatHistorySessionId(source))) setOpen(true);
+    };
+    update(); window.addEventListener("popstate", update);
+    return () => window.removeEventListener("popstate", update);
+  }, [source?.id]);
+  useEffect(() => {
+    if (!open || !source?.detailAvailable || hasBoundedChatDetails(source)) return;
     let disposed = false;
     setDetails(null);
     setLoadError(null);
@@ -589,6 +623,11 @@ export function ToolCard({
   );
   const summary = subagent?.description ?? toolSummary(name, input, cwd);
   const visibleSteps = Math.max(stepCount ?? 0, subagent?.toolUses ?? 0);
+  // Pages a finished call wrote get a card that stays visible while the call itself is folded.
+  const artifacts = useMemo(
+    () => (running || isError ? [] : artifactPaths(name, input, cwd)),
+    [running, isError, name, input, cwd],
+  );
   if (answered) return <QuestionAnswerCard items={answered} />;
   return (
     <div className={"sv-tool" + (isError ? " sv-tool-error" : "") + (open ? " sv-tool-open" : "")}>
@@ -608,12 +647,18 @@ export function ToolCard({
         ) : null}
         {running ? <span className="sv-tool-pending">{t("session.toolRunning")}</span> : null}
       </button>
+      {artifacts.length > 0 && <ArtifactCards paths={artifacts} />}
       {open && (
         <div className="sv-tool-body">
+          {source && hasBoundedChatDetails(source) ? <>
+            {source.childAvailable && renderChildren && <ChildConversation row={source} renderRows={renderChildren} />}
+            <DeferredContents row={source} />
+          </> : <>
           {source?.detailAvailable && !details && !loadError && <div role="status">{t("common.loading")}</div>}
           {loadError && <div role="alert">{loadError}<button onClick={() => setRetry(value => value + 1)}>{t("common.retry")}</button></div>}
           {steps}
           <ToolBody tool={name} input={input} output={output} isError={isError} />
+          </>}
         </div>
       )}
     </div>
@@ -678,6 +723,15 @@ export function ToolRunCard({
   cwd?: string;
 }) {
   const t = useT();
+  // A folded run still shows the pages it wrote; once open, each call's own card shows them instead.
+  const artifacts = useMemo(() => {
+    const out: string[] = [];
+    for (const call of calls) {
+      if (call.status !== "completed" || call.isError) continue;
+      for (const path of artifactPaths(call.name, call.input, cwd)) if (!out.includes(path)) out.push(path);
+    }
+    return out;
+  }, [calls, cwd]);
   return (
     <div className="sv-run">
       <button className="sv-run-head" onClick={onToggle} title={t("chat.toolRun.tooltip")}>
@@ -687,6 +741,7 @@ export function ToolRunCard({
         <span className="sv-tool-spacer" />
         {running ? <span className="sv-tool-pending">{t("session.toolRunning")}</span> : null}
       </button>
+      {!open && artifacts.length > 0 && <ArtifactCards paths={artifacts} />}
       {open && (
         <div className="sv-run-body">
           {calls.map((call) => renderCall ? <div key={call.id}>{renderCall(call)}</div> : (
@@ -717,12 +772,14 @@ export function ErrorRow({ message }: { message: string }): ReactNode {
  * What a slash command the agent answered itself printed back, such as `/effort` or `/context`.
  *
  * Set apart from the answers around it because nobody said it: it is the session reporting on itself.
- * The text is Markdown — `/context` replies with a table — so it is rendered rather than shown raw.
+ * The text is Markdown — `/context` replies with a table — so it is rendered rather than shown raw. Review
+ * findings printed as JSON are drawn as a list instead.
  */
 export function CommandRow({ text }: { text: string }): ReactNode {
+  const findings = useMemo(() => parseCommandFindings(text), [text]);
   return (
     <div className="sv-row-command">
-      <Markdown text={text} />
+      {findings ? <CommandFindings findings={findings} /> : <Markdown text={text} />}
     </div>
   );
 }
@@ -808,6 +865,29 @@ export function CompactionRow({
             {t("chat.compaction.from", fmtTokens(preTokens))}
           </span>
         ) : null}
+      </span>
+      <span className="sv-compaction-line" />
+    </div>
+  );
+}
+
+/**
+ * A background task finished and woke the agent, which answers it in a turn of its own.
+ *
+ * Drawn as a rule like compaction, because it is a boundary and not a message: the reply below answers
+ * the task, not the prompt above it. The summary is the agent's own account of the task, so it stays in
+ * the agent's words; it is cut to one line, with the full text on hover.
+ */
+export function WakeRow({ summary, at }: { summary: string; at?: string | number }): ReactNode {
+  const t = useT();
+  const when = messageTime(at);
+  return (
+    <div className="sv-compaction sv-wake">
+      <span className="sv-compaction-line" />
+      <span className="sv-compaction-label sv-wake-label" title={summary || undefined}>
+        <span className="sv-wake-title">{t("chat.wake.label")}</span>
+        {summary ? <span className="sv-compaction-detail sv-wake-summary">{summary}</span> : null}
+        {when ? <time className="sv-compaction-detail" title={when.full}>{when.short}</time> : null}
       </span>
       <span className="sv-compaction-line" />
     </div>

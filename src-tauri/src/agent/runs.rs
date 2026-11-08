@@ -3,19 +3,21 @@
 //!
 //! `vrun` leaves the work in its own process session and records it under `<data dir>/runs/<label>/`: the
 //! PID, the log, the exit code once it ends, and a `meta.json` naming the session that started it. That
-//! directory, not memory, is the source of truth. The waiting half of `vrun` can time out and exit while
-//! the work goes on, and VelaTerm itself can restart in the middle of an hour-long build, so the registry
+//! directory, not memory, is the source of truth. The waiting half of `vrun` can time out or stop to
+//! report progress and exit while the work goes on, and VelaTerm itself can restart in the middle of an hour-long build, so the registry
 //! is rebuilt by scanning it: whenever `vrun` announces a start or a finish, and on a short poll that
 //! notices work ending with nobody left to announce it.
 //!
 //! Terminal sessions depend on this entirely. In a terminal the agent reports only its own turns, and a
 //! turn ends as soon as the work has been started, so without the registry a session looks finished for
 //! the whole time its build runs.
+//!
+//! A run's record outlives the run by a day, so the result can still be collected, and is then swept away.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::host::AppCtx;
 use crate::pty::{AgentState, StatusSignal};
@@ -30,7 +32,14 @@ pub struct RunMeta {
     pub command: Vec<String>,
     /// Milliseconds since the epoch.
     pub started_at: u64,
+    /// The supervisor waiting on the command; it leads the run's process group.
     pub pid: u32,
+    /// When waiting gives up, in milliseconds since the epoch; absent when no `-t` limit was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<u64>,
+    /// Seconds between progress reports, counted from the start. Absent in records older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<u64>,
 }
 
 pub const META_FILE: &str = "meta.json";
@@ -60,6 +69,15 @@ const POLL: Duration = Duration::from_secs(3);
 const DRAIN_GRACE: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const DRAIN_GRACE: Duration = Duration::from_millis(100);
+
+/// How long a run's record stays after the run ends. `vrun --wait` collects the result from it after a
+/// progress report, and `vrun --status` and the log viewer read it later still; a day also covers a
+/// session picked up again the next morning.
+const KEEP_ENDED: Duration = Duration::from_secs(24 * 60 * 60);
+/// How often records past that are swept away.
+const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
+/// Where swept records are moved before they are deleted, beside `runs/`.
+const TRASH_DIR: &str = "runs-trash";
 
 /// How much of a log the viewer shows.
 const LOG_BYTES: u64 = 256 * 1024;
@@ -105,7 +123,7 @@ pub(crate) fn alive(pid: u32) -> bool {
 }
 
 /// A label names a directory under `runs/`, so it may not reach outside it.
-fn valid_label(label: &str) -> bool {
+pub(crate) fn valid_label(label: &str) -> bool {
     !label.trim().is_empty() && !label.contains('/') && !label.contains('\\') && label != "." && label != ".."
 }
 
@@ -139,8 +157,9 @@ fn scan(dir: &Path) -> HashMap<String, Vec<RunBrief>> {
 
 /// Rescan the runs directory and publish what changed.
 ///
-/// Called when `vrun` announces a start or a finish, and by the poll. The scan reads one small file per
-/// unfinished run, so running it every few seconds costs nothing worth measuring.
+/// Called when `vrun` announces a start or a finish, and by the poll. The scan checks every record and
+/// reads one small file per unfinished run, so it stays cheap only while [`sweep`] keeps the directory to
+/// about a day of runs.
 pub fn refresh(app: &AppCtx) {
     let Some(dir) = runs_dir(app) else { return };
     apply(app, scan(&dir));
@@ -175,16 +194,86 @@ fn apply(app: &AppCtx, next: HashMap<String, Vec<RunBrief>>) {
     }
 }
 
-/// Start the poll that notices runs ending with nobody left to announce it. Idempotent.
+/// Start the poll that notices runs ending with nobody left to announce it, and sweeps ended runs away
+/// at startup and every hour. Idempotent.
 pub fn start(app: AppCtx) {
     static STARTED: OnceLock<()> = OnceLock::new();
     if STARTED.set(()).is_err() {
         return;
     }
-    std::thread::spawn(move || loop {
-        refresh(&app);
-        std::thread::sleep(POLL);
+    std::thread::spawn(move || {
+        let mut swept: Option<Instant> = None;
+        loop {
+            if swept.map_or(true, |at| at.elapsed() >= SWEEP_EVERY) {
+                sweep(&app);
+                swept = Some(Instant::now());
+            }
+            refresh(&app);
+            std::thread::sleep(POLL);
+        }
     });
+}
+
+/// Delete the records of runs that ended more than [`KEEP_ENDED`] ago.
+///
+/// Nothing else removes them, and agents pick a fresh label for most runs, so they pile up: a month of
+/// use left 4,209, every one of them checked by the poll every three seconds.
+fn sweep(app: &AppCtx) {
+    let (Some(dir), Ok(data)) = (runs_dir(app), app.data_dir()) else { return };
+    sweep_dir(&dir, &data.join(TRASH_DIR), SystemTime::now());
+}
+
+fn sweep_dir(dir: &Path, trash: &Path, now: SystemTime) {
+    // Whatever an interrupted sweep left behind.
+    let _ = std::fs::remove_dir_all(trash);
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) && expired(&entry.path(), now) {
+            remove_run(&entry.path(), trash, now);
+        }
+    }
+}
+
+/// Whether the run under `dir` ended more than [`KEEP_ENDED`] before `now`. A run still going has not
+/// ended: it has no exit code and its supervisor is alive.
+fn expired(dir: &Path, now: SystemTime) -> bool {
+    let modified = |path: &Path| std::fs::metadata(path).and_then(|meta| meta.modified()).ok();
+    let ended = match modified(&dir.join("exit")) {
+        Some(at) => at,
+        None => {
+            let meta: Option<RunMeta> =
+                std::fs::read_to_string(dir.join(META_FILE)).ok().and_then(|text| serde_json::from_str(&text).ok());
+            if meta.is_some_and(|meta| alive(meta.pid)) {
+                return false;
+            }
+            // Stopped before it could record an exit code: its last output or last record is as close to
+            // the end as there is.
+            let latest = [modified(&dir.join("log")), modified(&dir.join(META_FILE)), modified(dir)].into_iter().flatten().max();
+            let Some(at) = latest else { return false };
+            at
+        }
+    };
+    now.duration_since(ended).is_ok_and(|age| age > KEEP_ENDED)
+}
+
+/// Move a record aside under its start lock, then delete it there.
+///
+/// `vrun` holds the same lock while it starts a run, so a start reusing the label is never cut in half,
+/// and once the lock is free its record is new and no longer expired. Moving the directory out first
+/// lets the next start find a clean one even if deleting takes a while.
+fn remove_run(dir: &Path, trash: &Path, now: SystemTime) {
+    let lock = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("start.lock"));
+    let Ok(lock) = lock else { return };
+    if lock.try_lock().is_err() || !expired(dir, now) || std::fs::create_dir_all(trash).is_err() {
+        return;
+    }
+    let aside = trash.join(uuid::Uuid::new_v4().to_string());
+    let moved = std::fs::rename(dir, &aside).is_ok();
+    drop(lock);
+    // Windows may refuse to move a directory while a file in it is open; with the lock let go it can.
+    if moved || std::fs::rename(dir, &aside).is_ok() {
+        let _ = std::fs::remove_dir_all(&aside);
+    }
 }
 
 /// Whether a session has work of its own running under `vrun`.
@@ -247,8 +336,9 @@ pub fn log_tail(app: &AppCtx, label: &str) -> Result<serde_json::Value, String> 
 
 /// Stop a live run and everything it started.
 ///
-/// `vrun` starts the work as the leader of its own process group, so the whole group is signalled: a
-/// build script's compiler children would otherwise outlive it.
+/// `vrun` starts the work under a supervisor that leads its own process group, so the whole group is
+/// signalled: a build script's compiler children would otherwise outlive it. The supervisor ignores the
+/// signal long enough to record how the command ended.
 pub fn stop(app: &AppCtx, label: &str) -> Result<(), String> {
     if !valid_label(label) {
         return Err("Invalid run label".to_string());
@@ -313,7 +403,7 @@ mod tests {
     fn record(runs: &Path, label: &str, session_id: &str, pid: u32, started_at: u64) {
         let dir = runs.join(label);
         std::fs::create_dir_all(&dir).unwrap();
-        let meta = RunMeta { session_id: session_id.into(), command: vec!["sleep".into(), "60".into()], started_at, pid };
+        let meta = RunMeta { session_id: session_id.into(), command: vec!["sleep".into(), "60".into()], started_at, pid, deadline: None, interval: None };
         std::fs::write(dir.join(META_FILE), serde_json::to_string(&meta).unwrap()).unwrap();
         std::fs::write(dir.join("log"), "line one\nline two\n").unwrap();
     }
@@ -391,6 +481,43 @@ mod tests {
             assert!(log_tail(&app, label).is_err(), "{label:?}");
             assert!(stop(&app, label).is_err(), "{label:?}");
         }
+    }
+
+    /// Ended runs stay for a day, stopped ones included, and are then removed; live runs always stay.
+    #[test]
+    fn a_sweep_removes_runs_a_day_after_they_end() {
+        let (_app, runs) = ctx("sweep");
+        let trash = runs.with_file_name(TRASH_DIR);
+        record(&runs, "live", "s1", std::process::id(), 1);
+        record(&runs, "finished", "s1", std::process::id(), 1);
+        std::fs::write(runs.join("finished").join("exit"), "0").unwrap();
+        record(&runs, "stopped", "s1", u32::MAX / 2, 1);
+
+        let hour_later = SystemTime::now() + Duration::from_secs(60 * 60);
+        sweep_dir(&runs, &trash, hour_later);
+        for label in ["live", "finished", "stopped"] {
+            assert!(runs.join(label).is_dir(), "{label} is kept within the day");
+        }
+
+        let two_days_later = SystemTime::now() + 2 * KEEP_ENDED;
+        sweep_dir(&runs, &trash, two_days_later);
+        assert!(runs.join("live").is_dir(), "a live run is never swept");
+        assert!(!runs.join("finished").exists());
+        assert!(!runs.join("stopped").exists());
+        assert_eq!(std::fs::read_dir(&trash).unwrap().count(), 0, "nothing is left aside");
+    }
+
+    /// A `vrun` starting under a label holds its start lock, and the sweep leaves that record alone.
+    #[test]
+    fn a_sweep_skips_a_label_being_started() {
+        let (_app, runs) = ctx("sweep-lock");
+        record(&runs, "build", "s1", std::process::id(), 1);
+        std::fs::write(runs.join("build").join("exit"), "0").unwrap();
+        let starting = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .open(runs.join("build").join("start.lock")).unwrap();
+        starting.try_lock().unwrap();
+        sweep_dir(&runs, &runs.with_file_name(TRASH_DIR), SystemTime::now() + 2 * KEEP_ENDED);
+        assert!(runs.join("build").join("log").is_file());
     }
 
     /// The viewer reads the log's end and says whether the run is still going.

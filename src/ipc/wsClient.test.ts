@@ -51,6 +51,53 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("waits for the connection hello before reading history and rejects an older server without sending a read", async () => {
+  const client = wsClient as unknown as {
+    ensure: () => Promise<void>; ws: WebSocket | null; historyProtocol: unknown;
+  };
+  const previous = client.ws;
+  const ensure = vi.spyOn(client, "ensure").mockResolvedValue();
+  const send = vi.fn();
+  vi.stubGlobal("WebSocket", { OPEN: 1 });
+  client.ws = { readyState: 1, send } as unknown as WebSocket;
+  client.historyProtocol = null;
+  try {
+    const read = wsClient.invoke("chat_snapshot", { sessionId: "s" });
+    await Promise.resolve();
+    expect(send).not.toHaveBeenCalled();
+    internals.onMessage({ data: JSON.stringify({ t: "hello", source: "old-server" }) });
+    await expect(read).rejects.toThrow("history_protocol_unsupported:");
+    expect(send).not.toHaveBeenCalled();
+    const control = wsClient.invoke("chat_interrupt", { sessionId: "s" });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    const request = JSON.parse(send.mock.calls[0][0]);
+    internals.onMessage({ data: JSON.stringify({ t: "reply", id: request.id, ok: true, result: true }) });
+    expect(await control).toBe(true);
+  } finally { ensure.mockRestore(); client.ws = previous; client.historyProtocol = null; }
+});
+
+it("accepts history capability from the current hello and clears it when a connection is superseded", async () => {
+  const client = wsClient as unknown as {
+    ensure: () => Promise<void>; ws: WebSocket | null; historyProtocol: unknown;
+    supersede: (socket: WebSocket | null) => void;
+  };
+  const previous = client.ws;
+  const ensure = vi.spyOn(client, "ensure").mockResolvedValue();
+  const send = vi.fn();
+  vi.stubGlobal("WebSocket", { OPEN: 1 });
+  client.ws = { readyState: 1, send } as unknown as WebSocket;
+  try {
+    internals.onMessage({ data: JSON.stringify({ t: "hello", source: "new-server", historyProtocol: 2 }) });
+    const read = wsClient.invoke("chat_snapshot", { sessionId: "s" });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    const request = JSON.parse(send.mock.calls[0][0]);
+    internals.onMessage({ data: JSON.stringify({ t: "reply", id: request.id, ok: true, result: { rows: [] } }) });
+    expect(await read).toEqual({ rows: [] });
+    client.supersede(null);
+    expect(client.historyProtocol).toBeNull();
+  } finally { ensure.mockRestore(); client.ws = previous; client.historyProtocol = null; }
+});
+
 it("reattaches a terminal with a fresh request ID when HTTP hides randomUUID", async () => {
   vi.stubGlobal("crypto", { getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) });
   const client = wsClient as unknown as {
@@ -266,5 +313,43 @@ describe("wsClient superseded-socket isolation", () => {
     await inflight;
     expect(rejected).toBeDefined();
     expect(reconnect.pending.size).toBe(0);
+  });
+});
+
+describe("wsClient reconnect backoff", () => {
+  type BackoffInternals = ReconnectInternals & {
+    reconnectAttempts: number;
+    goOnline: (ws: FakeWebSocket) => void;
+  };
+  const backoff = wsClient as unknown as BackoffInternals;
+
+  afterEach(() => {
+    vi.useRealTimers();
+    backoff.ws = null;
+    backoff.reconnectAttempts = 0;
+    backoff.everConnected = false;
+  });
+
+  it("keeps backing off when every connection is closed right after it opens", () => {
+    vi.useFakeTimers();
+    const ws = new FakeWebSocket("ws://host/ws");
+    backoff.ws = ws;
+    backoff.reconnectAttempts = 3;
+    backoff.goOnline(ws);
+    // A server that drops each new connection must not reset the delay back to one second.
+    expect(backoff.reconnectAttempts).toBe(3);
+    backoff.ws = null;
+    vi.advanceTimersByTime(10_000);
+    expect(backoff.reconnectAttempts).toBe(3);
+  });
+
+  it("resets the backoff once the connection has stayed up", () => {
+    vi.useFakeTimers();
+    const ws = new FakeWebSocket("ws://host/ws");
+    backoff.ws = ws;
+    backoff.reconnectAttempts = 3;
+    backoff.goOnline(ws);
+    vi.advanceTimersByTime(10_000);
+    expect(backoff.reconnectAttempts).toBe(0);
   });
 });

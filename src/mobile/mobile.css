@@ -46,6 +46,10 @@
 .m-back { flex: none; display: flex; align-items: center; font-size: 14px; color: var(--text-mid); padding: 8px 10px 8px 0; touch-action: manipulation; }
 .m-back:active { color: var(--text); }
 .m-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; color: var(--text); }
+.m-session-heading { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; padding: 8px 0; }
+.m-session-heading .sv-agent-version { font-size: 12px; gap: 8px; flex-wrap: wrap; }
+.m-session-heading .sv-agent-version-current { max-width: 100%; }
+.m-session-heading .sv-agent-version-update { display: inline-flex; align-items: center; flex: none; max-width: 100%; min-height: 28px; white-space: normal; overflow-wrap: anywhere; }
 .m-kind { flex: none; font-size: 11px; color: var(--text-faint); }
 
 /* ── Session list toolbar: search and status filters ── */
@@ -283,6 +287,51 @@
   letter-spacing: 0.5px;
 }
 
+/* ── Terminal message box ── */
+/* Sits in the page flow between the terminal and KeyBar so it never covers the TUI's own prompt line;
+   the terminal gives up the height. The textarea grows with its text up to about six lines. */
+.m-compose {
+  flex: none;
+  margin: 6px 8px 0;
+  padding: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.m-compose:focus-within { border-color: var(--accent-line); }
+.m-compose-row { display: flex; align-items: flex-end; gap: 6px; }
+.m-compose textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: 9.6em;
+  padding: 7px 4px;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  /* 16px or more keeps iOS from zooming the page when the textarea gains focus. */
+  font-size: 16px;
+  line-height: 1.5;
+}
+.m-compose-btn {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg-1);
+  color: var(--text-mid);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-compose-send { background: var(--accent); color: var(--bg-0); }
+.m-compose-send:disabled { opacity: 0.45; }
+.m-compose-error { margin: 0 4px 6px; font-size: 13px; color: var(--status-error); }
+
 /* ── KeyBar shortcut toolbar ── */
 .m-keybar-wrap {
   flex: none;
@@ -370,6 +419,7 @@
 .m-session-content .sv-box { position: relative; }
 .m-session-content .sv-composer[data-options-expanded="false"] .sv-controls,
 .m-session-content .sv-composer[data-options-expanded="false"] .sv-action-feedback { display: none; }
+.m-session-content .sv-action-feedback { flex-wrap: wrap; white-space: normal; }
 .m-session-content .sv-composer textarea { padding: 12px 0 12px 12px; min-height: 64px; width: calc(100% - 104px); }
 .m-session-content .sv-composer[data-options-expanded="false"] textarea:not(:focus) { min-height: 52px; height: 52px !important; white-space: nowrap; overflow: hidden; }
 .m-session-content .sv-composer[data-options-expanded="true"] .sv-controls { padding: 6px; gap: 4px; }
@@ -380,6 +430,7 @@
 .m-recorded-composer textarea:not(:focus) { min-height: 44px; height: 44px; white-space: nowrap; overflow: hidden; }
 .m-recorded-composer textarea { outline: none; }
 .m-recorded-composer:focus-within { border-color: var(--accent-line); }
+
 
 .m-recorded-input { display: flex; align-items: flex-start; gap: 8px; }
 .m-recorded-input textarea { flex: 1; min-width: 0; }

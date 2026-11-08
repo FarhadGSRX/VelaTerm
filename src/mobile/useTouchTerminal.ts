@@ -5,7 +5,8 @@
 //! See touchSelect.ts and the architecture notes for mouse suppression. Gestures:
 //! - Vertical swipes synthesize WheelEvents into xterm's existing path: SGR reporting for Claude,
 //!   arrow keys on alternate screens without scrollback, or viewport scrolling. Mirror scaling adjusts delta.
-//! - Taps focus the terminal to open the soft keyboard after xterm's mousedown behavior is suppressed.
+//! - Taps focus the terminal to open the soft keyboard after xterm's mousedown behavior is suppressed,
+//!   unless the caller handles taps itself (the message box opens instead).
 //! - Long presses select a word, expose draggable endpoints and copy/cancel controls, and use public
 //!   buffer APIs plus custom highlighting. Selection mode takes precedence over scrolling/focus.
 
@@ -51,6 +52,8 @@ export interface TouchTerminalApi {
 export function useTouchTerminal(
   wrapRef: React.RefObject<HTMLDivElement | null>,
   sessionId: string,
+  /** Replaces the default tap action of focusing the terminal. */
+  onTap?: () => void,
 ): TouchTerminalApi {
   const [overlay, setOverlay] = useState<SelectionOverlay | null>(null);
 
@@ -60,6 +63,8 @@ export function useTouchTerminal(
   const overlayRef = useRef<SelectionOverlay | null>(null);
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
+  const onTapRef = useRef(onTap);
+  onTapRef.current = onTap;
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -256,7 +261,8 @@ export function useTouchTerminal(
       // A tap opens the keyboard; control touches returned early from touchstart.
       const target = e.target as HTMLElement | null;
       if (target?.closest("[data-ctl]")) return;
-      focusTerminal(sessionRef.current);
+      if (onTapRef.current) onTapRef.current();
+      else focusTerminal(sessionRef.current);
     };
 
     // Consume synthetic mouse events so coordinate-encoded ghost clicks cannot trigger agent menus.

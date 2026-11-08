@@ -122,8 +122,26 @@ it("lists the live description of each task and counts only the running ones", (
   renderTasks();
   expect(screen.getByText("Beta: gamma-worker")).toBeTruthy();
   expect(screen.getByText("npm test")).toBeTruthy();
-  expect(screen.getByText("local bash · Completed")).toBeTruthy();
+  expect(screen.getByText("Completed", { selector: ".sv-task-row-status" })).toBeTruthy();
   expect(screen.getByText("1", { selector: ".sv-chip-badge" })).toBeTruthy();
+});
+
+it("marks the running rows so they stand out from the finished ones", () => {
+  renderTasks();
+  const row = (text: string) => screen.getByText(text).closest(".sv-popover-row")!;
+  expect(row("Beta: gamma-worker").classList.contains("sv-task-row-running")).toBe(true);
+  expect(screen.getByText("Running", { selector: ".sv-task-row-status" })).toBeTruthy();
+  expect(row("npm test").classList.contains("sv-task-row-running")).toBe(false);
+});
+
+it("marks the chip as running only while a task is still running", () => {
+  const { rerender } = render(<TasksChip sessionId="s" tasks={tasks} busy={false} onStop={vi.fn()} onOpen={vi.fn()} onBackgroundAll={vi.fn()} />);
+  const chip = () => screen.getByRole("button", { name: /Tasks/ });
+  expect(chip().classList.contains("sv-tasks-running")).toBe(true);
+  rerender(<TasksChip sessionId="s" tasks={[tasks[1]]} busy={false} onStop={vi.fn()} onOpen={vi.fn()} onBackgroundAll={vi.fn()} />);
+  expect(chip().classList.contains("sv-tasks-running")).toBe(false);
+  rerender(<TasksChip sessionId="s" tasks={tasks} busy={false} disabled onStop={vi.fn()} onOpen={vi.fn()} onBackgroundAll={vi.fn()} />);
+  expect(chip().classList.contains("sv-tasks-running")).toBe(false);
 });
 
 it("opens the task behind a row, and Stop stops without opening", () => {
@@ -167,5 +185,5 @@ it("offers no Stop for a finished task, only its status", () => {
   renderTasks();
   expect(screen.getAllByRole("button", { name: "Stop" }).length).toBe(1);
   fireEvent.click(screen.getByText("npm test"));
-  expect(screen.getByText("local bash · Completed")).toBeTruthy();
+  expect(screen.getByText("Completed", { selector: ".sv-task-row-status" })).toBeTruthy();
 });

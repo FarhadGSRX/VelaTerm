@@ -1,5 +1,6 @@
 //! Backend command wrappers using Tauri IPC on desktop and WebSocket in browsers through the transport adapter.
 
+import type { WatchInfo } from "./info";
 import {
   invoke,
   isElectronShell,
@@ -166,6 +167,35 @@ export function agentLocateBin(agent: string): Promise<string | null> {
   return invoke<string | null>("agent_locate_bin", { agent });
 }
 
+/** One-click install command to type into the session shell, with the token its completion marker carries. */
+export interface AgentInstallRun {
+  /** Recommended command followed by the step that leaves the completion marker. */
+  command: string;
+  /** Token for agentInstallFinished; null when the backend could not add the marker step. */
+  token: string | null;
+}
+
+/**
+ * Builds the one-click install command for an agent. The shell leaves a completion marker once the command
+ * returns, so completion is never declared while the installer is still running. Null for unsupported kinds.
+ */
+export function agentInstallBegin(agent: string): Promise<AgentInstallRun | null> {
+  return invoke<AgentInstallRun | null>("agent_install_begin", { agent });
+}
+
+/** Whether the install started with this token has returned. A found marker is consumed. */
+export function agentInstallFinished(token: string): Promise<boolean> {
+  return invoke<boolean>("agent_install_finished", { token });
+}
+
+/**
+ * Runs the one-click install of an agent without a terminal interface on the host and resolves once it has
+ * exited successfully. Takes minutes for a download; rejects with a fixed code when it fails or does not apply.
+ */
+export function agentInstallRun(agent: string): Promise<void> {
+  return invoke<void>("agent_install_run", { agent });
+}
+
 /**
  * Asks an agent CLI to print the models it can run, normalized to bare identifiers.
  *
@@ -233,7 +263,8 @@ export function readAgentTranscript(
 export interface ChatEvent {
   /** Position in the list. Stable for a given transcript length; used as the React key. */
   index: number;
-  kind: "user" | "assistant" | "thinking" | "tool";
+  /** `wake`: a finished background task that started a turn of its own; `text` holds its summary. */
+  kind: "user" | "assistant" | "thinking" | "tool" | "command" | "wake";
   /** Message body. Absent on a tool row. */
   text?: string;
   /** Possibly empty ISO timestamp. */
@@ -280,8 +311,13 @@ export function exportSessionContext(
 
 /** One matching snippet from search.rs::SearchMatch. */
 export interface SearchMatch {
+  rowId?: string;
+  role?: string | null;
+  timestamp?: string | null;
   /** Transcript message index used as a scroll anchor; null for recordings. */
   messageIndex: number | null;
+  /** Byte offset of the message's first record in its transcript file, which locates it exactly. */
+  recordOffset?: number;
   /**
    * One-based match number within a transcript message or across the recording (the required findNext count).
    */
@@ -325,6 +361,29 @@ export function searchSessionContent(
   return invoke<SessionSearchHit[]>("search_session_content", { query, scope });
 }
 
+export interface ContentSearchPage {
+  jobId: string;
+  status: "pending" | "complete";
+  scannedSessions: number;
+  scannedBytes: number;
+  /** Sessions not brought up to date in time; their newest content may be missing from the results. */
+  pendingSessions?: number;
+  hits?: SessionSearchHit[];
+  totalSessions?: number;
+  totalMatches?: number;
+  nextCursor?: number | null;
+  previousCursor?: number | null;
+}
+export function startContentSearch(query: string, scope: SearchScope): Promise<ContentSearchPage> {
+  return invoke("search_content_start", { query, scope });
+}
+export function contentSearchPage(jobId: string, cursor?: number, before?: number): Promise<ContentSearchPage> {
+  return invoke("search_content_page", { jobId, cursor, before, limit: 10 });
+}
+export function cancelContentSearch(jobId: string): Promise<void> {
+  return invoke("search_content_cancel", { jobId });
+}
+
 /** Info-panel model/context/current-tool snapshot. */
 export interface AgentContextInfo {
   /** Actual model ID from the latest assistant row. */
@@ -344,6 +403,14 @@ export function agentContextInfo(sessionId: string): Promise<AgentContextInfo> {
   return invoke<AgentContextInfo>("agent_context_info", { sessionId });
 }
 
+/** One file the turn edited. Line counts sum every recorded edit to it; both are null when any edit was not countable. */
+export interface TurnChangedFile {
+  /** As the agent wrote it: absolute, or relative to the session folder. */
+  path: string;
+  additions: number | null;
+  deletions: number | null;
+}
+
 /** Backend-owned statistics for the latest root turn and its recorded session. Missing data is null. */
 export interface AgentTurnStats {
   /** Model the latest context reading came from, as the provider reports it. */
@@ -357,6 +424,8 @@ export interface AgentTurnStats {
   sessionTokens: number | null;
   toolsUsed: number | null;
   filesTouched: number | null;
+  /** The files behind `filesTouched`, sorted by path. */
+  changedFiles: TurnChangedFile[] | null;
   contextTokens: number | null;
   contextLimit: number | null;
   contextPercent: number | null;
@@ -437,8 +506,27 @@ export interface GrokUsage {
   onDemandCap: number | null;
 }
 
+/** One ZCode plan quota window. */
+export interface ZcodeWindow {
+  /** Row label such as `5h` or `7d`; tool-call quotas are prefixed `mcp`. */
+  label: string;
+  /** Used percentage, 0-100. */
+  usedPercent: number;
+  /** Unix seconds of the next reset. */
+  resetsAt: number | null;
+}
+
+/** GLM Coding Plan quota of the platform ZCode is signed in to. */
+export interface ZcodeUsage {
+  /** `zai` or `bigmodel`. */
+  platform: string;
+  /** Plan level as the server names it, such as `lite` or `pro`. */
+  level: string | null;
+  windows: ZcodeWindow[];
+}
+
 /** Which account a usage row comes from; matches the session kinds that publish a quota. */
-export type UsageProvider = "claude" | "codex" | "grok";
+export type UsageProvider = "claude" | "codex" | "grok" | "zcode";
 
 /** One provider's stored reading, kept with the reason the last attempt failed. */
 export interface UsageEntry<T> {
@@ -462,6 +550,8 @@ export interface UsageSnapshot {
   claude: UsageEntry<ClaudeUsage>;
   codex: UsageEntry<CodexUsage>;
   grok: UsageEntry<GrokUsage>;
+  /** Absent in snapshots from a backend that predates the ZCode quota. */
+  zcode?: UsageEntry<ZcodeUsage>;
   /** Whether automatic polling is on; the panel hides its countdown when it is off. */
   auto: boolean;
   /** Effective poll interval in seconds, used for the countdown to the next refresh. */
@@ -530,11 +620,6 @@ export interface WorktreeEntry {
 /** Lists all worktrees including main; non-repositories error so callers can use an empty list. */
 export function listWorktrees(repoRoot: string): Promise<WorktreeEntry[]> {
   return invoke<WorktreeEntry[]>("list_worktrees", { repoRoot });
-}
-
-/** Lists worktrees associated with a session and descendants for deletion confirmation. */
-export function worktreesInSubtree(sessionId: string): Promise<string[]> {
-  return invoke<string[]>("worktrees_in_subtree", { sessionId });
 }
 
 /** Removes a worktree directory; force allows removal with local changes. */
@@ -614,8 +699,13 @@ export function gitMergeApply(
 
 // Change viewing and diffs.
 
-/** One file changed relative to HEAD. */
+/** The Git area selected for a comparison. */
+export type GitChangeSide = "all" | "staged" | "unstaged" | "untracked" | "conflicted";
+
+/** One changed file with independent index and worktree facts. */
 export interface ChangedFile {
+  /** Original repository-relative path for a rename. */
+  originalPath?: string | null;
   /** Repository-root-relative path. */
   path: string;
   /** `"modified"` / `"added"` / `"deleted"` / `"untracked"` / `"renamed"`。 */
@@ -635,10 +725,18 @@ export interface ChangedFile {
   unstagedAdditions: number;
   unstagedDeletions: number;
   unstagedBinary: boolean;
+  /** For an unmerged path, which side did what. */
+  conflict?: GitConflictKind | null;
 }
+
+export type GitConflictKind =
+  | "both-modified" | "both-added" | "both-deleted"
+  | "added-by-us" | "added-by-them" | "deleted-by-us" | "deleted-by-them";
 
 /** Two sides of a file diff: HEAD versus worktree. */
 export interface FileDiff {
+  /** Text exceeds the viewer limit; this is not a binary file. */
+  tooLarge?: boolean;
   path: string;
   /** HEAD content, empty for added/untracked files. */
   original: string;
@@ -648,9 +746,26 @@ export interface FileDiff {
   binary: boolean;
 }
 
-/** Lists files changed from HEAD for View Changes. */
-export function gitChangedFiles(cwd: string): Promise<ChangedFile[]> {
-  return invoke<ChangedFile[]>("git_changed_files", { cwd });
+/** Changed files of a repository, capped by the backend. */
+export interface ChangedFileList {
+  files: ChangedFile[];
+  /** More changes exist than `files` holds; every line count is then zero. */
+  truncated: boolean;
+}
+
+/** Lists files changed from HEAD for View Changes and the Git panel. */
+export function gitChangedFiles(cwd: string): Promise<ChangedFileList> {
+  return invoke<ChangedFileList>("git_changed_files", { cwd });
+}
+
+/** Folder that floods a cut-off change list and could be added to `.gitignore`, if one does. */
+export function gitIgnoreSuggestion(cwd: string): Promise<string | null> {
+  return invoke<string | null>("git_ignore_suggestion", { cwd });
+}
+
+/** Adds the suggested folder to the repository's root `.gitignore`; false when it is already listed. */
+export function gitIgnoreFolder(cwd: string, folder: string): Promise<boolean> {
+  return invoke<boolean>("git_ignore_folder", { cwd, folder });
 }
 
 /** A repository found below a folder that is not itself a repository. */
@@ -667,22 +782,23 @@ export function gitDiscoverRepos(path: string): Promise<NestedRepo[]> {
 }
 
 /** Gets HEAD/worktree text for line-by-line View Changes diff. */
-export function gitFileDiff(cwd: string, path: string): Promise<FileDiff> {
-  return invoke<FileDiff>("git_file_diff", { cwd, path });
+export function gitFileDiff(cwd: string, path: string, side: GitChangeSide = "all"): Promise<FileDiff> {
+  return invoke<FileDiff>("git_file_diff", { cwd, path, side: side === "untracked" ? "unstaged" : side === "conflicted" ? "all" : side });
 }
 
 /** One commit for the group Info panel's recent history. */
 export interface CommitInfo {
+  /** Full identity; older servers may only provide the abbreviated hash. */
+  oid?: string;
   hash: string;
   subject: string;
+  message?: string;
   author: string;
   relative: string;
-  /** Full hash; the history graph joins commits on it. */
-  id: string;
-  /** Full parent hashes, first parent first; empty for a root commit. */
-  parents: string[];
-  /** Full ref names on this commit: "HEAD -> refs/heads/main", "refs/remotes/origin/main", "tag: refs/tags/v1". */
-  refs: string[];
+  /** Parent identities; empty for a root commit, two or more for a merge. Absent from older servers. */
+  parents?: string[];
+  /** Ref names pointing at the commit, such as `HEAD -> main`, `origin/main`, or `tag: v1`. */
+  refs?: string[];
 }
 
 /** Gets recent commits for cwd's repository; returns empty outside a repository or with no commits. */
@@ -711,29 +827,108 @@ export function gitDiscard(cwd: string, paths: string[]): Promise<void> {
 }
 
 /** Commits what is staged and returns the new commit. */
-export function gitCommit(cwd: string, message: string, amend = false): Promise<CommitInfo> {
-  return invoke<CommitInfo>("git_commit", { cwd, message, amend });
+export function gitCommit(cwd: string, message: string, amend = false, expectHead?: string | null): Promise<CommitInfo> {
+  return invoke<CommitInfo>("git_commit", { cwd, message, amend, expectHead: expectHead ?? null });
 }
 
-/**
- * Total commits reachable from HEAD, or from every branch, remote, and tag when `all` is set; zero
- * outside a repository or before the first commit.
- */
-export function gitCommitCount(cwd: string, all = false): Promise<number> {
-  return invoke<number>("git_commit_count", { cwd, all });
+/** How Pull integrates upstream commits: fast-forward only, rebase local commits, or merge. */
+export type GitPullMode = "ff-only" | "rebase" | "merge";
+
+/** Fetches from the default remote and prunes deleted remote branches. */
+export function gitFetch(cwd: string): Promise<void> {
+  return invoke<void>("git_fetch", { cwd });
 }
 
-/** One page of history in topological order, newest first; `all` covers every ref, not just HEAD. */
-export function gitLogPage(
-  cwd: string,
-  limit: number,
-  offset: number,
-  all = false,
-): Promise<CommitInfo[]> {
-  return invoke<CommitInfo[]>("git_log_page", { cwd, limit, offset, all });
+/** Integrates the upstream branch into the current one. */
+export function gitPull(cwd: string, mode: GitPullMode = "ff-only"): Promise<void> {
+  return invoke<void>("git_pull", { cwd, mode });
 }
 
-/** Files changed by one commit; merge commits return an empty list. */
+/** Pushes the current branch, publishing it with upstream tracking when it has none. `force` uses --force-with-lease. */
+export function gitPush(cwd: string, force = false): Promise<void> {
+  return invoke<void>("git_push", { cwd, force });
+}
+
+/** What the current branch committed since it split from a base branch. */
+export interface BranchCompare {
+  /** Ref compared against, such as `origin/main`. */
+  base: string;
+  /** Where the histories split; the left side of each file diff. */
+  mergeBase: string;
+  /** HEAD at comparison time; the right side of each file diff. */
+  head: string;
+  /** Commits on this branch since the split. */
+  ahead: number;
+  /** Commits on the base since the split. */
+  behind: number;
+  files: ChangedFile[];
+  /** Branches that can be chosen as the base. */
+  candidates: string[];
+}
+
+/** Compares HEAD with `base`, or the default base; null when there is nothing to compare with. */
+export function gitBranchCompare(cwd: string, base?: string | null): Promise<BranchCompare | null> {
+  return invoke<BranchCompare | null>("git_branch_compare", { cwd, base: base ?? null });
+}
+
+/** Files changed between two commits. */
+export function gitRangeFiles(cwd: string, from: string, to: string): Promise<ChangedFile[]> {
+  return invoke<ChangedFile[]>("git_range_files", { cwd, from, to });
+}
+
+/** Both sides of one file between two commits. */
+export function gitRangeFileDiff(cwd: string, from: string, to: string, path: string): Promise<FileDiff> {
+  return invoke<FileDiff>("git_range_file_diff", { cwd, from, to, path });
+}
+
+/** Whether the Git panel can open a pull request here, and why not when it cannot. */
+export interface GitPrProvider {
+  provider: "gitea" | null;
+  available: boolean;
+  reason: "ok" | "not_gitea" | "no_token" | "unreachable";
+}
+
+export function gitPrProvider(cwd: string): Promise<GitPrProvider> {
+  return invoke<GitPrProvider>("git_pr_provider", { cwd });
+}
+
+/** Result of opening a pull request: its URL (empty when the server gave none) and a message. */
+export interface PrOutcome {
+  url: string;
+  message: string;
+}
+
+/** Pushes the current branch and opens a pull request into `base`. */
+export function gitOpenPullRequest(cwd: string, base: string, title: string, body: string): Promise<PrOutcome> {
+  return invoke<PrOutcome>("git_open_pull_request", { cwd, base, title, body });
+}
+
+/** Change-notification lease for the repository containing `cwd`, keyed by its top level. */
+export function gitWatch(cwd: string): Promise<WatchInfo> {
+  return invoke<WatchInfo>("git_watch", { cwd });
+}
+
+/** Aborts the merge, rebase, cherry-pick, or revert that stopped on conflicts. */
+export function gitAbortOperation(cwd: string): Promise<void> {
+  return invoke<void>("git_abort_operation", { cwd });
+}
+
+/** Continues the stopped operation once its conflicts are resolved and staged. */
+export function gitContinueOperation(cwd: string): Promise<void> {
+  return invoke<void>("git_continue_operation", { cwd });
+}
+
+/** Total commits reachable from HEAD; zero outside a repository or before the first commit. */
+export function gitCommitCount(cwd: string): Promise<number> {
+  return invoke<number>("git_commit_count", { cwd });
+}
+
+/** One page of history, newest first. */
+export function gitLogPage(cwd: string, limit: number, offset: number, head?: string | null): Promise<CommitInfo[]> {
+  return invoke<CommitInfo[]>("git_log_page", { cwd, limit, offset, head });
+}
+
+/** Files changed against a commit's first parent, or the empty tree for its first commit. */
 export function gitCommitFiles(cwd: string, hash: string): Promise<ChangedFile[]> {
   return invoke<ChangedFile[]>("git_commit_files", { cwd, hash });
 }

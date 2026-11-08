@@ -4,11 +4,11 @@ import { ContextMenu } from "../../../components/ContextMenu";
 import { useT } from "../../../i18n";
 
 /** Keep the menu in the preview's top layer when an image is inside a modal dialog. */
-export function useImageMenu(src: string, onPreview?: () => void) {
+export function useImageMenu(src: string, onPreview?: () => void,original?:()=>Promise<string>) {
   const t = useT();
-  const [menu, setMenu] = useState<{ x: number; y: number; host: Element } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; host: Element;source:string } | null>(null);
   const [error, setError] = useState(false);
-  useEffect(() => { setMenu(null); setError(false); }, [src]);
+  useEffect(() => { setMenu(previous=>previous?.source===src ? previous : null); setError(false); }, [src]);
   useEffect(() => {
     if (!menu) return;
     const dismiss = (event: KeyboardEvent) => {
@@ -29,13 +29,13 @@ export function useImageMenu(src: string, onPreview?: () => void) {
     onContextMenu: (event: MouseEvent<HTMLImageElement>) => {
       event.preventDefault();
       event.stopPropagation();
-      setMenu({ x: event.clientX, y: event.clientY, host: event.currentTarget.closest("dialog") || document.body });
+      setMenu({ x: event.clientX, y: event.clientY, host: event.currentTarget.closest("dialog") || document.body,source:src });
     },
     imageMenu: <>
       {menu && createPortal(<ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
         ...(onPreview ? [{ label: t("chat.imageViewOriginal"), onClick: onPreview }] : []),
-        { label: t("chat.imageCopy"), onClick: () => run(async () => (await import("../../../platform/imageActions")).copyImage(src)) },
-        { label: t("chat.imageSave"), onClick: () => run(async () => (await import("../../../platform/imageActions")).saveImage(src)) },
+        { label: t("chat.imageCopy"), onClick: () => run(async () => (await import("../../../platform/imageActions")).copyImage(original ? await original() : src)) },
+        { label: t("chat.imageSave"), onClick: () => run(async () => (await import("../../../platform/imageActions")).saveImage(original ? await original() : src)) },
       ]} />, menu.host)}
       {error && <span role="alert">{t("chat.imageActionFailed")}</span>}
     </>,

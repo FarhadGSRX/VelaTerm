@@ -1,76 +1,95 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommitInfo } from "../../../ipc/commands";
-
-const mocks = vi.hoisted(() => ({ gitLogPage: vi.fn(), gitCommitFiles: vi.fn() }));
-vi.mock("../../../ipc/commands", () => mocks);
-
 import { CommitHistory } from "./CommitHistory";
 
-const commit = (id: string, subject: string, parents: string[] = []): CommitInfo => ({
-  hash: id.slice(0, 7),
-  id,
-  subject,
-  author: "a",
-  relative: "1 minute ago",
-  parents,
-  refs: [],
+const mocks = vi.hoisted(() => ({ log: vi.fn(), files: vi.fn(), open: vi.fn() }));
+vi.mock("../../../ipc/commands", () => ({ gitLogPage: mocks.log, gitCommitFiles: mocks.files }));
+vi.mock("../../../i18n", () => ({ useT: () => (key: string) => key }));
+vi.mock("../../../store/termStore", () => ({ useTermStore: (select: (s: unknown) => unknown) => select({ openChanges: mocks.open }) }));
+
+function commits(count: number): CommitInfo[] {
+  return Array.from({ length: count }, (_, i) => ({
+    oid: String(i + 1).padStart(40, "0"), hash: String(i + 1), subject: `Commit ${i + 1}`,
+    message: `Commit ${i + 1}\n\nComplete multiline body\nSecond line`, author: "Example", relative: "today",
+  }));
+}
+
+afterEach(cleanup);
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.files.mockResolvedValue([{ path: "example.txt", status: "modified", additions: 1, deletions: 0 }]);
 });
 
-afterEach(() => {
-  cleanup();
-  vi.clearAllMocks();
-});
-
-describe("CommitHistory refresh", () => {
-  it("refreshes in place: no loading flash, and an expanded commit stays open", async () => {
-    const older = commit("b".repeat(40), "older");
-    const newer = commit("a".repeat(40), "newer", [older.id]);
-    mocks.gitCommitFiles.mockResolvedValue([{ path: "a.ts", status: "modified", additions: 1, deletions: 0 }]);
-    mocks.gitLogPage.mockResolvedValue([newer, older]);
-
-    const props = { cwd: "/repo", total: 2, allBranches: false };
-    const view = render(<CommitHistory {...props} tick={0} />);
-    await screen.findByText("newer");
-    fireEvent.click(screen.getByText("older"));
-    await act(async () => {});
-    expect(document.querySelector(".git-commit-files")).not.toBeNull();
-
-    // The panel's poll: the same history comes back.
-    view.rerender(<CommitHistory {...props} tick={1} />);
-    expect(screen.queryByText("Loading…")).toBeNull();
-    expect(screen.getByText("newer")).toBeTruthy();
-    await act(async () => {});
-    expect(mocks.gitLogPage).toHaveBeenLastCalledWith("/repo", expect.any(Number), 0, false);
-    expect(document.querySelector(".git-commit-files")).not.toBeNull();
-
-    // A new commit lands on top: it appears, nothing blanks, and the open commit is still open.
-    const newest = commit("c".repeat(40), "newest", [newer.id]);
-    mocks.gitLogPage.mockResolvedValue([newest, newer, older]);
-    view.rerender(<CommitHistory {...props} total={3} tick={2} />);
-    expect(screen.queryByText("Loading…")).toBeNull();
-    await screen.findByText("newest");
-    expect(screen.getByText("older")).toBeTruthy();
-    expect(document.querySelector(".git-commit-files")).not.toBeNull();
+describe("CommitHistory", () => {
+  it("keeps rows and expansion during a HEAD refresh and includes the full message", async () => {
+    const rows = commits(1);
+    mocks.log.mockResolvedValueOnce(rows);
+    const view = render(<CommitHistory cwd="/repo" total={1} head="first" />);
+    await screen.findByText("Commit 1");
+    const button = view.container.querySelector<HTMLButtonElement>(".git-commit-row")!;
+    expect(button.title).toContain("Complete multiline body\nSecond line");
+    fireEvent.click(button);
+    await screen.findByText("example.txt");
+    let resolve!: (rows: CommitInfo[]) => void;
+    mocks.log.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    view.rerender(<CommitHistory cwd="/repo" total={1} head="amended" />);
+    expect(screen.getByText("example.txt")).toBeTruthy();
+    expect(view.container.querySelector(".git-commit-row")?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => { resolve(rows); });
+    expect(screen.getByText("example.txt")).toBeTruthy();
+    expect(mocks.files).toHaveBeenCalledTimes(1);
+    view.rerender(<CommitHistory cwd="/repo" total={1} head="amended" />);
+    expect(mocks.log).toHaveBeenCalledTimes(2);
   });
 
-  it("shows the full commit message on hover, not just the hash", async () => {
-    mocks.gitLogPage.mockResolvedValue([commit("e".repeat(40), "Merge branch 'fg-main' into feature")]);
-    render(<CommitHistory cwd="/repo" total={1} allBranches={false} tick={0} />);
-    const row = (await screen.findByText("Merge branch 'fg-main' into feature")).closest("button")!;
-    expect(row.title.split("\n")[0]).toBe("Merge branch 'fg-main' into feature");
-    expect(row.title).toContain("eeeeeee");
+  it("retains the loaded range and scroll anchor when a new commit is prepended", async () => {
+    const rows = commits(75);
+    const prepended = [{ ...commits(1)[0], oid: "a".repeat(40), hash: "new", subject: "New commit" }, ...rows];
+    mocks.log.mockImplementation(async (_cwd, limit, offset, head) => (head === "new" ? prepended : rows).slice(offset, offset + limit));
+    const view = render(<div data-git-scroll><CommitHistory cwd="/repo" total={75} head="old" /></div>);
+    await screen.findByText("Commit 30");
+    fireEvent.click(screen.getByText("git.loadMore"));
+    await screen.findByText("Commit 60");
+    fireEvent.click(screen.getByText("Commit 60"));
+    await screen.findByText("example.txt");
+    const parent = view.container.firstElementChild as HTMLElement;
+    parent.scrollTop = 600;
+    const rect = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 300, width: 300, height: bottom - top, x: 0, y: top, toJSON() {} });
+    parent.getBoundingClientRect = () => rect(0, 300);
+    const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const index = Array.from(parent.querySelectorAll("[data-commit-oid]")).indexOf(this);
+      return rect(index * 20 - parent.scrollTop, (index + 1) * 20 - parent.scrollTop);
+    });
+    view.rerender(<div data-git-scroll><CommitHistory cwd="/repo" total={76} head="new" /></div>);
+    await screen.findByText("New commit");
+    expect(view.container.querySelectorAll(".git-commit-item")).toHaveLength(61);
+    expect(screen.getByText("Commit 60")).toBeTruthy();
+    expect(screen.getByText("example.txt")).toBeTruthy();
+    expect(parent.scrollTop).toBe(620);
+    expect(new Set(Array.from(view.container.querySelectorAll<HTMLElement>("[data-commit-oid]")).map((row) => row.dataset.commitOid)).size).toBe(61);
+    geometry.mockRestore();
   });
 
-  it("starts over when the repository changes", async () => {
-    mocks.gitCommitFiles.mockResolvedValue([{ path: "a.ts", status: "modified", additions: 1, deletions: 0 }]);
-    mocks.gitLogPage.mockResolvedValue([commit("a".repeat(40), "first repo")]);
-    const view = render(<CommitHistory cwd="/one" total={1} allBranches={false} tick={0} />);
-    await screen.findByText("first repo");
+  it("ignores a late response from the previous repository", async () => {
+    let resolve!: (rows: CommitInfo[]) => void;
+    mocks.log.mockImplementationOnce(() => new Promise((done) => { resolve = done; })).mockResolvedValueOnce([{ ...commits(1)[0], subject: "Other repository" }]);
+    const view = render(<CommitHistory cwd="/old" total={1} head="old" />);
+    view.rerender(<CommitHistory cwd="/new" total={1} head="new" />);
+    await screen.findByText("Other repository");
+    await act(async () => { resolve(commits(1)); });
+    expect(screen.queryByText("Commit 1")).toBeNull();
+    expect(screen.getByText("Other repository")).toBeTruthy();
+  });
 
-    mocks.gitLogPage.mockResolvedValue([commit("d".repeat(40), "second repo")]);
-    view.rerender(<CommitHistory cwd="/two" total={1} allBranches={false} tick={0} />);
-    await screen.findByText("second repo");
-    expect(screen.queryByText("first repo")).toBeNull();
+  it("keeps readable history when a refresh fails", async () => {
+    mocks.log.mockResolvedValueOnce(commits(1)).mockRejectedValueOnce(new Error("Refresh unavailable"));
+    const view = render(<CommitHistory cwd="/repo" total={1} head="old" />);
+    await screen.findByText("Commit 1");
+    fireEvent.click(screen.getByText("Commit 1"));
+    await screen.findByText("example.txt");
+    view.rerender(<CommitHistory cwd="/repo" total={1} head="new" />);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("Refresh unavailable"));
+    expect(screen.getByText("example.txt")).toBeTruthy();
   });
 });

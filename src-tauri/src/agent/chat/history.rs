@@ -47,7 +47,8 @@ pub struct ChatEvent {
     /// Position in the returned list. Stable for a given transcript length, so the frontend uses it as the
     /// React key and as the anchor for "scroll to this message" from global search.
     pub index: usize,
-    /// `user`, `assistant`, `thinking`, `command`, or `tool`.
+    /// `user`, `assistant`, `thinking`, `command`, `tool`, or `wake` (a finished background task
+    /// that started a turn of its own).
     pub kind: &'static str,
     /// Message body. Empty for a tool row.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,6 +75,8 @@ pub struct ChatEvent {
     /// Provider id used only while rebuilding richer live rows; it is not part of the IPC contract.
     #[serde(skip)]
     native_id: Option<String>,
+    #[serde(skip)]
+    translation_ids: Vec<String>,
 }
 
 impl ChatEvent {
@@ -89,6 +92,7 @@ impl ChatEvent {
             is_error: false,
             pending: false,
             native_id: None,
+            translation_ids: Vec::new(),
             shell: None,
         }
     }
@@ -124,6 +128,8 @@ pub fn read(kind: SessionKind, agent_session_id: &str) -> Result<Vec<ChatEvent>,
         SessionKind::Pi | SessionKind::Omp => {
             pi_events(&resume::read_pi_transcript(kind, agent_session_id)?)
         }
+        // ZCode keeps messages and parts in its SQLite session store.
+        SessionKind::Zcode => crate::agent::zcode::history_events(agent_session_id)?,
         // Other agents keep their history in SQLite blobs or formats we do not parse. Use a fallback arm so a
         // newly added session kind compiles as unsupported rather than silently rendering an empty view.
         other => {
@@ -175,7 +181,7 @@ pub fn rewind_targets(
     })
 }
 
-fn claude_rewind_targets(content: &str) -> Vec<RewindTarget> {
+pub(crate) fn claude_rewind_targets(content: &str) -> Vec<RewindTarget> {
     let targets: Vec<RewindTarget> = content
         .lines()
         .filter_map(|line| {
@@ -301,13 +307,17 @@ fn codex_rewind_targets(content: &str) -> Vec<RewindTarget> {
 
 /// Fold parsed events into rows: pair each tool result with its call, and join adjacent same-kind messages.
 fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
+    fold_identified(events.into_iter().map(|event| (event,None)).collect())
+}
+
+fn fold_identified(events: Vec<(Event,Option<String>)>) -> Vec<ChatEvent> {
     let mut out: Vec<ChatEvent> = Vec::new();
     // Tool id -> index in `out` of the pending card waiting for that result.
     let mut pending: HashMap<String, usize> = HashMap::new();
 
-    for ev in events {
+    for (ev, identity) in events {
         match ev {
-            Event::User { text, ts } => push_message(&mut out, "user", text, ts),
+            Event::User { text, ts } => push_message(&mut out, "user", text, ts, identity),
             Event::Shell { id, command, output, exit_code, cancelled, truncated, ts } => {
                 let mut event = ChatEvent::message("user", format!("!{command}"), ts);
                 let context = super::shell::ShellContext {
@@ -319,11 +329,12 @@ fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
                     &context, context.status()));
                 out.push(event);
             }
-            Event::AssistantText { text, ts } => push_message(&mut out, "assistant", text, ts),
-            Event::Thinking { text, ts } => push_message(&mut out, "thinking", text, ts),
+            Event::AssistantText { text, ts } => push_message(&mut out, "assistant", text, ts, identity),
+            Event::Thinking { text, ts } => push_message(&mut out, "thinking", text, ts, None),
             // Each command answers a separate line someone typed, so two of them stay two rows even when
             // they arrive back to back.
             Event::Command { text, ts } => out.push(ChatEvent::message("command", text, ts)),
+            Event::Wake { summary, ts } => out.push(ChatEvent::message("wake", summary, ts)),
             Event::ToolUse {
                 id,
                 name,
@@ -344,6 +355,7 @@ fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
                     is_error: false,
                     pending: true,
                     native_id: id,
+                    translation_ids: Vec::new(),
                     shell: None,
                 });
             }
@@ -374,6 +386,7 @@ fn fold(events: Vec<Event>) -> Vec<ChatEvent> {
                     is_error,
                     pending: false,
                     native_id: id,
+                    translation_ids: Vec::new(),
                     shell: None,
                 });
             }
@@ -401,8 +414,12 @@ fn native_shell_pair(input: &str, output: &str) -> Option<(String, super::shell:
 }
 
 fn fold_claude(events: Vec<Event>) -> Vec<ChatEvent> {
+    fold_claude_shells(fold(events))
+}
+
+fn fold_claude_shells(events: Vec<ChatEvent>) -> Vec<ChatEvent> {
     let mut out: Vec<ChatEvent> = Vec::new();
-    for event in fold(events) {
+    for event in events {
         if let Some(previous) = out.last_mut() {
             if previous.kind == "user" && event.kind == "user" {
                 if let Some((text, context)) = native_shell_pair(
@@ -428,17 +445,20 @@ fn fold_claude(events: Vec<Event>) -> Vec<ChatEvent> {
 /// One turn commonly arrives as several content blocks; drawing each as its own bubble would break a single
 /// answer into fragments. A tool row in between ends the run, because text before and after a tool call are
 /// genuinely separate parts of the answer.
-fn push_message(out: &mut Vec<ChatEvent>, kind: &'static str, text: String, ts: Option<String>) {
+fn push_message(out: &mut Vec<ChatEvent>, kind: &'static str, text: String, ts: Option<String>, identity: Option<String>) {
     if let Some(last) = out.last_mut() {
         if kind != "user" && last.kind == kind {
             if let Some(prev) = last.text.as_mut() {
                 prev.push_str("\n\n");
                 prev.push_str(&text);
+                last.translation_ids.extend(identity);
                 return;
             }
         }
     }
-    out.push(ChatEvent::message(kind, text, ts));
+    let mut event=ChatEvent::message(kind,text,ts);
+    event.translation_ids.extend(identity);
+    out.push(event);
 }
 
 // ─────────────────────────── Replaying into a live conversation ───────────────────────────
@@ -461,6 +481,70 @@ struct CodexSubagentReplay {
 /// displayed page, so the ids do not shift when a client loads earlier history.
 fn replay_id(index: usize) -> String {
     format!("h-{index}")
+}
+
+/// Translation aliases use identities from the same recording that produces the replay rows.
+/// Codex's completed UserMessage id differs from its response-item id; pair those adjacent records
+/// before folding, so repeated text and merged assistant blocks never require a content lookup.
+pub fn translation_aliases(kind: SessionKind, agent_session_id: &str) -> Result<Vec<(String,String,Vec<String>,String)>,String> {
+    if !matches!(kind,SessionKind::Claude|SessionKind::Codex) {return Ok(Vec::new());}
+    type Aliases=Vec<(String,String,Vec<String>,String)>;
+    struct Cached { path:std::path::PathBuf, size:u64, modified:std::time::SystemTime, aliases:Aliases }
+    static CACHE:std::sync::OnceLock<std::sync::Mutex<HashMap<String,Cached>>>=std::sync::OnceLock::new();
+    let cache=CACHE.get_or_init(||std::sync::Mutex::new(HashMap::new()));
+    let key=format!("{}:{agent_session_id}",kind.as_str());
+    {
+        let saved=cache.lock().unwrap();
+        if let Some(value)=saved.get(&key) {
+            if let Ok(meta)=std::fs::metadata(&value.path) {
+                if meta.len()==value.size && meta.modified().ok()==Some(value.modified) {return Ok(value.aliases.clone());}
+            }
+        }
+    }
+    let path=if kind==SessionKind::Claude {
+        resume::find_claude_transcript(agent_session_id).ok_or("Claude transcript file not found")?
+    } else {resume::find_codex_rollout(agent_session_id).ok_or("Codex rollout file not found")?};
+    let before=std::fs::metadata(&path).ok().and_then(|m|m.modified().ok().map(|modified|(m.len(),modified)));
+    let aliases=if kind==SessionKind::Claude {
+        claude_translation_aliases(&resume::read_claude_transcript(agent_session_id)?)
+    } else {codex_translation_aliases(&resume::read_codex_rollout_chain(agent_session_id)?.1)};
+    if let Ok(meta)=std::fs::metadata(&path) {
+        if let Ok(modified)=meta.modified() {
+            if before!=Some((meta.len(),modified)) {return Ok(aliases);}
+            let mut saved=cache.lock().unwrap();
+            if saved.len()>=16 {saved.clear();}
+            saved.insert(key,Cached {path,size:meta.len(),modified,aliases:aliases.clone()});
+        }
+    }
+    Ok(aliases)
+}
+
+pub(crate) fn claude_translation_aliases(content: &str) -> Vec<(String,String,Vec<String>,String)> {
+    let events=crate::agent::export::claude_identified_events(content);
+    fold_claude_shells(fold_identified(events)).into_iter()
+        .filter(|event|event.shell.is_none() && !event.translation_ids.is_empty())
+        .map(|event|(replay_id(event.index),event.kind.to_string(),event.translation_ids,event.text.unwrap_or_default())).collect()
+}
+
+pub(crate) fn codex_translation_aliases(content: &str) -> Vec<(String,String,Vec<String>,String)> {
+    let mut events:Vec<(Event,Option<String>)>=Vec::new();
+    let mut pending_user:Option<usize>=None;
+    for line in content.lines() {
+        let Ok(value)=serde_json::from_str::<Value>(line) else {continue;};
+        if value["type"]=="event_msg" && value["payload"]["type"]=="item_completed" && value["payload"]["item"]["type"]=="UserMessage" {
+            if let Some(index)=pending_user.take() {
+                events[index].1=value["payload"]["item"]["id"].as_str().map(str::to_string);
+            }
+        }
+        for event in codex_events(line) {
+            let identity=if matches!(&event,Event::AssistantText { .. }) {value["payload"]["id"].as_str().map(str::to_string)} else {None};
+            if matches!(&event,Event::User { .. }) {pending_user=Some(events.len());}
+            events.push((event,identity));
+        }
+    }
+    fold_identified(events).into_iter().filter(codex_replay_event_visible)
+        .filter(|event|event.shell.is_none() && !event.translation_ids.is_empty())
+        .map(|event|(replay_id(event.index),event.kind.to_string(),event.translation_ids,event.text.unwrap_or_default())).collect()
 }
 
 /// Read a recording back as timeline rows, for a conversation the agent is resuming.
@@ -492,8 +576,10 @@ fn replay_recorded(kind: SessionKind, agent_session_id: &str) -> Result<Vec<Chat
     if kind == SessionKind::Opencode {
         // OpenCode's store already holds addressable parts, and its subagents are whole sessions of their
         // own; the row ids come from the store so a later live event can update the same rows.
-        let messages = crate::agent::opencode_store::messages(agent_session_id)?;
-        let children = |id: &str| crate::agent::opencode_store::messages(id).ok();
+        let mut remaining=crate::agent::history_store::limits::PAGE_BYTES;
+        let messages = crate::agent::opencode_store::messages_bounded(agent_session_id,&mut remaining)?;
+        let remaining=std::cell::RefCell::new(remaining);
+        let children = |id: &str| crate::agent::opencode_store::messages_bounded(id,&mut remaining.borrow_mut()).ok();
         let mut rows = super::opencode_timeline::rows(&messages, &children);
         attach_recorded_turn_durations(&mut rows);
         return Ok(rows);
@@ -502,8 +588,19 @@ fn replay_recorded(kind: SessionKind, agent_session_id: &str) -> Result<Vec<Chat
         let path = resume::find_claude_transcript(agent_session_id)
             .ok_or("Claude transcript file not found")?;
         let content = resume::read_claude_transcript(agent_session_id)?;
-        let mut read_child = claude_subagent_reader(path.with_extension("").join("subagents"));
+        let mut read_child = claude_subagent_reader(path.with_extension("").join("subagents"),crate::agent::history_store::limits::PAGE_BYTES.saturating_sub(content.len()));
         return Ok(claude_replay(&content, &mut read_child, &mut HashSet::new(), 0));
+    }
+    if kind == SessionKind::Zcode {
+        // A recorded call without a result belongs to a process that is gone: it was interrupted or still
+        // waiting for approval, and can no longer finish.
+        let mut rows = to_rows(read(kind, agent_session_id)?);
+        for row in &mut rows {
+            if let ChatRow::Tool { status, .. } = row {
+                if *status == "running" { *status = "canceled"; }
+            }
+        }
+        return Ok(rows);
     }
     if kind != SessionKind::Codex {
         return Ok(to_rows(read(kind, agent_session_id)?));
@@ -513,7 +610,13 @@ fn replay_recorded(kind: SessionKind, agent_session_id: &str) -> Result<Vec<Chat
         .into_iter()
         .filter(codex_replay_event_visible)
         .collect();
-    let mut read_thread = |id: &str| resume::read_codex_rollout_chain(id).map(|(_, value)| value);
+    let mut remaining=crate::agent::history_store::limits::PAGE_BYTES.saturating_sub(content.len());
+    let mut read_thread = |id: &str| {
+        if remaining==0 {return Err(crate::agent::history_store::compat::UPGRADE.into());}
+        let (_,value)=resume::read_codex_rollout_chain(id)?;
+        if value.len()>remaining {return Err(crate::agent::history_store::compat::UPGRADE.into());}
+        remaining-=value.len();Ok(value)
+    };
     let subagents = codex_subagent_replays(&content, &mut read_thread);
     Ok(to_rows_with_subagents(events, &subagents))
 }
@@ -529,7 +632,7 @@ pub fn replay_claude_subagent(agent_session_id: &str, agent_id: &str) -> Result<
 }
 
 fn claude_subagent_rows(directory: std::path::PathBuf, agent_id: &str) -> Result<Vec<ChatRow>, String> {
-    let mut read_child = claude_subagent_reader(directory);
+    let mut read_child = claude_subagent_reader(directory,crate::agent::history_store::limits::PAGE_BYTES);
     let chain = claude_child_chain(&read_child(agent_id)?);
     let mut ancestors = HashSet::from([agent_id.to_string()]);
     let mut rows = claude_replay(&chain, &mut read_child, &mut ancestors, 1);
@@ -538,14 +641,18 @@ fn claude_subagent_rows(directory: std::path::PathBuf, agent_id: &str) -> Result
 }
 
 /// Reads a subagent recording by its agent id from the parent's `subagents` directory.
-fn claude_subagent_reader(directory: std::path::PathBuf) -> impl FnMut(&str) -> Result<String, String> {
+fn claude_subagent_reader(directory: std::path::PathBuf,mut remaining:usize) -> impl FnMut(&str) -> Result<String, String> {
     move |id| {
         // Only provider identifiers are accepted; recording content cannot select arbitrary paths.
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
             return Err("Invalid Claude subagent identifier".to_string());
         }
-        std::fs::read_to_string(directory.join(format!("agent-{id}.jsonl")))
-            .map_err(|_| "The subagent recording is unavailable".to_string())
+        let path=directory.join(format!("agent-{id}.jsonl"));
+        let bytes=std::fs::metadata(&path).map_err(|_|"The subagent recording is unavailable")?.len();
+        if bytes>remaining as u64 {return Err(crate::agent::history_store::compat::UPGRADE.into());}
+        let content=crate::agent::history_store::compat::read_path(&path)?;
+        if content.len()>remaining {return Err(crate::agent::history_store::compat::UPGRADE.into());}
+        remaining-=content.len();Ok(content)
     }
 }
 
@@ -707,7 +814,8 @@ fn scope_child_rows(rows: &mut [ChatRow], agent_id: &str) {
         let id = match row {
             ChatRow::User { id, .. } | ChatRow::Assistant { id, .. } | ChatRow::Reasoning { id, .. }
             | ChatRow::Tool { id, .. } | ChatRow::Error { id, .. } | ChatRow::Command { id, .. }
-            | ChatRow::Shell { id, .. } | ChatRow::Notice { id, .. } | ChatRow::Compaction { id, .. } => id,
+            | ChatRow::Shell { id, .. } | ChatRow::Notice { id, .. } | ChatRow::Compaction { id, .. }
+            | ChatRow::Wake { id, .. } => id,
         };
         *id = format!("child-{agent_id}-{id}");
         if let ChatRow::Tool { children, .. } = row { scope_child_rows(children, agent_id); }
@@ -744,7 +852,8 @@ fn attach_recorded_turn_durations(rows: &mut [ChatRow]) {
 
     for (index, row) in rows.iter().enumerate() {
         match row {
-            ChatRow::User { at, .. } => {
+            // A wake-up opens a turn just as a prompt does.
+            ChatRow::User { at, .. } | ChatRow::Wake { at, .. } => {
                 if let (Some(started), Some((answer_index, completed))) = (started_at, last_answer) {
                     if completed >= started {
                         durations.push((answer_index, (completed - started) as u64));
@@ -1022,7 +1131,7 @@ fn recorded_text(value: Option<&Value>) -> String {
     }
 }
 
-fn recorded_codex_item_row(item: &Value, timestamp: Option<&str>) -> Option<ChatRow> {
+pub(crate) fn recorded_codex_item_row(item: &Value, timestamp: Option<&str>) -> Option<ChatRow> {
     let id = value_string(item, &["id"])?.to_string();
     let status = recorded_tool_status(item);
     match normalized_item_type(item).as_str() {
@@ -1169,6 +1278,7 @@ fn to_row(mut ev: ChatEvent, subagent: Option<CodexSubagentReplay>) -> ChatRow {
             streaming: false,
         },
         "command" => ChatRow::Command { id, text: ev.text.unwrap_or_default() },
+        "wake" => ChatRow::Wake { id, summary: ev.text.unwrap_or_default(), at },
         // A tool call whose result never arrived stays running: the recording ends mid-call, which is
         // exactly what an interrupted session looks like.
         "tool" => match subagent {
@@ -1225,6 +1335,32 @@ mod tests {
 
     fn claude(lines: &[&str]) -> Vec<ChatEvent> {
         fold(claude_events(&lines.join("\n")))
+    }
+
+    #[test]
+    fn claude_translation_aliases_use_live_block_indexes_and_replay_rows() {
+        let content=[
+            serde_json::json!({"type":"user","uuid":"user-one","message":{"content":"Same"}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"thinking","thinking":""}]}}),
+            serde_json::json!({"type":"assistant","isSidechain":true,"message":{"id":"answer","content":[{"type":"text","text":"Child"}]}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"tool_use","id":"tool","name":"Read","input":{}}]}}),
+            serde_json::json!({"type":"user","uuid":"tool-result","message":{"content":[{"type":"tool_result","tool_use_id":"tool","content":"done"}]}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"text","text":" First\n"}]}}),
+            serde_json::json!({"type":"assistant","message":{"id":"answer","content":[{"type":"text","text":"Second"}]}}),
+            serde_json::json!({"type":"user","uuid":"user-two","message":{"content":"Same"}}),
+        ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        let aliases=claude_translation_aliases(&content);
+        assert_eq!(aliases,vec![
+            ("h-0".into(),"user".into(),vec!["user-one".into()],"Same".into()),
+            ("h-2".into(),"assistant".into(),vec!["answer:2".into(),"answer:3".into()],"First\n\nSecond".into()),
+            ("h-3".into(),"user".into(),vec!["user-two".into()],"Same".into()),
+        ]);
+        let rows=claude_replay(&content,&mut |_|Err("No subagent".into()),&mut HashSet::new(),0);
+        for (id,kind,_,text) in aliases {
+            let row=rows.iter().find(|row|row.id()==id).unwrap();
+            let value=serde_json::to_value(row).unwrap();
+            assert_eq!(value["kind"],kind);assert_eq!(value["text"],text);
+        }
     }
 
     fn claude_task_record(tool: &str, agent: &str) -> String {
@@ -1304,9 +1440,9 @@ mod tests {
             r#"{"type":"user","isSidechain":true,"message":{"content":[{"type":"tool_result","tool_use_id":"read","content":"file contents"}]}}"#.to_string(),
             claude_task_record("nested-tool", "nested"),
         ].join("\n");
-        std::fs::write(dir.join("agent-child.jsonl"), child).unwrap();
+        std::fs::write(dir.join("agent-child.jsonl"), format!("{child}\n")).unwrap();
         std::fs::write(dir.join("agent-nested.jsonl"),
-            r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"nested answer"}]}}"#).unwrap();
+            format!("{}\n", r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"nested answer"}]}}"#)).unwrap();
 
         let rows = claude_subagent_rows(dir.clone(), "child").unwrap();
         assert!(matches!(&rows[0], ChatRow::User { text, .. } if text == "Inspect files"));
@@ -1635,6 +1771,28 @@ mod tests {
         );
         assert_eq!(targets[0].text, "/config theme=dark");
         assert_eq!(targets[1].text, "inspect");
+    }
+
+    /// A notification recorded as a message of its own opened a turn; one queued while the agent was busy
+    /// did not. Only the first becomes a wake row, and it splits the replies the way the turns ran.
+    #[test]
+    fn task_notification_that_opened_a_turn_becomes_a_wake_row() {
+        let content = [
+            serde_json::json!({"type":"user","uuid":"u-real","timestamp":"2026-10-17T13:30:00Z","message":{"content":"watch CI"}}),
+            serde_json::json!({"type":"assistant","timestamp":"2026-10-17T13:31:00Z","message":{"id":"m1","content":[{"type":"text","text":"Watching."}]}}),
+            serde_json::json!({"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>\n<summary>queued</summary>\n</task-notification>"}}),
+            serde_json::json!({"type":"user","uuid":"u-task","timestamp":"2026-10-17T14:01:00Z","message":{"content":"<task-notification>\n<task-id>b1</task-id>\n<status>failed</status>\n<summary>Background command \"Watch CI\" failed with exit code 1</summary>\n</task-notification>"}}),
+            serde_json::json!({"type":"assistant","timestamp":"2026-10-17T14:05:00Z","message":{"id":"m2","content":[{"type":"text","text":"CI failed."}]}}),
+        ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        let rows = claude_replay(&content, &mut |_| Err("No subagent".into()), &mut HashSet::new(), 0);
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[1], ChatRow::Assistant { text, duration_ms: Some(60_000), .. } if text == "Watching."));
+        assert!(matches!(&rows[2], ChatRow::Wake { summary, at: Some(_), .. }
+            if summary == "Background command \"Watch CI\" failed with exit code 1"));
+        assert!(matches!(&rows[3], ChatRow::Assistant { text, duration_ms: Some(240_000), .. } if text == "CI failed."));
+        // The notification is no rewind target: nobody typed it.
+        let targets = claude_rewind_targets(&content);
+        assert_eq!(targets.iter().map(|target| target.message_id.as_str()).collect::<Vec<_>>(), ["u-real"]);
     }
 
     #[test]

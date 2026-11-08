@@ -21,6 +21,7 @@ export function MobileTerminal({
   cwd,
   onImages,
   imgError,
+  onTap,
 }: {
   session: Session;
   cwd?: string;
@@ -28,6 +29,8 @@ export function MobileTerminal({
   onImages: (files: File[]) => void;
   /** Image-upload error managed by the parent and cleared after five seconds; empty means hidden. */
   imgError?: string | null;
+  /** Replaces the default tap action of focusing the terminal for keystroke input. */
+  onTap?: () => void;
 }) {
   const t = useT();
   const { containerRef, starting, sizeMode, ptyDims, takeoverSize } = usePtySession(
@@ -38,7 +41,7 @@ export function MobileTerminal({
 
   // Touch layer: swipe to scroll, tap for the keyboard, long-press to select, and suppress synthetic mouse events.
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const { overlay, copy, cancel } = useTouchTerminal(wrapRef, session.id);
+  const { overlay, copy, cancel } = useTouchTerminal(wrapRef, session.id, onTap);
 
   return (
     <div
@@ -150,6 +153,8 @@ export function MobileTerminal({
                                 ? "Grok Build"
                               : session.kind === "zoo"
                                 ? "Zoo Code"
+                              : session.kind === "zcode"
+                                ? "ZCode"
                             : "Claude",
           )}
         </div>
