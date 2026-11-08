@@ -1145,8 +1145,6 @@ interface TermStore {
   shells: ShellOption[];
   /** Detects available shells and caches them in `shells`; on failure the list is left as is. */
   loadShells: () => Promise<void>;
-  /** Interface monospace font, or `null` for the default stack. */
-  uiFontFamily: string | null;
   /** Interface font size in pixels, or `null` to follow density. */
   uiFontSize: number | null;
   /** Terminal monospace font, applied live to all terminals. */
@@ -1823,7 +1821,6 @@ function persistAndApplyVisual(getState: () => TermStore) {
     maxLiveTabs: s.maxLiveTabs,
     defaultShell: s.defaultShell,
     agentShell: s.agentShell,
-    uiFontFamily: s.uiFontFamily,
     uiFontSize: s.uiFontSize,
     termFontFamily: s.termFontFamily,
     termFontSize: s.termFontSize,
@@ -5088,10 +5085,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
     listShells()
       .then((shells) => set({ shells }))
       .catch(() => {}),
-  setUiFontFamily: (v) => {
-    set({ uiFontFamily: v && v.trim() ? v.trim() : null });
-    persistAndApplyVisual(get);
-  },
   setUiFontSize: (v) => {
     set({
       uiFontSize: v == null ? null : Math.min(20, normalizeTextSize(v)),

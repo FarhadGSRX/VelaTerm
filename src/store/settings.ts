@@ -162,8 +162,6 @@ export interface PersistedSettings {
    * Windows PowerShell on Windows. Kept separate from `defaultShell` so a Git Bash terminal and a PowerShell 7
    * agent can coexist. WSL values are ignored here: agent hooks do not cross the WSL boundary. */
   agentShell: string;
-  /** Primary UI monospace font; null uses the default JetBrains Mono stack. */
-  uiFontFamily: string | null;
   /** UI font size in pixels; null follows density without an inline `--ui-fs`. */
   uiFontSize: number | null;
   /** Primary terminal monospace font; null uses the default stack. */
@@ -295,7 +293,6 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   maxLiveTabs: DEFAULT_MAX_LIVE_TABS,
   defaultShell: "",
   agentShell: "",
-  uiFontFamily: null,
   uiFontSize: null,
   termFontFamily: null,
   termFontSize: DEFAULT_TERMINAL_FONT_SIZE,

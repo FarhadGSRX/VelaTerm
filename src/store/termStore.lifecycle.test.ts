@@ -206,6 +206,8 @@ describe("following a peer's layout", () => {
         ephemeralSessions: {},
         docTabs: {},
         browserTabs: {},
+        stickyTabId: null,
+        stickySize: 35,
       },
       left: {
         selection: [],

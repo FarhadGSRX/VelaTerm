@@ -32,7 +32,7 @@ import { focusTerminal } from "../../terminal/registry";
 import { focusComposer } from "../CenterPane/session/composerFocus";
 import { useGitBranch, useLinkedWorktrees } from "../../hooks/useGitBranch";
 import { stripControlChars, useCtrlCharGuard } from "../../hooks/textInputGuards";
-import { placeProject, setProjectCollection } from "../../store/projectCollections";
+import { placeProject } from "../../store/projectCollections";
 import { arrangeProjectsInCollections, sectionEntries } from "./projectCollectionLayout";
 import {
   LIVE_AGENTS,
@@ -53,7 +53,7 @@ import {
 } from "./systemCollections";
 import { collectionDialogUrl } from "./collectionNavigation";
 import { newGroupDialogUrl } from "./groupNavigation";
-import { hasProjectDrag, orderBetween, PROJECT_DRAG_MIME, resolveProjectDrop, resolveProjectPlacement } from "./projectCollectionDrop";
+import { hasProjectDrag, orderBetween, PROJECT_DRAG_MIME, resolveProjectPlacement } from "./projectCollectionDrop";
 import {
   gatherByWorktree,
   normalizeWorktreePath,
@@ -1152,13 +1152,15 @@ export function ProjectTree(h: TreeHandlers) {
 
   // A project row's depth is its collection indent, and walkChildren starts its groups and sessions one level
   // below that, so a project nested in a collection is the collection's child. Only a session can be a leaf.
+  // A Terminals/Agents list header sits at the top level and its running sessions one level below it.
   const navRows = useMemo<KeyNavRow[]>(
     () =>
-      rows.map((r) => ({
-        depth: r.kind === "project" ? r.indent : r.depth,
-        expandable: r.kind === "session" ? r.hasKids : true,
-        expanded: r.expanded,
-      })),
+      rows.map((r): KeyNavRow => {
+        if (r.kind === "project") return { depth: r.indent, expandable: true, expanded: r.expanded };
+        if (r.kind === "liveSession") return { depth: 1, expandable: false, expanded: false };
+        if (r.kind === "live") return { depth: 0, expandable: true, expanded: r.expanded };
+        return { depth: r.depth, expandable: r.kind === "session" ? r.hasKids : true, expanded: r.expanded };
+      }),
     [rows],
   );
 
@@ -1197,7 +1199,19 @@ export function ProjectTree(h: TreeHandlers) {
       if (filtering) return;
       if (row.kind === "session") toggleSessionCollapsed(row.id);
       else if (row.kind === "group") toggleNodeCollapsed("group", row.id, row.group.collapsed);
-      else toggleNodeCollapsed("project", row.id, row.project.collapsed);
+      else if (row.kind === "project") toggleNodeCollapsed("project", row.id, row.project.collapsed);
+      else if (row.kind === "live" || row.kind === "worktree") setWtNodeCollapsed(row.id, row.expanded);
+      return;
+    }
+    // Runtime list headers and worktree levels are display-only: Enter toggles them, as a click does. A
+    // running session in a list opens without touching the tree selection, as its click does.
+    if (row.kind === "live" || row.kind === "worktree") {
+      if (!filtering) setWtNodeCollapsed(row.id, row.expanded);
+      return;
+    }
+    if (row.kind === "liveSession") {
+      openSession(row.session.id);
+      focusSessionInput(row.session.id);
       return;
     }
     activateNode({ id: row.id, kind: row.kind }, row.kind === "session", false);

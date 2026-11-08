@@ -24,7 +24,6 @@ const visual = (overrides: Partial<VisualSettings>): VisualSettings => ({
   paneStyle: "flush",
   dividerStyle: "subtle",
   navLayout: "tree",
-  uiFontFamily: null,
   uiFontSize: null,
   chatFontFamily: null,
   chatFontSize: 13.5,

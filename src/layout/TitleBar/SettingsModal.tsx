@@ -631,9 +631,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                     onChange={setNavLayout}
                   />
                 </Field>
-                <Field label={t("settings.uiFont")}>
-                  <FontSelect fonts={fonts} value={uiFontFamily} onChange={setUiFontFamily} label={t("settings.uiFont")} proportional />
-                </Field>
                 <Field label={t("settings.uiFontSize")}>
                   <FontSizeStepper
                     value={uiFontSize}

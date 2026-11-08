@@ -77,8 +77,6 @@ const rectToStyle = (r: Rect): React.CSSProperties => ({
   height: `${r.height}%`,
 });
 
-const FULL: React.CSSProperties = { left: 0, top: 0, width: "100%", height: "100%" };
-
 const FULL_RECT: Rect = { left: 0, top: 0, width: 100, height: 100 };
 
 /** Where a sidebar session drag would land: a pane and zone, or the whole stage (paneId null) for a tiled or
