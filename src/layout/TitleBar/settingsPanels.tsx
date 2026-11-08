@@ -4,7 +4,6 @@
 
 import { useEffect, useState } from "react";
 import { normalizeArgDashes } from "../../args";
-import Select from "../../components/Select";
 import AgentSelect from "../../components/AgentSelect";
 import {
   LaunchLoadState,
@@ -42,9 +41,9 @@ import {
 import { env } from "../../platform";
 import { useTermStore } from "../../store/termStore";
 import { defaultEngineFor } from "../../store/settings";
-import { supportsChatEngine, type SessionKind } from "../../types";
-import { kindIconEl } from "../sessionViewers/sessionMeta";
+import { hasTerminalInterface, supportsChatEngine, type SessionKind } from "../../types";
 import { Field, Seg, SectionTitle } from "./settingsParts";
+import { AgentPresetsSection } from "./AgentPresetsSection";
 
 /** i18n label keys for actions with configurable shortcuts. */
 const SC_LABEL: Record<ShortcutAction, I18nKey> = {
@@ -57,6 +56,7 @@ const SC_LABEL: Record<ShortcutAction, I18nKey> = {
   splitDown: "settings.scSplitDown",
   search: "settings.scSearch",
   globalSearch: "settings.scGlobalSearch",
+  copyTerminal: "settings.scCopyTerminal",
   selectAllTerminal: "settings.scSelectAllTerminal",
   saveDoc: "settings.scSaveDoc",
   focusSidebar: "settings.scFocusSidebar",
@@ -184,64 +184,30 @@ export function ShortcutsPanel() {
   const actions = SHORTCUT_ACTIONS.filter((a) => a !== "newBrowserTab" || isTauri || env.isElectron);
 
   return (
-    <>
-      <SectionTitle>{t("settings.catShortcuts")}</SectionTitle>
-      {actions.map((a) => (
-        <ShortcutRow
-          key={a}
-          label={t(SC_LABEL[a])}
-          combo={eff(a)}
-          recording={recording === a}
-          onStart={() => {
-            setErr(null);
-            setRecording(a);
-          }}
-          onCancel={() => setRecording(null)}
-          onCapture={(c) => capture(a, c)}
-        />
-      ))}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginTop: 14,
-        }}
-      >
-        <span
-          style={{
-            flex: 1,
-            fontSize: 11,
-            lineHeight: 1.5,
-            color: err ? "#e5484d" : "var(--text-dim)",
-          }}
-        >
-          {err ?? t("settings.scHint")}
-        </span>
-        <button
-          onClick={() => {
-            setErr(null);
-            setRecording(null);
-            resetShortcuts();
-            if (shot && shot.shortcut !== shot.defaultShortcut) applyShot(shot.defaultShortcut);
-          }}
-          style={{
-            flex: "none",
-            padding: "5px 14px",
-            fontSize: 11.5,
-            borderRadius: 5,
-            border: "1px solid var(--border)",
-            background: "var(--bg-active)",
-            color: "var(--text)",
-            cursor: "pointer",
-          }}
-        >
-          {t("settings.scReset")}
-        </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div>
+        <SectionTitle>{t("settings.catShortcuts")}</SectionTitle>
+        <div style={{ marginBottom: 10, fontSize: 11, lineHeight: 1.5, color: "var(--text-dim)" }}>
+          {t("settings.scHint")}
+        </div>
+        {actions.map((a) => (
+          <ShortcutRow
+            key={a}
+            label={t(SC_LABEL[a])}
+            combo={eff(a)}
+            recording={recording === a}
+            onStart={() => {
+              setErr(null);
+              setRecording(a);
+            }}
+            onCancel={() => setRecording(null)}
+            onCapture={(c) => capture(a, c)}
+          />
+        ))}
+        {err && <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: "#e5484d" }}>{err}</div>}
       </div>
       {shot?.supported && (
-        <>
+        <div>
           <SectionTitle>{t("settings.scScreenshotSection")}</SectionTitle>
           <ShortcutRow
             label={t("settings.scScreenshot")}
@@ -268,9 +234,23 @@ export function ShortcutsPanel() {
           >
             {shotErr ?? (shot.error ? t("settings.scInUse") : t("settings.scScreenshotHint"))}
           </div>
-        </>
+        </div>
       )}
-    </>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          className="vlx-btn"
+          onClick={() => {
+            setErr(null);
+            setRecording(null);
+            resetShortcuts();
+            if (shot && shot.shortcut !== shot.defaultShortcut) applyShot(shot.defaultShortcut);
+          }}
+        >
+          {t("settings.scReset")}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -284,7 +264,7 @@ const AGENT_DEFAULT_KINDS: {
   kind: SessionKind;
   label: string;
   yolo: string;
-  permVia: "flag" | "env" | "none" | "inverse";
+  permVia: "flag" | "env" | "none" | "inverse" | "answer";
 }[] = [
   { kind: "claude", label: "Claude", yolo: "--dangerously-skip-permissions", permVia: "flag" },
   { kind: "codex", label: "Codex", yolo: "--dangerously-bypass-approvals-and-sandbox", permVia: "flag" },
@@ -307,6 +287,10 @@ const AGENT_DEFAULT_KINDS: {
   { kind: "grok", label: "Grok Build", yolo: "--always-approve", permVia: "flag" },
   // Zoo auto-approves natively; VelaTerm injects --require-approval in default mode and no skip flag.
   { kind: "zoo", label: "Zoo Code", yolo: "", permVia: "inverse" },
+  // DeepSeek Harness and ZCode run only in the conversation view, where YOLO means the view approves their
+  // requests (ZCode is also sent its own yolo mode with every message).
+  { kind: "zcode", label: "ZCode", yolo: "", permVia: "answer" },
+  { kind: "deepseek", label: "DeepSeek", yolo: "", permVia: "answer" },
 ];
 
 /** Multiline default-arguments field with a label above a full-width textarea. Edits remain local until
@@ -469,21 +453,13 @@ export function ReferenceContextPanel() {
           {launch.state === "ready" && summarySpec && (
             <>
               <Field label={t("settings.referSummaryAgent")}>
-                <Select<SessionKind>
+                <AgentSelect
                   value={referSummary.agent}
-                  onChange={(agent) => setReferSummary({ agent, model: "", effort: "" })}
-                  options={summaryOptions.map((option) => ({
-                    value: option.id as SessionKind,
-                    label: option.label,
-                    icon: (
-                      <span style={{ display: "inline-flex", flex: "none" }}>
-                        {kindIconEl(option.id as SessionKind, 15)}
-                      </span>
-                    ),
-                  }))}
+                  onChange={(agent) => { if (agent) setReferSummary({ agent, model: "", effort: "" }); }}
+                  options={summaryOptions.map((option) => ({ id: option.id as SessionKind, label: option.label }))}
                   width={220}
                   align="right"
-                  menuPortal
+                  ariaLabel={t("settings.referSummaryAgent")}
                 />
               </Field>
               <div style={{ display: "grid", gap: 12, paddingTop: 2 }}>
@@ -512,7 +488,7 @@ export function AgentsPanel() {
   const [selKind, setSelKind] = useState<SessionKind>("claude");
   const meta = AGENT_DEFAULT_KINDS.find((a) => a.kind === selKind);
   const supportsYolo =
-    !!meta?.yolo || meta?.permVia === "env" || meta?.permVia === "inverse";
+    !!meta?.yolo || meta?.permVia === "env" || meta?.permVia === "inverse" || meta?.permVia === "answer";
   const cfg = agentDefaults[selKind] ?? {};
   const skip = ["skip", "bypassPermissions", "full-access"].includes(cfg.permissionMode ?? "");
   const isEnvPerm = meta?.permVia === "env";
@@ -589,12 +565,14 @@ export function AgentsPanel() {
         >
           {isEnvPerm
             ? t("settings.permViaEnvHint")
-            : t("settings.yoloHint", meta.yolo)}
+            : meta.permVia === "answer"
+              ? t("settings.permViaAnswerHint")
+              : t("settings.yoloHint", meta.yolo)}
         </div>
       )}
 
       {/* Only agents the chat engine can drive have two views; everything else always runs its own terminal. */}
-      {supportsChatEngine(selKind) && (
+      {supportsChatEngine(selKind) && hasTerminalInterface(selKind) && (
         <>
           <Field label={t("settings.agentDefaultView")}>
             <Seg<"chat" | "tui">
@@ -617,6 +595,7 @@ export function AgentsPanel() {
       >
         {t("settings.agentArgsHint")}
       </div>
+      <AgentPresetsSection />
     </>
   );
 }

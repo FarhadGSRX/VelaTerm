@@ -38,8 +38,16 @@ const TICKET_TTL: Duration = Duration::from_secs(300);
 /// not pin much memory per connection.
 const STREAM_CHUNK: usize = 64 * 1024;
 
+#[derive(Clone)]
+enum DownloadSource {
+    File(PathBuf),
+    Detail {branch:crate::agent::history_store::api::Branch,reference:String,revision:String,size:u64},
+    Attachment {branch:crate::agent::history_store::api::Branch,reference:String,revision:String,mime:String},
+    Markdown {branch:crate::agent::history_store::api::Branch,name:String,at:Option<String>},
+}
+
 struct Ticket {
-    path: PathBuf,
+    source: DownloadSource,
     issued: Instant,
 }
 
@@ -59,7 +67,7 @@ pub fn issue(path: &str) -> String {
         map.insert(
             token.clone(),
             Ticket {
-                path: PathBuf::from(path),
+                source: DownloadSource::File(PathBuf::from(path)),
                 issued: Instant::now(),
             },
         );
@@ -72,10 +80,42 @@ pub fn issue(path: &str) -> String {
 /// Deliberately not single-use: a browser may retry the request after an early network hiccup, and a paused
 /// download resumes with a fresh `Range` request against the same URL. Both are the same user fetching the
 /// same file, and the short TTL is what bounds the exposure.
-fn resolve(token: &str) -> Option<PathBuf> {
+fn resolve_source(token: &str) -> Option<DownloadSource> {
     let mut map = tickets().lock().ok()?;
     map.retain(|_, t| t.issued.elapsed() < TICKET_TTL);
-    map.get(token).map(|t| t.path.clone())
+    map.get(token).map(|t| t.source.clone())
+}
+
+pub fn issue_detail(branch:crate::agent::history_store::api::Branch,reference:&str,expected:Option<&str>) -> Result<String,String> {
+    let (revision,size)=branch.detail_facts(reference,expected)?;
+    let attachment=if crate::agent::history_store::attachments::is_attachment(&branch,reference)? {Some(crate::agent::history_store::attachments::facts(&branch,reference,expected)?)} else {None};
+    let token=uuid::Uuid::new_v4().simple().to_string()+&uuid::Uuid::new_v4().simple().to_string();
+    let mut map=tickets().lock().map_err(|_|"Download ticket storage is unavailable")?;
+    map.retain(|_,ticket|ticket.issued.elapsed()<TICKET_TTL);
+    if map.len()>=1024 {return Err("Too many active download tickets".into());}
+    let source=if let Some(attachment)=attachment {DownloadSource::Attachment {branch,reference:reference.into(),revision,mime:attachment.mime}}
+        else {DownloadSource::Detail {branch,reference:reference.into(),revision,size}};
+    map.insert(token.clone(),Ticket {source,issued:Instant::now()});
+    Ok(format!("/api/download?token={token}"))
+}
+
+pub fn issue_markdown(branch:crate::agent::history_store::api::Branch,name:&str,at:Option<&str>) -> Result<String,String> {
+    let token=uuid::Uuid::new_v4().simple().to_string()+&uuid::Uuid::new_v4().simple().to_string();
+    let mut map=tickets().lock().map_err(|_|"Download ticket storage is unavailable")?;
+    map.retain(|_,ticket|ticket.issued.elapsed()<TICKET_TTL);
+    if map.len()>=1024 {return Err("Too many active download tickets".into());}
+    map.insert(token.clone(),Ticket {source:DownloadSource::Markdown {branch,name:name.into(),at:at.map(str::to_owned)},issued:Instant::now()});
+    Ok(format!("/api/download?token={token}"))
+}
+
+fn readers() -> std::sync::Arc<tokio::sync::Semaphore> {
+    static READERS:OnceLock<std::sync::Arc<tokio::sync::Semaphore>>=OnceLock::new();
+    READERS.get_or_init(||std::sync::Arc::new(tokio::sync::Semaphore::new(2))).clone()
+}
+
+#[cfg(test)]
+fn resolve(token:&str) -> Option<PathBuf> {
+    match resolve_source(token)? {DownloadSource::File(path)=>Some(path),_=>None}
 }
 
 /// Extract one query parameter's raw value.
@@ -165,10 +205,16 @@ pub async fn handler(RawQuery(query): RawQuery, headers: HeaderMap) -> Response 
         return (StatusCode::UNAUTHORIZED, "Missing download token").into_response();
     };
     // An expired or unknown ticket is indistinguishable from a forged one, and both get the same answer.
-    let Some(path) = resolve(&token) else {
+    let Some(source) = resolve_source(&token) else {
         return (StatusCode::UNAUTHORIZED, "Invalid or expired download token").into_response();
     };
 
+    let path=match source {
+        DownloadSource::File(path)=>path,
+        DownloadSource::Detail {branch,reference,revision,size}=>return detail_response(headers,branch,reference,revision,size).await,
+        DownloadSource::Attachment {branch,reference,revision,mime}=>return attachment_response(branch,reference,revision,mime).await,
+        DownloadSource::Markdown {branch,name,at}=>return markdown_response(branch,name,at).await,
+    };
     let meta = match tokio::fs::metadata(&path).await {
         Ok(m) if m.is_file() => m,
         Ok(_) => return (StatusCode::NOT_FOUND, "Not a regular file").into_response(),
@@ -227,6 +273,100 @@ pub async fn handler(RawQuery(query): RawQuery, headers: HeaderMap) -> Response 
         }
     }
     res
+}
+
+async fn detail_response(headers:HeaderMap,branch:crate::agent::history_store::api::Branch,reference:String,revision:String,size:u64) -> Response {
+    let range=match parse_range(&headers,size) {
+        Ok(range)=>range,
+        Err(())=>{
+            let mut response=(StatusCode::RANGE_NOT_SATISFIABLE,"Range not satisfiable").into_response();
+            if let Ok(value)=HeaderValue::from_str(&format!("bytes */{size}")) {response.headers_mut().insert(header::CONTENT_RANGE,value);}
+            return response;
+        }
+    };
+    let start=range.as_ref().map_or(0,|range|range.start);
+    let end=range.as_ref().map_or(size,|range|range.end+1);
+    let check_branch=branch.clone();let check_ref=reference.clone();let check_revision=revision.clone();
+    let sequence=match tokio::task::spawn_blocking(move || {
+        check_branch.detail_facts(&check_ref,Some(&check_revision))?;
+        check_branch.detail_sequence_at(&check_ref,start)
+    }).await {
+        Ok(Ok(sequence))=>sequence,
+        _=>return (StatusCode::CONFLICT,"History detail changed or is unavailable").into_response(),
+    };
+    // The body owns one read slot. Dropping a disconnected response releases the slot and stops further IO.
+    let permit=match readers().acquire_owned().await {Ok(permit)=>permit,Err(_)=>return StatusCode::SERVICE_UNAVAILABLE.into_response()};
+    let state=(branch,reference,revision,sequence,start,end,permit);
+    let stream=futures_util::stream::unfold(state,|state|async move {
+        let (branch,reference,revision,mut sequence,mut at,end,permit)=state;
+        if at>=end {return None;}
+        loop {
+            let read_branch=branch.clone();let read_ref=reference.clone();let read_revision=revision.clone();
+            let chunk=tokio::task::spawn_blocking(move ||read_branch.detail(&read_ref,Some(&read_revision),sequence)).await;
+            let value=match chunk {
+                Ok(Ok(value))=>value,
+                _=>return Some((Err::<Vec<u8>,std::io::Error>(std::io::Error::other("History detail changed during download")),
+                    (branch,reference,revision,sequence,end,end,permit))),
+            };
+            let from=value["decodedStart"].as_u64().unwrap_or(0);let to=value["decodedEnd"].as_u64().unwrap_or(0);
+            let text=value["text"].as_str().unwrap_or_default();sequence+=1;
+            if to<=at {continue;}
+            if from>at || to-from!=text.len() as u64 {
+                return Some((Err(std::io::Error::other("History detail download has a coverage gap")),(branch,reference,revision,sequence,end,end,permit)));
+            }
+            let next=to.min(end);let bytes=text.as_bytes()[(at-from) as usize..(next-from) as usize].to_vec();at=next;
+            return Some((Ok(bytes),(branch,reference,revision,sequence,at,end,permit)));
+        }
+    });
+    let mut response=Response::builder().status(if range.is_some() {StatusCode::PARTIAL_CONTENT} else {StatusCode::OK})
+        .header(header::CONTENT_TYPE,"application/octet-stream").header(header::CONTENT_LENGTH,end-start)
+        .header(header::ACCEPT_RANGES,"bytes").header(header::CONTENT_DISPOSITION,content_disposition("history-detail.txt"))
+        .body(Body::from_stream(stream)).unwrap_or_else(|_|StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    if let Some(range)=range {
+        if let Ok(value)=HeaderValue::from_str(&format!("bytes {}-{}/{}",range.start,range.end,size)) {response.headers_mut().insert(header::CONTENT_RANGE,value);}
+    }
+    response
+}
+
+async fn attachment_response(branch:crate::agent::history_store::api::Branch,reference:String,revision:String,mime:String) -> Response {
+    let permit=match readers().acquire_owned().await {Ok(permit)=>permit,Err(_)=>return StatusCode::SERVICE_UNAVAILABLE.into_response()};
+    let (sender,receiver)=tokio::sync::mpsc::channel::<Result<Vec<u8>,std::io::Error>>(2);
+    tokio::task::spawn_blocking(move|| {
+        struct Writer(tokio::sync::mpsc::Sender<Result<Vec<u8>,std::io::Error>>);
+        impl std::io::Write for Writer {
+            fn write(&mut self,bytes:&[u8]) -> std::io::Result<usize> {
+                self.0.blocking_send(Ok(bytes.to_vec())).map_err(|_|std::io::Error::other("read_canceled"))?;Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {Ok(())}
+        }
+        let mut writer=Writer(sender);let cancel=std::sync::atomic::AtomicBool::new(false);
+        if let Err(error)=crate::agent::history_store::attachments::write(&branch,&reference,Some(&revision),&mut writer,&cancel) {
+            let _=writer.0.blocking_send(Err(std::io::Error::other(error)));
+        }drop(permit);
+    });
+    let stream=futures_util::stream::unfold(receiver,|mut receiver|async move {receiver.recv().await.map(|value|(value,receiver))});
+    let extension=match mime.as_str() {"image/png"=>"png","image/jpeg"=>"jpg","image/gif"=>"gif","image/webp"=>"webp",_=>"bin"};
+    Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE,"application/octet-stream")
+        .header(header::ACCEPT_RANGES,"none").header(header::CONTENT_DISPOSITION,content_disposition(&format!("history-image.{extension}")))
+        .body(Body::from_stream(stream)).unwrap_or_else(|_|StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn markdown_response(branch:crate::agent::history_store::api::Branch,name:String,at:Option<String>) -> Response {
+    let permit=match readers().acquire_owned().await {Ok(permit)=>permit,Err(_)=>return StatusCode::SERVICE_UNAVAILABLE.into_response()};
+    let reader=crate::agent::history_store::refer::markdown_stream(branch,name,at);
+    let stream=futures_util::stream::unfold((reader,permit),|(mut reader,permit)|async move {
+        let (reader,result)=tokio::task::spawn_blocking(move|| {
+            use std::io::Read;
+            let mut bytes=vec![0;32*1024];let result=reader.read(&mut bytes).map(|count|{bytes.truncate(count);bytes});(reader,result)
+        }).await.ok()?;
+        match result {
+            Ok(bytes) if bytes.is_empty()=>None,
+            result=>Some((result,(reader,permit))),
+        }
+    });
+    Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE,"text/markdown; charset=utf-8")
+        .header(header::ACCEPT_RANGES,"none").header(header::CONTENT_DISPOSITION,content_disposition("session-context.md"))
+        .body(Body::from_stream(stream)).unwrap_or_else(|_|StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 #[cfg(test)]

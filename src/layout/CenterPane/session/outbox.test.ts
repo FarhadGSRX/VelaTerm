@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 vi.mock("../../../ipc/chat", () => ({ chatSend: vi.fn(), resolveChatImage: vi.fn() }));
 import { chatSend } from "../../../ipc/chat";
-import { acknowledgeSubmissions, ChatVersions, createSubmission, deliverSubmission, retrySubmission, submissionsFor, useOutbox } from "./outbox";
+import { acknowledgeSubmissions, ChatVersions, createSubmission, deliverSubmission, retrySubmission, submissionsFor, useOutbox, unconfirmedSubmissionRows } from "./outbox";
 
 beforeEach(() => {
   useOutbox.setState({ sessions: {} });
@@ -58,4 +58,28 @@ it("rejects old collection versions and old processes after a restart", () => {
   expect(versions.accept("queue", 1, 100)).toBe(false);
   expect(versions.accept("rows", 1, 200)).toBe(true);
   expect(versions.accept("rows", 999, 100)).toBe(false);
+});
+
+
+it("reconciles optimistic rows by identifier without hiding repeated text", () => {
+  const first = createSubmission("s", "Hello", [], "queue", true);
+  const second = createSubmission("s", "Hello", [], "queue", true);
+  const third = createSubmission("s", "Hello", [], "queue", true);
+  expect(unconfirmedSubmissionRows([{ kind: "user", id: first.id, text: "Translated" }], [{ id: second.id }], [first, second, third])).toEqual([
+    { kind: "user", id: third.id, text: "Hello", images: [] },
+  ]);
+});
+
+
+it("does not republish an already observed submission while its receipt is pending", async () => {
+  let resolve!: (status: "sent") => void;
+  vi.mocked(chatSend).mockImplementation(() => new Promise(done => { resolve = done; }));
+  const item = createSubmission("s", "Hello", [], "queue");
+  const pending = deliverSubmission("s", item);
+  acknowledgeSubmissions("s", [item.id]);
+  const observed = submissionsFor("s");
+  acknowledgeSubmissions("s", [item.id]);
+  expect(submissionsFor("s")).toBe(observed);
+  resolve("sent"); await pending;
+  expect(submissionsFor("s")).toEqual([]);
 });

@@ -40,6 +40,7 @@ import { genId } from "../genId";
 import { handshakeFailureReason, mapBackendError, type HandshakeFailure } from "./backendError";
 import { recordRequestError } from "./reqLog";
 import { apiUrl, shareBasePath } from "./shareBase";
+import { acceptsHistoryProtocol, historyProtocolError, requiresHistoryProtocol } from "./historyCapability";
 import type { PtySpawnArgs, PtySpawnResult } from "./transport";
 
 type EventCb = (payload: unknown) => void;
@@ -54,6 +55,12 @@ const TOKEN_STORAGE_KEY = "vlx-token";
 /** Reconnect backoff starts at 1s, doubles each time, and is capped at 30s. */
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
+/**
+ * A connection must stay up this long before the backoff resets. A server that accepts and then closes
+ * every connection, for example when it cannot deliver the resynchronization burst, would otherwise be
+ * retried every second indefinitely.
+ */
+const RECONNECT_STABLE_MS = 10_000;
 
 /**
  * The server sends an application-level `{"t":"ping"}` text-frame heartbeat every 30s because
@@ -81,7 +88,7 @@ interface Pending {
 /**
  * Expected transport errors include connection failures, disconnects, and handshake/auth failures.
  * The disconnect banner, automatic reconnect logic, or LoginGate already handles these recoverable
- * conditions, so they must not reach the global uncaught-error fallback in main.tsx, which is for
+ * conditions, so they must not reach the global uncaught-error fallback in bootstrap.tsx, which is for
  * genuinely unexpected bugs. The `expected` marker tells the global unhandledrejection handler to
  * call preventDefault and suppress the uncaught-error overlay.
  */
@@ -220,11 +227,15 @@ class WsClient {
    * whenever a spawn result is processed.
    */
   private source: string | null = null;
+  private historyProtocol: unknown = null;
+  private readonly historyHelloWaiters = new Set<() => void>();
   private connectPromise: Promise<void> | null = null;
   /** Consecutive reconnect failures; reset on success and used for backoff and the banner. */
   private reconnectAttempts = 0;
   /** Pending reconnect timer; ensures that only one retry is scheduled at a time. */
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Resets the backoff once the live connection has lasted RECONNECT_STABLE_MS. */
+  private stableTimer: ReturnType<typeof setTimeout> | undefined;
   /** Credential-expiry callbacks; LoginGate returns to login after an /api/me 401. The optional
    *  reason distinguishes a server-side login rate limit from failed credentials on the E2EE path. */
   private readonly authLostCbs = new Set<(reason?: HandshakeFailure) => void>();
@@ -427,6 +438,7 @@ class WsClient {
       // e2ee_ready then failed to decrypt and was reported as an authentication failure.
       this.supersede(this.ws);
       this.ws = ws;
+      this.historyProtocol = null;
       ws.onopen = () => {
         if (this.ws !== ws) {
           ws.close();
@@ -459,6 +471,8 @@ class WsClient {
         // drives reconnection. Reacting here would clear the new connection's keys mid-handshake.
         if (this.ws !== ws) return;
         this.ws = null;
+        this.historyProtocol = null;
+        for (const wake of this.historyHelloWaiters) wake();
         this.connectPromise = null;
         // Reset E2EE state so the next connection uses a fresh handshake and ephemeral key.
         this.e2eeReady = false;
@@ -501,7 +515,10 @@ class WsClient {
    */
   private goOnline(ws: WebSocket) {
     this.connectPromise = null;
-    this.reconnectAttempts = 0;
+    clearTimeout(this.stableTimer);
+    this.stableTimer = setTimeout(() => {
+      if (this.ws === ws) this.reconnectAttempts = 0;
+    }, RECONNECT_STABLE_MS);
     this.everConnected = true;
     this.emitConnState("online");
     // If no traffic arrives within IDLE_TIMEOUT_MS despite the server's 30s heartbeat, treat the
@@ -554,6 +571,8 @@ class WsClient {
    *  the teardown that handler would have performed happens here: close it if it is still live and
    *  fail its in-flight requests, which will never receive a reply on the new connection. */
   private supersede(prev: WebSocket | null) {
+    this.historyProtocol = null;
+    for (const wake of this.historyHelloWaiters) wake();
     if (!prev) return;
     if (
       prev.readyState === WebSocket.OPEN ||
@@ -721,6 +740,8 @@ class WsClient {
     } else if (msg.t === "hello") {
       // The first frame supplies this connection's source ID; replace it after reconnection.
       this.source = String(msg.source ?? "");
+      this.historyProtocol = msg.historyProtocol ?? 0;
+      for (const wake of this.historyHelloWaiters) wake();
     } else if (msg.t === "reply") {
       const p = this.pending.get(msg.id as number);
       if (!p) return;
@@ -762,6 +783,17 @@ class WsClient {
   /** Send an ID-bearing request and return its response promise. */
   private async request(partial: Record<string, unknown>): Promise<unknown> {
     await this.ensure();
+    if (partial.t === "invoke" && requiresHistoryProtocol(String(partial.cmd))) {
+      const socket = this.ws;
+      if (this.historyProtocol === null) await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout>;
+        const wake = () => { clearTimeout(timer); this.historyHelloWaiters.delete(wake); resolve(); };
+        this.historyHelloWaiters.add(wake);
+        timer = setTimeout(wake, 5000);
+      });
+      if (socket !== this.ws || !socket || socket.readyState !== WebSocket.OPEN) throw new TransportError(t("transport.wsDisconnected"));
+      if (!acceptsHistoryProtocol(this.historyProtocol)) throw historyProtocolError();
+    }
     const id = this.nextId++;
     return new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });

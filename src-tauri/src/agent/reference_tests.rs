@@ -60,7 +60,7 @@ impl Fixture {
     fn script(&self, name: &str, result: &str) {
         let path = self.dir.join(name);
         std::fs::write(&path, format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$0.args\"\nprintf '\\nCALL\\n' >> \"$0.prompts\"\ncat >> \"$0.prompts\"\n{result}\n"
+            "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo 1.0.0; exit 0; }}\nprintf '%s\\n' \"$@\" >> \"$0.args\"\nprintf '\\nCALL\\n' >> \"$0.prompts\"\ncat >> \"$0.prompts\"\n{result}\n"
         )).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -188,7 +188,7 @@ fn reference_handler_returns_the_requested_transcript_window_when_summary_fails(
 #[test]
 fn reference_original_excerpts_are_deduplicated_and_scoped_to_the_target() {
     let fixture = Fixture::new(true);
-    {
+    let messages={
         let conn = fixture.app.db().conn.lock().unwrap();
         let other = repo::create_session(
             &conn,
@@ -203,24 +203,16 @@ fn reference_original_excerpts_are_deduplicated_and_scoped_to_the_target() {
             None,
         )
         .unwrap();
-        for (id, text) in [
-            (&fixture.session.id, "cache timeout evidence"),
-            (&other.id, "cache timeout unrelated"),
-        ] {
-            conn.execute(
-                "INSERT INTO session_fts(session_id,source,message_index,ordinal,text) VALUES(?1,'transcript',0,0,?2)",
-                rusqlite::params![id, text],
-            ).unwrap();
-            conn.execute(
-                "INSERT INTO session_words(rowid,session_id,words) VALUES(?1,?2,?3)",
-                rusqlite::params![
-                    conn.last_insert_rowid(),
-                    id,
-                    crate::search::tokenize::boundary_marked(text)
-                ],
-            )
-            .unwrap();
-        }
+        vec![(fixture.session.id.clone(),"cache timeout evidence"),(other.id,"cache timeout unrelated")]
+    };
+    let store=crate::agent::history_store::store::Store::at(&fixture.dir).unwrap();
+    for (id,text) in messages {
+        let native=format!("fixture-{id}");let path=fixture.dir.join(format!("{id}.jsonl"));
+        std::fs::write(&path,serde_json::json!({"type":"response_item","payload":{"type":"message","id":"user","role":"user",
+            "content":[{"type":"input_text","text":text}]}}).to_string()+"\n").unwrap();
+        repo::set_agent_session_id(&fixture.app.db().conn.lock().unwrap(),&id,&native,SessionKind::Codex).unwrap();
+        let source=store.register(SessionKind::Codex,crate::agent::history_store::source::Segment {path,native_id:native.clone(),end_byte:None,end_ordinal:None}).unwrap();
+        crate::agent::history_store::api::bind(store.clone(),vec![source],SessionKind::Codex,native,None,&id).unwrap();
     }
     let excerpts =
         relevant_original_excerpts(&fixture.app, &fixture.session.id, "cache timeout").unwrap();
@@ -229,4 +221,5 @@ fn reference_original_excerpts_are_deduplicated_and_scoped_to_the_target() {
     assert_eq!(excerpts[0].score, 2);
     assert!(excerpts[0].snippet.contains("evidence"));
     assert!(!excerpts[0].snippet.contains("unrelated"));
+    crate::agent::history_store::store::release_test_directory(&fixture.dir);
 }

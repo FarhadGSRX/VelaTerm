@@ -5,6 +5,7 @@ import { memo, type ReactNode } from "react";
 
 import { useT } from "../../../i18n";
 import type { ChatImageValue, ChatRewindScope, ChatRow } from "../../../ipc/chat";
+import { mapBackendError } from "../../../ipc/backendError";
 import { messageSenderName, originIconEl } from "./MessageSender";
 import {
   CompactionRow,
@@ -17,8 +18,10 @@ import {
   ToolCard,
   ToolRunCard,
   TurnHead,
+  WakeRow,
 } from "./rows";
 import type { DisplayRow, TurnFold } from "./toolRuns";
+import { DeferredBody } from "./DeferredContents";
 
 /** A user message edited before it is sent again from a rewind. */
 export interface MessageReplacement {
@@ -41,6 +44,7 @@ export const Entry = memo(function Entry({
   rewindRequest,
   onRewindRequestHandled,
   onCancelShell,
+  feedback,
 }: {
   entry: DisplayRow;
   label: string;
@@ -55,6 +59,7 @@ export const Entry = memo(function Entry({
   rewindRequest: { rowId: string; token: number } | null;
   onRewindRequestHandled: (token: number) => void;
   onCancelShell?: (rowId: string) => void;
+  feedback?: ReactNode;
 }) {
   // The author line the pass in `toolRuns` placed on the first entry of an agent turn. Everything the
   // agent did in that turn sits under it, so reasoning and tool calls read as the agent's.
@@ -99,6 +104,7 @@ export const Entry = memo(function Entry({
         rewindRequest={rewindRequest}
         onRewindRequestHandled={onRewindRequestHandled}
         onCancelShell={onCancelShell}
+        feedback={feedback}
       />
     </>
   );
@@ -117,6 +123,7 @@ export function Row({
   rewindRequest,
   onRewindRequestHandled,
   onCancelShell,
+  feedback,
 }: {
   row: ChatRow;
   label: string;
@@ -131,6 +138,7 @@ export function Row({
   onRewindRequestHandled?: (token: number) => void;
   /** Stop a running shell command; the row knows only its own id. */
   onCancelShell?: (rowId: string) => void;
+  feedback?: ReactNode;
 }) {
   const t = useT();
   switch (row.kind) {
@@ -161,15 +169,18 @@ export function Row({
       );
     }
     case "reasoning":
-      return <ReasoningRow text={row.text} />;
+      return <><ReasoningRow text={row.text} /><DeferredBody row={row} /></>;
     case "error":
-      return <ErrorRow message={row.message} />;
+      // Agents may record a stable backend code instead of prose, such as ZCode's unavailable plan.
+      return <ErrorRow message={mapBackendError(row.message)} />;
     case "command":
       return <CommandRow text={row.text} />;
     case "shell":
       return <ShellRow row={row} onCancel={onCancelShell} />;
     case "notice":
       return <NoticeRow message={row.message} />;
+    case "wake":
+      return <WakeRow summary={row.summary} at={row.at} />;
     case "compaction":
       return (
         <CompactionRow
@@ -184,11 +195,14 @@ export function Row({
           who={row.origin ? messageSenderName(row.origin, t) : t("archive.you")}
           icon={row.origin ? originIconEl(row.origin, 14) : undefined}
           isUser
+          rowId={row.id}
           text={row.text}
+          copyAvailable={!row.bodyAvailable}
           images={row.images}
           at={row.at}
           onRewind={onRewind ? (scope) => onRewind(row.id, scope) : undefined}
-          onEditSend={onRewind ? (text, images) => onRewind(row.id, "conversation", { text, images }) : undefined}
+          onEditSend={onRewind && !row.bodyAvailable ? (text, images) => onRewind(row.id, "conversation", { text, images }) : undefined}
+          footnote={<><DeferredBody row={row} />{feedback}</>}
           rewindDisabledReason={rewindDisabledReason || (rewindScopes?.length ? undefined : t("chat.rewind.unsupported"))}
           editDisabledReason={rewindDisabledReason || (rewindScopes?.includes("conversation") ? undefined : t("chat.rewind.unsupported"))}
           rewindScopes={rewindScopes}
@@ -201,11 +215,14 @@ export function Row({
         <MessageBubble
           who={row.model ?? label}
           isUser={false}
+          streaming={row.streaming}
+          rowId={row.id}
           icon={icon}
           text={row.text}
           at={row.at}
           durationMs={row.durationMs}
           showHead={!headless}
+          footnote={<DeferredBody row={row} />}
         />
       );
   }

@@ -15,6 +15,7 @@ pub(crate) mod dispatch;
 // dispatch mints download tickets, so this is reachable from the crate rather than private to web transport.
 pub(crate) mod download;
 pub(crate) mod e2ee;
+mod frontend;
 pub(crate) mod full_access;
 #[cfg(test)]
 mod remote_audit_fixture;
@@ -37,6 +38,7 @@ mod static_assets;
 mod tls;
 pub mod tunnel;
 mod ws;
+mod outbound;
 
 use std::sync::Mutex;
 
@@ -55,10 +57,6 @@ use std::sync::Arc;
 /// Default listening port, overridable by `web_server_start`.
 const DEFAULT_PORT: u16 = 8799;
 
-/// Frontend build output at `src-tauri/../dist`, read from disk in debug and embedded in release.
-#[derive(rust_embed::Embed)]
-#[folder = "../dist"]
-struct Assets;
 
 /// Context shared by axum handlers.
 #[derive(Clone)]
@@ -534,6 +532,9 @@ fn build_router(ctx: Ctx) -> Router {
         // fetches. Its credential is therefore a ticket in the URL, minted over the authenticated socket for
         // one path and valid for minutes — see `download`.
         .route("/api/download", get(download::handler))
+        // Artifact previews load into a sandboxed iframe whose requests carry no credentials, so the
+        // grant ID in the path is the credential, minted over the authenticated socket (see artifact.rs).
+        .route("/api/artifact/*rest", get(artifact_handler))
         .route("/ws", get(ws::ws_handler))
         .fallback(static_handler)
         .layer(axum::middleware::from_fn(audit_http))
@@ -542,6 +543,23 @@ fn build_router(ctx: Ctx) -> Router {
             tunnel_gate,
         ))
         .with_state(ctx)
+}
+
+/// Serves one file under an artifact grant. File reads run on the blocking pool.
+async fn artifact_handler(uri: Uri) -> axum::response::Response {
+    let path = uri.path().strip_prefix(crate::artifact::HTTP_PREFIX).unwrap_or("").to_string();
+    let served = tokio::task::spawn_blocking(move || crate::artifact::serve(&path)).await;
+    let Ok(served) = served else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let mut res = axum::response::Response::new(axum::body::Body::from(served.body));
+    *res.status_mut() = StatusCode::from_u16(served.status).unwrap_or(StatusCode::NOT_FOUND);
+    for (name, value) in served.headers {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&value) {
+            res.headers_mut().insert(name, value);
+        }
+    }
+    res
 }
 
 /// Rejects any request on a `ShareTunnel` instance that lacks the per-launch tunnel secret. Only the

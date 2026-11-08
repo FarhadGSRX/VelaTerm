@@ -2,9 +2,8 @@
 #
 # dev-serve.sh [label] — plaintext development backend plus Vite HMR on random ports.
 #
-# Vite and the backend both bind 0.0.0.0 (`--lan-http`), so the same instance serves this machine and
-# anything else on the LAN: a second computer, a phone browser, or the phone shell. There is no
-# separate loopback-only variant; a browser here still reaches it over localhost.
+# By default Vite and the backend both bind 0.0.0.0 (`--lan-http`) for LAN access. Set
+# VLX_DEV_LOCAL_ONLY=1 to bind both services to loopback and use the backend's local command policy.
 #
 # Clients connect to Vite, which proxies /ws and /api to the real backend while preserving HMR.
 #
@@ -19,6 +18,7 @@
 # Usage:
 #   pnpm dev:web                          # Browser with HMR and an isolated empty database
 #   pnpm dev:web uitest                   # Same, with an explicit label for dev:ls / dev:stop
+#   VLX_DEV_LOCAL_ONLY=1 pnpm dev:web local # Local configuration editing with HMR
 #   VLX_DEV_DATA_DIR="$HOME/Library/Application Support/io.vlinx.vlxterm" pnpm dev:web
 #                                         # Use the real database only when no other backend writes it
 #   VELA_SERVE_PASSWORD=mypw pnpm dev:web # Custom login password
@@ -30,6 +30,12 @@ ROOT="$(pwd)"
 
 MODE="web"
 HTTP_FLAG="--lan-http"
+LOCAL_ONLY="${VLX_DEV_LOCAL_ONLY:-0}"
+case "$LOCAL_ONLY" in
+  0) BIND_HOST="0.0.0.0" ;;
+  1) BIND_HOST="127.0.0.1"; HTTP_FLAG="--local-http" ;;
+  *) echo "VLX_DEV_LOCAL_ONLY must be 0 or 1." >&2; exit 1 ;;
+esac
 
 # Register a label from environment, first argument, or automatic generation for dev:ls/dev:stop.
 source "$(dirname "$0")/dev-lib.sh"
@@ -58,13 +64,14 @@ lan_ip() {
     *) echo 127.0.0.1 ;;
   esac
 }
-LAN_IP="$(lan_ip)"
-
-# Clients connect to Vite. Bind it to 0.0.0.0 and point HMR at the LAN address: a page loaded over the
-# LAN IP must reconnect its HMR socket to that same host, not to the server's own idea of localhost.
-CLIENT_HOST="$LAN_IP"
-export VLX_VITE_HOST="0.0.0.0"
-export VLX_VITE_HMR_HOST="$LAN_IP"
+# A local backend must have a loopback-only Vite proxy as well; a LAN proxy would expose local commands.
+if [[ "$LOCAL_ONLY" == "1" ]]; then
+  CLIENT_HOST="127.0.0.1"
+else
+  CLIENT_HOST="$(lan_ip)"
+fi
+export VLX_VITE_HOST="$BIND_HOST"
+export VLX_VITE_HMR_HOST="$CLIENT_HOST"
 URL="http://${CLIENT_HOST}:${VITE_PORT}"
 LOCAL_URL="http://localhost:${VITE_PORT}"
 
@@ -74,13 +81,19 @@ dev_write_instance "$LABEL" "$MODE" \
 
 echo "============================================================"
 echo " dev · web mode (HMR)  ·  instance ${LABEL}"
-echo "   URL       : ${URL}      (also reachable from other devices on this network)"
+if [[ "$LOCAL_ONLY" == "1" ]]; then
+  echo "   URL       : ${URL}      (this machine only; local configuration editing enabled)"
+else
+  echo "   URL       : ${URL}      (also reachable from other devices on this network)"
+fi
 echo "   Local     : ${LOCAL_URL}"
-echo "   Password  : ${PASSWORD}"
+if [[ "$PASSWORD" == "dev" ]]; then
+  echo "   Password  : dev (default)"
+else
+  echo "   Password  : configured through VELA_SERVE_PASSWORD"
+fi
 echo "   Data dir  : ${DATA_DIR}"
 echo "   Ports     : Vite ${VITE_PORT} / backend ${BACKEND_PORT} (random unless overridden)"
-echo "   Pair link : vlxterm://pair?host=${CLIENT_HOST}&port=${VITE_PORT}&password=${PASSWORD}&name=dev"
-echo "   (type the link into Add host in the phone app, or turn it into a QR code)"
 echo " Ctrl+C stops both the backend and Vite; elsewhere, use pnpm dev:stop ${LABEL}"
 echo "============================================================"
 

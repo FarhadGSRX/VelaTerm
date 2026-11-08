@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { md } from "../../../markdownEngine";
 import type { ChatEvent, ChatPermission, ChatSnapshot } from "../../../ipc/chat";
+import type { TranslationSession, TranslationSettings } from "../../../ipc/translation";
 import type { SessionPermissionState } from "../../../hooks/useSessionPermissionState";
 import type { PermissionAnswer } from "./permissionCards";
 import type { ReactNode } from "react";
@@ -13,12 +14,15 @@ vi.mock("./engineSwitch", () => ({ useEngineSwitch: () => ({ switchTo: vi.fn(), 
 // Exercise the pane's orchestration; menu layout is covered separately by the controls themselves.
 vi.mock("./controls", () => ({
   LevelBar: () => null,
-  ControlChip: ({ title, label, value, options, onPick, disabled, footer }: {
+  ControlChip: ({ title, label, value, options, onPick, disabled, footer, keepLabel, onKeepCurrent, defaultValue }: {
     title: string; label?: string; value: string; options: { value: string; label: string; tag?: string }[];
     onPick: (value: string, keep: boolean) => void; disabled?: boolean; footer?: ReactNode;
-  }) => <><select aria-label={title} data-label={label} value={value} disabled={disabled} onChange={(event) => onPick(event.target.value, true)}>
+    keepLabel?: string; onKeepCurrent?: (value: string) => void; defaultValue?: string;
+  }) => <><select aria-label={title} data-label={label} data-default-value={defaultValue} value={value} disabled={disabled} onChange={(event) => onPick(event.target.value, true)}>
     {options.map((option) => <option key={option.value} value={option.value}>{option.label}{option.tag ? ` — ${option.tag}` : ""}</option>)}
-  </select>{footer}</>,
+  </select>{keepLabel && <label><input type="checkbox" onChange={event => {
+    if (event.target.checked) onKeepCurrent?.(value);
+  }} />{keepLabel}</label>}{footer}</>,
 }));
 vi.mock("./permissionCards", () => ({
   PermissionCard: ({ request, onAnswer }: {
@@ -32,7 +36,7 @@ import { useTermStore } from "../../../store/termStore";
 import { MAX_IMAGES } from "./attachments";
 import { ChatPane } from "./ChatPane";
 import { useOutbox } from "./outbox";
-import { clearChatCache } from "./chatCache";
+import { cachedChat, clearChatCache } from "./chatCache";
 
 let eventCallback: (event: ChatEvent) => void;
 let permissions: ChatPermission[];
@@ -42,6 +46,8 @@ let snapshotOverrides: Partial<ChatSnapshot>;
 let reconnectCallback: () => void;
 
 beforeEach(() => {
+  window.history.replaceState(null,"","/");
+  document.documentElement.dataset.theme = "light";
   clearChatCache();
   useOutbox.setState({ sessions: {} });
   snapshotOverrides = {};
@@ -87,6 +93,129 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+it("reads an archive range without acquiring a process or replacing its runtime state", async () => {
+  const runtime={status:"running" as const,pid:719,startedAt:100,agent:"codex" as const,agentState:"working" as const};
+  useTermStore.setState({runtimes:{s:runtime}});
+  snapshotOverrides={running:false,protocolVersion:2,historyGeneration:"fixed",coverage:"complete",readJobId:"index:archive",
+    locatedRowId:"first",rows:[{kind:"user",id:"first",text:"Original archived text"}]};
+  const view=render(<ChatPane session={{id:"s",projectId:"p",name:"Archive",kind:"codex",engine:"tui",collapsed:false,sortOrder:0,createdAt:0}}
+    area={{}} hidden={false} focused multi={false} readOnly historyOnly initialMessageIndex={0}
+    onActivate={()=>{}} onSplit={()=>{}} onClose={()=>{}}/>);
+  await screen.findByText("Original archived text");
+  expect(vi.mocked(invoke).mock.calls.find(([command])=>command==="chat_snapshot")?.[1]).toMatchObject({historyOnly:true,window:{messageIndex:0}});
+  expect(useTermStore.getState().runtimes.s).toEqual(runtime);
+  expect(cachedChat("s")).toBeUndefined();expect(cachedChat("s\u0000history")?.rows[0].id).toBe("first");
+  view.unmount();
+  const commands=vi.mocked(invoke).mock.calls.map(([command])=>command);
+  expect(commands).not.toEqual(expect.arrayContaining(["chat_attach"]));
+  expect(commands.some(command=>["chat_attach","chat_detach","chat_models","chat_start","chat_send","chat_interrupt"].includes(command))).toBe(false);
+  expect(commands).toContain("chat_read_cancel");
+});
+
+it("recovers from a reconnect backlog too large for one response by reading the recent rows", async () => {
+  snapshotOverrides = { startedAt: 1, rowsRevision: 1, rows: [{ kind: "user", id: "stale", text: "Stale message" }] };
+  await mountPane();
+  await screen.findByText("Stale message");
+  const answer = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    const since = (args as { window?: { since?: number } } | undefined)?.window?.since;
+    if (command === "chat_snapshot" && since !== undefined) return Promise.reject(new Error("detail_requires_paging: Too large")) as Promise<never>;
+    return answer(command, args);
+  });
+  snapshotOverrides = { startedAt: 1, rowsRevision: 9, rows: [{ kind: "user", id: "fresh", text: "Fresh message" }] };
+  await act(async () => reconnectCallback());
+  await screen.findByText("Fresh message");
+  expect(screen.queryByText("Stale message")).toBeNull();
+  expect(screen.queryByText(/detail_requires_paging/)).toBeNull();
+});
+
+it("bounds the v2 window during live updates and process reset while retaining a history entry", async () => {
+  snapshotOverrides = { protocolVersion: 2, historyGeneration: "generation", coverage: "complete", rowsRevision: 1, startedAt: 1, readJobId: "index:owned" };
+  const view = await mountPane();
+  act(() => eventCallback({ type: "rows", epoch: 1, revision: 2, rows: Array.from({ length: 400 }, (_,i) => ({ kind: "user" as const, id: `u-${i}`, text: `Message ${i}` })) }));
+  await waitFor(() => expect(cachedChat("s")?.rows).toHaveLength(240));
+  expect(cachedChat("s")?.rows[0].id).toBe("u-160");expect(cachedChat("s")?.hasMore).toBe(true);
+  act(() => eventCallback({ type: "reset", epoch: 2, revision: 1, rows: Array.from({ length: 300 }, (_,i) => ({ kind: "user" as const, id: `reset-${i}`, text: `Reset ${i}` })) }));
+  await waitFor(() => expect(cachedChat("s")?.rows[0]?.id).toBe("reset-60"));
+  expect(cachedChat("s")?.rows).toHaveLength(240);expect(cachedChat("s")?.hasMore).toBe(true);
+  view.unmount();expect(vi.mocked(invoke).mock.calls.some(([command,args]) => command === "chat_read_cancel" && args?.jobId === "index:owned")).toBe(true);
+});
+
+it("keeps live v2 rows for a reader scrolled up in a full window", async () => {
+  snapshotOverrides = { protocolVersion: 2, historyGeneration: "generation", coverage: "complete", rowsRevision: 1, startedAt: 1 };
+  const { container } = await mountPane();
+  act(() => eventCallback({ type: "rows", epoch: 1, revision: 2, rows: Array.from({ length: 240 }, (_,i) => ({ kind: "user" as const, id: `u-${i}`, text: `Message ${i}` })) }));
+  await waitFor(() => expect(cachedChat("s")?.rows).toHaveLength(240));
+  const scroll = container.querySelector<HTMLDivElement>(".sv-scroll")!;
+  let top = 500;
+  Object.defineProperties(scroll, {
+    scrollHeight: { get: () => 2000 }, clientHeight: { get: () => 400 },
+    scrollTop: { get: () => top, set: (value: number) => { top = value; } },
+  });
+  // The first event only records the new geometry; the second parks the reader above the end.
+  fireEvent.scroll(scroll);top = 500;fireEvent.scroll(scroll);
+  expect(container.querySelector(".sv-to-end")).toBeTruthy();
+  act(() => eventCallback({ type: "rows", epoch: 1, revision: 3, rows: [{ kind: "user", id: "reply", text: "Live reply" }] }));
+  await waitFor(() => expect(cachedChat("s")?.rows.at(-1)?.id).toBe("reply"));
+  expect(cachedChat("s")?.rows).toHaveLength(240);expect(cachedChat("s")?.rows[0].id).toBe("u-1");
+  expect(cachedChat("s")?.hasNewer).toBeFalsy();expect(screen.queryByText("Load newer messages")).toBeNull();
+});
+
+it("loads the following v2 page when the reader reaches the end of a parked window", async () => {
+  snapshotOverrides = { protocolVersion: 2, historyGeneration: "generation", coverage: "complete", hasNewer: true,
+    rows: [{ kind: "user", id: "parked", text: "Parked message" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args) => command === "chat_snapshot" && (args?.window as { after?: string })?.after
+    ? Promise.resolve({ ...snapshotOverrides, pageKind: "history", hasNewer: false, rows: [{ kind: "user", id: "later", text: "Later message" }] }) as Promise<never> : previous(command,args));
+  const { container } = await mountPane();
+  await screen.findByText("Load newer messages");
+  const scroll = container.querySelector<HTMLDivElement>(".sv-scroll")!;
+  Object.defineProperties(scroll, { scrollHeight: { get: () => 1000 }, clientHeight: { get: () => 400 }, scrollTop: { get: () => 600, set: () => {} } });
+  // The first event only records the new geometry, as a layout change would; the second is the reader's.
+  fireEvent.scroll(scroll);fireEvent.scroll(scroll);
+  await screen.findByText("Later message");
+  expect(screen.queryByText("Load newer messages")).toBeNull();
+});
+
+it("restores a copied v2 paging link with the same subscription after browser navigation", async () => {
+  window.history.replaceState(null,"","/?chatSession=s&chatBefore=boundary");
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args) => command === "chat_snapshot" ? Promise.resolve({
+    running: false, protocolVersion: 2, historyGeneration: "generation", coverage: "complete", readJobId: "index:window", rows: [{ kind: "user", id: (args?.window as { before?: string })?.before ? "old-page" : "recent-page", text: "Page body" }], queue: [], permissions: [], commands: [], configKeys: [],
+  }) as Promise<never> : previous(command,args));
+  try {
+    await mountPane("claude",null);
+    await waitFor(() => expect(cachedChat("s")?.rows[0]?.id).toBe("old-page"));
+    const initial = vi.mocked(invoke).mock.calls.find(([command]) => command === "chat_snapshot")![1];
+    expect(initial?.protocolVersion).toBe(2);expect(initial?.window).toMatchObject({ before: "boundary" });
+    window.history.replaceState(null,"","/?chatSession=s");act(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    await waitFor(() => expect(cachedChat("s")?.rows[0]?.id).toBe("recent-page"));
+    const latest = vi.mocked(invoke).mock.calls.filter(([command]) => command === "chat_snapshot").at(-1)![1];
+    expect(latest?.readJobId).toBe("index:window");
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_detail_read" || command === "chat_row")).toBe(false);
+  } finally { window.history.replaceState(null,"","/"); }
+});
+
+it("cancels a v2 indexing subscription returned after its pane has closed", async () => {
+  let finish!: (value: unknown) => void;const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args) => command === "chat_snapshot" ? new Promise<unknown>(resolve => {finish=resolve;}) as Promise<never> : previous(command,args));
+  const view=await mountPane("claude",null);view.unmount();
+  await act(async () => finish({ protocolVersion: 2, readJobId: "index:late", running: false, rows: [], queue: [], permissions: [], commands: [], configKeys: [] }));
+  expect(vi.mocked(invoke).mock.calls.some(([command,args]) => command === "chat_read_cancel" && args?.jobId === "index:late")).toBe(true);
+});
+
+it("keeps the recent edge complete when an earlier v2 page is added to the retained window", async () => {
+  snapshotOverrides = { protocolVersion: 2, historyGeneration: "generation", coverage: "complete", hasMore: true, hasNewer: false,
+    rows: [{ kind: "user", id: "recent", text: "Recent retained message" }] };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args) => command === "chat_snapshot" && (args?.window as { before?: string })?.before
+    ? Promise.resolve({ ...snapshotOverrides, pageKind: "history", hasMore: false, hasNewer: true, rows: [{ kind: "user", id: "older", text: "Earlier retained message" }] }) as Promise<never> : previous(command,args));
+  const view = await mountPane();fireEvent.click(view.container.querySelector(".sv-history-more")!);
+  await screen.findByText("Earlier retained message");
+  expect(cachedChat("s")?.rows.map(row=>row.id)).toEqual(["older","recent"]);
+  expect(cachedChat("s")?.hasNewer).toBe(false);expect(screen.queryByText("Load newer messages")).toBeNull();
+});
 
 it("keeps the running model visible on discovery failure and restores choices after retry", async () => {
   const previous = vi.mocked(invoke).getMockImplementation()!;
@@ -166,6 +295,65 @@ async function mountPane(kind: "claude" | "codex" | "opencode" | "antigravity" =
   return view;
 }
 
+function mockOutgoingTranslation(pending: TranslationSession["pending"] = []) {
+  const settings: TranslationSettings = {
+    config: { enabled: true, defaultEnabled: true, conversationKinds: ["claude", "codex"], engine: "google", agent: "", model: "", effort: "", serviceId: "", version: 1, generation: 1, enabledSince: 0 },
+    editable: true, services: [], agents: [], conversationKinds: [], languages: [{ code: "en", name: "English" }],
+    engines: ["google"], protocols: [], displays: ["immersive"],
+  };
+  const session: TranslationSession = {
+    enabled: true, version: 1, generation: 1,
+    preferences: { outgoing: true, replies: false, source: "auto", target: "en", replySource: "auto", replyTarget: "en", display: "immersive", repliesSince: 0 },
+    replies: [], messages: [], pending,
+  };
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "translation_settings") return Promise.resolve(settings) as Promise<never>;
+    if (command === "translation_session") return Promise.resolve(session) as Promise<never>;
+    if (command === "translation_prepare") return Promise.resolve({ id: args?.messageId }) as Promise<never>;
+    if (command === "translation_send") return Promise.resolve("sent") as Promise<never>;
+    return previous(command, args);
+  });
+}
+
+it("sends the first translated Claude message without waiting for its native session event", async () => {
+  snapshotOverrides = { running: false };
+  mockOutgoingTranslation();
+  const { container } = await mountPane();
+  await screen.findByRole("switch", { name: "Translation" });
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Hello" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send")).toBe(true));
+  const calls = vi.mocked(invoke).mock.calls.map(([command]) => command);
+  expect(calls.indexOf("translation_prepare")).toBeLessThan(calls.indexOf("chat_start"));
+  expect(calls.indexOf("chat_start")).toBeLessThan(calls.indexOf("translation_send"));
+  expect(calls).not.toContain("chat_send");
+});
+
+it("retries a prepared Claude message after restart without waiting for its native session event", async () => {
+  snapshotOverrides = { running: false };
+  mockOutgoingTranslation([{ id: "prepared-message", text: "Hello", images: [], behavior: "queue", status: "failed", translation: true, translationReady: true }]);
+  await mountPane();
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("translation_send", { sessionId: "s", messageId: "prepared-message", text: "Hello", images: [], behavior: "queue" }));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_prepare")).toBe(false);
+});
+
+it("still waits for the native Codex session before sending a translated message", async () => {
+  snapshotOverrides = { running: false };
+  mockOutgoingTranslation();
+  const { container } = await mountPane("codex");
+  await screen.findByRole("switch", { name: "Translation" });
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "Hello" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_start")).toBe(true));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send")).toBe(false);
+  act(() => eventCallback({ type: "session", agentSessionId: "thread-1", model: "old-model" }));
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send")).toBe(true));
+});
+
 /** Serve `session_permission_state` from a value the test can change between events. */
 function mockPermissionState(read: () => SessionPermissionState) {
   const previous = vi.mocked(invoke).getMockImplementation()!;
@@ -192,6 +380,21 @@ it("resynchronizes on reconnection and reuses the uncertain submission identifie
   expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "chat_snapshot")).toHaveLength(2);
   act(() => eventCallback({ type: "rows", rows: [{ kind: "user", id: original.messageId as string, text: "Keep this message" }] }));
   expect(screen.getAllByText("Keep this message")).toHaveLength(1);
+});
+
+it("does not leave a stale error row when a dropped connection cuts a snapshot short", async () => {
+  const { container } = await mountPane();
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  const disconnected = new Error("Disconnected");
+  disconnected.name = "TransportError";
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_snapshot"
+    ? Promise.reject(disconnected) : previous(command, args));
+  await act(async () => reconnectCallback());
+  vi.mocked(invoke).mockImplementation(previous);
+  await act(async () => reconnectCallback());
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "chat_snapshot")).toHaveLength(3));
+  await act(async () => {});
+  expect(container.textContent).not.toContain("TransportError");
 });
 
 it("preserves input when an older server cannot deduplicate submissions", async () => {
@@ -248,6 +451,26 @@ it("guards queue editors mounted after the pane and removes the listener on unmo
   expect(insert()).toBe(true);
 });
 
+it("leaves the Enter that confirms IME composition to the input method", async () => {
+  const { container } = await mountPane();
+  act(() => eventCallback({ type: "queued", items: [{ id: "ime-q", text: "Queued input" }] }));
+  fireEvent.click(screen.getByText("Queued input"));
+  const editor = container.querySelector<HTMLTextAreaElement>(".sv-queue-edit")!;
+  // WebKit reports the confirming Enter with isComposing false and keyCode 229.
+  expect(fireEvent.keyDown(editor, { key: "Enter", keyCode: 229 })).toBe(true);
+  expect(container.querySelector(".sv-queue-edit")).toBe(editor);
+  fireEvent.keyDown(editor, { key: "Escape" });
+
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  const sends = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === "chat_send");
+  fireEvent.change(input, { target: { value: "hello" } });
+  expect(fireEvent.keyDown(input, { key: "Enter", keyCode: 229 })).toBe(true);
+  expect(input.value).toBe("hello");
+  expect(sends()).toHaveLength(0);
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(sends()).toHaveLength(1));
+});
+
 it("recalls session inputs in order while busy and restores the unsent draft", async () => {
   snapshotOverrides = { rows: [
     { kind: "user", id: "old", text: "First input" },
@@ -280,6 +503,17 @@ it("recalls session inputs in order while busy and restores the unsent draft", a
   }
   expect(input.selectionStart).toBe(0);
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+});
+
+it("recalls the original long input without exposing its preview as a complete copy",async()=> {
+  const text="Full original message 雪😀";const sizeBytes=new TextEncoder().encode(text).byteLength;
+  snapshotOverrides={protocolVersion:2,historyGeneration:"g",coverage:"complete",rows:[{kind:"user",id:"original",text:"Preview only",bodyAvailable:true}]};
+  const previous=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args)=>command==="chat_row" ? Promise.resolve({protocolVersion:2,fields:[{label:"body",detailRef:"original",contentRevision:"g:original",sizeBytes}],nextCursor:null}) as never
+    : command==="chat_detail_read" ? Promise.resolve({contentRevision:"g:original",text,nextCursor:null,eof:true}) as never : previous(command,args));
+  const view=await mountPane();const input=view.container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  expect(view.container.querySelector(".sv-message-copy-button")).toBeNull();fireEvent.keyDown(input,{key:"ArrowUp"});
+  await waitFor(()=>expect(input.value).toBe(text));expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==="chat_detail_read")).toHaveLength(1);
 });
 
 it("leaves multiline caret movement, selection, modified arrows and IME input to the editor", async () => {
@@ -812,8 +1046,8 @@ it("restores steering attachments on failure and clears them on retry", async ()
   vi.mocked(invoke).mockImplementation((command, args) => command === "chat_send"
     ? Promise.reject(new Error("Image rejected")) : previous(command, args));
   fireEvent.click(screen.getByRole("button", { name: "Steer" }));
-  await screen.findByText("Error: Image rejected");
-  expect(container.querySelector(".sv-submission img")).toBeTruthy();
+  const failedMessage = await screen.findByText("Error: Image rejected");
+  expect(failedMessage.closest(".sv-item")?.querySelector(".sv-msg-image")).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("chat_send", expect.objectContaining({ behavior: "steer", images: [{ mimeType: "image/png", data: "cG5n" }] }));
   vi.mocked(invoke).mockImplementation(previous);
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -839,6 +1073,21 @@ it("gives Escape to queue editing and open menus before stopping", async () => {
   option.remove();
   fireEvent.keyDown(container.querySelector(".term-mount")!, { key: "Escape" });
   expect(invoke).toHaveBeenCalledWith("chat_interrupt", { sessionId: "s" });
+});
+
+it.each(["claude", "codex"] as const)("saves the current %s effort when Set as default is checked without another selection", async (kind) => {
+  snapshotOverrides = { running: false, selection: { model: "old-model", effort: "high" } };
+  useTermStore.setState({ chatEffortByModel: { [`${kind}:new-model`]: "high" } });
+  await mountPane(kind);
+  const effort = screen.getByRole("combobox", { name: "Thinking effort" });
+  expect(effort.getAttribute("data-default-value")).toBe("");
+  vi.mocked(invoke).mockClear();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Set as default for Old" }));
+  expect(useTermStore.getState().chatEffortByModel).toEqual({ [`${kind}:old-model`]: "high", [`${kind}:new-model`]: "high" });
+  expect(useTermStore.getState().chatModelByKind[kind]).toBe("old-model");
+  expect(effort.getAttribute("data-default-value")).toBe("high");
+  expect(JSON.parse(localStorage.getItem("vlx-settings")!).chatEffortByModel[`${kind}:old-model`]).toBe("high");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_set_effort" || command === "chat_set_model")).toBe(false);
 });
 
 it.each(["claude", "codex", "opencode"] as const)("restores %s conversation settings instead of global defaults before its process starts", async (kind) => {
@@ -889,7 +1138,7 @@ it.each([
   const { container } = await mountPane(kind);
   const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
   fireEvent.change(input, { target: { value: draft, selectionStart: draft.length } });
-  await screen.findByRole("button", { name: /vspawn/ });
+  await screen.findByRole("option", { name: /vspawn/ });
   expect(invoke).toHaveBeenCalledWith("chat_commands", { sessionId: "s" });
   expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "chat_start" || name === "chat_send")).toBe(false);
   fireEvent.keyDown(input, { key: "Tab" });
@@ -897,6 +1146,38 @@ it.each([
   fireEvent.change(input, { target: { value: native + "inspect the project" } });
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("chat_send", expect.objectContaining({ text: native + "inspect the project" })));
+});
+
+
+it("moves through the skill list with the arrow keys and takes the highlighted one", async () => {
+  snapshotOverrides = { running: false, commands: [] };
+  const fallback = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => command === "chat_commands"
+    ? Promise.resolve(["vspawn", "vspawn-tree", "vstat"].map((name) => ({ name, invocation: "$" }))) as Promise<never>
+    : fallback(command, args));
+  const { container } = await mountPane("codex");
+  const input = container.querySelector<HTMLTextAreaElement>(".sv-box textarea")!;
+  fireEvent.change(input, { target: { value: "$v", selectionStart: 2 } });
+  await screen.findByRole("option", { name: /vstat/ });
+  const selected = () => container.querySelector('.sv-complete [aria-selected="true"]')?.textContent;
+  expect(selected()).toBe("$vspawn");
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(selected()).toBe("$vstat");
+  // The list wraps, so the first entry is one step up from itself.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  expect(selected()).toBe("$vstat");
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  fireEvent.keyDown(input, { key: "Tab" });
+  expect(input.value).toBe("$vspawn-tree ");
+  fireEvent.change(input, { target: { value: "$vs", selectionStart: 3 } });
+  await screen.findByRole("option", { name: /vstat/ });
+  expect(selected()).toBe("$vspawn");
+  fireEvent.keyDown(input, { key: "ArrowUp" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(input.value).toBe("$vstat ");
+  expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "chat_send")).toBe(false);
 });
 
 
@@ -921,7 +1202,7 @@ it("waits for the skill catalogue and retries a failed lookup without sending th
   retry = true;
   fireEvent.change(input, { target: { value: "" } });
   fireEvent.change(input, { target: { value: "$vsp", selectionStart: 4 } });
-  await screen.findByRole("button", { name: "$vspawn" });
+  await screen.findByRole("option", { name: "$vspawn" });
   expect(screen.queryByText(/Skill lookup failed/)).toBeNull();
 });
 
@@ -1274,6 +1555,37 @@ it("confirms the target before removing history and resends the edit with its im
   expect(calls.find(([command]) => command === "chat_send")?.[1]).toMatchObject({ text: "Replacement", images: [image] });
   expect(screen.getByText("Keep this")).toBeTruthy();
   expect(screen.queryByText("Old answer")).toBeNull();
+});
+
+it.each(["claude", "codex"] as const)("translates a %s edit after rewind before resending with the same attachments", async kind => {
+  const image = { mimeType: "image/png", data: "UE5H" };
+  snapshotOverrides = { rewindScopes: ["conversation"], rows: [{ kind: "user", id: "edit", text: "Original", images: [image] }] };
+  mockOutgoingTranslation();
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  let prepared!: () => void;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "chat_rewind") return Promise.resolve({ prefillText: "Original" }) as Promise<never>;
+    if (command === "translation_prepare") return new Promise<void>(resolve => { prepared = resolve; }) as Promise<never>;
+    return previous(command, args);
+  });
+  await mountPane(kind);
+  await screen.findByRole("switch", { name: "Translation" });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Edit" }), { target: { value: "Replacement" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review and resend" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete and resend" }));
+  await waitFor(() => expect(prepared).toBeTypeOf("function"));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "translation_send" || command === "chat_send")).toBe(false);
+  await act(async () => prepared());
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("translation_send", expect.objectContaining({ text: "Replacement", images: [image], behavior: "queue" })));
+  const calls = vi.mocked(invoke).mock.calls;
+  const prepareIndex = calls.findIndex(([command]) => command === "translation_prepare");
+  const sendIndex = calls.findIndex(([command]) => command === "translation_send");
+  expect(calls.findIndex(([command]) => command === "chat_rewind")).toBeLessThan(prepareIndex);
+  expect(calls.slice(prepareIndex + 1, sendIndex).some(([command]) => command === "translation_session")).toBe(true);
+  expect(calls[prepareIndex][1]).toEqual(calls[sendIndex][1]);
+  expect(calls.some(([command]) => command === "chat_send")).toBe(false);
+  expect(useOutbox.getState().sessions.s[0].status).toBe("sent");
 });
 
 it("keeps the original conversation and edited text when rewind fails", async () => {
@@ -1774,4 +2086,59 @@ it("Antigravity rejects dropped images with a clear text-only notice", async () 
   await screen.findByText("Antigravity conversation view currently supports text messages only.");
   expect(container.querySelector(".sv-attach-thumb")).toBeNull();
   expect(container.querySelector<HTMLTextAreaElement>(".sv-composer textarea")?.placeholder).toBe("Message Antigravity, or use @files");
+});
+
+function mockReadiness(readiness: { installed: boolean; signedIn?: boolean | null }) {
+  const previous = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "chat_agent_readiness") return Promise.resolve(readiness) as Promise<never>;
+    return previous(command, args);
+  });
+}
+
+const sendButton = () => document.querySelector<HTMLButtonElement>(".sv-send")!;
+const composer = () => document.querySelector<HTMLTextAreaElement>("textarea")!;
+
+it("holds messages back with no way to dismiss the notice while the agent is not installed", async () => {
+  mockReadiness({ installed: false });
+  await mountPane("claude");
+  await screen.findByText(/is not installed/);
+  expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  act(() => eventCallback({ type: "unsent", text: "Keep this", images: [] }));
+  await waitFor(() => expect(composer().value).toBe("Keep this"));
+  expect(sendButton().disabled).toBe(true);
+  fireEvent.keyDown(composer(), { key: "Enter" });
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_send")).toBe(false);
+});
+
+it("asks for a sign-in when the conversation opens and lets go once it is confirmed", async () => {
+  mockReadiness({ installed: true, signedIn: false });
+  await mountPane("claude");
+  await screen.findByRole("region", { name: "Claude account" });
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+  act(() => eventCallback({ type: "unsent", text: "Keep this", images: [] }));
+  await waitFor(() => expect(composer().value).toBe("Keep this"));
+  expect(sendButton().disabled).toBe(true);
+
+  mockReadiness({ installed: true, signedIn: true });
+  act(() => eventCallback({ type: "extras", extras: { auth: { status: "success" } } }));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Claude account" })).toBeNull());
+  await waitFor(() => expect(sendButton().disabled).toBe(false));
+});
+
+it("does not hold a message back when the sign-in cannot be told", async () => {
+  mockReadiness({ installed: true, signedIn: null });
+  await mountPane("claude");
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "chat_agent_readiness")).toBe(true));
+  act(() => eventCallback({ type: "unsent", text: "Send this", images: [] }));
+  await waitFor(() => expect(sendButton().disabled).toBe(false));
+  expect(screen.queryByRole("region", { name: "Claude account" })).toBeNull();
+});
+
+it("puts a refused message and its images back ahead of what is being typed", async () => {
+  await mountPane("claude");
+  fireEvent.change(composer(), { target: { value: "Later thought" } });
+  act(() => eventCallback({ type: "unsent", text: "First message", images: [{ mimeType: "image/png", data: "AAAA" }] }));
+  await waitFor(() => expect(composer().value).toBe("First message\n\nLater thought"));
+  expect(document.querySelectorAll(".sv-attach-item").length).toBe(1);
 });

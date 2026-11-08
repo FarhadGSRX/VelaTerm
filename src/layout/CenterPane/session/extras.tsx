@@ -143,6 +143,7 @@ export function ChipPopover({
   label,
   title,
   badge,
+  className,
   width = 300,
   fitViewport = true,
   disabled = false,
@@ -153,6 +154,8 @@ export function ChipPopover({
   label: string;
   title: string;
   badge?: ReactNode;
+  /** Extra classes on the chip button, for chips that show a state of their own. */
+  className?: string;
   width?: number;
   fitViewport?: boolean;
   disabled?: boolean;
@@ -196,7 +199,7 @@ export function ChipPopover({
   return (
     <div className="sv-chip-box" ref={boxRef}>
       <button
-        className="sv-chip"
+        className={className ? `sv-chip ${className}` : "sv-chip"}
         title={title}
         aria-expanded={open}
         aria-disabled={disabled || undefined}
@@ -356,13 +359,14 @@ export function TasksChip({
   onBackgroundAll: () => void;
 }) {
   const t = useT();
-  const running = tasks.filter((task) => !isTaskFinished(task)).length;
+  const running = disabled ? 0 : tasks.filter((task) => !isTaskFinished(task)).length;
   return (
     <ChipPopover
       glyph={<Icons.layers size={14} />}
       label={t("chat.tasks.label")}
       title={disabled ? t("chat.chipAgentNotRunning") : t("chat.tasks.tooltip")}
-      badge={!disabled && running > 0 ? <span className="sv-chip-badge">{running}</span> : undefined}
+      badge={running > 0 ? <span className="sv-chip-badge">{running}</span> : undefined}
+      className={running > 0 ? "sv-tasks-running" : undefined}
       width={340}
       disabled={disabled}
     >
@@ -380,7 +384,7 @@ export function TasksChip({
           // Two sibling buttons rather than Stop inside the row button: interactive content may not nest,
           // and a nested Stop could not be reached by keyboard.
           return (
-            <div className="sv-popover-row" key={task.task_id}>
+            <div className={finished ? "sv-popover-row" : "sv-popover-row sv-task-row-running"} key={task.task_id}>
               <a className="sv-popover-open" title={t("chat.tasks.open")} href={taskUrl(sessionId, task.task_id)} onClick={(event) => {
                 if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                 event.preventDefault();
@@ -390,7 +394,10 @@ export function TasksChip({
                   <span className="sv-popover-title">{task.description || task.summary || task.task_id}</span>
                   <span className="sv-popover-sub">
                     {task.task_type.replace(/_/g, " ")}
-                    {finished ? ` · ${taskStatusLabel(t, task.status)}` : ""}
+                    {" · "}
+                    <span className="sv-task-row-status">
+                      {finished ? taskStatusLabel(t, task.status) : t("chat.tasks.status.running")}
+                    </span>
                   </span>
                 </span>
               </a>

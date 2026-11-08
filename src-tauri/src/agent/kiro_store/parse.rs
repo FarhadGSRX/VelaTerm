@@ -14,7 +14,7 @@ fn id<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
     if !valid_id(value) { return Err(damaged(field)); }
     Ok(value)
 }
-fn directory(value: &str) -> Result<PathBuf, String> {
+pub(crate) fn directory(value: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(value);
     if !path.is_absolute() { return Err(damaged("project directory")); }
     Ok(path)
@@ -48,23 +48,23 @@ fn timestamp(dt: time::OffsetDateTime) -> String {
     let fraction = if dt.nanosecond() == 0 { String::new() } else { format!(".{:09}",dt.nanosecond()).trim_end_matches('0').to_string() };
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}Z",dt.year(),u8::from(dt.month()),dt.day(),dt.hour(),dt.minute(),dt.second())
 }
-fn iso_optional(value: &Value) -> Result<Option<String>, String> {
+pub(crate) fn iso_optional(value: &Value) -> Result<Option<String>, String> {
     if value.is_null() { return Ok(None); }
     Ok(Some(timestamp(iso(text(value,"timestamp")?)?)))
 }
-fn seconds(value: &Value) -> Result<Option<String>, String> {
+pub(crate) fn seconds(value: &Value) -> Result<Option<String>, String> {
     if value.is_null() { return Ok(None); }
     let value = value.as_i64().ok_or_else(|| damaged("seconds timestamp"))?;
     let dt = time::OffsetDateTime::from_unix_timestamp(value).map_err(|_| damaged("seconds timestamp"))?;
     if !(0..=9999).contains(&dt.year()) { return Err(damaged("seconds timestamp")); }
     Ok(Some(timestamp(dt)))
 }
-fn millis(value: &Value) -> Result<i64, String> {
+pub(crate) fn millis(value: &Value) -> Result<i64, String> {
     let dt = iso(text(value,"session time")?)?;
     i64::try_from(dt.unix_timestamp_nanos()/1_000_000).map_err(|_| damaged("session time"))
 }
 
-fn context(model: &Value, percent: &Value) -> Result<Context, String> {
+pub(crate) fn context(model: &Value, percent: &Value) -> Result<Context, String> {
     let mut out = Context::default();
     if !model.is_null() {
         let m = text(&model["model_id"], "model ID")?;

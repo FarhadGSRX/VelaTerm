@@ -4,7 +4,7 @@
 //!   encode only single letters, so Tab is not expressible as a remappable ShortcutAction.
 //! - Cmd/Ctrl++/-/0 changes or resets terminal font size and is fixed to those semantics.
 //! - Settings may remap temporary-terminal creation, desktop browser tabs, pane/tab closure, both
-//!   split directions, terminal/global search, terminal selection, and document save. Defaults live in shortcutRegistry
+//!   split directions, terminal/global search, terminal copy and select all, and document save. Defaults live in shortcutRegistry
 //!   and overrides in vlx-settings. Remapping changes only triggers, not contextual behavior.
 //!
 //! Platform defaults use Cmd on macOS and Ctrl+Alt on Windows/Linux (see DEFAULT_BINDINGS). Bare Ctrl
@@ -26,7 +26,13 @@ import { isShareSurface } from "../ipc/shareBase";
 import { env } from "../platform";
 import { useTermStore } from "../store/termStore";
 import { activeAgentLocation, agentPickerUrl, navigateAgentPicker, newAgentPickerRoute, readAgentPickerRoute } from "../layout/NewAgentSession/navigation";
-import { getTerminal, selectAll as selectAllTerminalContent } from "../terminal/registry";
+import { copyText } from "../ipc/info";
+import {
+  getSelection as getTerminalSelection,
+  getTerminal,
+  hasSelection as hasTerminalSelection,
+  selectAll as selectAllTerminalContent,
+} from "../terminal/registry";
 import {
   DEFAULT_BINDINGS,
   hasMod,
@@ -51,6 +57,19 @@ export function useKeyboardShortcuts() {
       if (e.key >= "1" && e.key <= "9") return Number(e.key) - 1;
       if (/^Digit[1-9]$/.test(e.code)) return Number(e.code.slice(5)) - 1;
       return -1;
+    };
+
+    // The session whose terminal owns keyboard focus for this event, or null when the key belongs to
+    // something else: an input, a conversation view, a document/browser/task tab or an IME composition.
+    const focusedTerminalSession = (e: KeyboardEvent): string | null => {
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return null;
+      const { activeSessionId, activeTabId, docTabs, browserTabs, taskTabs, newSessionTabs } = useTermStore.getState();
+      if (!activeSessionId) return null;
+      if (activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId] || newSessionTabs[activeTabId])) return null;
+      const terminal = getTerminal(activeSessionId);
+      if (!(e.target instanceof Node) || !terminal?.element?.contains(e.target)
+        || !terminal.element.contains(document.activeElement)) return null;
+      return activeSessionId;
     };
 
     const handler = (e: KeyboardEvent) => {
@@ -87,11 +106,11 @@ export function useKeyboardShortcuts() {
         const isMinus = e.key === "-" || e.key === "_" || e.code === "Minus";
         const isZero = e.key === "0" || e.code === "Digit0";
         if (isPlus || isMinus || isZero) {
-          const { activeSessionId, activeTabId, docTabs, browserTabs, taskTabs, termFontSize, setTermFontSize } =
+          const { activeSessionId, activeTabId, docTabs, browserTabs, taskTabs, newSessionTabs, termFontSize, setTermFontSize } =
             useTermStore.getState();
           const onSessionTab =
             !!activeSessionId &&
-            !(activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId]));
+            !(activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId] || newSessionTabs[activeTabId]));
           if (onSessionTab) {
             e.preventDefault();
             if (isZero) setTermFontSize(13);
@@ -138,7 +157,7 @@ export function useKeyboardShortcuts() {
       }
 
       if (matchCombo(e, sc("closePane"))) {
-        const { activeTabId, docTabs, browserTabs, taskTabs, requestCloseDocTab, closeTab, activeSessionId, closePane } =
+        const { activeTabId, docTabs, browserTabs, taskTabs, newSessionTabs, requestCloseDocTab, closeTab, activeSessionId, closePane } =
           useTermStore.getState();
         // Document tabs close directly when clean or route dirty state to DocView confirmation.
         if (activeTabId && docTabs[activeTabId]) {
@@ -147,8 +166,8 @@ export function useKeyboardShortcuts() {
           return;
         }
         // Browser and task tabs close directly: a browser tab has no unsaved state (unmounting destroys the
-        // child WebView), and a task tab only shows what the agent reports.
-        if (activeTabId && (browserTabs[activeTabId] || taskTabs[activeTabId])) {
+        // child WebView), a task tab only shows what the agent reports, and a New Session tab has created nothing yet.
+        if (activeTabId && (browserTabs[activeTabId] || taskTabs[activeTabId] || newSessionTabs[activeTabId])) {
           e.preventDefault();
           closeTab(activeTabId);
           return;
@@ -162,7 +181,13 @@ export function useKeyboardShortcuts() {
       }
 
       if (matchCombo(e, sc("saveDoc"))) {
-        // Intercept save only for an active document tab.
+        // A document beside a conversation saves when focus is inside it; otherwise only an active document tab.
+        const docked = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-dock-doc-id]")?.dataset.dockDocId;
+        if (docked) {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent(DOC_SAVE_EVENT, { detail: docked }));
+          return;
+        }
         const { activeTabId, docTabs } = useTermStore.getState();
         if (activeTabId && docTabs[activeTabId]) {
           e.preventDefault();
@@ -225,18 +250,22 @@ export function useKeyboardShortcuts() {
       // Only the focused terminal owns this action; inputs, conversation views and overlays keep their
       // native selection. Stop handled keys before xterm can turn a rebound Ctrl+A into PTY input.
       if (matchCombo(e, sc("selectAllTerminal"))) {
-        if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
-        const { activeSessionId, activeTabId, docTabs, browserTabs, taskTabs } = useTermStore.getState();
-        const onSessionTab =
-          !!activeSessionId &&
-          !(activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId]));
-        if (!onSessionTab) return;
-        const terminal = getTerminal(activeSessionId!);
-        if (!(e.target instanceof Node) || !terminal?.element?.contains(e.target)
-          || !terminal.element.contains(document.activeElement)) return;
+        const id = focusedTerminalSession(e);
+        if (!id) return;
         e.preventDefault();
         e.stopPropagation();
-        selectAllTerminalContent(activeSessionId!);
+        selectAllTerminalContent(id);
+        return;
+      }
+
+      // Copy only when the focused terminal has a selection. Without one the key falls through, so a
+      // user who rebinds this to plain Ctrl+C still gets the shell interrupt when nothing is selected.
+      if (matchCombo(e, sc("copyTerminal"))) {
+        const id = focusedTerminalSession(e);
+        if (!id || !hasTerminalSelection(id)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void copyText(getTerminalSelection(id)).catch(() => {});
       }
     };
 

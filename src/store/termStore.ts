@@ -65,6 +65,9 @@ import {
   collectSidebarViewIds,
   firstSidebarViewId,
   makeSidebarTreeTab,
+  assignSidebarTabSections,
+  sidebarTabOfView,
+  sidebarTabSection,
   migrateLegacySidebarTabs,
   removeSidebarView,
   setSidebarSplitSizes,
@@ -104,7 +107,7 @@ import type {
   SessionKind,
   SessionRuntime,
 } from "../types";
-import { AGENT_STATES, effectiveStatus, matchesAgentState } from "../types";
+import { AGENT_STATES, effectiveStatus, matchesAgentState, worktreeGroup } from "../types";
 import {
   CLEAN_IMAGES_KEY,
   NOTIFY_KEY,
@@ -129,8 +132,9 @@ import {
   type ReferSummaryConfig,
   type TermRenderer,
 } from "./settings";
-import { docKindOf, makeDocTab, type DocTab } from "./docTab";
+import { docKindOf, makeChangesTab, makeDiffTab, makeDocTab, sameComparison, type ChangesTarget, type DocTab } from "./docTab";
 import { traceSplit, type SplitSource } from "./splitTrace";
+import { parseRailSection, sectionStartsExpanded, type RailSection } from "../layout/LeftSidebar/systemCollections";
 
 // Re-export the public API after moving implementations to settings/docTab, preserving existing import paths.
 export { DEFAULT_MAX_LIVE_TABS } from "./settings";
@@ -141,7 +145,7 @@ export type {
   TermRenderer,
 } from "./settings";
 export { docKindOf } from "./docTab";
-export type { DocKind, DocTab } from "./docTab";
+export type { ChangesTarget, DocKind, DocTab } from "./docTab";
 
 // A local claim lets a failed workflow or image upload retry its backend-owned request ID.
 const spawnRecovery = new Map<string, Promise<void>>();
@@ -290,10 +294,22 @@ function defaultSidebarViews(): {
   };
   return {
     views: [view],
-    tabs: [makeSidebarTreeTab(view.id)],
+    tabs: [makeSidebarTreeTab(view.id, "projects")],
     primaryId: MAIN_TREE_VIEW_ID,
     activeId: MAIN_TREE_VIEW_ID,
   };
+}
+
+/** First unused default name for a new sidebar view. */
+function nextSidebarViewName(views: SidebarTreeView[]): string {
+  const usedNames = new Set(views.map((view) => view.name));
+  let index = views.length + 1;
+  let name = t("tree.viewDefaultName", index);
+  while (usedNames.has(name)) {
+    index += 1;
+    name = t("tree.viewDefaultName", index);
+  }
+  return name;
 }
 
 /** Upper bound on persisted per-view ID maps so a corrupted payload cannot grow without limit. */
@@ -402,6 +418,8 @@ function loadSidebarViews() {
     }
     const seen = new Set<string>();
     const views: SidebarTreeView[] = [];
+    // Sections were briefly stored per pane; a group without its own section takes its first pane's.
+    const legacySections = new Map<string, unknown>();
     for (const candidate of saved.views) {
       if (
         !candidate ||
@@ -412,6 +430,7 @@ function loadSidebarViews() {
       const id = candidate.id.slice(0, 100);
       if (!id) continue;
       seen.add(id);
+      legacySections.set(id, (candidate as { section?: unknown }).section);
       // A status filter only means something together with the ID snapshot taken when it was switched on, because
       // live statuses are gone after a restart. Payloads without that snapshot (older versions) start unfiltered.
       const statusFilterIds = loadIdSnapshot(candidate.statusFilterIds);
@@ -496,12 +515,14 @@ function loadSidebarViews() {
           activeViewId: memberIds.includes(candidate.activeViewId)
             ? candidate.activeViewId
             : firstSidebarViewId(root),
+          section: parseRailSection(candidate.section),
         });
       }
       for (const view of views) {
         if (!usedViewIds.has(view.id)) tabs.push(makeSidebarTreeTab(view.id));
       }
     }
+    tabs = assignSidebarTabSections(tabs, primaryId, (viewId) => legacySections.get(viewId));
     tabs = tabs.map((tab) =>
       collectSidebarViewIds(tab.root).includes(activeId)
         ? { ...tab, activeViewId: activeId }
@@ -683,6 +704,7 @@ function reconcileTabs(state: {
   docTabs: Record<string, DocTab>;
   browserTabs: Record<string, BrowserTab>;
   taskTabs: Record<string, TaskTab>;
+  newSessionTabs: Record<string, NewSessionTab>;
 }) {
   const valid = new Set([
     ...state.sessions.map((s) => s.id),
@@ -691,7 +713,7 @@ function reconcileTabs(state: {
   const paneTrees: Record<string, PaneNode> = {};
   const openTabs: string[] = [];
   for (const tabId of state.openTabs) {
-    if (state.docTabs[tabId] || state.browserTabs[tabId] || state.taskTabs[tabId]) {
+    if (state.docTabs[tabId] || state.browserTabs[tabId] || state.taskTabs[tabId] || state.newSessionTabs[tabId]) {
       // Preserve metadata-backed document/browser/task tabs without pane trees. A browser tab bound to a
       // tree node uses the node ID and closes when that node is deleted or archived.
       if (
@@ -724,11 +746,15 @@ function reconcileTabs(state: {
   for (const [id, task] of Object.entries(state.taskTabs)) {
     if (inOpen.has(id)) taskTabs[id] = task;
   }
+  const newSessionTabs: Record<string, NewSessionTab> = {};
+  for (const [id, draft] of Object.entries(state.newSessionTabs)) {
+    if (inOpen.has(id)) newSessionTabs[id] = draft;
+  }
   let { activeTabId, activeSessionId, focusedPaneId } = state;
   if (!activeTabId || !openTabs.includes(activeTabId)) {
     activeTabId = openTabs[0] ?? null;
   }
-  if (activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId])) {
+  if (activeTabId && (docTabs[activeTabId] || browserTabs[activeTabId] || taskTabs[activeTabId] || newSessionTabs[activeTabId])) {
     // Document/browser/task tabs have no active session or focused pane.
     activeSessionId = null;
     focusedPaneId = null;
@@ -764,6 +790,7 @@ function reconcileTabs(state: {
     docTabs,
     browserTabs,
     taskTabs,
+    newSessionTabs,
   };
 }
 
@@ -842,6 +869,30 @@ export interface TaskTab {
   returnPaneId?: string;
 }
 
+/**
+ * Tab for setting up a new agent session: location, agent, model, view and a first task. Like `TaskTab` it has
+ * no pane tree and is client-local: not persisted across restart and not published to mirror peers. The form
+ * itself lives in the mounted `NewSessionView`; the tab only records where the session will be created.
+ */
+export interface NewSessionTab {
+  /** `"new-session-" + genId()`, used in `openTabs` and the tab's URL. */
+  id: string;
+  projectId: string;
+  groupId: string | null;
+  /** Session the new one is created under, or null for the project or group root. */
+  parentSessionId: string | null;
+  /** The pane to return to when this tab closes without creating anything. */
+  returnTabId?: string;
+  returnPaneId?: string;
+}
+
+/** Where a new-session tab creates its session. */
+export interface NewSessionTarget {
+  projectId: string;
+  groupId?: string | null;
+  parentSessionId?: string | null;
+}
+
 /** Restore a task's source only within the selected tab; other navigation keeps the first-leaf fallback. */
 function taskReturnLeaf(tree: PaneNode, tabId: string, task?: TaskTab) {
   const source = task?.returnTabId === tabId && task.returnPaneId
@@ -890,17 +941,6 @@ interface TermStore {
   spawnReceipts: Record<string, SpawnReceipt>;
   /** Target ID for the open merge dialog, or `null`. */
   mergeTarget: SessionId | null;
-  /** Working directory for the open changes dialog, or `null`. */
-  changesCwd: string | null;
-  /** File the changes dialog should select on open, or `null` to select the first one. */
-  changesPath: string | null;
-  /**
-   * Commit the changes dialog should show instead of the worktree, or `null` for uncommitted work.
-   * Set from the Git panel's history so one dialog serves both "what changed since HEAD" and
-   * "what did this commit change".
-   */
-  changesCommit: string | null;
-
   // Center tabs and split panes.
   openTabs: SessionId[]; // Visible tabs, identified by root session ID.
   activeTabId: SessionId | null; // Current tab.
@@ -945,10 +985,17 @@ interface TermStore {
   liveEvictAsk: boolean;
   /** Metadata for `doc-` entries in `openTabs`. */
   docTabs: Record<string, DocTab>;
+  /**
+   * Documents shown in the panel beside a conversation (`vartifact`). They use the same view and actions as
+   * document tabs but are not tabs: never in `openTabs`, not persisted, and closed with the panel.
+   */
+  dockDocs: Record<string, DocTab>;
   /** Metadata for `browser-` entries in `openTabs`. */
   browserTabs: Record<string, BrowserTab>;
   /** Metadata for `task-` entries in `openTabs`. Client-local, see `TaskTab`. */
   taskTabs: Record<string, TaskTab>;
+  /** Metadata for `new-session-` entries in `openTabs`. Client-local, see `NewSessionTab`. */
+  newSessionTabs: Record<string, NewSessionTab>;
 
   // Mirror mode: one shared arrangement across every client of this service (see mirrorSync.ts).
   /**
@@ -982,6 +1029,12 @@ interface TermStore {
 
   // Other UI state.
   leftCollapsed: boolean;
+  /**
+   * Show a section's pane group in the sidebar, creating it with a single pane the first time. Every group keeps its
+   * own splits, sizes and per-pane conditions while hidden. Picking the section already shown hides or shows the
+   * sidebar instead.
+   */
+  pickSidebarSection: (section: RailSection) => void;
   rightCollapsed: boolean;
   leftWidth: number;
   rightWidth: number;
@@ -1143,6 +1196,8 @@ interface TermStore {
   referSummary: ReferSummaryConfig;
   /** Whether the Info panel's Resources section shows the whole-machine group. */
   showSystemResources: boolean;
+  /** Whether the This turn section shows the changed-file list instead of the statistics. */
+  turnFilesView: boolean;
   /**
    * Info panel sections the user collapsed, keyed by section id. Missing keys are open, matching the
    * sparse persisted map, so a section the user never touched keeps its default expanded state.
@@ -1218,9 +1273,11 @@ interface TermStore {
   /** Closes branch merge. */
   closeMerge: () => void;
   /** Opens the changes dialog for a working directory. */
-  openChanges: (cwd: string, opts?: { path?: string; commit?: string }) => void;
+  /** Open, or focus and refresh, the changes tab for this comparison, selecting `path` when given. */
+  openChanges: (cwd: string, opts?: { path?: string; commit?: string; side?: import("../ipc/commands").GitChangeSide; base?: { from: string; label: string } }) => void;
+  /** Select a file in an open changes tab. */
+  selectChangesFile: (id: string, path: string | null) => void;
   /** Closes the changes dialog. */
-  closeChanges: () => void;
   /** Executes a spawn: creates the child and optional worktree, stores its prompt, and opens it. */
   executeSpawn: (req: SpawnRequest) => Promise<void>;
   /** Consumes a session's pending initial spawn prompt after PTY startup. */
@@ -1253,6 +1310,8 @@ interface TermStore {
   archiveMany: (nodes: SelNode[]) => Promise<void>;
   /** Archives an entire group and keeps a hidden tombstone that returns when any child is restored. */
   archiveGroup: (id: string) => Promise<void>;
+  /** Archives a user collection like a group, releasing member projects and keeping a hidden tombstone. */
+  archiveCollection: (id: string) => Promise<void>;
   /** Restores an archived session to the normal tree. */
   restoreSession: (id: SessionId) => Promise<void>;
   /** Loads archived sessions. */
@@ -1316,6 +1375,12 @@ interface TermStore {
    * Opens a document tab. Reopening an existing path focuses it and forces a disk reload; otherwise creates one.
    */
   openDocTab: (path: string) => void;
+  /** Creates a document shown beside a conversation and returns its ID; see `dockDocs`. */
+  openDockDoc: (path: string) => string;
+  /** Removes a document shown beside a conversation, discarding unsaved edits. */
+  closeDockDoc: (id: string) => void;
+  /** Open, or focus and refresh, the diff tab of `path`, whose repository-relative path under `root` is `relative`. */
+  openDiffTab: (path: string, root: string, relative: string) => void;
   /** Creates an untitled plain-text draft whose first Save As establishes path and syntax. */
   newDocTab: () => void;
   /**
@@ -1323,12 +1388,21 @@ interface TermStore {
    */
   openTaskTab: (sessionId: string, task: ChatBackgroundTask) => void;
   hydrateTaskTab: (sessionId: string, task: ChatBackgroundTask) => void;
+  /**
+   * Opens a New Session tab for a location and returns its ID. With `id`, focuses that tab when it is open,
+   * or opens one under that ID (restoring a tab from its URL).
+   */
+  openNewSessionTab: (target: NewSessionTarget, id?: string) => string;
+  /** Moves an open New Session tab to another location, such as when its project is changed. */
+  retargetNewSessionTab: (id: string, target: NewSessionTarget) => void;
   /** Applies Save As path/title/kind and converts a draft to normal read/write mode. */
   setDocTabPath: (id: string, path: string) => void;
   /** Refreshes a document by incrementing its reload nonce. */
   refreshDocTab: (id: string) => void;
   /** Toggles a document tab's edit mode. */
   setDocTabMode: (id: string, mode: DocTab["mode"]) => void;
+  /** Sets the viewport an artifact tab previews at. */
+  setDocTabViewport: (id: string, viewport: NonNullable<DocTab["viewport"]>) => void;
   /** Marks or clears unsaved document changes. */
   setDocTabDirty: (id: string, dirty: boolean) => void;
   /** Requests document closure; clean tabs close immediately and dirty tabs prompt. */
@@ -1553,6 +1627,7 @@ interface TermStore {
   setReferSummary: (patch: Partial<ReferSummaryConfig>) => void;
   /** Shows or hides the whole-machine rows in the Info panel's Resources section. */
   setShowSystemResources: (v: boolean) => void;
+  setTurnFilesView: (v: boolean) => void;
   /** Collapses or expands one Info panel section by id, persisting the choice across sessions and shells. */
   toggleInfoSection: (id: string) => void;
   /** Replaces the ordered list of composer chips shown inline; chips left out are off. */
@@ -1580,7 +1655,6 @@ interface TermStore {
   setDefaultShell: (v: string) => void;
   setAgentShell: (v: string) => void;
   /** Interface font family; empty or `null` uses the default stack. */
-  setUiFontFamily: (v: string | null) => void;
   /** Interface font size in pixels; `null` follows density. */
   setUiFontSize: (v: number | null) => void;
   /** Terminal font family; empty or `null` uses the default stack. */
@@ -1775,6 +1849,7 @@ function persistAndApplyVisual(getState: () => TermStore) {
     sessionTitlePrefs: s.sessionTitlePrefs,
     referSummary: s.referSummary,
     showSystemResources: s.showSystemResources,
+    turnFilesView: s.turnFilesView,
     infoCollapsed: s.infoCollapsed,
     composerInlineChips: s.composerInlineChips,
     composerInlineChipsRevision: s.composerInlineChipsRevision,
@@ -2003,6 +2078,20 @@ function stopTabSessions(state: TermStore, tabId: string): void {
   }
 }
 
+type DocMaps = { docTabs: Record<string, DocTab>; dockDocs: Record<string, DocTab> };
+
+/** A document tab or a document shown beside a conversation; both share the document actions. */
+export function findDocTab(state: DocMaps, id: string): DocTab | undefined {
+  return state.docTabs[id] ?? state.dockDocs[id];
+}
+
+/** Store update applying `patch` to document `id`, wherever it is shown; nothing when it is gone. */
+function patchDoc(state: DocMaps, id: string, patch: Partial<DocTab>): Partial<DocMaps> {
+  if (state.docTabs[id]) return { docTabs: { ...state.docTabs, [id]: { ...state.docTabs[id], ...patch } } };
+  if (state.dockDocs[id]) return { dockDocs: { ...state.dockDocs, [id]: { ...state.dockDocs[id], ...patch } } };
+  return {};
+}
+
 export const useTermStore = create<TermStore>((set, get) => ({
   projects: [],
   groups: [],
@@ -2020,9 +2109,6 @@ export const useTermStore = create<TermStore>((set, get) => ({
   pendingSpawns: [],
   spawnReceipts: {},
   mergeTarget: null,
-  changesCwd: null,
-  changesPath: null,
-  changesCommit: null,
 
   openTabs: [],
   activeTabId: null,
@@ -2040,8 +2126,10 @@ export const useTermStore = create<TermStore>((set, get) => ({
   liveEvictNotice: null,
   liveEvictAsk: false,
   docTabs: {},
+  dockDocs: {},
   browserTabs: {},
   taskTabs: {},
+  newSessionTabs: {},
 
   mirrorEnabled: false,
   remoteClients: 0,
@@ -2160,6 +2248,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
               docTabs: {},
               browserTabs: {},
               taskTabs: {},
+              newSessionTabs: {},
             });
             // Restore visible tabs, background tabs, and split trees intact.
             layoutPatch = {
@@ -2196,6 +2285,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
           docTabs: state.docTabs,
           browserTabs: state.browserTabs,
           taskTabs: state.taskTabs,
+          newSessionTabs: state.newSessionTabs,
         });
       }
       const sidebarTreeViews = state.sidebarTreeViews;
@@ -2258,7 +2348,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
       inspectTarget: { id: projectId, kind: "project" },
       revealProjectId: projectId,
       leftCollapsed: false,
-      // Reveal requests clear the primary projection's conditions before the one-shot target is consumed.
+      // Reveal requests clear the primary projection's conditions before the one-shot target is consumed, and
+      // bring up its group, Projects, where the project row is.
+      activeSidebarTreeViewId: state.primarySidebarTreeViewId,
+      sidebarTreeTabs: state.sidebarTreeTabs.map((tab) =>
+        collectSidebarViewIds(tab.root).includes(state.primarySidebarTreeViewId)
+          ? { ...tab, activeViewId: state.primarySidebarTreeViewId }
+          : tab,
+      ),
       sidebarTreeViews: state.sidebarTreeViews.map((view) =>
         view.id === state.primarySidebarTreeViewId
           ? {
@@ -2377,9 +2474,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
 
   applySpawnReceipt: async (receipt, open = false) => {
-    const needsReview = receipt.decision === "pending" || receipt.state === "pending" || receipt.state === "failed" || receipt.state === "uncertain" || receipt.state === "dispatching";
     set((s) => {
       const index = s.pendingSpawns.findIndex((r) => r.requestId === receipt.requestId);
+      // Creation in progress keeps a card the user already has open, but never raises a new one:
+      // an automatic launch (`vspawn --yes` or confirmation turned off) needs no one's attention
+      // until it fails.
+      const creating = receipt.decision === "confirmed" && receipt.state === "pending";
+      const needsReview = receipt.decision === "pending" || (creating && index >= 0)
+        || receipt.state === "failed" || receipt.state === "uncertain" || receipt.state === "dispatching";
       const next = s.pendingSpawns.filter((r) => r.requestId !== receipt.requestId);
       if (needsReview) next.splice(index < 0 ? next.length : index, 0, receipt.request);
       return { pendingSpawns: next, spawnReceipts: { ...s.spawnReceipts, [receipt.requestId]: receipt } };
@@ -2409,8 +2511,11 @@ export const useTermStore = create<TermStore>((set, get) => ({
     if (!req.requestId) { await get().syncSpawnRequests(); return; }
     // The event is a hint. Settings, the decision and the result come from the durable backend row.
     // Keep the hint visible if the read fails; reconnect can recover it without executing locally.
-    set((s) => ({ pendingSpawns: s.pendingSpawns.some((r) => r.requestId === req.requestId)
-      ? s.pendingSpawns : [...s.pendingSpawns, req] }));
+    // Requests the backend confirms on its own raise no card, so nothing pops up to be clicked by mistake.
+    if (!req.noConfirm && get().spawnConfirm !== false) {
+      set((s) => ({ pendingSpawns: s.pendingSpawns.some((r) => r.requestId === req.requestId)
+        ? s.pendingSpawns : [...s.pendingSpawns, req] }));
+    }
     const receipt = await spawnRequest(req.requestId);
     await get().applySpawnReceipt(receipt, receipt.decision === "confirmed");
     if (receipt.decision === "confirmed" && receipt.state === "pending") await get().syncSpawnRequests();
@@ -2448,14 +2553,48 @@ export const useTermStore = create<TermStore>((set, get) => ({
 
   openMerge: (id) => set({ mergeTarget: id }),
   closeMerge: () => set({ mergeTarget: null }),
-  openChanges: (cwd, opts) =>
-    set({
-      changesCwd: cwd,
-      changesPath: opts?.path ?? null,
-      changesCommit: opts?.commit ?? null,
+  openChanges: (cwd, opts) => {
+    set((state) => {
+      const target: ChangesTarget = {
+        cwd,
+        side: opts?.side ?? "all",
+        commit: opts?.commit ?? null,
+        base: opts?.commit && opts.base ? opts.base : null,
+        path: opts?.path ?? null,
+      };
+      // One tab per comparison: opening it again selects the requested file there and rereads it.
+      const existing = Object.values(state.docTabs).find(
+        (d) => d.kind === "changes" && d.changes && sameComparison(d.changes, target),
+      );
+      if (existing) {
+        const path = target.path ?? existing.changes!.path;
+        return {
+          docTabs: {
+            ...state.docTabs,
+            [existing.id]: { ...existing, changes: { ...target, path }, reloadNonce: existing.reloadNonce + 1 },
+          },
+          activeTabId: existing.id,
+          activeSessionId: null,
+          focusedPaneId: null,
+        };
+      }
+      const tab = makeChangesTab(target);
+      return {
+        docTabs: { ...state.docTabs, [tab.id]: tab },
+        openTabs: [...state.openTabs, tab.id],
+        activeTabId: tab.id,
+        activeSessionId: null,
+        focusedPaneId: null,
+      };
+    });
+    saveLayoutTick();
+  },
+  selectChangesFile: (id, path) =>
+    set((state) => {
+      const tab = state.docTabs[id];
+      if (!tab?.changes || tab.changes.path === path) return {};
+      return { docTabs: { ...state.docTabs, [id]: { ...tab, changes: { ...tab.changes, path } } } };
     }),
-  closeChanges: () =>
-    set({ changesCwd: null, changesPath: null, changesCommit: null }),
 
   executeSpawn: async (req) => {
     await get().confirmSpawn(req);
@@ -2635,6 +2774,14 @@ export const useTermStore = create<TermStore>((set, get) => ({
   archiveGroup: async (id) => {
     // Group archive hides a tombstone and all children, then reloads, reconciles tabs, and saves layout once.
     await tree.archiveGroup(id);
+    await get().loadTree();
+    set((state) => reconcileTabs(state));
+    saveLayoutTick();
+  },
+
+  archiveCollection: async (id) => {
+    // Like archiveGroup: the collection becomes a hidden tombstone; reload, reconcile tabs, and save once.
+    await tree.archiveCollection(id);
     await get().loadTree();
     set((state) => reconcileTabs(state));
     saveLayoutTick();
@@ -2951,8 +3098,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
 
   setActiveTab: (tabId) => {
     set((state) => {
-      if (state.docTabs[tabId] || state.browserTabs[tabId] || state.taskTabs[tabId]) {
-        // Document/browser/task tabs have no session or focused pane, naturally disabling session-only controls.
+      if (state.docTabs[tabId] || state.browserTabs[tabId] || state.taskTabs[tabId] || state.newSessionTabs[tabId]) {
+        // Document/browser/task/new-session tabs have no session or focused pane, naturally disabling session-only controls.
         return {
           activeTabId: tabId,
           activeSessionId: null,
@@ -2960,7 +3107,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
         };
       }
       const t = state.paneTrees[tabId];
-      const task = state.activeTabId ? state.taskTabs[state.activeTabId] : undefined;
+      const task = state.activeTabId ? state.taskTabs[state.activeTabId] ?? state.newSessionTabs[state.activeTabId] : undefined;
       const leaf = t ? taskReturnLeaf(t, tabId, task) : null;
       return {
         activeTabId: tabId,
@@ -2991,6 +3138,11 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
 
   closeTab: (tabId) => {
+    // A document beside a conversation is not a tab; closing it from its own view just removes it.
+    if (get().dockDocs[tabId]) {
+      get().closeDockDoc(tabId);
+      return;
+    }
     // Explicit tab closure terminates all contained sessions here. Unmount also serves automatic detach-only
     // flows in browser mode, so it cannot express user intent reliably. Repeated stops are idempotent.
     stopTabSessions(get(), tabId);
@@ -3005,8 +3157,10 @@ export const useTermStore = create<TermStore>((set, get) => ({
       const browserTabs = { ...state.browserTabs };
       delete browserTabs[tabId];
       const taskTabs = { ...state.taskTabs };
-      const closingTask = taskTabs[tabId];
+      const newSessionTabs = { ...state.newSessionTabs };
+      const closingTask = taskTabs[tabId] ?? newSessionTabs[tabId];
       delete taskTabs[tabId];
+      delete newSessionTabs[tabId];
 
       let { activeTabId, activeSessionId, focusedPaneId } = state;
       if (activeTabId === tabId) {
@@ -3039,6 +3193,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
         docTabs,
         browserTabs,
         taskTabs,
+        newSessionTabs,
         pinnedTabs,
         stickyTabId,
         activeTabId,
@@ -3056,7 +3211,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set((state) => {
       // Focus and reload an already-open canonical path because another `view` request asks for current content.
       const existing = Object.values(state.docTabs).find(
-        (d) => d.path === path,
+        (d) => d.path === path && d.kind !== "diff" && d.kind !== "changes",
       );
       if (existing) {
         return {
@@ -3073,6 +3228,44 @@ export const useTermStore = create<TermStore>((set, get) => ({
         };
       }
       const tab = makeDocTab(path);
+      return {
+        docTabs: { ...state.docTabs, [tab.id]: tab },
+        openTabs: [...state.openTabs, tab.id],
+        activeTabId: tab.id,
+        activeSessionId: null,
+        focusedPaneId: null,
+      };
+    });
+    saveLayoutTick();
+  },
+
+  openDockDoc: (path) => {
+    const tab = makeDocTab(path);
+    set((state) => ({ dockDocs: { ...state.dockDocs, [tab.id]: tab } }));
+    return tab.id;
+  },
+
+  closeDockDoc: (id) =>
+    set((state) => {
+      if (!state.dockDocs[id]) return {};
+      const dockDocs = { ...state.dockDocs };
+      delete dockDocs[id];
+      return { dockDocs };
+    }),
+
+  openDiffTab: (path, root, relative) => {
+    set((state) => {
+      // A file's diff tab is separate from its editor tab, and a second open refreshes it like `openDocTab`.
+      const existing = Object.values(state.docTabs).find((d) => d.path === path && d.kind === "diff");
+      if (existing) {
+        return {
+          docTabs: { ...state.docTabs, [existing.id]: { ...existing, diff: { root, path: relative }, reloadNonce: existing.reloadNonce + 1 } },
+          activeTabId: existing.id,
+          activeSessionId: null,
+          focusedPaneId: null,
+        };
+      }
+      const tab = makeDiffTab(path, root, relative);
       return {
         docTabs: { ...state.docTabs, [tab.id]: tab },
         openTabs: [...state.openTabs, tab.id],
@@ -3160,81 +3353,75 @@ export const useTermStore = create<TermStore>((set, get) => ({
     });
   },
 
+  // ── New Session tabs opened from the New Session menu item ──
+  openNewSessionTab: (target, requested) => {
+    let opened = requested ?? "";
+    set((state) => {
+      if (requested && state.newSessionTabs[requested]) {
+        return { activeTabId: requested, activeSessionId: null, focusedPaneId: null };
+      }
+      const id = requested ?? `new-session-${genId()}`;
+      opened = id;
+      // Leaving one local tab for another keeps the original return point, as task tabs do.
+      const local = state.activeTabId ? state.taskTabs[state.activeTabId] ?? state.newSessionTabs[state.activeTabId] : undefined;
+      const tab: NewSessionTab = {
+        id,
+        projectId: target.projectId,
+        groupId: target.groupId ?? null,
+        parentSessionId: target.parentSessionId ?? null,
+        returnTabId: local ? local.returnTabId : state.activeTabId ?? undefined,
+        returnPaneId: (local ? local.returnPaneId : undefined) ?? state.focusedPaneId ?? undefined,
+      };
+      return {
+        newSessionTabs: { ...state.newSessionTabs, [id]: tab },
+        openTabs: [...state.openTabs, id],
+        activeTabId: id,
+        activeSessionId: null,
+        focusedPaneId: null,
+      };
+    });
+    saveLayoutTick();
+    return opened;
+  },
+
+  retargetNewSessionTab: (id, target) =>
+    set((state) => {
+      const tab = state.newSessionTabs[id];
+      if (!tab) return {};
+      return { newSessionTabs: { ...state.newSessionTabs, [id]: { ...tab,
+        projectId: target.projectId, groupId: target.groupId ?? null, parentSessionId: target.parentSessionId ?? null,
+      } } };
+    }),
+
   setDocTabPath: (id, path) =>
     set((state) => {
-      const tab = state.docTabs[id];
-      if (!tab) return {};
       const title = path.split("/").pop() || path;
-      return {
-        docTabs: {
-          ...state.docTabs,
-          [id]: { ...tab, path, title, kind: docKindOf(path), isNew: false },
-        },
-      };
+      return patchDoc(state, id, { path, title, kind: docKindOf(path), isNew: false });
     }),
 
   refreshDocTab: (id) =>
-    set((state) =>
-      state.docTabs[id]
-        ? {
-            docTabs: {
-              ...state.docTabs,
-              [id]: {
-                ...state.docTabs[id],
-                reloadNonce: state.docTabs[id].reloadNonce + 1,
-              },
-            },
-          }
-        : {},
-    ),
+    set((state) => {
+      const tab = findDocTab(state, id);
+      return tab ? patchDoc(state, id, { reloadNonce: tab.reloadNonce + 1 }) : {};
+    }),
 
-  setDocTabMode: (id, mode) =>
-    set((state) =>
-      state.docTabs[id]
-        ? {
-            docTabs: { ...state.docTabs, [id]: { ...state.docTabs[id], mode } },
-          }
-        : {},
-    ),
+  setDocTabMode: (id, mode) => set((state) => patchDoc(state, id, { mode })),
 
-  setDocTabDirty: (id, dirty) =>
-    set((state) =>
-      state.docTabs[id]
-        ? {
-            docTabs: {
-              ...state.docTabs,
-              [id]: { ...state.docTabs[id], dirty },
-            },
-          }
-        : {},
-    ),
+  setDocTabViewport: (id, viewport) => set((state) => patchDoc(state, id, { viewport })),
+
+  setDocTabDirty: (id, dirty) => set((state) => patchDoc(state, id, { dirty })),
 
   requestCloseDocTab: (id) => {
-    const tab = get().docTabs[id];
+    const tab = findDocTab(get(), id);
     if (!tab) return;
     if (!tab.dirty) {
       get().closeTab(id);
       return;
     }
-    set((state) => ({
-      docTabs: {
-        ...state.docTabs,
-        [id]: { ...state.docTabs[id], pendingClose: true },
-      },
-    }));
+    set((state) => patchDoc(state, id, { pendingClose: true }));
   },
 
-  cancelCloseDocTab: (id) =>
-    set((state) =>
-      state.docTabs[id]
-        ? {
-            docTabs: {
-              ...state.docTabs,
-              [id]: { ...state.docTabs[id], pendingClose: false },
-            },
-          }
-        : {},
-    ),
+  cancelCloseDocTab: (id) => set((state) => patchDoc(state, id, { pendingClose: false })),
 
   // ── Browser tabs, desktop only ──
   openBrowserTab: (url, opts) => {
@@ -4231,6 +4418,38 @@ export const useTermStore = create<TermStore>((set, get) => ({
   },
 
   toggleLeft: () => set((s) => ({ leftCollapsed: !s.leftCollapsed })),
+  pickSidebarSection: (section) => {
+    const s = get();
+    const shown =
+      sidebarTabOfView(s.sidebarTreeTabs, s.activeSidebarTreeViewId) ??
+      sidebarTabOfView(s.sidebarTreeTabs, s.primarySidebarTreeViewId);
+    if (sidebarTabSection(shown) === section) {
+      set({ leftCollapsed: !s.leftCollapsed });
+      return;
+    }
+    const target = s.sidebarTreeTabs.find((tab) => sidebarTabSection(tab) === section);
+    if (target) {
+      set({ activeSidebarTreeViewId: target.activeViewId, leftCollapsed: false });
+    } else {
+      // First visit: the section gets a group with one unfiltered pane that follows the shared collapse state.
+      const view: SidebarTreeView = {
+        id: `tree-view-${genId()}`,
+        name: nextSidebarViewName(s.sidebarTreeViews),
+        treeFilter: "",
+        statusFilter: null,
+        statusFilterIds: null,
+        markFilter: null,
+        collapsedOverrides: null,
+      };
+      set({
+        sidebarTreeViews: [...s.sidebarTreeViews, view],
+        sidebarTreeTabs: [...s.sidebarTreeTabs, makeSidebarTreeTab(view.id, section)],
+        activeSidebarTreeViewId: view.id,
+        leftCollapsed: false,
+      });
+    }
+    saveSidebarViewsTick(get);
+  },
   toggleRight: () => set((s) => ({ rightCollapsed: !s.rightCollapsed })),
 
   setMirrorEnabled: (enabled) => set({ mirrorEnabled: enabled }),
@@ -4260,18 +4479,25 @@ export const useTermStore = create<TermStore>((set, get) => ({
     // anchor this client published in its place (or whatever the peer is looking at). Following it would
     // pull the user out of the task tab on every peer interaction; stay until they leave it themselves.
     const local = get();
-    const inTaskTab = !!(local.activeTabId && local.taskTabs[local.activeTabId]);
+    const inTaskTab = !!(local.activeTabId && (local.taskTabs[local.activeTabId] || local.newSessionTabs[local.activeTabId]));
     const activeSessionId = inTaskTab ? local.activeSessionId : c.activeSessionId;
     set((s) => ({
       // A leaf arriving from a peer is not a request to start anything. If the backend says no process
       // stands behind that session, render a placeholder: mounting a terminal is what starts one, and
       // that is how a browser following a desktop which had merely *restored* a workspace launched every
       // one of those sessions for real. A leaf the user opened here is intent to start and never lands
-      // in this branch.
+      // in this branch. Chat panes are exempt, as in applySessionStates: they never register a terminal, so
+      // "not displayed" is always true for them, and an idle chat whose process has exited would otherwise
+      // turn into a placeholder on every frame — opening and closing any other tab was enough.
       dormantSessions: Object.values(c.paneTrees).reduce(
         (acc, tree) => {
           for (const sid of collectSessionIds(tree)) {
-            if (!displayed.has(sid) && s.runtimes[sid]?.alive === false)
+            const engine = (
+              s.sessions.find((session) => session.id === sid) ??
+              c.ephemeralSessions[sid] ??
+              s.ephemeralSessions[sid]
+            )?.engine;
+            if (!displayed.has(sid) && engine !== "chat" && s.runtimes[sid]?.alive === false)
               acc[sid] = true;
           }
           return acc;
@@ -4280,7 +4506,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
       ),
       // Task tabs are client-local and absent from the peer's snapshot; keep this client's own at the end
       // so following the layout never closes them.
-      openTabs: [...c.openTabs, ...s.openTabs.filter((id) => s.taskTabs[id] && !c.openTabs.includes(id))],
+      openTabs: [...c.openTabs, ...s.openTabs.filter((id) => (s.taskTabs[id] || s.newSessionTabs[id]) && !c.openTabs.includes(id))],
       liveTabs: c.liveTabs,
       pinnedTabs: c.pinnedTabs,
       stickyTabId: c.stickyTabId,
@@ -4395,15 +4621,7 @@ export const useTermStore = create<TermStore>((set, get) => ({
         collectSidebarViewIds(candidate.root).includes(source.id),
       );
       if (!tab) return {};
-      const usedNames = new Set(
-        state.sidebarTreeViews.map((view) => view.name),
-      );
-      let index = state.sidebarTreeViews.length + 1;
-      let name = t("tree.viewDefaultName", index);
-      while (usedNames.has(name)) {
-        index += 1;
-        name = t("tree.viewDefaultName", index);
-      }
+      const name = nextSidebarViewName(state.sidebarTreeViews);
       const next: SidebarTreeView = {
         ...source,
         id,
@@ -4411,8 +4629,11 @@ export const useTermStore = create<TermStore>((set, get) => ({
         statusFilterIds: source.statusFilterIds
           ? { ...source.statusFilterIds }
           : null,
-        // Start from what the source pane shows right now, then keep expanding and collapsing to itself.
-        collapsedOverrides: snapshotCollapsed(state, source),
+        // Start from what the source pane shows right now, then keep expanding and collapsing to itself. A section
+        // that starts expanded shows only its own overrides, not the shared state the snapshot would copy.
+        collapsedOverrides: sectionStartsExpanded(sidebarTabSection(tab))
+          ? { ...source.collapsedOverrides }
+          : snapshotCollapsed(state, source),
       };
       return {
         sidebarTreeViews: [...state.sidebarTreeViews, next],
@@ -4787,6 +5008,10 @@ export const useTermStore = create<TermStore>((set, get) => ({
     set({ showSystemResources: v });
     persistAndApplyVisual(get);
   },
+  setTurnFilesView: (v) => {
+    set({ turnFilesView: v });
+    persistAndApplyVisual(get);
+  },
   toggleInfoSection: (id) => {
     set((state) => {
       // Expanding deletes the key instead of storing `false`, keeping the persisted map as sparse as its
@@ -4940,6 +5165,9 @@ export const useTermStore = create<TermStore>((set, get) => ({
     const theme = loadTheme();
     set({
       ...ps,
+      // The open inspector tab belongs to this window and its URL. The persisted value only seeds a
+      // fresh launch; applying it here would override a reloaded URL or follow another client's clicks.
+      inspectorTab: get().inspectorTab,
       theme,
       soundEnabled: loadSoundEnabled(),
       notifyEnabled: loadNotifyEnabled(),
@@ -5014,7 +5242,8 @@ export const useTermStore = create<TermStore>((set, get) => ({
       }
       cwd = cwd ?? targetSession.cwd ?? null;
     }
-    cwd = cwd ?? targetGroup?.worktreePath ?? null;
+    // A nested group starts in the worktree bound on it or its nearest ancestor group.
+    cwd = cwd ?? (targetGroup ? worktreeGroup(st.groups, targetGroup.id)?.worktreePath : null) ?? null;
     if (cwd == null && !opts?.target && !overrideProject && active) {
       try {
         cwd = await getSessionCwd(active.id);

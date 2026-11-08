@@ -15,6 +15,7 @@ const SKILLS = [
   ["vspawn", "skills.vspawn"],
   ["vspawn-tree", "skills.vspawnTree"],
   ["vopen", "skills.vopen"],
+  ["vartifact", "skills.vartifact"],
   ["vrefer", "skills.vrefer"],
   ["vask", "skills.vask"],
   ["vsearch", "skills.vsearch"],

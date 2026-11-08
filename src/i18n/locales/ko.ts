@@ -3,8 +3,88 @@
 import type en from "./en";
 
 const ko: typeof en = {
-  "panel.averageOutput": "평균 출력 속도",
-  "panel.averageOutputHint": "측정된 응답 시간을 기준으로 추정한 초당 출력 토큰 수입니다. 보고된 추론 토큰을 포함하며, 도구 실행 시간과 사용자 대기 시간은 제외합니다. 사용량과 측정 시간을 신뢰할 수 있게 대응시킬 수 없으면 표시하지 않습니다. 모델 자체의 디코딩 속도를 나타내는 값은 아닙니다.",
+  "panel.turnStats": "턴 통계",
+  "panel.fileCount": (n: number) => `파일 ${n}개`,
+  "panel.showChangedFiles": "이번 턴에서 변경된 파일 보기",
+  "panel.noFilesChanged": "이번 턴에서 편집된 파일이 없습니다.",
+  "panel.shellEditsNotListed": "셸 명령으로 변경한 내용은 목록에 표시되지 않습니다.",
+  "translation.swap": "언어 바꾸기",
+  "translation.openai": "OpenAI 호환",
+  "translation.bing": "Bing 번역(API 키 불필요)",
+  "translation.bingHint": "Bing의 무료 번역을 사용합니다. API 키나 Microsoft 계정이 필요하지 않습니다.",
+  "translation.google": "Google 번역(API 키 불필요)",
+  "translation.googleHint": "Google의 무료 번역을 사용합니다. API 키나 Google 계정이 필요하지 않습니다.",
+  "translation.rateLimited": "번역 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+  "translation.saved": "설정을 저장했습니다.",
+
+  "translation.title": "번역",
+  "translation.enable": "번역 사용",
+  "translation.visibility": "이 기능을 켜면 대화에 번역 컨트롤이 표시됩니다.",
+  "translation.defaultEnabled": "기본으로 번역 켜기",
+  "translation.defaultEnabledHint": "번역 설정을 별도로 저장하지 않은 대화에 적용됩니다. 변경 사항은 자동으로 저장됩니다.",
+  "translation.conversationKinds": "번역을 사용할 에이전트 유형",
+  "translation.conversationKindsHint": "선택한 에이전트 유형의 대화에만 번역 컨트롤과 자동 번역이 적용됩니다. 변경 사항은 자동으로 저장됩니다.",
+  "translation.chooseConversationKinds": "에이전트 유형 선택",
+  "translation.allConversationKinds": "모든 에이전트 유형",
+  "translation.kindSaveFailed": "에이전트 유형을 저장하지 못했습니다. 현재 선택 사항은 아직 저장되지 않았습니다.",
+  "translation.noConversationKinds": "선택한 에이전트 유형이 없습니다. 모든 대화에서 번역 옵션이 숨겨집니다.",
+  "translation.engine": "번역 엔진",
+  "translation.api": "API 서비스",
+  "translation.service": "저장된 서비스",
+  "translation.newService": "서비스 추가",
+  "translation.editService": "서비스 편집",
+  "translation.name": "서비스 이름",
+  "translation.protocol": "프로토콜",
+  "translation.apiKey": "API 키",
+  "translation.copyKey": "API 키 복사",
+  "translation.keyCopied": "API 키가 복사되었습니다",
+  "translation.showKey": "API 키 표시",
+  "translation.hideKey": "API 키 숨기기",
+  "translation.keyConfigured": "API 키 설정됨",
+  "translation.keyNotConfigured": "API 키가 설정되지 않음",
+  "translation.deleteServiceConfirm": "이 서비스와 저장된 API 키를 삭제하시겠습니까?",
+  "translation.saveConfig": "설정 저장",
+  "translation.test": "연결 테스트",
+  "translation.testHint": "저장된 설정으로 영어 예문 “Connection test.”를 독일어로 번역합니다.",
+  "translation.testSuccess": "연결 테스트에 성공했습니다.",
+  "translation.hostOnly": "호스트 데스크톱에서 번역 서비스를 설정하세요.",
+  "translation.configure": "설정에서 번역을 구성하세요.",
+  "translation.languages": "번역 언어",
+  "translation.moreSettings": "추가 설정",
+  "translation.source": "원본 언어",
+ "translation.target": "대상 언어",
+  "translation.chooseTarget": "번역할 대상 언어를 먼저 선택하세요.",
+  "translation.auto": "자동 감지",
+  "translation.outgoing": "보내기 전에 번역",
+  "translation.replies": "답변 번역",
+  "translation.replySource": "답변 원본 언어",
+  "translation.replyTarget": "답변 대상 언어",
+  "translation.replyDisplay": "답변 표시 방식",
+  "translation.original": "원문",
+  "translation.translation": "번역문",
+  "translation.both": "모두",
+  "translation.immersive": "원문과 번역문 교차 표시",
+  "translation.copyBoth": "원문과 번역문 복사",
+  "translation.copyTranslation": "번역문 복사",
+  "translation.copiedBoth": "원문과 번역문을 복사했습니다",
+  "translation.copiedTranslation": "번역문을 복사했습니다",
+  "translation.duration": (time: string) => `번역 소요 시간: ${time}`,
+  "translation.translating": "번역 중…",
+  "translation.failed": "번역에 실패했습니다. 메시지는 전송되지 않았습니다.",
+  "translation.canceled": "번역을 취소했습니다. 메시지는 전송되지 않았습니다.",
+  "translation.cancel": "번역 취소",
+  "translation.retry": "번역 다시 시도",
+  "translation.sendOriginal": "원문 보내기",
+  "translation.sent": "전송한 번역문",
+  "translation.showSent": "전송한 번역문 표시",
+  "translation.hideSent": "전송한 번역문 숨기기",
+  "translation.stale": "이 번역문은 이전 원문, 언어 설정 또는 엔진 설정에 해당합니다.",
+  "translation.unavailable": "번역을 사용할 수 없습니다. 선택한 에이전트나 서비스를 확인하세요.",
+  "translation.invalid": "번역 설정과 언어 선택을 확인하세요.",
+  "translation.structure": "번역문이 메시지 구조를 유지하지 못했습니다. 다시 시도하세요.",
+  "translation.network": "번역 서비스를 사용할 수 없습니다. 다시 시도해 주세요.",
+  "translation.paymentRequired": "번역 서비스를 이용하려면 결제가 필요합니다(HTTP 402). API 계정 잔액이나 결제 상태를 확인하세요.",
+
   "tree.newPlanExecuteSession": "새 계획/실행 세션…",
   "launch.splitTasks": "여러 작업으로 자동 분할",
   "launch.splitTasksHint": "계획 세션이 독립적인 작업을 제안합니다. 실행 전에 각 작업의 지시 사항, 에이전트, 모델 및 추론 강도를 검토할 수 있습니다.",
@@ -120,20 +200,20 @@ const ko: typeof en = {
   "nb.attach": "파일 첨부",
   "nb.browse": "찾아보기",
   "nb.chooseNote": "첫 노트 작성하기",
-  "nb.closeHint": "목록에서만 보관함을 제거합니다. 디스크의 파일은 그대로 유지됩니다.",
-  "nb.closeVault": "보관함 닫기",
+  "nb.closeHint": "목록에서만 지식 베이스를 제거합니다. 디스크의 파일은 그대로 유지됩니다.",
+  "nb.closeVault": "지식 베이스 닫기",
   "nb.conflict": "파일이 외부에서 변경되었습니다. 작성 중인 내용은 유지됩니다. 파일을 다시 불러오거나 새 노트로 저장하세요.",
-  "nb.copyTo": "로컬 보관함에 복사",
+  "nb.copyTo": "로컬 지식 베이스에 복사",
   "nb.createVault": "지식 베이스 만들기",
   "nb.destination": "대상 경로",
   "nb.download": "다운로드",
   "nb.downloadHint": "첨부 파일을 다운로드하면 다른 앱에서 열 수 있습니다.",
-  "nb.empty": "폴더를 열거나 새 보관함을 만들어 기록을 시작하세요.",
+  "nb.empty": "폴더를 열거나 새 지식 베이스를 만들어 기록을 시작하세요.",
   "nb.emptyImport": "가져올 수 있는 파일을 선택하지 않았습니다.",
   "nb.emptyNotes": "노트는 Markdown 파일로 저장됩니다.",
   "nb.emptyOutline": "문서의 제목이 여기에 표시됩니다.",
   "nb.emptyTrash": "휴지통이 비어 있습니다.",
-  "nb.error": "보관함에 접근할 수 없습니다. 연결과 폴더를 확인한 후 다시 시도하세요.",
+  "nb.error": "지식 베이스에 접근할 수 없습니다. 연결과 폴더를 확인한 후 다시 시도하세요.",
   "nb.exists": "대상이 이미 존재합니다. 다른 이름이나 폴더를 선택하세요.",
   "nb.favorites": "즐겨찾기",
   "nb.files": "파일",
@@ -141,6 +221,9 @@ const ko: typeof en = {
   "nb.generatedHint": "세션에서 정리된 지식으로, 출처와 수정 기록도 확인할 수 있습니다.",
   "nb.homeHint": "세션 지식 베이스와 로컬 지식 베이스를 살펴보세요.",
   "nb.homeSearch": "세션 지식과 로컬 노트 검색…",
+  "nb.layout": "레이아웃",
+  "nb.layoutCards": "카드",
+  "nb.layoutList": "목록",
   "nb.loadMore": "더 불러오기",
   "nb.import": "가져오기",
   "nb.importFiles": "파일 선택",
@@ -174,7 +257,7 @@ const ko: typeof en = {
   "nb.local": "로컬 파일",
   "nb.localVaults": "로컬 지식 베이스",
   "nb.move": "이름 변경 또는 이동",
-  "nb.moveHint": "보관함 루트를 기준으로 상대 경로를 입력하세요. 파일이나 폴더를 이동하면 기존 노트의 링크도 갱신됩니다.",
+  "nb.moveHint": "지식 베이스 루트를 기준으로 상대 경로를 입력하세요. 파일이나 폴더를 이동하면 기존 노트의 링크도 갱신됩니다.",
   "nb.name": "이름",
   "nb.newFolder": "새 폴더",
   "nb.newNote": "새 노트",
@@ -208,25 +291,26 @@ const ko: typeof en = {
   "nb.searchThisVault": "현재 지식 베이스",
   "nb.skipped": "건너뛴 파일",
   "nb.split": "분할 보기",
-  "nb.tooLarge": "파일 또는 선택한 항목이 보관함의 허용 범위를 초과합니다.",
+  "nb.tooLarge": "파일 또는 선택한 항목이 지식 베이스의 허용 범위를 초과합니다.",
   "nb.trash": "휴지통",
-  "nb.trashHint": "이 항목을 보관함의 휴지통으로 이동합니다. 나중에 복원할 수 있습니다.",
+  "nb.trashHint": "이 항목을 지식 베이스의 휴지통으로 이동합니다. 나중에 복원할 수 있습니다.",
   "nb.unsaved": "저장하지 않은 변경 사항",
   "nb.vaults": "지식 베이스",
   "nb.view": "보기 모드",
-  "nb.welcome": "내 노트 보관함",
-  "nb.welcomeText": "자유롭게 기록하고 생각을 연결하며 일반 로컬 파일로 노트를 보관하세요. 기존 Markdown 폴더를 열거나 새 보관함에 자료를 가져올 수 있습니다.",
+  "nb.welcome": "내 지식 베이스",
+  "nb.welcomeText": "자유롭게 기록하고 생각을 연결하며 일반 로컬 파일로 노트를 보관하세요. 기존 Markdown 폴더를 열거나 새 지식 베이스에 자료를 가져올 수 있습니다.",
   "memory.globalMemory": "세션 지식 베이스",
   "memory.collections": "보관된 세션",
   "memory.collectionConversation": "대화",
   "memory.collectionEmptyEntries": "이 대화에는 아직 지식 항목이 없습니다.",
+  "memory.collapseAllProjects": "모든 프로젝트 접기",
+  "memory.expandAllProjects": "모든 프로젝트 펼치기",
   "memory.title": "지식 베이스",
   "memory.add": "지식 베이스에 추가",
   "memory.intro": "프로젝트와 세션별로 지식을 정리합니다. 저장된 항목은 원본 변경에 따라 자동으로 갱신되지 않으며 직접 편집할 수 있습니다.",
   "memory.entries": "지식 항목",
   "memory.emptyJobs": "아직 정리 기록이 없습니다.",
   "memory.jobs": "정리 기록",
-  "memory.search": "항목 제목과 본문 검색…",
   "memory.empty": "일치하는 항목이 없습니다. 세션에서 지식 항목을 생성하거나 직접 만드세요.",
   "memory.emptyDetail": "항목을 선택하면 내용, 관련 항목, 출처를 확인할 수 있습니다.",
   "memory.new": "새 항목",
@@ -235,7 +319,6 @@ const ko: typeof en = {
   "memory.content": "본문(Markdown)",
   "memory.tags": "태그(쉼표로 구분)",
   "memory.related": "관련 항목",
-  "memory.backlinks": "이 항목을 참조하는 항목",
   "memory.sources": "출처",
   "memory.history": "수정 이력",
   "memory.restore": "이 버전 복원",
@@ -294,6 +377,8 @@ const ko: typeof en = {
   "chat.imageCopy": "이미지 복사",
   "chat.imageSave": "이미지 저장",
   "chat.imageActionFailed": "이미지 작업을 완료하지 못했습니다. 다시 시도해 주세요.",
+  "clipboard.unresponsive":
+    "클립보드 내용을 제공하는 앱이 응답하지 않아 붙여넣지 못했습니다. 잠시 후 다시 시도해 주세요.",
   "common.copy": "복사", // Copy
   "common.cut": "잘라내기", // Cut
   "common.paste": "붙여넣기", // Paste
@@ -417,6 +502,8 @@ const ko: typeof en = {
     `시작 시 ${flag} 를 추가해 모든 권한 확인을 건너뜁니다. 주의해서 사용하세요.`, // YOLO flag hint
   "settings.permViaEnvHint":
     "설정 파일을 통해 모든 권한 확인을 건너뜁니다 (CLI 플래그 없음). 이 세션 시작 시 적용됩니다.",
+  "settings.permViaAnswerHint":
+    "대화 보기의 모든 권한 요청을 자동으로 승인합니다. 작업 공간 밖에 영향을 주는 명령도 포함되므로 주의해서 사용하세요.",
   "settings.catGeneral": "일반", // General
   "settings.cliLabel": "셸 명령",
   "settings.cliInstall": "‘vela’ 명령 설치",
@@ -562,7 +649,9 @@ const ko: typeof en = {
   "changes.loading": "불러오는 중…",
   "changes.loadingDiff": "diff 불러오는 중…",
   "changes.noChanges": "변경 사항 없음",
+  "changes.unchangedLines": "변경되지 않은 $개 줄 표시",
   "changes.refresh": "새로 고침",
+  "changes.openFile": "파일 열기",
   "changes.notRepo": "Git 저장소가 아닙니다",
   "changes.selectFile": "파일을 선택하세요",
   "changes.binary": "바이너리 파일 — 줄 단위 diff 불가",
@@ -571,7 +660,30 @@ const ko: typeof en = {
   "git.staged": "스테이징됨",
   "git.changes": "변경 사항",
   "git.untracked": "추적되지 않는 파일",
-  "git.committed": "커밋된 변경 사항",
+  "git.committed": "커밋 기록",
+  "git.conflicts": "충돌",
+  "git.conflictNotice": "커밋하기 전에 충돌을 해결하세요.",
+  "git.filterFiles": "파일 이름 또는 경로로 필터링",
+  "git.noMatchingFiles": "일치하는 파일이 없습니다",
+  "changes.compareAll": "HEAD → 작업 트리",
+  "changes.compareStaged": "HEAD → 인덱스",
+  "changes.compareUnstaged": "인덱스 → 작업 트리",
+  "changes.compareCommit": "커밋 전 → 커밋 후",
+  "changes.compareBranch": (base: string) => `${base}와의 병합 기준 → HEAD`,
+  "changes.ignoreWhitespace": "공백 무시",
+  "changes.collapseUnchanged": "변경되지 않은 줄 접기",
+  "changes.tooLarge": "이 파일은 미리 보기 한도인 2 MiB를 초과합니다.",
+  "git.fileStatus.modified": "수정됨",
+  "git.fileStatus.added": "추가됨",
+  "git.fileStatus.deleted": "삭제됨",
+  "git.fileStatus.renamed": "이름 변경됨",
+  "git.fileStatus.untracked": "추적되지 않음",
+  "git.fileStatus.conflicted": "충돌 있음",
+  "git.changedFiles": (n: number) => `변경된 파일: ${n}`,
+  "git.changedFilesOver": (n: number) => `변경된 파일: ${n}개 초과`,
+  "git.tooManyChanges": (n: number) => `변경 사항이 너무 많아 처음 ${n}개만 표시하며, 줄 수는 표시하지 않습니다.`,
+  "git.ignoreSuggestion": (folder: string) => `이 파일 중 상당수가 ${folder}/ 안에 있습니다.`,
+  "git.addToGitignore": ".gitignore에 추가",
   "git.stage": "스테이징",
   "git.unstage": "스테이징 취소",
   "git.stageAll": "모두 스테이징",
@@ -581,7 +693,6 @@ const ko: typeof en = {
   "git.viewAll": "모두 보기",
   "git.detached": "(detached)",
   "git.repository": "저장소",
-  "git.aheadBehind": "업스트림 브랜치 대비 앞선/뒤처진 커밋 수",
   "git.commitPlaceholder": "커밋 메시지",
   "git.amend": "마지막 커밋 수정",
   "git.amendCommit": "커밋 수정",
@@ -591,6 +702,76 @@ const ko: typeof en = {
   "git.loadMore": "더 불러오기",
   "git.allBranches": "모든 브랜치",
   "git.currentBranch": "현재 브랜치",
+  "git.upstreamTitle": (u: string) => `업스트림 브랜치: ${u}`,
+  "git.fetch": "가져오기",
+  "git.pull": "끌어오기",
+  "git.pullTitle": (u: string) => `${u}에서 끌어오기(빨리 감기만)`,
+  "git.pullRebase": "끌어오기(리베이스)",
+  "git.pullMerge": "끌어오기(병합)",
+  "git.divergedHint": "로컬 브랜치와 업스트림 브랜치 모두에 새 커밋이 있습니다. 합칠 방법을 선택하세요.",
+  "git.branchChanges": "이 브랜치의 커밋",
+  "git.compareBase": "비교 대상",
+  "git.compareAheadBehind": (ahead: number, behind: number, base: string) => `${base}에서 갈라진 뒤 이 브랜치에 커밋 ${ahead}개, ${base}에 새 커밋 ${behind}개가 있습니다`,
+  "git.noBranchChanges": "기준 브랜치에서 갈라진 뒤 변경된 파일이 없습니다",
+  "git.pr.open": "풀 리퀘스트 만들기",
+  "git.pr.opening": "만드는 중…",
+  "git.pr.formTitle": "Gitea 풀 리퀘스트 만들기",
+  "git.pr.formDescription": (branch: string, base: string) => `${branch}을(를) origin에 푸시하고 ${base}(으)로 병합하는 풀 리퀘스트를 만듭니다.`,
+  "git.pr.titleField": "제목",
+  "git.pr.bodyField": "설명",
+  "git.pr.noToken": "여기서 풀 리퀘스트를 만들려면 설정에서 Gitea 토큰을 추가하세요.",
+  "git.pr.unreachable": "지금은 Gitea 서버에 연결할 수 없습니다.",
+  "git.pr.opened": "풀 리퀘스트를 만들었습니다",
+  "git.push": "푸시",
+  "git.pushTitle": (u: string) => `${u}(으)로 푸시`,
+  "git.publish": "브랜치 게시",
+  "git.publishTitle": "이 브랜치를 원격에 푸시하고 추적합니다",
+  "git.forcePush": "강제 푸시…",
+  "git.forcePushAction": "강제 푸시",
+  "git.forcePushConfirm": (u: string) => `로컬 브랜치로 ${u}을(를) 덮어쓸까요? 아직 가져오지 않은 커밋이 원격에 있으면 강제 푸시가 중단됩니다.`,
+  "git.moreActions": "Git 작업 더 보기",
+  "git.running.fetch": "가져오는 중…",
+  "git.running.pull": "끌어오는 중…",
+  "git.running.push": "푸시하는 중…",
+  "git.running.publish": "게시하는 중…",
+  "git.operation.merge": "병합 진행 중",
+  "git.operation.rebase": "리베이스 진행 중",
+  "git.operation.cherry-pick": "체리픽 진행 중",
+  "git.operation.revert": "되돌리기 진행 중",
+  "git.operationHint": (n: number) => `충돌 파일 ${n}개를 해결하고 스테이징한 뒤 계속하세요.`,
+  "git.operationReady": "모든 충돌이 해결되었습니다. 계속해서 완료하거나 중단해 되돌리세요.",
+  "git.continue": "계속",
+  "git.abort": "중단",
+  "git.abortConfirm": "중단하고 작업 시작 전 상태로 돌아갈까요? 지금까지 해결한 충돌은 사라집니다.",
+  "git.amendTarget": (hash: string, subject: string) => `${hash} 수정: ${subject}`,
+  "git.amendUnavailable": "아직 수정할 커밋이 없습니다",
+  "git.conflictKind.both-modified": "양쪽에서 수정",
+  "git.conflictKind.both-added": "양쪽에서 추가",
+  "git.conflictKind.both-deleted": "양쪽에서 삭제",
+  "git.conflictKind.added-by-us": "현재 쪽에서 추가",
+  "git.conflictKind.added-by-them": "상대 쪽에서 추가",
+  "git.conflictKind.deleted-by-us": "현재 쪽에서 삭제",
+  "git.conflictKind.deleted-by-them": "상대 쪽에서 삭제",
+  "git.markResolved": "해결됨으로 표시",
+  "git.openChanges": "변경 사항 열기",
+  "git.discardAll": "모든 변경 사항 버리기",
+  "git.deleteAll": "추적하지 않는 파일 모두 삭제",
+  "git.discardConfirm": (n: number) => `파일 ${n}개의 변경 사항을 버릴까요? 이 작업은 되돌릴 수 없습니다.`,
+  "git.deleteConfirm": (n: number) => `추적하지 않는 파일 ${n}개를 삭제할까요? 이 작업은 되돌릴 수 없습니다.`,
+  "git.selectedCount": (n: number) => `${n}개 선택됨`,
+  "git.clearSelection": "선택 해제",
+  "git.viewAsTree": "트리로 보기",
+  "git.viewAsList": "목록으로 보기",
+  "git.copyCommitHash": "커밋 해시 복사",
+  "git.copyCommitMessage": "커밋 메시지 복사",
+  "git.ask.resolve": (agent: string) => `${agent}에게 해결 요청`,
+  "git.ask.resolvePrompt": (files: string) => `다음 파일의 Git 충돌을 양쪽 변경의 의도를 살려 해결한 뒤, 해결한 파일을 각각 git add로 스테이징해 주세요. 커밋하지 말고 병합, 리베이스, 체리픽을 계속하거나 중단하지도 마세요. 결과를 검토한 뒤 직접 마무리하겠습니다.\n\n${files}`,
+  "git.ask.fix": (agent: string) => `${agent}에게 수정 요청`,
+  "git.ask.fixPrompt": (error: string) => `Git 패널에서 실행한 Git 명령이 다음 오류로 실패했습니다.\n\n${error}\n\n원인을 찾아 안전한 경우에만 수정해 주세요. 강제 푸시, 기록 재작성, 변경 사항 삭제 전에는 반드시 먼저 물어봐 주세요.`,
+  "git.ask.commit": (agent: string) => `${agent}에게 커밋 메시지 작성과 스테이징된 변경 사항 커밋 요청`,
+  "git.ask.commitPrompt": "스테이징된 변경 사항(git diff --cached)을 검토하고, 이 저장소의 관례를 따르는 명확하고 간결한 커밋 메시지로 커밋해 주세요. 스테이징된 내용만 커밋하고 파일을 스테이징, 스테이징 해제, 수정하지 마세요.",
+  "git.ask.explain": (agent: string) => `${agent}에게 설명 요청`,
+  "git.ask.explainPrompt": (hash: string, subject: string) => `git show ${hash}를 사용해 커밋 ${hash}("${subject}")가 무엇을 왜 변경했는지 설명해 주세요. 아무것도 수정하지 마세요.`,
   "tree.merge": "Merge…", // TODO translate
   "tree.copyWorktreePath": "Copy worktree path",
   "tree.openWorktreeDir": "Open worktree folder",
@@ -659,10 +840,9 @@ const ko: typeof en = {
   "settings.recordSessionsHint":
     "기본값은 끔. 켜면 터미널 출력을 로그 파일로 저장해 보관 재생과 검색에 사용합니다. 일반 터미널 세션은 기록하지 않으며, 에이전트 세션은 자체 대화 기록을 읽습니다.", // Record session logs hint
   "settings.fonts": "Fonts", // TODO translate
-  "settings.uiFont": "Interface font", // TODO translate
-  "settings.uiFontSize": "Interface size", // TODO translate
-  "settings.termFont": "Terminal font", // TODO translate
-  "settings.termFontSize": "Terminal size", // TODO translate
+  "settings.uiFontSize": "인터페이스 글꼴 크기",
+  "settings.termFont": "터미널 글꼴",
+  "settings.termFontSize": "터미널 글꼴 크기",
   "settings.termLineHeight": "터미널 줄 높이",
   "settings.chatTypography": "대화 보기",
   "settings.chatTypographyHint": "글꼴 설정은 터미널과 별도로 저장되며 변경 사항은 즉시 적용됩니다.",
@@ -685,7 +865,7 @@ const ko: typeof en = {
   "settings.composerChip.tasks": "백그라운드 작업",
   "settings.composerChip.account": "계정",
   "settings.composerChip.codexCredits": "Codex 초기화 이용권",
-  "settings.fontDefault": "Default", // TODO translate
+  "settings.fontDefault": "기본값",
   "settings.fontCustom": "Custom…", // TODO translate
   "settings.fontListUnavailable": "시스템 글꼴 목록을 가져올 수 없습니다. 글꼴 이름을 직접 입력할 수 있습니다.",
   "settings.fontUnconfirmed": "이 글꼴을 사용할 수 있는지 확인할 수 없습니다.",
@@ -730,6 +910,7 @@ const ko: typeof en = {
   "settings.scSplitDown": "아래쪽 분할", // Split down
   "settings.scSearch": "터미널에서 찾기", // Find in terminal
   "settings.scGlobalSearch": "모든 세션 검색", // Search all sessions
+  "settings.scCopyTerminal": "터미널 선택 내용 복사", // Copy terminal selection
   "settings.scSelectAllTerminal": "터미널에서 모두 선택", // Select all in terminal
   "settings.scSaveDoc": "문서 저장", // Save document
   "settings.scFocusSidebar": "사이드바로 포커스", // Focus sidebar
@@ -832,6 +1013,7 @@ const ko: typeof en = {
   "connect.portPlaceholder": "포트", // Port
   "connect.connecting": "연결 중…", // Connecting…
   "connect.connect": "연결", // Connect
+  "connect.stop": "중지",
   "connect.stagePreparing": "서버 준비 중…",
   "connect.stageTransferring": "서버 전송 중…",
   "connect.stageStarting": "서버 시작 중…",
@@ -912,6 +1094,7 @@ const ko: typeof en = {
   "tree.presetLink": "프리셋 (presets.json)", // Preset (presets.json) / Not linked
   "tree.presetNone": "연결 안 됨",
   "tree.projectInfo": "프로젝트 정보", // Project Info
+  "tree.codeAudit": "코드 감사", // Code audit
   "info.branch": "브랜치", // Branch
   "info.path": "경로", // Path
   "info.recentCommits": "최근 커밋", // Recent Commits
@@ -920,6 +1103,7 @@ const ko: typeof en = {
   "tree.killProcessConfirm": (name: string) => `“${name}”의 프로세스를 종료하시겠습니까? 현재 작업이 중단됩니다. 저장된 대화 기록과 파일은 유지됩니다.`,
   "tree.archiveSession": "세션 보관", // Archive Session
   "tree.archiveGroup": "그룹 보관", // Archive Group
+  "tree.archiveCollection": "컬렉션 보관", // Archive Collection
   // Temporary (draft) sessions
   "tree.scratchTag": "임시", // scratch
   "tree.persistSession": "영구 세션으로 전환…", // Make Permanent Session…
@@ -1047,6 +1231,11 @@ const ko: typeof en = {
   // Working directory / Leave empty for the default
   "tree.workingDirLabel": "작업 디렉터리",
   "tree.workingDirPlaceholder": "비워 두면 기본 디렉터리",
+  "preset.savedTitle": "저장된 프리셋",
+  "preset.empty": "저장된 프리셋이 없습니다.",
+  "preset.deleteHint": "프리셋을 삭제해도 기존 세션은 삭제되지 않습니다.",
+  "preset.deleteNamed": (name: string) => `프리셋 “${name}” 삭제`,
+  "preset.deleteConfirm": (name: string) => `프리셋 “${name}”을 삭제하시겠습니까?`,
   "preset.execPathLabel": "실행 파일(선택)",
   "preset.execPathPlaceholder": "/usr/local/bin/claude",
   "preset.execPathHint":
@@ -1082,8 +1271,6 @@ const ko: typeof en = {
     `그룹 "${name}"을(를) 삭제할까요? 하위 그룹과 세션도 모두 삭제됩니다. 되돌릴 수 없습니다.`, // Delete group "{name}"?…
   "tree.deleteSessionBody": (name) =>
     `세션 "${name}" (및 모든 하위 세션)을 삭제할까요? 되돌릴 수 없습니다.`, // Delete session "{name}"…
-  "tree.deleteWorktrees": (n) =>
-    `연결된 git worktree도 삭제 (총 ${n}개. 작업 트리에 변경이 있으면 삭제가 실패할 수 있습니다)`, // Also remove associated git worktrees…
 
   // Session information dialog
   "info.name": "이름", // Name
@@ -1106,10 +1293,12 @@ const ko: typeof en = {
   "importSessions.results": ({ count }: { count: number }) => `검색 결과 ${count}개`,
   "importSessions.selected": ({ count }: { count: number }) => `${count}개 선택됨`,
   "importSessions.clearSelection": "선택 해제",
-  "importSessions.clearSearch": "검색 지우기",
+  "importSessions.clearFilters": "필터 지우기",
+  "importSessions.agentFilter": "에이전트별 필터",
+  "importSessions.allAgents": "모든 에이전트",
   "importSessions.noHistory": "이 프로젝트 디렉터리에 세션 기록이 없습니다.",
   "importSessions.title": "세션 가져오기",
-  "importSessions.description": "작업 디렉터리가 이 프로젝트와 일치하는 기존 Codex, Claude, OpenCode, Kiro 세션을 찾습니다. 세션을 선택하여 프로젝트에 추가한 후 열면 대화를 이어갈 수 있습니다. 현재 Kiro 기록은 텍스트로만 구성된 경우에만 볼 수 있습니다.",
+  "importSessions.description": "작업 디렉터리가 이 프로젝트와 일치하는 기존 Codex, Claude, OpenCode, Pi, OMP, ZCode, DeepSeek, Kiro 세션을 찾습니다. 세션을 선택하여 프로젝트에 추가한 후 열면 대화를 이어갈 수 있습니다. 현재 Kiro 기록은 텍스트로만 구성된 경우에만 볼 수 있습니다.",
   "importSessions.search": "제목, 에이전트 또는 세션 ID로 검색",
   "importSessions.empty": "일치하는 세션이 없습니다.",
   "importSessions.imported": "이미 가져옴",
@@ -1132,9 +1321,9 @@ const ko: typeof en = {
     "이 프로젝트에는 사용할 수 있는 git 저장소 경로가 없습니다.", // This project has no usable git repository path.
   // ── Worktree selector for custom session creation ──
   "worktreeSel.label": "Worktree",
-  "worktreeSel.modeNone": "없음", // None
-  "worktreeSel.modeNew": "새로", // New
-  "worktreeSel.modeExisting": "기존", // Existing
+  "worktreeSel.modeNone": "사용 안 함", // None
+  "worktreeSel.modeNew": "새로 만들기", // New
+  "worktreeSel.modeExisting": "기존 선택", // Existing
   "worktreeSel.loading": "worktree 불러오는 중…", // Loading worktrees…
   "worktreeSel.empty": "이 저장소에 기존 worktree가 없습니다.", // No existing worktrees in this repository.
   "worktreeSel.loadFailed":
@@ -1174,6 +1363,7 @@ const ko: typeof en = {
   "search.includeArchived": "보관 세션 포함", // Include archived
   "search.includeArchivedHint": "보관된 세션도 검색에 포함 (기본은 꺼짐)", // Also search archived sessions (off by default)
   "search.searching": "검색 중…", // Searching…
+  "search.progress": (sessions, bytes) => `검색 중… 세션 ${sessions}개 확인 · ${bytes} 읽음`,
   "search.noResults": "일치하는 항목이 없습니다", // No matches found
   "search.sessionCount": (n) => `세션 ${n}개`, // n sessions
   "search.matchCount": (n) => `일치 ${n}건`, // n matches
@@ -1182,6 +1372,7 @@ const ko: typeof en = {
   "search.backToResults": "결과로 돌아가기", // Back to results
   "search.archivedBadge": "보관됨", // Archived
   "search.summary": (m, s) => `일치 ${m}건 · 세션 ${s}개`, // X matches · N sessions
+  "search.pending": (n) => `세션 ${n}개를 아직 인덱싱하는 중이므로 결과가 완전하지 않을 수 있습니다.`, // N sessions are still being indexed, so results may be incomplete
   "search.matchPosition": (n, total) => `${n} / ${total}`, // N of M
   "search.roleTerminal": "터미널", // Terminal
   "search.collapseGroup": "접기", // Collapse
@@ -1222,6 +1413,7 @@ const ko: typeof en = {
   "browser.loading": "로드 중…", // Loading…
   // Application-exit confirmation and dormant restored sessions.
   "quit.title": "VelaTerm을 종료할까요?", // Quit VelaTerm?
+  "quit.closeWindowTitle": "메인 창을 닫을까요?", // Close the main window?
   "quit.body": "실행 중인 터미널과 에이전트 세션이 모두 중지됩니다.", // Any running terminal and agent sessions will be stopped.
   "quit.remoteWindows": "열려 있는 원격 창도 함께 닫힙니다.", // Open remote windows will also be closed.
   "quit.saveWorkspace": "작업 공간 저장", // Save workspace
@@ -1265,6 +1457,31 @@ const ko: typeof en = {
   "term.startFailed": (err) => `시작 실패: ${err}`, // Failed to start: {err}
 
   // ── agent 설치 안내 카드 ──
+  "agentVersion.label": "에이전트 버전",
+  "agentVersion.loading": "버전 확인 중…",
+  "agentVersion.unavailable": "버전을 확인할 수 없습니다",
+  "agentVersion.running": (version) => `실행 중인 버전: ${version}`,
+  "agentVersion.installed": (version) => `설치된 버전: ${version}`,
+  "agentVersion.update": (version) => `업데이트 가능: v${version}`,
+  "agentVersion.upgrade": (version) => `버전 ${version}이(가) 출시되었습니다. 공식 업데이트 안내를 확인하세요.`,
+  "agentVersion.checkFailed": "업데이트를 확인할 수 없습니다.",
+  "agentVersion.upgradeAction": (version) => `버전 ${version}이(가) 출시되었습니다. 클릭하면 업데이트합니다.`,
+  "agentUpdate.title": (label) => `${label} 업데이트`,
+  "agentUpdate.commandHint": "VelaTerm이 에이전트에 포함된 업데이트 명령을 실행합니다:",
+  "agentUpdate.confirm": "업데이트",
+  "agentUpdate.docs": "공식 안내",
+  "agentUpdate.running": "업데이트하는 중…",
+  "agentUpdate.background": "이 창을 닫아도 업데이트는 계속 진행됩니다.",
+  "agentUpdate.waiting": "출력을 기다리는 중…",
+  "agentUpdate.succeeded": (label, version) => `${label}이(가) v${version}(으)로 업데이트되었습니다.`,
+  "agentUpdate.unchanged": (version) => `명령은 끝났지만 설치된 버전은 여전히 v${version}입니다. 위의 출력을 확인하세요.`,
+  "agentUpdate.finished": "업데이트 명령이 끝났습니다. 위의 출력을 확인하세요.",
+  "agentUpdate.failed": "업데이트를 완료하지 못했습니다. 위의 출력을 확인하거나 명령을 복사해 터미널에서 실행하세요.",
+  "agentUpdate.broken": (label) => `업데이트 후 ${label}이(가) 시작되지 않아 업데이트가 완료되지 않았습니다. 위의 출력을 확인하거나 ${label}을(를) 다시 설치하세요.`,
+  "agentUpdate.timedOut": "업데이트가 15분을 넘겨 중단되었습니다. 명령을 복사해 터미널에서 실행하세요.",
+  "agentUpdate.restartHint": "이 대화는 아직 이전 버전으로 실행 중입니다. 에이전트를 재시작하면 새 버전으로 전환됩니다. 대화 내용은 유지되며, 다음 메시지를 보낼 때 새 버전이 시작됩니다.",
+  "agentUpdate.restart": "에이전트 재시작",
+  "agentUpdate.startFailed": "업데이트를 시작할 수 없습니다. 다시 시도하세요.",
   "agentInstall.title": (label) => `${label}이(가) 설치되어 있지 않습니다`, // {label} is not installed
   "agentInstall.desc": (label) =>
     `VelaTerm이 PATH에서 ${label}을(를) 찾지 못했습니다. 설치하면 이 세션을 시작할 수 있습니다.`, // couldn't find {label} on PATH
@@ -1273,6 +1490,10 @@ const ko: typeof en = {
   "agentInstall.dismiss": "직접 설치", // I'll do it myself
   "agentInstall.docs": "설치 문서", // Install docs
   "agentInstall.needsNode": "Node.js / npm 필요", // Requires Node.js / npm
+  "agentInstall.runInTerminal": "터미널에서 다음 명령을 실행해 설치한 다음 메시지를 다시 보내세요.",
+  "agentInstall.installing": "설치 중…", // Installing…
+  "agentInstall.installingDesc": "다운로드하여 설치하는 중입니다. 몇 분 정도 걸릴 수 있습니다.", // Downloading and installing. This can take a few minutes.
+  "agentInstall.installFailed": "설치를 완료하지 못했습니다. 터미널에서 다음 명령을 실행해 원인을 확인한 다음 메시지를 다시 보내세요.", // Installation didn't finish. Run this command in a terminal to see what went wrong, then send your message again.
   "agentInstall.afterInstall": "설치 후:", // After install:
   "agentInstall.pathSaved": (label: string) =>
     `${label} 실행 파일 경로를 설정에 저장했습니다:`, // executable path saved to Settings
@@ -1572,7 +1793,6 @@ const ko: typeof en = {
   "mobile.inputOptions": "입력 옵션",
   "mobile.connections": "연결 관리",
   "mobile.more": "추가 작업",
-  "mobile.toDesktop": "데스크톱 버전으로 전환", // Switch to desktop
   "mobile.empty1": "세션이 없습니다.", // No sessions.
   "mobile.noMatch": "일치하는 세션이 없습니다", // No matching sessions
   "mobile.empty2":
@@ -1580,6 +1800,10 @@ const ko: typeof en = {
   "mobile.back": "‹ 뒤로", // ‹ Back
   "mobile.selCopy": "복사", // Copy
   "mobile.selCancel": "취소", // Cancel
+  "mobile.compose": "메시지 작성",
+  "mobile.composePlaceholder": "터미널로 보낼 메시지를 입력하세요",
+  "mobile.showTranscript": "기록",
+  "mobile.showTerminal": "터미널",
 
   // ── Mobile connection client (apps/mobile start page) ──
   "mobile.phaseConnecting": "SSH로 연결 중…",
@@ -1778,6 +2002,7 @@ const ko: typeof en = {
   "skills.vspawn": "하위 세션을 만들어 작업을 맡깁니다.",
   "skills.vspawnTree": "독립된 워크트리를 사용하는 하위 세션을 만듭니다.",
   "skills.vopen": "파일이나 웹 페이지를 VelaTerm에서 엽니다.",
+  "skills.vartifact": "시각적인 결과물을 세션 옆에 실시간 HTML 페이지로 보여 줍니다.", // Show visual work as a live HTML page beside the conversation.
   "skills.vrefer": "다른 세션의 대화 내용을 읽습니다.",
   "skills.vask": "다른 세션에 관해 질문하고 간결한 답변을 받습니다.",
   "skills.vsearch": "모든 세션의 대화 내용을 검색합니다.",
@@ -1796,6 +2021,7 @@ const ko: typeof en = {
   "session.showTerminal": "터미널 보기",
   "session.switchTitle": "보기를 전환하면 에이전트가 다시 시작됩니다",
   "session.switchBody": "진행 중인 턴이 중단됩니다. 대화 내용은 그대로 유지됩니다.",
+  "session.switchBodyBackground": "에이전트가 시작한 백그라운드 작업이 중단될 수 있으며, 작업이 끝나도 에이전트에게 알림이 가지 않습니다. 대화 내용은 그대로 유지됩니다.",
   "session.switchConfirm": "전환",
   "session.terminalViewHint": "여기를 클릭하면 터미널 보기로 돌아갈 수 있습니다.",
   "session.loading": "대화를 읽는 중…",
@@ -1924,6 +2150,8 @@ const ko: typeof en = {
   "chat.attach.tooLarge": (name: string, mb: number) => `${name}은(는) ${mb} MB를 초과하여 첨부하지 않았습니다`,
   "chat.attach.unreadable": (name: string) => `${name}을(를) 읽지 못했습니다`,
   // ── Shell mode: `!` runs a command in the session's shell ──
+  "chat.findings.count": (n: number) => `문제 ${n}개 발견`,
+  "chat.findings.none": "발견된 문제가 없습니다",
   "chat.shell.title": "셸 명령",
   "chat.shell.running": "실행 중…",
   "chat.shell.cancel": "취소",
@@ -1941,6 +2169,7 @@ const ko: typeof en = {
   "chat.compaction.manual": "컨텍스트를 압축했습니다",
   "chat.compaction.auto": "컨텍스트를 자동으로 압축했습니다",
   "chat.compaction.from": (tokens: string) => `압축 전 ${tokens} 토큰`,
+  "chat.wake.label": "백그라운드 작업 종료",
   // N steps
   "chat.subagent.steps": (n: number) => `${n}단계`,
   "chat.subagent.tokens": (tokens: string) => `${tokens} 토큰`,
@@ -2039,6 +2268,15 @@ const ko: typeof en = {
   "chat.auth.claude.invalidCode": "이번 인증 페이지에 표시된 코드를 # 뒤의 내용까지 모두 붙여 넣으세요.",
   "chat.auth.claude.externalAuth": "API 키와 그 밖에 설정된 인증 방식은 변경되지 않습니다.",
   "chat.auth.open": "인증 페이지 열기",
+  "chat.auth.zcode.required": "현재 대화를 사용하려면 Z.ai 또는 BigModel 계정으로 ZCode에 로그인하세요.",
+  "chat.auth.zcode.pending": "인증 페이지를 열고 접근을 허용하세요. 로그인이 완료되면 이 화면이 자동으로 업데이트됩니다.",
+  "chat.auth.zcode.failed": "로그인을 완료하지 못했습니다. 다시 시도하세요.",
+  "chat.auth.zcode.zai": "Z.ai로 로그인",
+  "chat.auth.zcode.bigmodel": "BigModel로 로그인",
+  "chat.auth.zcode.noPlan.zai": "ZCode에 Z.ai 계정으로 로그인되어 있지만, 이 계정에는 사용할 수 있는 GLM Coding Plan이 없거나 요금제 사용량을 모두 소진했습니다. 요금제를 BigModel에서 구매했다면 ‘ZCode 계정’ 메뉴를 열고 ‘BigModel로 로그인’을 선택하세요.",
+  "chat.auth.zcode.noPlan.bigmodel": "ZCode에 BigModel 계정으로 로그인되어 있지만, 이 계정에는 사용할 수 있는 GLM Coding Plan이 없거나 요금제 사용량을 모두 소진했습니다. 요금제를 Z.ai에서 구매했다면 ‘ZCode 계정’ 메뉴를 열고 ‘Z.ai로 로그인’을 선택하세요.",
+  "chat.auth.zcode.noModels.zai": "ZCode가 현재 Z.ai 로그인에서 GLM Coding Plan을 찾지 못해 사용할 수 있는 모델이 없습니다. ‘ZCode 계정’ 메뉴를 열고 ‘Z.ai로 로그인’을 선택해 다시 로그인하세요. 요금제를 BigModel에서 구매했다면 ‘BigModel로 로그인’을 선택하세요.",
+  "chat.auth.zcode.noModels.bigmodel": "ZCode가 현재 BigModel 로그인에서 GLM Coding Plan을 찾지 못해 사용할 수 있는 모델이 없습니다. ‘ZCode 계정’ 메뉴를 열고 ‘BigModel로 로그인’을 선택해 다시 로그인하세요. 요금제를 Z.ai에서 구매했다면 ‘Z.ai로 로그인’을 선택하세요.",
   "chat.resetCredits.label": (n: string) => `초기화 이용권: ${n}개`,
   "chat.resetCredits.title": "Codex 사용 한도 초기화 이용권",
   "chat.resetCredits.unknown": "초기화 이용권 수를 확인할 수 없습니다.",
@@ -2119,11 +2357,20 @@ const ko: typeof en = {
     `${seconds}초 후 다시 시도합니다(${attempt}/${max}): ${message}`,
   "chat.notify.dismiss": "닫기",
   "settings.completionMode": "명령어 자동 완성",
-  "settings.completionAuto": "자동 표시",
-  "settings.completionTab": "Tab으로 표시",
+  "settings.completionAuto": "인라인 + Tab",
+  "settings.completionTab": "Tab만",
   "settings.completionOff": "끄기",
   "settings.completionUnavailable": "설정을 불러오거나 저장할 수 없습니다.",
-  "settings.completionHint": "새로 연 Zsh, Bash 4+, Fish 및 PowerShell 터미널에 적용됩니다. CMD는 기본 Tab 동작을 유지합니다. Tab은 선택한 후보를 입력하고, Enter는 후보를 적용하지 않고 현재 명령을 실행합니다.",
+  "settings.completionHint": "Zsh에서 입력하는 동안 기록에서 가장 최근에 일치한 명령이 커서 뒤에 흐리게 표시되며, → 또는 End 키로 적용할 수 있습니다. Tab은 셸 기본 동작과 같습니다. 후보가 하나면 바로 입력하고, 후보에 공통된 부분이 있으면 먼저 채우며, 후보가 여러 개 남으면 목록을 표시합니다. 새로 연 Zsh, Bash 4+, Fish 및 PowerShell 터미널에 적용됩니다.",
+  "settings.completionTabOnlyHint": "입력하는 동안에는 제안이 표시되지 않습니다. Tab을 누르면 셸 기본 동작과 같이 완성합니다. 후보가 하나면 바로 입력하고, 후보에 공통된 부분이 있으면 먼저 채우며, 후보가 여러 개 남으면 목록을 표시합니다. 새로 연 Zsh, Bash 4+, Fish 및 PowerShell 터미널에 적용됩니다.",
+  "settings.completionTabKey": "Tab 키",
+  "settings.completionTabAccept": "제안 적용",
+  "settings.completionTabComplete": "명령어 완성",
+  "settings.completionTabAcceptHint": "흐리게 표시된 제안이 있으면 Tab으로 적용합니다. 바로 이어서 Tab을 한 번 더 누르면 적용을 취소하고 후보 목록을 표시합니다. → 또는 End 키로도 적용할 수 있습니다.",
+  "settings.completionTabCompleteHint": "흐리게 표시된 제안이 있어도 Tab은 항상 명령어를 완성합니다. 제안을 적용하려면 → 또는 End 키를 누르세요.",
+  "term.completionTipAccept": "제안 적용",
+  "term.completionTipComplete": "명령어 완성",
+  "term.completionTipUndo": "취소하고 후보 목록 표시",
 
   // Native texts of the mobile remote plugin (iOS, Android, download bridge). They reach the apps through native-text.json; {name} placeholders are replaced natively.
   "mobile.native.trustTitle": "원격 지문 확인",
@@ -2230,8 +2477,186 @@ const ko: typeof en = {
   "term.runs.logEmpty": "아직 출력이 없습니다",
   "chat.antigravity.placeholder": "Antigravity에 메시지를 보내세요. @파일로 파일을 참조할 수 있습니다",
   "chat.antigravity.textOnly": "Antigravity 대화 보기는 현재 텍스트 메시지만 지원합니다.",
+  "chat.textOnly": (agent: string) => `${agent} 대화 보기는 텍스트 메시지만 지원합니다.`,
+  "chat.signInRequired": (agent: string) => `대화 보기를 사용하려면 ${agent}에 로그인해야 합니다. 터미널 보기로 전환해 로그인한 다음 메시지를 다시 보내세요.`,
+  "chat.apiKeyRequired": "DeepSeek Harness를 사용하려면 API 키가 필요합니다. DEEPSEEK_API_KEY 환경 변수를 설정하거나 `dsh web`을 실행해 Models 페이지에서 키를 저장한 다음 메시지를 다시 보내세요.",
   "chat.antigravity.permissionsHint": "승인이 필요한 도구는 Antigravity 설정에서 미리 허용하거나 터미널 보기에서 사용해야 합니다.",
   "chat.antigravity.settingsHint": "모델, 추론 강도 또는 권한은 턴 사이에 변경하세요.",
+  "chat.history.imageDownloadRequired": "이 이미지는 여기에서 열 수 없습니다. 원본을 다운로드하여 확인하세요.",
+  "chat.history.readBody": "전체 내용 읽기",
+  "chat.history.selectDetail": "파일 또는 필드 선택",
+  "chat.history.part": "부분",
+  "chat.history.copyPart": "이 부분 복사",
+
+  "chat.history.searchMore": "결과 더 보기",
+  "chat.history.indexing": "대화를 불러오는 중…",
+  "chat.history.newer": "이후 메시지 불러오기",
+
+  "chat.history.copyComplete": "전체 내용 복사",
+  "chat.history.downloadComplete": "전체 내용 다운로드",
+  "chat.history.unavailable": "이 세션의 기록 상세 정보를 사용할 수 없습니다.",
+  "chat.history.openViewer": "상세 보기를 열어 전체 내용을 확인하세요.",
+  "chat.history.copyBusy": "전체 내용을 복사하고 있습니다.",
+  "chat.history.clipboardLimit": "이 내용은 클립보드 용량 제한을 초과합니다. 전체 파일을 다운로드하세요.",
+  "chat.history.contentChanged": "전송 중 내용이 변경되었습니다. 다시 불러오세요.",
+  "export.preparing": "세션 내보내기를 준비하고 있습니다…",
+  "chat.history.windowLimit": "이 메시지는 표시 한도를 초과합니다. 전체 내용을 읽거나 다운로드하세요.",
+
+  "chat.history.incomplete": "대화를 아직 다 불러오지 못했습니다. 잠시 후 다시 시도하세요.",
+  "chat.history.indexBusy": "다른 프로세스에서 기록 색인을 사용하고 있습니다. 잠시 후 다시 시도하세요.",
+  "chat.history.unsupported": "일부 기록 형식은 지원되지 않습니다. 원본 내용은 보존되어 있습니다.",
+  "chat.history.canceled": "기록 읽기가 취소되었습니다.",
+  "chat.history.pagedRequired": "페이지별 기록 보기나 상세 내용 뷰어에서 이 내용을 읽으세요.",
+  "chat.history.sourceMissing": "기록 원본이 없거나 접근할 수 없습니다.",
+  "chat.history.updateServer": "대화 기록을 안전하게 읽으려면 서버를 업데이트하세요.",
+  "chat.history.storagePressure": "기록 저장 공간이 부족하거나 사용할 수 없습니다. 공간을 확보한 후 다시 시도하세요. 에이전트 제어 기능은 계속 사용할 수 있습니다.",
+
+  "artifact.preview": "미리보기", // Preview
+  "artifact.source": "소스", // Source
+  "artifact.split": "분할", // Split
+  "artifact.live": "실시간", // Live
+  "artifact.liveTitle": "파일이 바뀌면 자동으로 다시 불러옵니다", // Reloads automatically when the file changes
+  "artifact.offline": "오프라인", // Offline
+  "artifact.offlineTitle": "이 페이지는 인터넷에서 아무것도 불러올 수 없습니다. 클릭하면 이 파일에 한해 허용합니다.", // This page cannot load anything from the internet. Click to allow it for this file.
+  "artifact.online": "온라인", // Online
+  "artifact.onlineTitle": "이 페이지는 인터넷에서 파일을 불러올 수 있습니다. 클릭하면 다시 차단합니다.", // This page can load files from the internet. Click to block them again.
+  "artifact.netBlocked": (n: number) => `이 페이지가 인터넷에서 파일 ${n}개를 불러오려고 해서 차단했습니다.`, // This page tried to load ${n} files from the internet. They were blocked.
+  "artifact.allowForFile": "이 파일 허용", // Allow for this file
+  "artifact.errorCount": (n: number) => `오류 ${n}개`, // ${n} errors
+  "artifact.warningCount": (n: number) => `경고 ${n}개`, // ${n} warnings
+  "artifact.console": "콘솔", // Console
+  "artifact.consoleEmpty": "오류나 경고가 없습니다.", // No errors or warnings.
+  "artifact.clearConsole": "지우기", // Clear
+  "artifact.closeConsole": "콘솔 닫기", // Close console
+  "artifact.sendToSession": "세션으로 보내기", // Send to session
+  "artifact.sendToSessionTitle": "이 페이지를 작성한 세션의 입력란에 오류를 넣습니다", // Put these errors in the message box of the session that wrote this page
+  "artifact.fileGone": "이 파일을 더 이상 사용할 수 없습니다", // This file is no longer available
+  "artifact.fileGoneBody": (name: string) => `${name} 파일이 이동되었거나 삭제되었습니다. 새 위치에서 다시 열거나 이 탭을 닫으세요.`, // ${name} was moved or deleted. Open it again from its new location, or close this tab.
+  "artifact.reload": "다시 불러오기", // Reload
+  "artifact.openInBrowser": "브라우저에서 열기", // Open in browser
+  "artifact.viewportFit": "탭에 맞추기", // Fit to tab
+  "artifact.viewportDesktop": "데스크톱", // Desktop
+  "artifact.viewportTablet": "태블릿", // Tablet
+  "artifact.viewportPhone": "휴대폰", // Phone
+  "artifact.goToSession": "세션으로 이동", // Go to session
+  "artifact.versionTitle": (n: number, time: string) => `버전 ${n} · ${time}`, // Version ${n} · ${time}
+  "artifact.viewingVersion": (n: number, time: string) => `버전 ${n}을(를) 보고 있습니다(${time}에 저장)`, // Viewing version ${n}, saved ${time}
+  "artifact.restoreVersion": "이 버전으로 복원", // Restore this version
+  "artifact.backToLatest": "최신 버전으로 돌아가기", // Back to latest
+  "artifact.restoreBody": (n: number) => `파일이 버전 ${n}의 내용으로 바뀝니다. 현재 내용은 버전 기록에 남습니다.`, // The file will be replaced with version ${n}. Its current content stays in the version history.
+  "artifact.restore": "복원", // Restore
+  "artifact.restoreFailed": "이 버전을 복원하지 못했습니다. 다시 시도해 주세요.", // The version could not be restored. Please try again.
+  "artifact.openAsTab": "탭에서 열기", // Open as tab
+  "artifact.closePanel": "미리보기 닫기", // Close preview
+  "artifact.cardOpen": "열기", // Open
+  "artifact.cardOpenTitle": "이 세션 옆에 열기", // Open beside this session
+  "artifact.cardKind": "HTML 페이지", // HTML page
+  "artifact.frameTitle": (name: string) => `${name} 미리보기`, // Preview of ${name}
+  "newSession.menu": "새 세션…", // New Session…
+  "newSession.heading": "무엇을 작업할까요?", // What should we work on?
+  "newSession.terminalOnly": "터미널 보기만 지원", // Terminal view only
+  "newSession.conversationOnly": "대화 보기만 지원", // Conversation view only
+  "newSession.noConversationView": "이 에이전트는 대화 보기를 지원하지 않아 세션이 터미널 보기로 열립니다.", // This agent has no conversation view, so the session opens in the terminal view.
+  "newSession.noTerminalView": "이 에이전트는 터미널 보기를 지원하지 않아 세션이 대화 보기로 열립니다.", // This agent has no terminal view, so the session opens in the conversation view.
+  "newSession.taskLabel": "첫 작업", // First task
+  "newSession.placeholder": "작업을 설명하거나 질문하세요", // Describe a task or ask a question
+  "newSession.enterHint": "Enter로 시작 · Shift+Enter로 줄 바꿈", // Enter to start · Shift+Enter for a new line
+  "newSession.start": "시작", // Start
+  "newSession.starting": "시작하는 중…", // Starting…
+  "newSession.viewLabel": "보기", // View
+  "newSession.worktreeHint": "이 세션을 별도 폴더의 전용 브랜치에서 실행합니다.", // Runs this session on its own branch in a separate folder.
+  "newSession.worktreeNotRepo": "독립 워크트리를 만들려면 Git 저장소가 필요합니다.", // A separate worktree needs a Git repository.
+  "newSession.worktreeName": "워크트리 이름(선택)", // Worktree name (optional)
+  "newSession.worktreeNameHint": "새 폴더와 브랜치 이름에 사용됩니다. 비워 두면 세션 이름을 사용합니다.", // Names the new folder and branch. Leave empty to use the session name.
+  "newSession.typeLabel": "세션 유형",
+  "newSession.typeTask": "작업",
+  "newSession.typeProject": "프로젝트",
+  "newSession.typeChat": "채팅",
+  "newSession.typeTaskHint": "프로젝트를 고르지 않고 작업을 처리합니다. 프로젝트 가져오기 등에 쓸 수 있습니다.",
+  "newSession.typeProjectHint": "프로젝트 폴더에서 작업합니다.",
+  "newSession.typeChatHint": "프로젝트나 파일 없이 대화만 합니다.",
+  "newSession.location": "프로젝트 또는 컬렉션",
+  "newSession.locationSearch": "프로젝트 및 컬렉션 필터",
+  "newSession.collectionOption": "컬렉션",
+  "newSession.newTask": "새 작업 세션",
+  "newSession.newChat": "새 채팅 세션",
+  "systemCollection.projects": "프로젝트",
+  "systemCollection.agents": "에이전트",
+  "systemCollection.terminals": "터미널",
+  "systemCollection.tasks": "작업",
+  "systemCollection.chat": "채팅",
+  "systemCollection.projectsHint": "모든 프로젝트입니다. 기본 제공 컬렉션이라 삭제할 수 없습니다.",
+  "systemCollection.agentsHint": "터미널에서 실행 중인 에이전트입니다. 종료되면 목록에서 사라집니다.",
+  "systemCollection.terminalsHint": "지금 실행 중인 터미널입니다.",
+  "systemCollection.tasksHint": "어느 프로젝트에도 속하지 않는 작업 세션입니다.",
+  "systemCollection.chatHint": "채팅 세션입니다.",
+  "sidebarSection.nav": "사이드바 섹션",
+  "sidebarSection.noTasks": "아직 작업 세션이 없습니다.",
+  "sidebarSection.noChats": "아직 채팅 세션이 없습니다.",
+  "artifact.comment": "댓글", // Comment
+  "artifact.commentTitle": "페이지 요소를 선택해 에이전트에게 댓글을 남깁니다", // Click elements in the page to leave comments for the agent
+  "artifact.pickHint": "페이지에서 요소를 클릭해 댓글을 답니다. Esc로 종료합니다.", // Click an element in the page to comment on it. Press Esc to stop.
+  "artifact.commentOn": (target: string) => `${target}에 댓글`, // Comment on ${target}
+  "artifact.commentPlaceholder": "여기를 어떻게 바꿀까요?", // What should change here?
+  "artifact.commentAdd": "댓글 추가", // Add comment
+  "artifact.commentMore": "다른 요소에 댓글", // Comment on another element
+  "artifact.commentRemove": "댓글 삭제", // Remove comment
+  "artifact.showInPage": "페이지에서 보기", // Show in page
+  "artifact.sendCommentsTitle": "이 페이지를 작성한 세션의 입력란에 댓글을 넣습니다", // Put these comments in the message box of the session that wrote this page
+  "artifact.copyCommentsTitle": "에이전트에게 보낼 수 있도록 댓글을 복사합니다", // Copy these comments to send to an agent
+  "artifact.options": "시안", // Options
+  "artifact.useOption": (id: string) => `${id} 사용`, // Use ${id}
+  "artifact.useOptionTitle": "이 시안을 유지해 달라는 메시지를 이 페이지를 작성한 세션의 입력란에 넣습니다", // Put a message asking to keep this option in the message box of the session that wrote this page
+  "artifact.useOptionCopyTitle": "이 시안을 유지해 달라는 메시지를 복사합니다", // Copy a message asking to keep this option
+  // Knowledge base and archived sessions pages.
+  "kb.overview": "개요",
+  "kb.sources": "출처",
+  "kb.searchAll": "지식 및 노트 검색…",
+  "kb.localHint": "이 컴퓨터의 Markdown 폴더입니다. 여기나 다른 편집기에서 편집할 수 있습니다.",
+  "kb.archiveHint": "종료된 대화입니다. 남겨 둘 만한 대화는 지식 베이스에 추가하세요.",
+  "kb.recent": "최근 업데이트",
+  "kb.openArchived": "보관된 세션 열기",
+  "kb.editDetails": "세부 정보 편집",
+  "kb.moreActions": "추가 작업",
+  "archive.allSessions": "모든 세션",
+  "archive.projects": "프로젝트",
+  "archive.allProjects": "모든 프로젝트",
+  "archive.allAgents": "모든 에이전트",
+  "archive.anyKnowledge": "지식 유무 전체",
+  "archive.withKnowledge": "지식 베이스에 추가됨",
+  "archive.withoutKnowledge": "아직 추가되지 않음",
+  "archive.view": "보기",
+  "archive.viewTree": "트리",
+  "archive.viewTime": "날짜순",
+  "archive.newest": "최신순",
+  "archive.oldest": "오래된순",
+  "archive.colSession": "세션",
+  "archive.colProject": "프로젝트",
+  "archive.colAgent": "에이전트",
+  "archive.colKnowledge": "지식",
+  "archive.colArchived": "보관일",
+  "archive.restoreShort": "복원",
+  "kb.needsAttention": (count: string) => `확인 필요 ${count}건`,
+  "kb.statusAttention": "확인 필요",
+  "kb.statusOrganized": "정리됨",
+  "kb.organizedCount": (count: string) => `정리됨 ${count}개`,
+  "kb.failedTimes": (count: string) => `${count}번 실패했습니다`,
+  "kb.succeededAfter": (count: string) => `${count}번 실패한 후 성공했습니다`,
+  "kb.fromSession": "원본 세션",
+  "kb.showAllTags": "모든 태그 보기",
+  "kb.inKnowledgeBase": (count: string) => `지식 베이스에 ${count}개`,
+  "kb.entriesCount": (count: string) => `항목 ${count}개`,
+  "kb.entriesFrom": (_count: string, sessions: string) => `개 항목 · 세션 ${sessions}개`,
+  "kb.notesIn": (_count: string, folders: string) => `개 노트 · 폴더 ${folders}개`,
+  "kb.sessionsIn": (_count: string, projects: string) => `개 세션 · 프로젝트 ${projects}개`,
+  "kb.lastArchived": "최근 보관",
+  "nb.notesWord": (_count: string) => "개 노트",
+  "archive.sessionsInProjects": (sessions: string, projects: string) => `세션 ${sessions}개 · 프로젝트 ${projects}개`,
+  "archive.collapseAll": "모두 접기",
+  "kb.andMore": (count: string) => `외 ${count}개`,
+  "kb.searchEntries": "항목 검색…",
+  "kb.updatedOn": (date: string) => `${date} 업데이트`,
+  "archive.sessionsCount": (count: string) => `세션 ${count}개`,
 };
 
 export default ko;

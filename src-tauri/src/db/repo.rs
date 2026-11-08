@@ -8,6 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use uuid::Uuid;
 
+use super::system_collections;
+
 use crate::models::{
     AgentPreset, Group, NodeKind, Project, Session, SessionKind, Tree, AGENT_PRESET_ICON_MAX_BYTES,
 };
@@ -174,21 +176,22 @@ pub fn import_project(conn: &Connection, root_path: &str) -> Result<Project, Str
         .unwrap_or("project")
         .to_string();
 
+    let id = new_id();
     let project = Project {
-        id: new_id(),
+        collection_id: system_collections::default_parent(conn, &id, None)?.map(str::to_string),
+        id,
         name,
         root_path: normalize_windows_verbatim_path(canonical.to_string_lossy().into_owned()),
         color: None,
         sort_order: now_millis(),
         collapsed: false,
         mark: None,
-        collection_id: None,
         created_at: now_secs(),
     };
 
     conn.execute(
-        "INSERT INTO projects (id, name, root_path, color, sort_order, collapsed, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+        "INSERT INTO projects (id, name, root_path, color, sort_order, collapsed, created_at, collection_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)",
         params![
             project.id,
             project.name,
@@ -196,6 +199,7 @@ pub fn import_project(conn: &Connection, root_path: &str) -> Result<Project, Str
             project.color,
             project.sort_order,
             project.created_at,
+            project.collection_id,
         ],
     )
     .map_err(|e| format!("Failed to write project: {e}"))?;
@@ -216,21 +220,22 @@ pub fn create_virtual_project(conn: &Connection, name: &str) -> Result<Project, 
     if collection_name_taken(conn, trimmed, None)? {
         return Err(DUPLICATE_COLLECTION_NAME.to_string());
     }
+    let id = new_id();
     let project = Project {
-        id: new_id(),
+        collection_id: system_collections::default_parent(conn, &id, None)?.map(str::to_string),
+        id,
         name: trimmed.to_string(),
         root_path: String::new(),
         color: None,
         sort_order: now_millis(),
         collapsed: false,
         mark: None,
-        collection_id: None,
         created_at: now_secs(),
     };
 
     conn.execute(
-        "INSERT INTO projects (id, name, root_path, color, sort_order, collapsed, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+        "INSERT INTO projects (id, name, root_path, color, sort_order, collapsed, created_at, collection_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)",
         params![
             project.id,
             project.name,
@@ -238,6 +243,7 @@ pub fn create_virtual_project(conn: &Connection, name: &str) -> Result<Project, 
             project.color,
             project.sort_order,
             project.created_at,
+            project.collection_id,
         ],
     )
     .map_err(|e| format!("Failed to write project: {e}"))?;
@@ -449,7 +455,9 @@ pub fn create_session_identified(
             .map(|s| s.to_string())
             .filter(|s| !s.is_empty()),
         agent_path: agent_path.map(|s| s.to_string()).filter(|s| !s.is_empty()),
+        // An agent without a terminal interface can only be driven as a conversation, whatever was asked.
         engine: match engine.map(str::trim) {
+            _ if !kind.has_terminal_interface() => "chat".to_string(),
             Some("chat") => "chat".to_string(),
             _ => "tui".to_string(),
         },
@@ -1170,6 +1178,32 @@ pub fn set_agent_session_id(
     Ok(n > 0)
 }
 
+/// Forget the agent conversation a session's terminal has just cleared (Claude `/clear`).
+///
+/// The agent starts a new conversation whose ID only arrives with the next prompt; until then the stored
+/// ID still names the cleared one, so the session view would replay it and a chat start would resume it.
+/// Unbind only when the cleared ID is the stored one, so a late callback cannot drop a conversation
+/// already captured after the clear. A pending fork has not captured its own ID yet, so its stored ID is
+/// the source conversation's and the clear always releases it.
+///
+/// Return whether data actually changed, like [`set_agent_session_id`].
+pub fn forget_agent_session_id(
+    conn: &Connection,
+    id: &str,
+    cleared_agent_session_id: &str,
+    kind: SessionKind,
+) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE sessions SET agent_session_id = NULL, fork_pending = 0
+             WHERE id = ?2 AND kind = ?3 AND agent_session_id IS NOT NULL
+               AND (agent_session_id = ?1 OR fork_pending <> 0)",
+            params![cleared_agent_session_id, id, kind.as_str()],
+        )
+        .map_err(|e| format!("Failed to clear agent session id: {e}"))?;
+    Ok(n > 0)
+}
+
 /// Atomically claim a newly created agent session ID for a PTY session.
 ///
 /// Disk scanning narrows only by start time/cwd, so concurrent agents may see the same newest file.
@@ -1677,6 +1711,7 @@ pub fn rename_node(conn: &Connection, kind: NodeKind, id: &str, name: &str) -> R
     let name = name.trim();
     if name.is_empty() { return Err("Name must not be empty".into()); }
     if matches!(kind, NodeKind::Project) {
+        system_collections::guard(id)?;
         let is_collection = conn
             .query_row("SELECT root_path = '' FROM projects WHERE id = ?1", params![id], |row| row.get::<_, bool>(0))
             .optional()
@@ -1784,14 +1819,22 @@ pub fn delete_node(conn: &Connection, kind: NodeKind, id: &str) -> Result<Vec<St
         NodeKind::Session => delete_session_node(conn, id),
         NodeKind::Group => delete_group_node(conn, id),
         NodeKind::Project => {
+            system_collections::guard(id)?;
             let tx = conn.unchecked_transaction().map_err(|e| format!("Failed to begin project deletion: {e}"))?;
-            tx.execute("UPDATE projects SET collection_id = NULL WHERE collection_id = ?1", params![id])
-                .map_err(|e| format!("Failed to release collection projects: {e}"))?;
-            let deleted = delete_project_node(&tx, id)?;
+            let deleted = release_and_delete_project(&tx, id)?;
             tx.commit().map_err(|e| format!("Failed to commit project deletion: {e}"))?;
             Ok(deleted)
         },
     }
+}
+
+/// Return a project's member projects to their default parent, then delete it per [`delete_node`].
+fn release_and_delete_project(conn: &Connection, id: &str) -> Result<Vec<String>, String> {
+    // Members go back to Projects when it exists, so nothing but the fixed collections sits at the top.
+    let parent = system_collections::projects_collection(conn)?;
+    conn.execute("UPDATE projects SET collection_id = ?2 WHERE collection_id = ?1", params![id, parent])
+        .map_err(|e| format!("Failed to release collection projects: {e}"))?;
+    delete_project_node(conn, id)
 }
 
 /// Physically delete sessions by generated IN placeholders; empty input is a no-op.
@@ -2260,6 +2303,37 @@ fn creates_group_cycle(conn: &Connection, id: &str, target: &str) -> Result<bool
     Ok(true)
 }
 
+/// Re-parent a group and, when its project changes, re-home its whole subtree (nested groups and every
+/// session filed under them, archived ones included) to the target project.
+fn move_group_subtree(
+    conn: &Connection,
+    id: &str,
+    target_project_id: Option<&str>,
+    target_group_id: Option<&str>,
+    sort_order: i64,
+) -> Result<(), String> {
+    let source_project: Option<String> = conn
+        .query_row("SELECT project_id FROM groups WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("Failed to read group: {e}"))?;
+    conn.execute(
+        "UPDATE groups SET project_id = ?1, parent_group_id = ?2, sort_order = ?3 WHERE id = ?4",
+        params![target_project_id, target_group_id, sort_order, id],
+    )
+    .map_err(|e| format!("Failed to move group: {e}"))?;
+    let Some(target) = target_project_id else { return Ok(()) };
+    if source_project.as_deref() == Some(target) {
+        return Ok(());
+    }
+    for gid in descendant_group_ids(conn, id)? {
+        conn.execute("UPDATE groups SET project_id = ?1 WHERE id = ?2", params![target, gid])
+            .map_err(|e| format!("Failed to move nested group: {e}"))?;
+        conn.execute("UPDATE sessions SET project_id = ?1 WHERE group_id = ?2", params![target, gid])
+            .map_err(|e| format!("Failed to move grouped sessions: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Move a node to a new parent and sort position; projects support reordering only.
 pub fn move_node(
     conn: &Connection,
@@ -2279,11 +2353,15 @@ pub fn move_node(
                     return Err("Cannot move a group into itself or its own subtree".into());
                 }
             }
-            conn.execute(
-                "UPDATE groups SET project_id = ?1, parent_group_id = ?2, sort_order = ?3 WHERE id = ?4",
-                params![target_project_id, target_group_id, sort_order, id],
-            )
-            .map_err(|e| format!("Failed to move group: {e}"))?;
+            // A session launches in its own project's root, so a cross-project move must carry every nested
+            // group and session along; otherwise they would sit under the new project but still start in the
+            // old one. A savepoint keeps this atomic even when the caller already holds a transaction.
+            conn.execute_batch("SAVEPOINT move_group")
+                .map_err(|e| format!("Failed to begin group move: {e}"))?;
+            let moved = move_group_subtree(conn, id, target_project_id, target_group_id, sort_order);
+            let end = if moved.is_ok() { "RELEASE move_group" } else { "ROLLBACK TO move_group; RELEASE move_group" };
+            conn.execute_batch(end).map_err(|e| format!("Failed to finish group move: {e}"))?;
+            moved?;
         }
         NodeKind::Session => {
             // Same cycle guard as groups: `move_node` is reachable over the WebSocket dispatch, where no
@@ -2348,6 +2426,9 @@ pub fn set_project_collection(
 }
 
 fn apply_project_collection(conn: &Connection, project_id: &str, collection_id: Option<&str>) -> Result<(), String> {
+    system_collections::guard(project_id)?;
+    system_collections::guard_destination(conn, collection_id)?;
+    let collection_id = system_collections::default_parent(conn, project_id, collection_id)?;
     let source = conn.query_row("SELECT 1 FROM projects WHERE id = ?1 AND deleted_at IS NULL",
         params![project_id], |_| Ok(())).optional().map_err(|e| format!("Failed to read project: {e}"))?;
     if source.is_none() { return Err(format!("Project not found: {project_id}")); }
@@ -2438,6 +2519,18 @@ pub fn list_archived(conn: &Connection) -> Result<Vec<Session>, String> {
                      SELECT 1 FROM sessions p
                      WHERE p.id = s.parent_session_id AND p.archived_at IS NOT NULL))
              ORDER BY s.archived_at DESC"
+        ),
+        map_session,
+    )
+}
+
+/// List every archived session, descendants included, for the knowledge-base Collections tree,
+/// which nests archived children under their archived parent instead of hiding them.
+pub fn list_archived_all(conn: &Connection) -> Result<Vec<Session>, String> {
+    query_all(
+        conn,
+        &format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC"
         ),
         map_session,
     )
@@ -2552,6 +2645,35 @@ pub fn archive_group(conn: &Connection, group_id: &str) -> Result<(), String> {
     }
     // Delete the group into a tombstone when archives exist; an empty group is removed physically.
     delete_group_node(conn, group_id)?;
+    Ok(())
+}
+
+/// Archive a user collection the way [`archive_group`] archives a group: archive every session in it,
+/// return member projects to their default parent as deletion does, then delete the collection. Because
+/// it now contains archives, deletion turns it into a hidden tombstone that restoring any session revives.
+///
+/// A collection without sessions contains nothing restorable and is deleted permanently. Fixed
+/// collections and folder projects cannot be archived.
+pub fn archive_collection(conn: &Connection, id: &str) -> Result<(), String> {
+    system_collections::guard(id)?;
+    let tx = conn.unchecked_transaction().map_err(|e| format!("Failed to begin collection archive: {e}"))?;
+    let virtual_project: Option<bool> = tx
+        .query_row("SELECT root_path = '' FROM projects WHERE id = ?1 AND deleted_at IS NULL", params![id], |r| r.get(0))
+        .optional()
+        .map_err(|e| format!("Failed to read collection: {e}"))?;
+    match virtual_project {
+        None => return Err("Collection not found".into()),
+        Some(false) => return Err("Only collections can be archived".into()),
+        Some(true) => {}
+    }
+    // Preserve original archive timestamps on sessions already archived.
+    tx.execute(
+        "UPDATE sessions SET archived_at = ?1 WHERE archived_at IS NULL AND project_id = ?2",
+        params![now_secs(), id],
+    )
+    .map_err(|e| format!("Failed to archive collection sessions: {e}"))?;
+    release_and_delete_project(&tx, id)?;
+    tx.commit().map_err(|e| format!("Failed to commit collection archive: {e}"))?;
     Ok(())
 }
 
@@ -2969,6 +3091,45 @@ mod tests {
         assert!(move_node(&conn, NodeKind::Group, "g2", Some("p1"), None, None, 0).is_ok());
     }
 
+    /// Sessions launch in their own project's root, so moving a group out of a collection into a project must
+    /// re-home every nested group and session; nodes outside the subtree stay put.
+    #[test]
+    fn move_node_carries_group_subtree_across_projects() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO projects (id, name, root_path, sort_order, created_at) VALUES
+               ('c', 'collection', '', 0, 0), ('p', 'project', '/work/p', 0, 0);
+             INSERT INTO groups (id, project_id, name, sort_order, parent_group_id, created_at) VALUES
+               ('g1', 'c', 'g1', 0, NULL, 0), ('g2', 'c', 'g2', 0, 'g1', 0), ('other', 'c', 'other', 0, NULL, 0);
+             INSERT INTO sessions (id, project_id, group_id, name, kind, sort_order, parent_session_id, created_at) VALUES
+               ('s1', 'c', 'g1', 's1', 'terminal', 0, NULL, 0),
+               ('s1c', 'c', 'g1', 's1c', 'terminal', 0, 's1', 0),
+               ('s2', 'c', 'g2', 's2', 'terminal', 0, NULL, 0),
+               ('s3', 'c', 'other', 's3', 'terminal', 0, NULL, 0);",
+        )
+        .unwrap();
+
+        move_node(&conn, NodeKind::Group, "g1", Some("p"), None, None, 5).unwrap();
+
+        let project_of = |table: &str, id: &str| -> String {
+            conn.query_row(&format!("SELECT project_id FROM {table} WHERE id = ?1"), params![id], |r| r.get(0))
+                .unwrap()
+        };
+        for g in ["g1", "g2"] {
+            assert_eq!(project_of("groups", g), "p", "group {g}");
+        }
+        for s in ["s1", "s1c", "s2"] {
+            assert_eq!(project_of("sessions", s), "p", "session {s}");
+        }
+        assert_eq!(project_of("groups", "other"), "c");
+        assert_eq!(project_of("sessions", "s3"), "c");
+        // Nesting inside the moved subtree is preserved.
+        let parent: Option<String> = conn
+            .query_row("SELECT parent_group_id FROM groups WHERE id = 'g2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(parent.as_deref(), Some("g1"));
+    }
+
     #[test]
     fn windows_verbatim_paths_are_normalized_for_display_and_launch() {
         assert_eq!(
@@ -3343,6 +3504,51 @@ mod tests {
 
         // A missing session returns None without error.
         assert_eq!(get_agent_session_id(&conn, "nope").unwrap(), None);
+    }
+
+    /// A terminal `/clear` unbinds only the conversation it cleared, and always releases a pending fork.
+    #[test]
+    fn forget_agent_session_id_unbinds_only_the_cleared_conversation() {
+        let conn = mem_conn();
+        let project = import_project(&conn, std::env::temp_dir().to_str().unwrap()).unwrap();
+        let claude = create_session(
+            &conn,
+            &project.id,
+            None,
+            "c",
+            SessionKind::Claude,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        set_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Claude).unwrap();
+
+        // A late callback for an older conversation, or one from another agent kind, changes nothing.
+        assert!(!forget_agent_session_id(&conn, &claude.id, "older", SessionKind::Claude).unwrap());
+        assert!(!forget_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Codex).unwrap());
+        assert_eq!(
+            get_agent_session_id(&conn, &claude.id).unwrap().as_deref(),
+            Some("before-clear")
+        );
+
+        assert!(forget_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Claude).unwrap());
+        assert_eq!(get_agent_session_id(&conn, &claude.id).unwrap(), None);
+        // Repeating the clear reports no change and triggers no broadcast.
+        assert!(!forget_agent_session_id(&conn, &claude.id, "before-clear", SessionKind::Claude).unwrap());
+
+        // A fork still anchored to its source releases it even though the cleared ID is the fork's own.
+        set_agent_session_id(&conn, &claude.id, "source", SessionKind::Claude).unwrap();
+        let fork = fork_session(&conn, &claude.id).unwrap();
+        assert!(forget_agent_session_id(&conn, &fork.id, "fork-own", SessionKind::Claude).unwrap());
+        assert_eq!(get_agent_session_id(&conn, &fork.id).unwrap(), None);
+        assert!(!get_fork_pending(&conn, &fork.id).unwrap());
+        assert_eq!(
+            get_agent_session_id(&conn, &claude.id).unwrap().as_deref(),
+            Some("source")
+        );
     }
 
     #[test]
@@ -3891,6 +4097,34 @@ mod tests {
         assert_eq!(r.group_id.as_deref(), Some(g.id.as_str()), "the session returns to its original group");
         assert_eq!(list_archived(&conn).unwrap().len(), 1, "the other one is still archived");
         let _ = s2;
+    }
+
+    /// Archiving a collection archives its sessions, releases member projects, and tombstones the
+    /// collection; restoring one session revives it. Folder projects and fixed collections are refused.
+    #[test]
+    fn archive_collection_archives_sessions_and_tombstones_collection() {
+        let conn = mem_conn();
+        let collection = create_virtual_project(&conn, "Research").unwrap();
+        let member = import_project(&conn, std::env::temp_dir().to_str().unwrap()).unwrap();
+        set_project_collection(&conn, &member.id, Some(&collection.id)).unwrap();
+        let g = create_group(&conn, &collection.id, None, "group").unwrap();
+        let s1 = create_session(&conn, &collection.id, Some(&g.id), "session 1", SessionKind::Claude, None, None, None, None, None)
+            .unwrap();
+        create_session(&conn, &collection.id, None, "session 2", SessionKind::Terminal, None, None, None, None, None).unwrap();
+
+        assert!(archive_collection(&conn, &member.id).is_err(), "folder projects cannot be archived");
+        archive_collection(&conn, &collection.id).unwrap();
+        let tree = list_tree(&conn).unwrap();
+        assert!(tree.projects.iter().all(|p| p.id != collection.id), "the collection is hidden as a tombstone");
+        assert!(tree.groups.is_empty() && tree.sessions.is_empty());
+        assert!(tree.projects.iter().any(|p| p.id == member.id && p.collection_id.is_none()), "member projects are released");
+        assert_eq!(list_archived(&conn).unwrap().len(), 2);
+
+        set_archived(&conn, &s1.id, false).unwrap();
+        let tree = list_tree(&conn).unwrap();
+        assert!(tree.projects.iter().any(|p| p.id == collection.id), "the collection is restored");
+        assert_eq!(tree.groups.len(), 1, "the session's group is restored");
+        assert_eq!(list_archived(&conn).unwrap().len(), 1, "the other session is still archived");
     }
 
     /// Archiving an empty group becomes permanent deletion because nothing is restorable.

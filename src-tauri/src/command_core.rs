@@ -493,7 +493,7 @@ pub fn delete_node(ctx: &AppCtx, kind: NodeKind, id: &str) -> Result<(), String>
     };
     if !hard_deleted.is_empty() {
         // Clear the shared full-text index regardless of which client initiated deletion.
-        let _ = crate::search::index::drop_sessions(ctx.db(), &hard_deleted);
+        let _ = crate::search::corpus::drop_sessions(ctx, &hard_deleted);
         // Drop the authoritative session records too. They deliberately outlive a process exit — an
         // agent that finished and left an unread result behind must stay marked — so removal from the
         // tree is the only thing that clears one. The in-memory status view goes with them, so `vstat`
@@ -531,6 +531,17 @@ pub fn archive_group(ctx: &AppCtx, id: &str) -> Result<(), String> {
     {
         let conn = ctx.db().conn.lock().unwrap();
         repo::archive_group(&conn, id)?;
+    }
+    ctx.emit(TREE_CHANGED, ());
+    Ok(())
+}
+
+/// Archives a user collection: archive its sessions, release member projects, and retain the collection as a
+/// hidden tombstone that any restored session revives. See `repo::archive_collection`.
+pub fn archive_collection(ctx: &AppCtx, id: &str) -> Result<(), String> {
+    {
+        let conn = ctx.db().conn.lock().unwrap();
+        repo::archive_collection(&conn, id)?;
     }
     ctx.emit(TREE_CHANGED, ());
     Ok(())
@@ -609,6 +620,9 @@ pub fn get_app_settings(ctx: &AppCtx) -> Result<std::collections::HashMap<String
     settings
         .entry(crate::pty::completion::MODE_KEY.into())
         .or_insert_with(|| crate::pty::completion::DEFAULT_MODE.into());
+    settings
+        .entry(crate::pty::completion::TAB_BEHAVIOR_KEY.into())
+        .or_insert_with(|| crate::pty::completion::DEFAULT_TAB_BEHAVIOR.into());
     Ok(settings)
 }
 
@@ -643,9 +657,20 @@ pub fn set_app_settings(
             return Err("Invalid terminal completion mode".into());
         }
     }
+    if let Some(behavior) = entries.get(crate::pty::completion::TAB_BEHAVIOR_KEY) {
+        if !matches!(behavior.as_str(), "accept" | "complete") {
+            return Err("Invalid terminal Tab behavior".into());
+        }
+    }
     {
         let conn = ctx.db().conn.lock().unwrap();
         repo::set_app_settings(&conn, &entries)?;
+    }
+    if let Some(mode) = entries.get(crate::pty::completion::MODE_KEY) {
+        // Running shells pick up the new mode at their next prompt.
+        if let Err(e) = ctx.data_dir().and_then(|dir| crate::pty::completion::write_mode(&dir, mode)) {
+            crate::diagnostic_warn!("failed to share the terminal completion mode: {e}");
+        }
     }
     // An empty batch changes nothing; staying quiet avoids waking every client for no reason.
     if !entries.is_empty() {
@@ -728,6 +753,32 @@ pub fn land_gitea_pr(
         title,
         body,
     )
+}
+
+/// Whether the Git panel can open a pull request for the repository at `cwd`: Gitea must be
+/// configured on the same host as `origin`, hold a token, and answer. `reason` is `ok`,
+/// `not_gitea`, `no_token`, or `unreachable` for the panel to explain.
+pub fn git_pr_provider(ctx: &AppCtx, cwd: &str) -> serde_json::Value {
+    if !crate::gitea::relevant(ctx.db(), cwd) {
+        return serde_json::json!({ "provider": null, "available": false, "reason": "not_gitea" });
+    }
+    let (available, reason) = crate::gitea::land_provider_check(ctx.db(), &app_identifier(ctx));
+    serde_json::json!({ "provider": "gitea", "available": available, "reason": reason })
+}
+
+/// Push the current branch and open a Gitea pull request into `base`, the branch the Git panel
+/// compares against.
+pub fn git_open_pull_request(
+    ctx: &AppCtx,
+    cwd: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+) -> Result<crate::gitea::PrOutcome, String> {
+    // `status().branch` is None on a detached HEAD, where there is no branch to push.
+    let head = crate::git::status(cwd).branch.ok_or("Check out a branch before opening a pull request")?;
+    let base_ref = crate::git::compare::full_ref(cwd, base)?;
+    crate::gitea::open_pr(ctx.db(), &app_identifier(ctx), cwd, &head, &base_ref, title, body)
 }
 
 // SSH host history and remembered passwords. These commands are **desktop-only** because Connect Remote is hidden
@@ -846,9 +897,8 @@ pub fn search_session_content(
     query: &str,
     scope: Option<&str>,
 ) -> Result<Vec<crate::search::SessionSearchHit>, String> {
-    let recordings_dir = ctx.data_dir()?.join("recordings");
     let scope = crate::search::SearchScope::from_arg(scope.unwrap_or("live"));
-    crate::search::search_sessions(ctx.db(), &recordings_dir, query, scope)
+    crate::search::jobs::legacy(ctx, query, scope, None)
 }
 
 /// Session-content search optionally restricted to one already resolved session ID.
@@ -858,10 +908,8 @@ pub fn search_session_content_in(
     scope: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<Vec<crate::search::SessionSearchHit>, String> {
-    let recordings_dir = ctx.data_dir()?.join("recordings");
     let scope = crate::search::SearchScope::from_arg(scope.unwrap_or("live"));
-    // Pass &Db rather than a locked connection; search refreshes outside the lock and writes in short transactions.
-    crate::search::search_sessions_in(ctx.db(), &recordings_dir, query, scope, session_id)
+    crate::search::jobs::legacy(ctx, query, scope, session_id)
 }
 
 /// Reads an agent transcript for the archive-panel viewer.
@@ -870,6 +918,23 @@ pub fn read_agent_transcript(
     session_id: &str,
 ) -> Result<Vec<crate::agent::transcript::TranscriptMessage>, String> {
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
+    if crate::agent::history_store::prose::supported(kind) {
+        let branch=crate::agent::history_store::api::prepare(ctx,session_id)?;
+        let mut ready=branch.error.is_none();let mut total=0u64;
+        for source in &branch.sources {
+            let (water,status)=source.progress()?;
+            ready&=status=="complete" || source.segment.end_byte.is_some_and(|end|water>=end);
+            total=total.saturating_add(source.segment.end_byte.unwrap_or(source.size));
+        }
+        if ready {
+            let cancel=std::sync::atomic::AtomicBool::new(false);
+            let prose=crate::agent::history_store::prose::Prose::new(branch,&cancel)?;
+            return prose.collect_bounded(0,prose.total,crate::agent::history_store::limits::PAGE_BYTES,&cancel);
+        }
+        if total>crate::agent::history_store::limits::PAGE_BYTES as u64 {
+            return Err(crate::agent::history_store::compat::UPGRADE.into());
+        }
+    }
     crate::agent::transcript::read(kind, &agent_id)
 }
 
@@ -889,6 +954,10 @@ pub fn set_session_engine(ctx: &AppCtx, session_id: &str, engine: &str) -> Resul
     }
     if !session.kind.supports_chat() {
         return Err("This session does not support switching conversation engines".into());
+    }
+    if engine == "tui" && !session.kind.has_terminal_interface() {
+        return Err(format!("{} has no terminal interface; this conversation stays in the conversation view.",
+            crate::agent::launch_options::label(session.kind)));
     }
     // Leaving an engine means leaving its process behind; two agents must never share one conversation.
     if engine == "tui" {
@@ -997,13 +1066,17 @@ pub fn chat_start(
     }
     // A session created under a project usually has no directory of its own; it runs in the project's.
     // The terminal path applies this fallback in the frontend, so the engine must apply it here or the
-    // agent inherits the backend's own working directory and reads the wrong files.
-    let cwd = session
-        .cwd
-        .as_deref()
-        .filter(|c| !c.trim().is_empty())
-        .map(str::to_string)
-        .or(project_root);
+    // agent inherits the backend's own working directory and reads the wrong files. With neither, or with a
+    // directory that no longer exists, it runs in home exactly as a terminal does; OpenCode v2 cannot open a
+    // session without a directory at all.
+    let cwd = crate::host::spawn_dir(
+        session.cwd.as_deref().filter(|c| !c.trim().is_empty()).or(project_root.as_deref()),
+    );
+    if crate::agent::executable::resolve_launch_binary(ctx, session_id, session.kind)?
+        == crate::agent::executable::LaunchBinary::Broken
+    {
+        return Err(format!("agent_not_installed:{}", session.kind.as_str()));
+    }
     let bin = crate::agent::executable::for_session(ctx, &session);
     let mut selection = session_settings::resolve(ctx, &session)?;
     if model.is_some() {
@@ -1107,10 +1180,15 @@ pub fn chat_set_personality(
     Ok(())
 }
 
+/// Whether the conversation's agent is installed and signed in, checked before anything is sent.
+pub fn chat_agent_readiness(ctx: &AppCtx, session_id: &str) -> Result<impl serde::Serialize, String> {
+    ctx.chat().agent_readiness(ctx, session_id)
+}
+
 /// Begin provider-managed authorization in the existing conversation.
-pub fn chat_auth_start(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
+pub fn chat_auth_start(ctx: &AppCtx, session_id: &str, provider: Option<&str>) -> Result<(), String> {
     prepare_chat_account(ctx, session_id)?;
-    ctx.chat().auth_start(ctx, session_id)
+    ctx.chat().auth_start(ctx, session_id, provider)
 }
 
 pub fn chat_auth_logout(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
@@ -1122,11 +1200,11 @@ fn prepare_chat_account(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
     {
         let conn = ctx.db().conn.lock().unwrap();
         let session = repo::get_session(&conn, session_id)?.ok_or("Session not found")?;
-        if !matches!(session.kind, SessionKind::Codex | SessionKind::Claude)
+        if !matches!(session.kind, SessionKind::Codex | SessionKind::Claude | SessionKind::Zcode)
             || session.engine != "chat"
         {
             return Err(
-                "Account operations are available only in Claude or Codex chat sessions.".into(),
+                "Account operations are available only in Claude, Codex or ZCode chat sessions.".into(),
             );
         }
     }
@@ -1401,7 +1479,7 @@ pub fn chat_queue_update(
 
 /// Stop the turn in progress, leaving the conversation open.
 pub fn chat_interrupt(ctx: &AppCtx, session_id: &str) -> Result<(), String> {
-    ctx.chat().interrupt(session_id)
+    ctx.chat().interrupt(ctx, session_id)
 }
 
 /// Answer a permission question raised by a tool the agent wants to run.
@@ -1507,7 +1585,10 @@ pub fn chat_set_model(ctx: &AppCtx, session_id: &str, model: Option<&str>) -> Re
     let session = session_settings::session(ctx, session_id)?;
     let mut selection = session_settings::resolve(ctx, &session)?;
     selection.model = session_settings::clean(model);
-    if session.kind == SessionKind::Antigravity {
+    // A model the running process cannot switch to is a launch setting: it applies when the process restarts.
+    let launch_only = crate::agent::chat::acp_protocol::supported(session.kind) && ctx.chat().is_alive(session_id)
+        && !ctx.chat().acp_switchable(session_id).0;
+    if session.kind == SessionKind::Antigravity || launch_only {
         return ctx.chat().update_launch_settings(ctx, session_id, || {
             session_settings::persist(ctx, &session, &selection)?;
             ctx.emit(&crate::agent::chat::engine::event_name(session_id), serde_json::json!({"type":"settingsChanged","model":selection.model}));
@@ -1532,7 +1613,9 @@ pub fn chat_set_effort(ctx: &AppCtx, session_id: &str, effort: Option<&str>) -> 
     let session = session_settings::session(ctx, session_id)?;
     let mut selection = session_settings::resolve(ctx, &session)?;
     selection.effort = session_settings::clean(effort);
-    if session.kind == SessionKind::Antigravity {
+    let launch_only = crate::agent::chat::acp_protocol::supported(session.kind) && ctx.chat().is_alive(session_id)
+        && !ctx.chat().acp_switchable(session_id).1;
+    if session.kind == SessionKind::Antigravity || launch_only {
         if selection.effort.as_deref().is_some_and(|value| !crate::agent::chat::antigravity_protocol::EFFORTS.contains(&value)) {
             return Err("Antigravity effort must be low, medium, high, max, or automatic".into());
         }
@@ -1555,6 +1638,24 @@ pub fn chat_set_effort(ctx: &AppCtx, session_id: &str, effort: Option<&str>) -> 
 }
 
 /// Models reported by the agent behind this session.
+/// DeepSeek's model picker while its agent is not running: the catalogue the last session reported, or the
+/// models dsh 0.2.1 ships with until one has. dsh names a model by its provider route and model id as a
+/// JSON pair, the same opaque value its ACP selector takes.
+fn deepseek_idle_models(ctx: &AppCtx) -> serde_json::Value {
+    let saved = ctx.db().conn.lock().ok()
+        .and_then(|conn| crate::db::repo::get_app_settings(&conn).ok())
+        .and_then(|settings| settings.get(crate::agent::chat::engine::DEEPSEEK_MODELS_SETTING).cloned())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .filter(|models| models.as_array().is_some_and(|models| !models.is_empty()));
+    saved.unwrap_or_else(|| {
+        let efforts = ["off", "low", "high", "max"];
+        serde_json::json!([
+            {"id":"[\"deepseek-official\",\"deepseek-v4-flash\"]","label":"deepseek-v4-flash","description":"","effortLevels":efforts},
+            {"id":"[\"deepseek-official\",\"deepseek-v4-pro\"]","label":"DeepSeek-V4-Pro","description":"","effortLevels":efforts},
+        ])
+    })
+}
+
 pub fn chat_models(ctx: &AppCtx, session_id: &str) -> Result<serde_json::Value, String> {
     let session = {
         let conn = ctx.db().conn.lock().unwrap();
@@ -1616,6 +1717,39 @@ pub fn chat_models(ctx: &AppCtx, session_id: &str) -> Result<serde_json::Value, 
                 cwd.as_deref(),
                 running,
             )?)
+        }
+        SessionKind::Zcode => {
+            if let Some(models) = ctx.chat().zcode_models(session_id) {
+                return serde_json::to_value(models).map_err(|e| format!("Failed to serialize model catalogue: {e}"));
+            }
+            let bin = crate::agent::executable::for_session(ctx, &session);
+            let root = {
+                let conn = ctx.db().conn.lock().unwrap();
+                repo::get_project_root(&conn, &session.project_id)?
+            };
+            let cwd = session.cwd.as_deref().filter(|c| !c.trim().is_empty()).map(str::to_string).or(root)
+                .ok_or("ZCode needs a working directory to list its models")?;
+            serde_json::to_value(crate::agent::zcode::list_models(&bin, &cwd)?)
+        }
+        // A running ACP session lists the models it can switch to. Without one, the CLI's own catalogue is
+        // what its next launch can be given.
+        kind if crate::agent::chat::acp_protocol::supported(kind) => {
+            if let Some(models) = ctx.chat().acp_models(session_id) {
+                return Ok(serde_json::Value::Array(models));
+            }
+            if kind == SessionKind::Deepseek {
+                return Ok(deepseek_idle_models(ctx));
+            }
+            let efforts: &[&str] = if kind == SessionKind::Copilot { crate::agent::chat::acp_protocol::COPILOT_EFFORTS } else { &[] };
+            let models = if kind == SessionKind::Kimi {
+                crate::agent::model_catalog::list_models(ctx, kind.as_str())?
+            } else {
+                let bin = crate::agent::executable::for_session(ctx, &session);
+                crate::agent::model_catalog::list_models_at(kind.as_str(), &bin)?
+            };
+            serde_json::to_value(models.into_iter().map(|id| serde_json::json!({
+                "label":id,"id":id,"description":"","effortLevels":efforts,
+            })).collect::<Vec<_>>())
         }
         SessionKind::Pi | SessionKind::Omp => {
             if let Some(models) = ctx.chat().pi_models(session_id) {
@@ -1707,7 +1841,7 @@ pub fn chat_snapshot(
     chat_snapshot_window(ctx, session_id, None)
 }
 
-pub fn chat_snapshot_window(
+pub fn chat_snapshot_control(
     ctx: &AppCtx,
     session_id: &str,
     window: Option<&crate::agent::chat::engine::ChatWindow>,
@@ -1729,6 +1863,15 @@ pub fn chat_snapshot_window(
             snapshot.chrome = Some(session_settings::chrome(&conn, session_id)?);
         }
     }
+    Ok(snapshot)
+}
+
+pub fn chat_snapshot_window(
+    ctx: &AppCtx,
+    session_id: &str,
+    window: Option<&crate::agent::chat::engine::ChatWindow>,
+) -> Result<crate::agent::chat::engine::ChatSnapshot, String> {
+    let mut snapshot = chat_snapshot_control(ctx, session_id, window)?;
     // No process has run this conversation since the backend started, so the engine holds no timeline for
     // it. The agent's own recording still does. Reading it here means a reopened session shows what was
     // said before anything else happens — and keeps showing it when the agent cannot be started at all,
@@ -1739,8 +1882,14 @@ pub fn chat_snapshot_window(
             repo::get_session(&conn, session_id)?
         };
         if let Some((kind, id)) = session.and_then(|s| s.agent_session_id.map(|id| (s.kind, id))) {
-            match crate::agent::chat::history::replay(kind, &id) {
+            let replayed = if crate::agent::chat::acp_protocol::supported(kind) {
+                crate::agent::chat::acp_protocol::replay(ctx.data_dir().ok().as_deref(), kind, &id)
+            } else {
+                crate::agent::chat::history::replay(kind, &id)
+            };
+            match replayed {
                 Ok(rows) => snapshot.rows = rows,
+                Err(e) if e.starts_with("detail_requires_paging:") => return Err(e),
                 // A recording that is gone, or a thread Codex never wrote, is the same empty pane as before.
                 Err(e) => crate::diagnostic_warn!("chat: no history replayed for {id}: {e}"),
             }
@@ -1788,7 +1937,7 @@ pub fn chat_row(
 ) -> Result<serde_json::Value, String> {
     if ctx
         .chat()
-        .snapshot_window(session_id, Some(&Default::default()))
+        .snapshot_window(session_id, Some(&crate::agent::chat::engine::ChatWindow {control_only:true,..Default::default()}))
         .pid
         .is_some()
     {
@@ -1828,8 +1977,10 @@ pub fn chat_rewind_preview(
     ctx: &AppCtx,
     session_id: &str,
     row_id: &str,
+    history_generation:Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    ctx.chat().rewind_preview(session_id, row_id)
+    if let Some(generation)=history_generation {ctx.chat().rewind_indexed_preview(ctx,session_id,row_id,generation)}
+    else {ctx.chat().rewind_preview(session_id, row_id)}
 }
 
 /// Rewind conversation state, Claude file checkpoints, or both from one visible user message.
@@ -1838,11 +1989,13 @@ pub fn chat_rewind(
     session_id: &str,
     row_id: &str,
     scope: &str,
+    history_generation:Option<&str>,
 ) -> Result<serde_json::Value, String> {
     if crate::security::session_active(session_id) {
         return Err("security_audit_owns_conversation".into());
     }
-    let result = ctx.chat().rewind(ctx, session_id, row_id, scope)?;
+    let result = if let Some(generation)=history_generation {ctx.chat().rewind_indexed(ctx,session_id,row_id,scope,generation)?}
+        else {ctx.chat().rewind(ctx, session_id, row_id, scope)?};
     crate::agent::chat::auto_continue::cancel(ctx, session_id);
     Ok(result)
 }
@@ -1910,6 +2063,10 @@ pub fn agent_context_info(
         return Ok(info);
     }
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
+    if kind==SessionKind::Kiro {
+        let context=crate::agent::history_store::context::kiro(ctx,session_id)?;
+        return Ok(crate::agent::transcript::AgentContextInfo {model:context.model,context_tokens:None,context_limit:context.limit.unwrap_or(0),current_tool:None});
+    }
     let mut info = crate::agent::transcript::context_info(kind, &agent_id)?;
     // Pi and OMP leave the limit to their catalogue; the running process answers with the catalogue the
     // CLI actually uses, which is fresher than the copy it cached on disk.
@@ -1930,7 +2087,7 @@ pub fn agent_turn_stats(
     session_id: &str,
 ) -> Result<crate::agent::transcript::TurnStats, String> {
     let (kind, agent_id) = session_kind_and_agent(ctx, session_id)?;
-    if kind == SessionKind::Kiro { return crate::agent::kiro_info::turn_stats(&agent_id); }
+    if kind==SessionKind::Kiro {return Ok(crate::agent::kiro_info::from_context(crate::agent::history_store::context::kiro(ctx,session_id)?));}
     let mut stats = crate::agent::transcript::current_turn_stats(kind, &agent_id)?;
     if let Ok(context) = agent_context_info(ctx, session_id) {
         stats.with_context(&context);

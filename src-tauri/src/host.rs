@@ -54,6 +54,41 @@ pub fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
+/// The directory a session's agent or shell starts in, shared by the terminal and chat views so both land
+/// in the same place. The requested directory is used when it exists. Otherwise, whether it is unset or
+/// stale, the session runs in home rather than this process's own directory, which on a desktop launch is
+/// `/` and is never what the user meant. `None` only when home is unavailable too.
+pub fn spawn_dir(requested: Option<&str>) -> Option<String> {
+    requested
+        .filter(|d| !d.trim().is_empty() && std::path::Path::new(d).is_dir())
+        .map(str::to_string)
+        .or_else(|| spawn_home().filter(|h| std::path::Path::new(h).is_dir()))
+}
+
+/// Home for `spawn_dir`. Windows uses `USERPROFILE` or `HOMEDRIVE` plus `HOMEPATH`; other platforms use
+/// `HOME`.
+fn spawn_home() -> Option<String> {
+    #[cfg(windows)]
+    {
+        if let Ok(p) = std::env::var("USERPROFILE") {
+            if !p.is_empty() {
+                return Some(p);
+            }
+        }
+        if let (Ok(drive), Ok(path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+            let h = format!("{drive}{path}");
+            if !h.is_empty() {
+                return Some(h);
+            }
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("HOME").ok().filter(|h| !h.is_empty())
+    }
+}
+
 /// Create a cross-platform `Command`, adding `CREATE_NO_WINDOW` on Windows so this GUI-subsystem binary
 /// does not flash a conhost window for every console child. Other platforms use plain `Command::new`.
 ///
@@ -406,5 +441,15 @@ mod tests {
         bus.unlisten(id1);
         bus.emit("e", "null");
         assert_eq!(count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn spawn_dir_falls_back_to_home() {
+        let home = super::spawn_home();
+        let existing = std::env::temp_dir().to_string_lossy().into_owned();
+        assert_eq!(super::spawn_dir(Some(&existing)), Some(existing.clone()));
+        assert_eq!(super::spawn_dir(Some("/no/such/vlx-term-dir")), home);
+        assert_eq!(super::spawn_dir(Some("  ")), home);
+        assert_eq!(super::spawn_dir(None), home);
     }
 }

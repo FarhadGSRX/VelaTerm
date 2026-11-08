@@ -23,6 +23,9 @@ export function AgentPermissionSelect({ kind, value, onChange }: {
   }}>
     <Select value={state?.catalog?.selected ?? ""}
       ariaLabel={t("info.permission")}
+      // Dialogs place this field near their bottom edge; portaling lets the list flip above the
+      // trigger instead of running past the window.
+      menuPortal
       placeholder={state?.error ? "—" : t("common.loading")}
       disabled={busy || !state?.catalog}
       options={state?.catalog?.modes.map(mode => ({ value: mode, label: t(permissionLabelKey(mode)) })) ?? []}

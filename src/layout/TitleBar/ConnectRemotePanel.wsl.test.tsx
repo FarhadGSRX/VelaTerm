@@ -27,7 +27,7 @@ it("restores the distribution from its URL and connects to that exact backend en
   expect(await screen.findByRole("combobox", { name: "Linux distribution" })).toBeTruthy();
   expect(screen.getByRole("combobox").textContent).toContain("Debian");
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("wsl_connect", { distribution: "Debian", restartExisting: false }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("wsl_connect", { distribution: "Debian", restartExisting: false, connectId: expect.any(String) }));
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
 });
 
@@ -88,8 +88,8 @@ it("requires explicit upgrade confirmation and never transfers it to another dis
   await screen.findByRole("combobox");
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
   fireEvent.click(await screen.findByRole("button", { name: "Restart server and connect" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("wsl_connect", { distribution: "Ubuntu", restartExisting: true }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("wsl_connect", { distribution: "Ubuntu", restartExisting: true, connectId: expect.any(String) }));
   await act(async () => { history.replaceState(null, "", "/?connect=wsl&wslDistribution=Debian"); window.dispatchEvent(new PopStateEvent("popstate")); });
   fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("wsl_connect", { distribution: "Debian", restartExisting: false }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("wsl_connect", { distribution: "Debian", restartExisting: false, connectId: expect.any(String) }));
 });

@@ -249,6 +249,7 @@ impl SshTransport for RusshTransport {
             progress("transfer", Some(0));
             let mut written = 0usize;
             for chunk in bytes.chunks(64 * 1024) {
+                crate::connect_cancel::check()?;
                 file.write_all(chunk)
                     .await
                     .map_err(|e| format!("sftp write failed: {e}"))?;

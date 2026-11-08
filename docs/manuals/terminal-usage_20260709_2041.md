@@ -2,7 +2,7 @@
 
 Created: 2026-07-09 20:41
 
-Updated: 2026-09-25 10:21
+Updated: 2026-10-17 21:43
 
 > This chapter covers the terminal itself: input and output, in-terminal search, copy and paste, image paste, command suggestions, the built-in `v` commands, background commands started with `vrun`, shell selection on Windows, session recording, renderer settings and shortcuts.
 
@@ -22,7 +22,7 @@ To search across sessions and history, use global search (⌘⇧F), described in
 
 ## 3. Copy and paste
 
-- Select text with the mouse, then use ⌘C / ⌘V or the context menu ("Copy", "Paste", "Select All", "Clear", "Search…").
+- Select text with the mouse, then use ⌘C / ⌘V on macOS or Ctrl+Shift+C / Ctrl+V on Windows and Linux, or the context menu ("Copy", "Paste", "Select All", "Clear", "Search…").
 - Inside programs that capture the mouse (vim, htop, most agent interfaces), hold Option on macOS or Shift on Windows and Linux while dragging to force a normal text selection.
 - Agent interfaces such as Claude Code and Codex can copy text themselves. When they have just done so and nothing is selected in the terminal, the context menu shows "Auto-copied N chars · ⌘V to paste".
 
@@ -70,7 +70,7 @@ Relative paths are resolved against the current directory, and several files can
 
 ### 6.1 Background commands (`vrun`)
 
-`vrun <label> <command...>` starts a command, waits for it to finish, and then prints the exit code, the elapsed time and the end of its log. An agent that starts a long build or test with `vrun` therefore learns about the result as soon as it is available. Closing the session does not stop the command. `vrun --status <label>` reports on a command started earlier, and `-t <seconds>` sets how long to wait (1800 seconds by default); when the wait times out, `vrun` exits with code 124 and leaves the command running.
+`vrun <label> <command...>` starts a command, waits for it to finish, and then prints the exit code, the elapsed time and the end of its log. An agent that starts a long build or test with `vrun` therefore learns about the result as soon as it is available. Closing the session does not stop the command. Every three minutes by default (`-i <seconds>` changes the interval), `vrun` exits with code 75 and a progress report showing the end of the log; the command keeps running, and `vrun --wait <label>` continues waiting on the same schedule. `vrun --status <label>` reports on a command started earlier. There is no time limit unless `-t <seconds>` sets one; reaching it exits with code 124 and leaves the command running.
 
 While such commands run, a "Background commands" row appears above the terminal. Each entry shows its label and "Running for …", a "Log" button that opens the command's output, and a "Stop" button; click "Confirm stop" to end the command. The row disappears when nothing is running.
 
@@ -96,7 +96,7 @@ Settings ▸ Advanced ▸ "Terminal renderer" offers DOM (default) and WebGL. DO
 
 ## 10. Common shortcuts
 
-The table lists the defaults of the macOS desktop app. The Windows and Linux apps use Ctrl+Alt instead of ⌘ for most actions (split down is Ctrl+Alt+E, search all sessions is Ctrl+Alt+G, select all is Ctrl+Shift+A, and save stays Ctrl+S). Browser clients use Ctrl-based defaults that avoid the browser's own shortcuts. Settings ▸ Shortcuts shows the exact bindings on your system, and every action except tab switching and font size can be changed there.
+The table lists the defaults of the macOS desktop app. The Windows and Linux apps use Ctrl+Alt instead of ⌘ for most actions (split down is Ctrl+Alt+E, search all sessions is Ctrl+Alt+G, copy is Ctrl+Shift+C, select all is Ctrl+Shift+A, and save stays Ctrl+S). Browser clients use Ctrl-based defaults that avoid the browser's own shortcuts. Settings ▸ Shortcuts shows the exact bindings on your system, and every action except tab switching and font size can be changed there.
 
 | Action | Shortcut |
 |--------|----------|

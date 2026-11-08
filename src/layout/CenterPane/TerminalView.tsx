@@ -1,4 +1,4 @@
-//! A single session pane in the Vlinx UI: pane header (status, title, branch, split, close) plus the real xterm.
+//! A single session pane in the Vlinx UI: pane header (title, branch, split, close) plus the real xterm.
 //! Active panes are shown while background panes remain alive under display:none, preserving xterm and PTY.
 //! `area` positions the pane within the terminal region as a percentage rectangle.
 
@@ -7,16 +7,18 @@ import { createPortal } from "react-dom";
 
 import Icons from "../../components/Icons";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
-import { StatusIndicator } from "../../components/StatusIndicator";
 import { AGENT_KIND_LABEL, kindIconEl } from "../sessionViewers/sessionMeta";
 import { useT } from "../../i18n";
 import { TermScrollbar } from "./TermScrollbar";
 import { RunStrip } from "./RunStrip";
 import { usePtySession } from "../../hooks/usePtySession";
+import { CompletionTipLabel } from "../../terminal/completion/CompletionTipLabel";
 import { useGitBranch } from "../../hooks/useGitBranch";
 import { IS_PLAIN_BROWSER, labelWithCombo } from "../../hooks/shortcutRegistry";
 import { copyText } from "../../ipc/info";
 import {
+  agentInstallBegin,
+  agentInstallFinished,
   agentInstallRecipe,
   agentLocateBin,
   ptyWrite,
@@ -25,6 +27,7 @@ import {
 import { flushNow as flushSettingsSync } from "../../ipc/settingsSync";
 import { isMac } from "../../ipc/transport";
 import { platform } from "../../platform";
+import { ClipboardUnresponsiveError } from "../../platform/clipboardStall";
 import { env } from "../../platform/env";
 import {
   imagesFromDrop,
@@ -45,7 +48,7 @@ import {
   redrawTerminal,
   selectAll,
 } from "../../terminal/registry";
-import { effectiveStatus, supportsChatEngine, type Session } from "../../types";
+import { supportsChatEngine, type Session } from "../../types";
 import { useEngineSwitch } from "./session/engineSwitch";
 
 // Platform-specific terminal search hint: Cmd+F on macOS shells, Ctrl+Alt+F on Windows/Linux and
@@ -93,11 +96,6 @@ export const TerminalView = memo(function TerminalView({
   // Subscribe only to whether this is the current session. With memoization, switching rerenders only the
   // terminal being left and the terminal being entered; other mounted background terminals remain untouched.
   const isActive = useTermStore((s) => s.activeSessionId === session.id);
-  // Subscribe to the derived status string rather than the runtime object. Every set changes object identity
-  // and would rerender TerminalView even without a value change; Object.is naturally deduplicates strings.
-  const status = useTermStore((s) => effectiveStatus(s.runtimes[session.id]));
-  // Unread notifications follow Tab and project-tree semantics and clear after two seconds of viewing.
-  const unread = useTermStore((s) => session.id in s.notifications);
   const isAgent = session.kind !== "terminal";
   const branch = useGitBranch(cwd ?? null);
   // Poll for the installation path during one-click install. Keep this on TerminalView because the card unmounts when hidden.
@@ -208,8 +206,11 @@ export const TerminalView = memo(function TerminalView({
       ) {
         await injectNativeImagePaste(session.id);
       }
-    } catch {
-      showImageError(t("term.imgClipboardUnavailable"));
+    } catch (error) {
+      // A stalled source already raised the global notice; the image message would be misleading.
+      if (!(error instanceof ClipboardUnresponsiveError)) {
+        showImageError(t("term.imgClipboardUnavailable"));
+      }
     } finally {
       focusTerminal(session.id);
     }
@@ -271,7 +272,7 @@ export const TerminalView = memo(function TerminalView({
             stays clickable and the user can split at any time; the close button is disabled while there
             is only one pane. The split shortcuts (⌘D/⌘⇧D, or Ctrl+Alt+D/E elsewhere) split as well. */}
         <div className="pane-head">
-          {/* The kind icon and status dot reuse the same shared components as the tabs and the sidebar tree, keeping all three consistent. */}
+          {/* The tab and the sidebar tree already show the session status, so the pane header carries no status dot. */}
           <span
             style={{
               color: isAgent ? "var(--text-secondary)" : "var(--text-dim)",
@@ -282,7 +283,7 @@ export const TerminalView = memo(function TerminalView({
             {kindIconEl(session.kind, 13)}
           </span>
           <span className="pt">{session.name}</span>
-          <StatusIndicator status={status} unread={unread} />
+          {session.kind === "terminal" && <CompletionTipLabel sessionId={session.id} />}
           {branch && (
             <span className="branch">
               <Icons.branch size={11} />
@@ -518,6 +519,8 @@ export const TerminalView = memo(function TerminalView({
                                     ? "Grok Build"
                                   : session.kind === "zoo"
                                     ? "Zoo Code"
+                                  : session.kind === "zcode"
+                                    ? "ZCode"
                                 : "Claude",
               )}
             </div>
@@ -624,7 +627,13 @@ async function locateAndSaveAgentPath(
 }
 
 /** Installation-location polling for immediate post-install action. While runtime.agentInstalling is set, probe
- *  every three seconds and save the path as soon as the binary appears, then show the completion dialog.
+ *  every three seconds and save the path as soon as the installation is usable, then show the completion dialog.
+ *
+ *  A binary on disk is not proof the installer is done: Zoo's script extracts `roo` before fetching its npm
+ *  dependencies, and restarting then kills the installer midway. With a completion-marker token the probe waits
+ *  until the shell reports that the install command returned. If nothing usable turns up after that, the
+ *  installer failed, so polling stops and the information card returns. Without a token (the backend could
+ *  not add the marker step) location polling alone decides, as before.
  *
  *  Attach polling to TerminalView rather than AgentInstallCard, which unmounts when its pane is hidden. The
  *  keep-alive TerminalView continues across tab switches. Stop after success, after roughly 15 minutes (clearing
@@ -635,38 +644,69 @@ function useAgentInstallLocator(session: Session) {
     const rt = s.runtimes[session.id];
     return !!rt?.agentMissing && !!rt?.agentInstalling && !rt?.agentPathSaved;
   });
+  const token = useTermStore((s) => s.runtimes[session.id]?.agentInstallToken ?? null);
   const kind = session.kind;
   useEffect(() => {
     if (!active || !(kind in AGENT_KIND_LABEL)) return;
     let inFlight = false;
     let ticks = 0;
-    const timer = setInterval(() => {
-      if (inFlight) return;
-      if (++ticks > 300) {
-        useTermStore.getState().setRuntime(session.id, { agentInstalling: false });
+    // The marker is consumed when read, so remember that the installer returned.
+    let finished = false;
+    // Probes after the installer returned; a few allow for files that settle just after exit.
+    let misses = 0;
+    const stop = () => {
+      useTermStore.getState().setRuntime(session.id, { agentInstalling: false, agentInstallToken: null });
+      clearInterval(timer);
+    };
+    const probe = async () => {
+      if (token && !finished) {
+        finished = await agentInstallFinished(token);
+        if (!finished) return;
+      }
+      if (await locateAndSaveAgentPath(kind, session.id, true)) {
         clearInterval(timer);
         return;
       }
+      if (token && ++misses >= 3) stop();
+    };
+    const timer = setInterval(() => {
+      if (inFlight) return;
+      if (++ticks > 300) {
+        stop();
+        return;
+      }
       inFlight = true;
-      locateAndSaveAgentPath(kind, session.id, true)
-        .then((hit) => {
-          if (hit) clearInterval(timer);
-        })
+      probe()
         .catch(() => {})
         .finally(() => {
           inFlight = false;
         });
     }, 3000);
     return () => clearInterval(timer);
-  }, [active, kind, session.id]);
+  }, [active, kind, session.id, token]);
 }
 
-/** Write the recipe into this session's shell, mark installation active, and start location polling.
- *  Shared by the card's button and a request handed over from the conversation view. */
-function runInstall(sessionId: string, command: string) {
-  void ptyWrite(sessionId, command + "\r");
-  useTermStore.getState().setRuntime(sessionId, { agentInstalling: true, agentAutoInstall: false });
-  focusTerminal(sessionId);
+/** Sessions whose install command is being prepared, so a repeated click cannot type it twice. */
+const startingInstalls = new Set<string>();
+
+/** Write the install command into this session's shell, mark installation active, and start location polling.
+ *  The backend appends the completion-marker step; if that call fails, the bare recipe runs with location
+ *  polling alone. Shared by the card's button and a request handed over from the conversation view. */
+async function runInstall(sessionId: string, kind: Session["kind"], recipeCommand: string) {
+  if (startingInstalls.has(sessionId)) return;
+  startingInstalls.add(sessionId);
+  try {
+    const run = await agentInstallBegin(kind).catch(() => null);
+    void ptyWrite(sessionId, (run?.command ?? recipeCommand) + "\r");
+    useTermStore.getState().setRuntime(sessionId, {
+      agentInstalling: true,
+      agentAutoInstall: false,
+      agentInstallToken: run?.token ?? null,
+    });
+    focusTerminal(sessionId);
+  } finally {
+    startingInstalls.delete(sessionId);
+  }
 }
 
 /** Missing-agent guidance card shown for local agent sessions when runtime.agentMissing is set.
@@ -724,8 +764,8 @@ function AgentInstallCard({ session }: { session: Session }) {
     }
     if (autoInstallHandled.current || !missing || !eligible || !recipe?.command.trim()) return;
     autoInstallHandled.current = true;
-    runInstall(session.id, recipe.command);
-  }, [autoInstall, missing, eligible, recipe, session.id]);
+    void runInstall(session.id, kind, recipe.command);
+  }, [autoInstall, missing, eligible, recipe, kind, session.id]);
 
   if (!eligible || (!missing && !pathSaved)) return null;
 
@@ -767,7 +807,7 @@ function AgentInstallCard({ session }: { session: Session }) {
   };
   const doInstall = () => {
     if (!recipe) return;
-    runInstall(session.id, recipe.command);
+    void runInstall(session.id, kind, recipe.command);
   };
   // Save a manually entered executable path for this agent type and show the same completion dialog
   // as a located installation, which offers the relaunch that applies it.

@@ -15,13 +15,17 @@
 //! the transcript. An empty array selects recording playback, except for Kiro, where it is re-read to
 //! distinguish an empty record from a cached failure. Omitting the prop retains internal loading.
 
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { t } from "../../i18n";
 import { readAgentTranscript, type TranscriptMessage } from "../../ipc/commands";
 import type { Session } from "../../types";
-import { RecordingViewer } from "./RecordingViewer";
 import { TranscriptViewer } from "./TranscriptViewer";
+import { PagedConversation } from "./PagedConversation";
+import { hasPagedHistory } from "./pagedHistory";
+
+// Recording playback embeds its own xterm, which would otherwise ride into the entry bundle with global search.
+const RecordingViewer = lazy(() => import("./RecordingViewer").then((m) => ({ default: m.RecordingViewer })));
 
 /** Whether this session type inherently lacks an agent transcript and should use recording playback. */
 function hasNoTranscript(kind: Session["kind"]): boolean {
@@ -35,6 +39,9 @@ interface SessionContentProps {
   initialQuery?: string;
   highlightTerms?: string[];
   scrollToMessageIndex?: number;
+  /** Byte offset of the hit's first record, for paged conversations. */
+  scrollToRecordOffset?: number;
+  scrollToRowId?: string;
   scrollToOrdinal?: number;
   /** Search caches failures as empty arrays; Kiro rechecks them to retain the backend reason. */
   preloadedMessages?: TranscriptMessage[];
@@ -43,6 +50,8 @@ interface SessionContentProps {
 export function SessionContentViewer(props: SessionContentProps) {
   const { session, source, preloadedMessages } = props;
   if (source === "recording" || hasNoTranscript(session.kind)) return <RecordingContent {...props} />;
+  if (hasPagedHistory(session)) return <PagedConversation session={session} messageIndex={props.scrollToRowId ? undefined : props.scrollToMessageIndex}
+    recordOffset={props.scrollToRowId ? undefined : props.scrollToRecordOffset} rowId={props.scrollToRowId} />;
   if (preloadedMessages !== undefined) {
     if (preloadedMessages.length > 0) return <TranscriptViewer {...props} messages={preloadedMessages} />;
     if (session.kind !== "kiro") return <RecordingContent {...props} />;
@@ -53,7 +62,11 @@ export function SessionContentViewer(props: SessionContentProps) {
 }
 
 function RecordingContent({ session, highlightTerms, initialQuery, scrollToOrdinal }: SessionContentProps) {
-  return <RecordingViewer sessionId={session.id} initialQuery={highlightTerms?.[0] ?? initialQuery} scrollToOrdinal={scrollToOrdinal} />;
+  return (
+    <Suspense fallback={null}>
+      <RecordingViewer sessionId={session.id} initialQuery={highlightTerms?.[0] ?? initialQuery} scrollToOrdinal={scrollToOrdinal} />
+    </Suspense>
+  );
 }
 
 function LoadedTranscript(props: SessionContentProps) {

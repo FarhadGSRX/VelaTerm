@@ -2,18 +2,18 @@
 name: vspawn-tree
 description: >-
   Same as /vspawn, but **opens a dedicated git worktree for the child session** (equivalent to vspawn --worktree).
-  Use when the user asks, or when a captain or lead agent needs a real crew session for delegated work. This is a real session run by its
+  Only use when the user explicitly invokes /vspawn-tree or $vspawn-tree; never auto-trigger. This is a real session run by its
   own process in the vlx-term left-panel tree — not an in-process sub-agent, and not a background Task. Available only
   inside vlx-term-hosted sessions.
-argument-hint: "[--plan-execute] [--review|--no-review] [--review-agent <agent>] [--review-model <model>] [--review-effort <level>] [--split-tasks] [--worktree-mode <shared|each>] [--plan-agent <agent>] [--plan-model <model>] [--plan-effort <level>] [--exec-agent <agent>] [--exec-model <model>] [--exec-effort <level>] [--cwd <path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] <task>"
+argument-hint: "[--plan-execute] [--review|--no-review] [--review-agent <agent>] [--review-model <model>] [--review-effort <level>] [--split-tasks] [--worktree-mode <shared|each>] [--plan-agent <agent>] [--plan-model <model>] [--plan-effort <level>] [--exec-agent <agent>] [--exec-model <model>] [--exec-effort <level>] [--cwd <path>] [--yes] [--agent <agent>] [--model <name>] [--effort <level>] <task>"
+disable-model-invocation: true
 allowed-tools: Bash(vspawn-tree:*)
 ---
 
 # /vspawn-tree
 
-This skill runs when the user invokes `/vspawn-tree` (Claude) or `$vspawn-tree` (Codex), or when an agent (such as
-a captain or lead delegating to its crew) decides to spawn a **standalone child session** under the current
-**vlx-term** session,
+The user **explicitly invoked `/vspawn-tree` (Claude) or `$vspawn-tree` (Codex)** to request spawning a **standalone
+child session** under the current **vlx-term** session,
 passing the task in as its first message. The only difference from `/vspawn`: it **opens a dedicated git worktree
 for the child session** (a separate workspace/branch), suited to cases where you don't want to pollute the current
 workspace and want the child task to run on an isolated branch.
@@ -70,8 +70,10 @@ Don't write "see above / as mentioned / continuing from earlier" — the new ses
 
 ## Step 2: Detect type options
 
-Detect "specifying claude / codex" from the user input (or a leading `--claude` / `--codex`) → add the matching
-flag, and **don't** write it into the prompt. The default follows the current session type. For planning
+Detect a named agent ("run it in codex / pi / opencode") from the user input (or a leading `--agent <agent>` or
+shortcut such as `--codex`) → add `--agent <agent>`, and **don't** write it into the prompt. Accepted names:
+`claude`, `codex`, `opencode`, `copilot`, `cursor`, `antigravity`, `cline`, `pi`, `omp`, `crush`, `kimi`, `kiro`,
+`grok`, `zoo`; `--claude`, `--codex`, `--copilot`, `--kiro` and `--pi` remain as shortcuts. The default follows the current session type. For planning
 and execution, also detect the shared or separate worktree choice described above.
 
 Also detect "no dialog / don't ask me / just start it" (or a leading `--yes` / `-y`) → add `--yes`, which starts
@@ -93,7 +95,7 @@ Pass the prompt you expanded in Step 1 **as a single argument** (escaping any qu
 `vspawn-tree` from PATH:
 
 ```bash
-vspawn-tree [--cwd <absolute-path>] [--yes] [--claude|--codex] [--model <name>] [--effort <level>] "<expanded self-contained prompt>"
+vspawn-tree [--cwd <absolute-path>] [--yes] [--agent <agent>] [--model <name>] [--effort <level>] "<expanded self-contained prompt>"
 ```
 
 For a split-task workflow, use this form, adding explicit role settings when supplied:

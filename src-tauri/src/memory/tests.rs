@@ -150,6 +150,7 @@ else: print(json.dumps({'structured_output':result,'is_error':False,'usage':{'in
             if flaky { "True" } else { "False" },
             r#"
 import sys,json,re,pathlib
+if '--version' in sys.argv: print('1.0.0');sys.exit(0)
 prompt=sys.argv[-1]
 root=pathlib.Path(__file__).parent
 calls=root/('calls-'+AGENT)
@@ -216,11 +217,8 @@ fn independent_search_handles_chinese_short_terms_tags_and_queries() {
         dispatch(&f.app, "memory_list", &json!({"tag":"不存在"})).unwrap()["total"],
         0
     );
-    let conn = f.app.db().conn.lock().unwrap();
-    let count: i64 = conn
-        .query_row("SELECT count(*) FROM session_fts", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 0);
+    // Memory search never writes conversation search rows; those live in a separate index file.
+    assert!(!crate::search::corpus::path(&f.app.data_dir().unwrap()).exists());
 }
 
 #[test]
@@ -721,20 +719,6 @@ fn job_history_names_the_entries_that_still_exist() {
     assert_eq!(job["entryLinks"], json!([{"id":kept.id,"title":"Kept entry"}]));
 }
 
-#[test]
-fn model_selection_rejects_unknown_models_and_unsupported_effort() {
-    let options = vec![runner::ModelOption {
-        id: "model".into(),
-        label: "Model".into(),
-        effort_levels: vec!["high".into()],
-    }];
-    assert!(runner::validate_model(&options, "model", "high").is_ok());
-    assert!(runner::validate_model(&options, "model", "").is_ok());
-    assert!(runner::validate_model(&options, "unknown", "high").is_err());
-    assert!(runner::validate_model(&options, "model", "ultra").is_err());
-    assert!(runner::validate_model(&options, "", "high").is_err());
-}
-
 #[cfg(unix)]
 #[test]
 fn compilation_preserves_effort_on_retry_and_replaces_completed_results() {
@@ -917,7 +901,7 @@ fn hierarchy_is_complete_across_pages_and_supports_manual_and_unknown_projects()
 }
 
 #[test]
-fn collections_group_archived_roots_by_original_project_and_keep_group_paths() {
+fn collections_group_archived_sessions_by_original_project_and_nest_descendants() {
     let f = Fixture::new();
     {
         let conn = f.app.db().conn.lock().unwrap();
@@ -928,8 +912,11 @@ fn collections_group_archived_roots_by_original_project_and_keep_group_paths() {
         // Tombstoned containers still name the session's original location, so they must not be filtered.
         conn.execute("UPDATE projects SET deleted_at=1 WHERE id='p'", []).unwrap();
         conn.execute("UPDATE groups SET deleted_at=1 WHERE id='g'", []).unwrap();
-        // An archived descendant is not an archive root and gets no row of its own.
-        conn.execute("INSERT INTO sessions(id,project_id,name,kind,parent_session_id,archived_at,created_at) VALUES('s2','p','Child','terminal','s1',100,1)", []).unwrap();
+        // An archived descendant nests under its archived parent and carries no group chain of its own.
+        conn.execute("INSERT INTO sessions(id,project_id,group_id,name,kind,parent_session_id,archived_at,created_at) VALUES('s2','p','g2','Child','terminal','s1',100,1)", []).unwrap();
+        // A session archived on its own below a live parent is a root.
+        conn.execute("INSERT INTO sessions(id,project_id,name,kind,created_at) VALUES('live','p','Live parent','claude',1)", []).unwrap();
+        conn.execute("INSERT INTO sessions(id,project_id,name,kind,parent_session_id,archived_at,created_at) VALUES('s3','p','Detached','claude','live',50,1)", []).unwrap();
     }
     let entry = f.save("Stored topic", "Reusable content");
     {
@@ -943,13 +930,17 @@ fn collections_group_archived_roots_by_original_project_and_keep_group_paths() {
     assert_eq!(projects[0]["name"], "Alpha");
     assert_eq!(projects[0]["count"], 1);
     let sessions = projects[0]["sessions"].as_array().unwrap();
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0]["id"], "s1");
-    assert_eq!(sessions[0]["count"], 1);
-    assert_eq!(sessions[0]["groupPath"], json!(["Work", "Nested"]));
-    assert_eq!(result["sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(result["sessions"][0]["id"], "s1");
-    assert_eq!(result["sessions"][0]["name"], "Archived one");
+    let row = |id: &str| sessions.iter().find(|s| s["id"] == id).unwrap().clone();
+    assert_eq!(sessions.len(), 3);
+    assert_eq!(row("s1")["count"], 1);
+    assert_eq!(row("s1")["parentId"], json!(null));
+    assert_eq!(row("s1")["groupIds"], json!(["g", "g2"]));
+    assert_eq!(row("s1")["groupPath"], json!(["Work", "Nested"]));
+    assert_eq!(row("s2")["parentId"], "s1");
+    assert_eq!(row("s2")["groupPath"], json!([]));
+    assert_eq!(row("s3")["parentId"], json!(null));
+    assert_eq!(result["sessions"].as_array().unwrap().len(), 3);
+    assert!(result["sessions"].as_array().unwrap().iter().any(|s| s["id"] == "s2" && s["name"] == "Child"));
 }
 
 #[test]
@@ -1251,4 +1242,52 @@ fn live_agents_organize_a_real_session() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn processing_history_reports_each_session_once_by_its_current_state() {
+    let f = Fixture::new();
+    {
+        let conn = f.app.db().conn.lock().unwrap();
+        let run = |id: &str, session: &str, status: &str, at: i64, entries: &str| {
+            conn.execute("INSERT INTO memory_sources(id,session_id,session_name,kind,agent_session_id,digest,content,created_at) VALUES(?1,?2,?2,'claude',?1,?1,'c',?3)", params![id, session, at]).unwrap();
+            conn.execute("INSERT INTO memory_jobs(id,source_id,agent,model,status,stage,owner_pid,entries,created_at,updated_at) VALUES(?1,?1,'claude','',?2,'done',0,?3,?4,?4)", params![id, status, entries, at]).unwrap();
+        };
+        // Recovered: three failures, then a success.
+        run("r1", "recovered", "failed", 10, "[]");
+        run("r2", "recovered", "failed", 11, "[]");
+        run("r3", "recovered", "failed", 12, "[]");
+        run("r4", "recovered", "completed", 13, "[\"e1\"]");
+        // Broken: succeeded once, then failed twice; a later cancel does not hide the failure.
+        run("b1", "broken", "completed", 1, "[\"e2\"]");
+        run("b2", "broken", "failed", 2, "[]");
+        run("b3", "broken", "failed", 3, "[]");
+        run("b4", "broken", "cancelled", 4, "[]");
+        // Abandoned: only ever cancelled.
+        run("a1", "abandoned", "cancelled", 20, "[]");
+    }
+    let page = dispatch(&f.app, "memory_jobs", &json!({"bySession":true})).unwrap();
+    assert_eq!(page["total"], 3);
+    assert_eq!(page["attention"], 1);
+    assert_eq!(page["organized"], 1);
+    let jobs = page["jobs"].as_array().unwrap();
+    let ids: Vec<&str> = jobs.iter().map(|job| job["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["b3", "a1", "r4"]);
+    assert_eq!(jobs[0]["failedAttempts"], 2);
+    assert_eq!(jobs[0]["entries"], json!(["e2"]));
+    assert_eq!(jobs[1]["failedAttempts"], 0);
+    assert_eq!(jobs[2]["failedAttempts"], 3);
+    // Run-level history and single-run lookups stay as they were.
+    assert_eq!(dispatch(&f.app, "memory_jobs", &json!({})).unwrap()["total"], 9);
+    assert_eq!(dispatch(&f.app, "memory_jobs", &json!({"id":"r1"})).unwrap()["jobs"][0]["status"], "failed");
+}
+
+#[test]
+fn entry_details_name_the_tags_shared_with_other_entries() {
+    let f = Fixture::new();
+    let save = |title: &str, tags: Value| serde_json::from_value::<Entry>(dispatch(&f.app, "memory_save", &json!({"id":null,"version":0,"title":title,"summary":"s","content":"c","tags":tags,"related":[]})).unwrap()).unwrap();
+    let first = save("First", json!(["shared", "only-first"]));
+    save("Second", json!(["shared"]));
+    let detail = dispatch(&f.app, "memory_get", &json!({"id":first.id})).unwrap();
+    assert_eq!(detail["sharedTags"], json!(["shared"]));
 }

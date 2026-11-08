@@ -48,6 +48,8 @@ const Icons: Record<string, IconComponent> = {
   project: I([r("path", { key: 1, d: "M8 13.5H4.5a2 2 0 01-2-2v-7a2 2 0 012-2h7a2 2 0 012 2v3" }), r("path", { key: 2, d: "M2.5 6h11" }), r("circle", { key: 3, cx: 4.6, cy: 4.3, r: 0.4, fill: "currentColor", stroke: "none" }), projectMarker]),
   projectPlus: I([r("path", { key: 1, d: "M8 13.5H3.5A1.5 1.5 0 012 12V4A1.5 1.5 0 013.5 2.5h2.8l1.2 1.8h5A1.5 1.5 0 0114 5.8V7" }), r("path", { key: 2, d: "M6.5 7v3M5 8.5h3" }), projectMarker]),
   projectOpen: I([r("path", { key: 1, d: "M2 4A1.5 1.5 0 013.5 2.5h2.8l1.2 1.8h5A1.5 1.5 0 0114 5.8" }), r("path", { key: 2, d: "M8 13.5H3.5a1 1 0 01-1-.74L2.2 6.3h11.3" }), projectMarker]),
+  // Clone: the branch glyph lifted clear of the corner so the blue project marker fits beside it.
+  projectClone: I([r("circle", { key: 1, cx: 4.5, cy: 3, r: 1.5 }), r("circle", { key: 2, cx: 4.5, cy: 12.5, r: 1.5 }), r("circle", { key: 3, cx: 11, cy: 5, r: 1.5 }), r("path", { key: 5, d: "M4.5 4.5v6.5M4.5 7.5h2.5A2.5 2.5 0 009.5 5" }), projectMarker]),
   terminal: I([r("rect", { key: 1, x: 2, y: 3, width: 12, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M4.8 6.5L6.8 8l-2 1.5M8.5 9.7h2.7" })]),
   bot: I([r("rect", { key: 1, x: 3, y: 5.5, width: 10, height: 7, rx: 2 }), r("path", { key: 2, d: "M8 3v2.5M5.5 8.6h.01M10.5 8.6h.01" }), r("path", { key: 3, d: "M3 9.2H1.8M14.2 9.2H13" })]),
   file: I([r("path", { key: 1, d: "M4 2.5h5L12 5.5V13a.5.5 0 01-.5.5h-7A.5.5 0 014 13z" }), r("path", { key: 2, d: "M8.8 2.6V5.5H11.7" })]),
@@ -93,6 +95,9 @@ const Icons: Record<string, IconComponent> = {
   newGroup: I([r("path", { key: 1, d: "M2 5.5A1.5 1.5 0 013.5 4h2.8l1.2 1.4h5A1.5 1.5 0 0114 6.9V8" }), r("path", { key: 2, d: "M11.5 10v4M9.5 12h4" })]),
   dotsV: I([r("circle", { key: 1, cx: 8, cy: 3.5, r: 1, fill: "currentColor", stroke: "none" }), r("circle", { key: 2, cx: 8, cy: 8, r: 1, fill: "currentColor", stroke: "none" }), r("circle", { key: 3, cx: 8, cy: 12.5, r: 1, fill: "currentColor", stroke: "none" })]),
   check: I(r("path", { key: 1, d: "M3.5 8.5l3 3 6-7" })),
+  // Session types: a speech bubble for chat and a checklist for tasks.
+  chat: I([r("path", { key: 1, d: "M4.2 2.8h7.6a1.7 1.7 0 0 1 1.7 1.7v4.4a1.7 1.7 0 0 1-1.7 1.7H7.6l-3 2.6v-2.6h-.4a1.7 1.7 0 0 1-1.7-1.7V4.5a1.7 1.7 0 0 1 1.7-1.7z" }), r("path", { key: 2, d: "M5.5 5.8h5M5.5 7.8h3" })]),
+  tasks: I([r("path", { key: 1, d: "M2.5 4.3l1.1 1.1 2-2.1M2.5 9.8l1.1 1.1 2-2.1" }), r("path", { key: 2, d: "M7.5 4.5h6M7.5 10h6M7.5 13h4" })]),
   cpu: I([r("rect", { key: 1, x: 4, y: 4, width: 8, height: 8, rx: 1 }), r("path", { key: 2, d: "M6.5 2.5v1.5M9.5 2.5v1.5M6.5 12v1.5M9.5 12v1.5M2.5 6.5H4M2.5 9.5H4M12 6.5h1.5M12 9.5h1.5" })]),
   copy: I([r("rect", { key: 1, x: 5.5, y: 5.5, width: 7.5, height: 7.5, rx: 1.5 }), r("path", { key: 2, d: "M3 10.2V4.2A1.2 1.2 0 014.2 3H10" })]),
   collapse: I([r("path", { key: 1, d: "M5.5 3.5L8 6l2.5-2.5M5.5 12.5L8 10l2.5 2.5M3.5 8h9" })]),
@@ -105,6 +110,13 @@ const Icons: Record<string, IconComponent> = {
   archive: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 2.6, rx: 0.6 }), r("path", { key: 2, d: "M3.6 5.6h8.8V12a1 1 0 01-1 1H4.6a1 1 0 01-1-1z" }), r("path", { key: 3, d: "M6.5 8h3" })]),
   connect: I([r("path", { key: 1, d: "M2 8h5.5" }), r("path", { key: 2, d: "M5.5 5.5L8 8 5.5 10.5" }), r("rect", { key: 3, x: 10, y: 3, width: 4, height: 10, rx: 1 })]),
   monitor: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 8, rx: 1.5 }), r("path", { key: 2, d: "M6 13.5h4M8 11v2.5" })]),
+  // Artifact preview: the tab icon, Split mode, device viewports, fit-to-area, and the offline shield.
+  appWindow: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M2.5 6h11M4.6 4.5h.01M6.2 4.5h.01" })]),
+  columns: I([r("rect", { key: 1, x: 2.5, y: 3, width: 11, height: 10, rx: 1.5 }), r("path", { key: 2, d: "M8 3v10" })]),
+  tablet: I([r("rect", { key: 1, x: 3.5, y: 2, width: 9, height: 12, rx: 1.5 }), r("path", { key: 2, d: "M7.2 12h1.6" })]),
+  phone: I([r("rect", { key: 1, x: 5, y: 2, width: 6, height: 12, rx: 1.3 }), r("path", { key: 2, d: "M7.4 12h1.2" })]),
+  fit: I(r("path", { key: 1, d: "M2.5 6V3.5a1 1 0 011-1H6M10 2.5h2.5a1 1 0 011 1V6M13.5 10v2.5a1 1 0 01-1 1H10M6 13.5H3.5a1 1 0 01-1-1V10" })),
+  shield: I(r("path", { key: 1, d: "M8 2.3l4.8 1.8v3.6c0 3-2 5.2-4.8 6-2.8-.8-4.8-3-4.8-6V4.1z" })),
   download: I([r("path", { key: 1, d: "M8 2.5V10M4.8 7.2L8 10.4l3.2-3.2" }), r("path", { key: 2, d: "M3 11.2v1.3a1 1 0 001 1h8a1 1 0 001-1v-1.3" })]),
   // Mirror of download: same tray, arrow pointing up and out.
   upload: I([r("path", { key: 1, d: "M8 10.4V2.9M4.8 6.1L8 2.9l3.2 3.2" }), r("path", { key: 2, d: "M3 11.2v1.3a1 1 0 001 1h8a1 1 0 001-1v-1.3" })]),
@@ -161,7 +173,11 @@ const Icons: Record<string, IconComponent> = {
   grid: I([r("rect", { key: 1, x: 2.5, y: 2.5, width: 4, height: 4, rx: .5 }), r("rect", { key: 2, x: 9.5, y: 2.5, width: 4, height: 4, rx: .5 }), r("rect", { key: 3, x: 2.5, y: 9.5, width: 4, height: 4, rx: .5 }), r("rect", { key: 4, x: 9.5, y: 9.5, width: 4, height: 4, rx: .5 })]),
   menu: I(r("path", { key: 1, d: "M3 4h10M3 8h10M3 12h10" })),
   clipboard: I([r("rect", { key: 1, x: 3.5, y: 3.5, width: 9, height: 10, rx: 1 }), r("rect", { key: 2, x: 5.5, y: 2, width: 5, height: 3, rx: 1 })]),
-  scissors: I([r("circle", { key: 1, cx: 4, cy: 4, r: 2 }), r("circle", { key: 2, cx: 4, cy: 12, r: 2 }), r("path", { key: 3, d: "M5.5 5.5L13 13M5.5 10.5L13 3" })]),
+  // Upright scissors keep the screenshot action distinct from the adjacent share nodes.
+  scissors: I([r("circle", { key: 1, cx: 4, cy: 12, r: 2 }), r("circle", { key: 2, cx: 12, cy: 12, r: 2 }), r("path", { key: 3, d: "M5.5 10.5L13 3M10.5 10.5L3 3" })]),
+  diamond: I(r("path", { key: 1, d: "M8 2.4L13.6 8 8 13.6 2.4 8z" })),
+  notebook: I([r("rect", { key: 1, x: 3.5, y: 2.5, width: 9.5, height: 11, rx: 1.2 }), r("path", { key: 2, d: "M6.2 2.5v11M2.5 5.2h2M2.5 8h2M2.5 10.8h2" })]),
+  history: I([r("path", { key: 1, d: "M2.8 8a5.2 5.2 0 101.6-3.8L2.8 5.6" }), r("path", { key: 2, d: "M2.8 3v2.6h2.6M8 5.2V8l2 1.2" })]),
   bookmark: I(r("path", { key: 1, d: "M4 2.5h8v11l-4-3-4 3z" })),
   // Screenshot annotation tools.
   shotRect: I(r("rect", { key: 1, x: 2.5, y: 3.5, width: 11, height: 9, rx: 0.5 })),

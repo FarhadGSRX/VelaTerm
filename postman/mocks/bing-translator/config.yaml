@@ -1,0 +1,9 @@
+version: 1
+name: Bing Translator
+slug: bing-translator
+protocol: http
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

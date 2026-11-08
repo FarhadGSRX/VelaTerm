@@ -2,15 +2,16 @@
 //! Session actions and dialogs are shared with the center tab bar through ../sessionMenu. This component
 //! retains tree-specific project/group menus, multiselection actions, inline rename, hover creation, and filtering.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenu, type MenuItem } from "../../components/ContextMenu";
 import Icons from "../../components/Icons";
 import { useT } from "../../i18n";
 import { env, platform } from "../../platform";
 import { knowledgeUrl } from "../Knowledge/navigation";
 import { securityUrl } from "../Security/navigation";
-import { securityText } from "../Security/text";
-import { memoryNavigate, memoryUrl } from "../Memory/navigation";
+import { memoryNavigate, COLLECTIONS_CHANGED, COLLECTIONS_COLLAPSE, MemoryLink } from "../Memory/navigation";
+import { knowledgeSelection } from "../Notebook/KnowledgeTreeRow";
+import { showVaultAction } from "../Notebook/VaultActions";
 import {
   type SidebarTreeView,
   useTermStore,
@@ -21,13 +22,13 @@ import {
   countByAgentState,
   isVirtualProject,
   projectRoot,
+  worktreeGroup,
   type AgentState,
   type NodeKind,
 } from "../../types";
 import { MARK_LABEL_KEYS, NODE_MARKS, normalizeMark } from "../../marks";
 import { useSessionMenu } from "../sessionMenu";
 import { GRID_MAX } from "../CenterPane/paneTree";
-import { GlobalSearch } from "../GlobalSearch/GlobalSearch";
 import { labelWithCombo } from "../../hooks/shortcutRegistry";
 import {
   ProjectTree,
@@ -38,6 +39,7 @@ import {
   collectSidebarViewIds,
   computeSidebarDividers,
   computeSidebarViewLayout,
+  sidebarTabSection,
   type SidebarDividerInfo,
   type SidebarTreeTab,
   type SidebarViewRect,
@@ -48,6 +50,16 @@ import { moveToCollectionItem } from "./projectCollectionMenu";
 import { setProjectCollection, sortCollectionAlphabetically } from "../../store/projectCollections";
 import { projectDialogUrl } from "../../remote/dialogNavigation";
 import { newGroupDialogUrl } from "./groupNavigation";
+import { newSessionHref, openNewSession, openNewSessionHere } from "../NewSession/navigation";
+import { isSystemCollection, SYSTEM_CHAT, SYSTEM_PROJECTS, SYSTEM_TASKS, systemLabel, type RailSection } from "./systemCollections";
+
+// The search overlay and its result viewers load when it is first opened (Cmd+Shift+F or the search button).
+const GlobalSearch = lazy(() => import("../GlobalSearch/GlobalSearch").then((m) => ({ default: m.GlobalSearch })));
+// The knowledge-base tree; it brings the Markdown engine with it, so it loads on first use.
+const KnowledgeNavigation = lazy(() =>
+  import("../Notebook/KnowledgeNavigation").then((m) => ({ default: m.KnowledgeNavigation })),
+);
+const ArchiveNavigation = lazy(() => import("../Notebook/KnowledgeNavigation").then((module) => ({ default: module.ArchiveNavigation })));
 
 /** Status filters: working (pulsing green), attention (pulsing yellow), replied (magenta), and replied with
  * background work still running (pulsing cyan). */
@@ -60,7 +72,7 @@ const STATUS_FILTERS: {
   { st: "working", color: "var(--status-working)", pulse: true, labelKey: "tree.filterWorking" },
   { st: "asking", color: "var(--status-asking)", pulse: true, labelKey: "tree.filterAsking" },
   { st: "waiting", color: "var(--status-waiting)", pulse: false, labelKey: "tree.filterWaiting" },
-  { st: "background", color: "var(--status-background)", pulse: true, labelKey: "tree.filterBackground" },
+  { st: "background", color: "var(--status-background)", pulse: false, labelKey: "tree.filterBackground" },
 ];
 
 /** Isolated filter button/dropdown subscribing to high-frequency runtime/notification changes. Agent updates
@@ -196,6 +208,7 @@ function TreeFilter({ view }: { view: SidebarTreeView }) {
 /** One independently filtered projection of the shared tree. Every pane can be split again. */
 function SidebarTreePane({
   view,
+  section,
   isPrimary,
   split,
   active,
@@ -206,6 +219,7 @@ function SidebarTreePane({
   treeHandlers,
 }: {
   view: SidebarTreeView;
+  section: RailSection;
   isPrimary: boolean;
   split: boolean;
   active: boolean;
@@ -218,7 +232,58 @@ function SidebarTreePane({
   const t = useT();
   const setTreeFilter = useTermStore((s) => s.setSidebarTreeViewFilter);
   const refreshStatusMatches = useTermStore((s) => s.refreshSidebarTreeViewStatusMatches);
+  // Mirror what the Dock badge counts, not just the session dots: when an unanswered spawn card is the
+  // only thing left, the badge shows a number while the button that clears it stays hidden.
+  const hasBadges = useTermStore(
+    (s) => Object.keys(s.notifications).length + s.pendingSpawns.length > 0,
+  );
+  const clearAllBadges = useTermStore((s) => s.clearAllBadges);
   const treeWrapRef = useRef<HTMLDivElement>(null);
+  // Sections are offered only with the fixed collections, so a stored Knowledge section is ignored without them.
+  const fixedLayout = useTermStore((s) => s.projects.some((p) => p.id === SYSTEM_PROJECTS));
+  const closeButton = split && !isPrimary && (
+    <button
+      className="icon-btn sm sidebar-tree-close"
+      title={t("common.close")}
+      aria-label={t("common.close")}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClose();
+      }}
+    >
+      <Icons.x size={13} />
+    </button>
+  );
+  const splitButton = (
+    <button
+      className="icon-btn sm sidebar-tree-split"
+      title={t("tree.viewSplitDown")}
+      aria-label={t("tree.viewSplitDown")}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSplitDown();
+      }}
+    >
+      <Icons.splitH size={14} />
+    </button>
+  );
+
+  if (fixedLayout && (section === "knowledge" || section === "archive")) {
+    return (
+      <section
+        className={"sidebar-tree-pane" + (split ? " split" : "") + (active ? " active" : "")}
+        onMouseDown={onActivate}
+      >
+        <div className="sidebar-tree-body sidebar-knowledge-body">
+          <Suspense fallback={null}>{section === "archive" ? <ArchiveNavigation /> : <KnowledgeNavigation heading={false} />}</Suspense>
+        </div>
+        <div className="sidebar-tree-footer">
+          {closeButton}
+          {splitButton}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section
@@ -249,23 +314,12 @@ function SidebarTreePane({
           )}
         </div>
         <TreeFilter view={view} />
-        {split && !isPrimary && (
-          <button
-            className="icon-btn sm sidebar-tree-close"
-            title={t("common.close")}
-            aria-label={t("common.close")}
-            onClick={(event) => {
-              event.stopPropagation();
-              onClose();
-            }}
-          >
-            <Icons.x size={13} />
-          </button>
-        )}
+        {closeButton}
       </div>
       <div ref={treeWrapRef} className="sidebar-tree-body">
         <ProjectTree
           view={view}
+          section={section}
           isPrimary={isPrimary}
           onNewCollection={onNewCollection}
           {...treeHandlers}
@@ -273,6 +327,19 @@ function SidebarTreePane({
         <TreeScrollbar wrapRef={treeWrapRef} />
       </div>
       <div className="sidebar-tree-footer">
+        {hasBadges && (
+          <button
+            className="icon-btn sm sidebar-tree-clear-badges"
+            title={t("tree.clearAllNotifications")}
+            aria-label={t("tree.clearAllNotifications")}
+            onClick={(event) => {
+              event.stopPropagation();
+              clearAllBadges();
+            }}
+          >
+            <Icons.bellOff size={13} />
+          </button>
+        )}
         <button
           className="icon-btn sm sidebar-tree-refresh"
           title={t("tree.refreshStatusFilter")}
@@ -285,17 +352,7 @@ function SidebarTreePane({
         >
           <Icons.restart size={14} />
         </button>
-        <button
-          className="icon-btn sm sidebar-tree-split"
-          title={t("tree.viewSplitDown")}
-          aria-label={t("tree.viewSplitDown")}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSplitDown();
-          }}
-        >
-          <Icons.splitH size={14} />
-        </button>
+        {splitButton}
       </div>
     </section>
   );
@@ -414,15 +471,10 @@ export function LeftSidebar() {
   const archiveMany = useTermStore((s) => s.archiveMany);
   const tileSessions = useTermStore((s) => s.tileSessions);
   const archiveGroup = useTermStore((s) => s.archiveGroup);
+  const archiveCollection = useTermStore((s) => s.archiveCollection);
   const clearNodeWorktree = useTermStore((s) => s.clearNodeWorktree);
   const globalSearchOpen = useTermStore((s) => s.globalSearchOpen);
   const setGlobalSearchOpen = useTermStore((s) => s.setGlobalSearchOpen);
-  // Mirror what the Dock badge counts, not just the session dots: when an unanswered spawn card is the
-  // only thing left, the badge shows a number while the button that clears it stays hidden.
-  const hasBadges = useTermStore(
-    (s) => Object.keys(s.notifications).length + s.pendingSpawns.length > 0,
-  );
-  const clearAllBadges = useTermStore((s) => s.clearAllBadges);
 
   // Keep shallow component mocks and pre-migration in-memory states renderable while the store initializes.
   const views: SidebarTreeView[] = sidebarTreeViews?.length
@@ -440,6 +492,7 @@ export function LeftSidebar() {
     views.some((view) => view.id === primaryViewId) ? primaryViewId : views[0].id;
   const effectiveActiveViewId =
     views.some((view) => view.id === activeViewId) ? activeViewId : effectivePrimaryViewId;
+  const fixedLayout = projects.some((p) => p.id === SYSTEM_PROJECTS);
   const fallbackTabs: SidebarTreeTab[] = views.map((view) => ({
     id: `fallback-${view.id}`,
     root: { kind: "leaf", paneId: `fallback-pane-${view.id}`, viewId: view.id },
@@ -459,6 +512,13 @@ export function LeftSidebar() {
     [activeTab.root],
   );
   const activeTabHasSplits = activeTab.root.kind === "split";
+  // The shown pane group belongs to one section; the header names it and offers what can be created in it.
+  const section = sidebarTabSection(activeTab);
+  const typedRoot = fixedLayout && section === "tasks" ? SYSTEM_TASKS : fixedLayout && section === "chat" ? SYSTEM_CHAT : null;
+  const newSessionLabel = t(typedRoot === SYSTEM_TASKS ? "newSession.newTask" : typedRoot === SYSTEM_CHAT ? "newSession.newChat" : "newSession.heading");
+  const showProjectActions = !fixedLayout || section === "projects";
+  const knowledgeSection = fixedLayout && section === "knowledge";
+  const archiveSection = fixedLayout && section === "archive";
   const treeStageRef = useRef<HTMLDivElement>(null);
 
   // Three draft sets route context menus and inline rename to temporary actions and in-memory renameScratch.
@@ -568,6 +628,11 @@ export function LeftSidebar() {
 
   // Hover add retains session creation and also offers collection-scoped containers and projects.
   const onAddSession = (node: TreeNodeRef, x: number, y: number) => {
+    // Tasks and Chat hold one session type each, so their add button opens New Session for that type.
+    if (node.kind === "project" && (node.id === SYSTEM_TASKS || node.id === SYSTEM_CHAT)) {
+      openNewSession({ projectId: node.id });
+      return;
+    }
     const projectId = node.projectId;
     let groupId: string | null = null;
     let parent: string | null = null;
@@ -579,6 +644,11 @@ export function LeftSidebar() {
     // Put New Terminal first in every project/group/session hover-add menu, and in project/group context
     // menus, for convenient center-pane draft terminals.
     const collection = node.kind === "project" && isVirtualProject(projects.find(p => p.id === node.id));
+    // Projects holds projects and collections only; sessions go into a project or the other fixed collections.
+    if (node.kind === "project" && node.id === SYSTEM_PROJECTS) {
+      setNewSessionMenu({ x, y, items: collectionCreationItems(node.id) });
+      return;
+    }
     setNewSessionMenu({ x, y, items: [
       ...(collection ? [...collectionCreationItems(node.id), { label: "", separator: true }] : []),
       ...newSessionItems(projectId, groupId, parent, { withTerminal: true }),
@@ -673,6 +743,24 @@ export function LeftSidebar() {
     const sep: MenuItem = { label: "", separator: true };
     const rename: MenuItem = { label: t("common.rename"), onClick: () => startRename(node) };
 
+    if (node.kind === "project" && isSystemCollection(node.id)) {
+      // Fixed collections cannot be renamed, moved or deleted. Projects offers what can be created in it;
+      // Tasks and Chat offer a new session of their type.
+      const typed = node.id === SYSTEM_TASKS || node.id === SYSTEM_CHAT;
+      return [
+        ...(typed ? [{
+          label: t(node.id === SYSTEM_TASKS ? "newSession.newTask" : "newSession.newChat"),
+          icon: <Icons.plus size={14} />,
+          href: newSessionHref({ projectId: node.id }),
+          onClick: (event: React.MouseEvent) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault(); openNewSession({ projectId: node.id });
+          },
+        }] : collectionCreationItems(SYSTEM_PROJECTS)),
+        sep,
+        buildMarkItem("project", node.id),
+      ];
+    }
     if (node.kind === "project") {
       const st = useTermStore.getState();
       const project = st.projects.find((p) => p.id === node.projectId);
@@ -713,7 +801,7 @@ export function LeftSidebar() {
               onClick: (event) => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); memoryNavigate(knowledgeUrl(node.projectId)); } },
             },
             {
-              label: securityText("title"),
+              label: t("tree.codeAudit"),
               href: securityUrl(node.projectId),
               onClick: (event) => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); memoryNavigate(securityUrl(node.projectId)); } },
             },
@@ -730,24 +818,29 @@ export function LeftSidebar() {
             event.preventDefault(); navigateCollectionDialog("rename", node.id);
           },
         } : rename,
+        // Archiving a collection with no sessions would only delete it, so the item needs one session.
+        ...(virtual && st.sessions.some((s) => s.projectId === node.projectId)
+          ? [{ label: t("tree.archiveCollection"), onClick: () => void archiveCollection(node.projectId) }]
+          : []),
         {
           label: virtual ? t("tree.deleteCollection") : t("tree.removeProject"),
           danger: true,
-          onClick: () => openDialog({ type: "confirmDelete", node, worktreePaths: [] }),
+          onClick: () => openDialog({ type: "confirmDelete", node }),
         },
       ];
     }
     if (node.kind === "group") {
-      // A group's Git directory prefers its own worktree and falls back to the project root.
+      // A group's Git directory is the worktree bound on it or its nearest ancestor, else the project root.
       const st = useTermStore.getState();
       const group = st.groups.find((g) => g.id === node.id);
+      const inheritedWorktree = worktreeGroup(st.groups, node.id)?.worktreePath;
       const gitRepoDir =
-        group?.worktreePath || projectRoot(st.projects.find((p) => p.id === node.projectId));
+        inheritedWorktree || projectRoot(st.projects.find((p) => p.id === node.projectId));
       // Populate Git actions only for repository directories and pass the group ID to MergeModal. Omit
       // the entire section and separator when empty to avoid duplicate separators.
       const gitItems = buildGitItems({
         repoDir: gitRepoDir,
-        worktreePath: group?.worktreePath,
+        worktreePath: inheritedWorktree,
         mergeTargetId: node.id,
       });
       // Group section contains child creation, worktree conversion/info, rename, archive, and delete.
@@ -797,7 +890,7 @@ export function LeftSidebar() {
         {
           label: t("tree.deleteGroup"),
           danger: true,
-          onClick: () => openDialog({ type: "confirmDelete", node, worktreePaths: [] }),
+          onClick: () => openDialog({ type: "confirmDelete", node }),
         },
       ];
       // Layout: Session, Git, then Group actions. Place Delete Group last to reduce accidental clicks.
@@ -830,9 +923,24 @@ export function LeftSidebar() {
   // to local paths, and sidebar rows must not treat an external drag as a reorder, so these handlers run in
   // the capture phase and stop the event before it reaches the rows.
   const [folderDropOver, setFolderDropOver] = useState(false);
+  const folderDropWatchdog = useRef<number | undefined>(undefined);
   const acceptsFolderDrop = env.isTauri || env.isElectron;
   const isExternalFileDrag = (e: React.DragEvent) =>
     acceptsFolderDrop && e.dataTransfer.types.includes("Files");
+  // WebKit does not reliably fire a final dragleave outside the sidebar (Esc cancel, a drop elsewhere, leaving the
+  // window), which left the overlay stuck. While a drag hovers, dragover repeats even without pointer motion, so a
+  // watchdog that dragover keeps re-arming clears the overlay once those events stop, whatever ended the drag.
+  useEffect(() => {
+    if (!folderDropOver) return;
+    const clear = () => setFolderDropOver(false);
+    window.addEventListener("drop", clear, true);
+    window.addEventListener("dragend", clear, true);
+    return () => {
+      window.removeEventListener("drop", clear, true);
+      window.removeEventListener("dragend", clear, true);
+      window.clearTimeout(folderDropWatchdog.current);
+    };
+  }, [folderDropOver]);
   const folderDropProps = {
     onDragOverCapture: (e: React.DragEvent) => {
       if (!isExternalFileDrag(e)) return;
@@ -840,11 +948,15 @@ export function LeftSidebar() {
       e.stopPropagation();
       e.dataTransfer.dropEffect = "copy";
       setFolderDropOver(true);
+      window.clearTimeout(folderDropWatchdog.current);
+      folderDropWatchdog.current = window.setTimeout(() => setFolderDropOver(false), 1000);
     },
     onDragLeaveCapture: (e: React.DragEvent) => {
       // Leaving a child element also fires dragleave; clear only once the pointer is outside the sidebar.
+      const related = e.relatedTarget as Node | null;
+      if (related && e.currentTarget.contains(related)) return;
       const rect = e.currentTarget.getBoundingClientRect();
-      if (e.clientX <= rect.left || e.clientX >= rect.right || e.clientY <= rect.top || e.clientY >= rect.bottom) {
+      if (related || e.clientX <= rect.left || e.clientX >= rect.right || e.clientY <= rect.top || e.clientY >= rect.bottom) {
         setFolderDropOver(false);
       }
     },
@@ -871,8 +983,43 @@ export function LeftSidebar() {
       </div>}
       {folderDropOver && <div className="sidebar-folder-drop">{t("tree.dropFoldersHint")}</div>}
       <div className="col-head">
-        <span className="title">Workspace</span>
+        {/* The Knowledge title opens the knowledge-base overview, like the heading of the right panel's knowledge tab. */}
+        {knowledgeSection || archiveSection
+          ? <MemoryLink className="title" route={archiveSection ? "collections" : "notebooks"} values={knowledgeSelection}>{systemLabel(t, section)}</MemoryLink>
+          : <span className="title">{fixedLayout ? systemLabel(t, section) : "Workspace"}</span>}
         <span className="sp" />
+        {knowledgeSection && <>
+        <button className="icon-btn sm" title={t("nb.openVault")} aria-label={t("nb.openVault")} onClick={() => showVaultAction("open")}>
+          <Icons.folderOpen size={14} />
+        </button>
+        <button className="icon-btn sm" title={t("nb.createVault")} aria-label={t("nb.createVault")} onClick={() => showVaultAction("new")}>
+          <Icons.folderPlus size={14} />
+        </button>
+        </>}
+        {/* One "+" per section: Tasks and Chat create a session of their own type; the others open the generic new-session page. */}
+        {archiveSection && <>
+        <button className="icon-btn sm" title={t("archive.collapseAll")} aria-label={t("archive.collapseAll")} onClick={() => window.dispatchEvent(new Event(COLLECTIONS_COLLAPSE))}>
+          <Icons.collapse size={14} />
+        </button>
+        <button className="icon-btn sm" title={t("common.refresh")} aria-label={t("common.refresh")} onClick={() => window.dispatchEvent(new Event(COLLECTIONS_CHANGED))}>
+          <Icons.restart size={14} />
+        </button>
+        </>}
+        {!knowledgeSection && !archiveSection && <a
+          href={newSessionHref({ projectId: typedRoot ?? "" })}
+          className="icon-btn sm"
+          title={newSessionLabel}
+          aria-label={newSessionLabel}
+          onClick={(event) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            if (typedRoot) openNewSession({ projectId: typedRoot });
+            else openNewSessionHere();
+          }}
+        >
+          <Icons.plus size={14} />
+        </a>}
+        {showProjectActions && <>
         <a
           href={collectionDialogUrl("create")}
           className="icon-btn sm"
@@ -897,27 +1044,16 @@ export function LeftSidebar() {
           <Icons.projectOpen size={14} />
         </button>
         <button className="icon-btn sm" title={t("tree.cloneProject")} onClick={() => setCloneModalOpen(true)}>
-          <Icons.git size={14} />
+          <Icons.projectClone size={14} />
         </button>
-        <button
+        </>}
+        {!knowledgeSection && !archiveSection && <button
           className="icon-btn sm"
           title={labelWithCombo(t("tree.globalSearch"), "globalSearch", shortcutOverrides)}
           onClick={() => setGlobalSearchOpen(true)}
         >
           <Icons.search size={14} />
-        </button>
-        <button className="icon-btn sm" title={t("tree.archivedSessions")} onClick={() => memoryNavigate(memoryUrl("collections", { memoryProject: null, memorySession: null, memoryCollectionProject: null, memoryCollectionQuery: null, memoryCollectionTab: null }))}>
-          <Icons.archive size={14} />
-        </button>
-        {hasBadges && (
-          <button
-            className="icon-btn sm"
-            title={t("tree.clearAllNotifications")}
-            onClick={clearAllBadges}
-          >
-            <Icons.bellOff size={13} />
-          </button>
-        )}
+        </button>}
       </div>
 
       <div ref={treeStageRef} className="sidebar-tree-stage">
@@ -931,6 +1067,7 @@ export function LeftSidebar() {
             >
               <SidebarTreePane
                 view={view}
+                section={section}
                 isPrimary={view.id === effectivePrimaryViewId}
                 split={activeTabHasSplits}
                 active={view.id === effectiveActiveViewId}
@@ -987,7 +1124,7 @@ export function LeftSidebar() {
 
       {dialogs}
 
-      {globalSearchOpen && <GlobalSearch />}
+      {globalSearchOpen && <Suspense fallback={null}><GlobalSearch /></Suspense>}
     </aside>
   );
 }

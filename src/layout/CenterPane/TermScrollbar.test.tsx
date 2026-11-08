@@ -9,7 +9,12 @@ vi.mock("../../ipc/commands", () => ({ ptyRedraw: vi.fn() }));
 const terminals: Terminal[] = [];
 const rect = { x: 0, y: 0, top: 0, left: 0, right: 400, bottom: 300, width: 400, height: 300, toJSON() {} };
 beforeEach(() => {
-  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  // Like the real observer, report each observed element once after it starts observing.
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe() { queueMicrotask(() => this.callback([], this as unknown as ResizeObserver)); }
+    disconnect() {}
+  });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rect);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
 });

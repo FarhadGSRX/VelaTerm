@@ -14,15 +14,15 @@ export function TermScrollbar({ sessionId, containerRef, hidden }: {
   const dragging = useRef(false);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const stopDragRef = useRef<(() => void) | null>(null);
+  // Track height, kept by the resize observer. Reading it on every write forced a synchronous layout in
+  // each frame of streaming output; the observer runs after layout, where reading it costs nothing.
+  const heightRef = useRef(0);
 
   const update = useCallback(() => {
     const term = getTerminal(sessionId);
-    const el = containerRef.current;
-    if (!term || !el) { setThumb(null); return; }
+    if (!term || !containerRef.current) { setThumb(null); return; }
     const buffer = term.buffer.active;
-    // The track is a sibling of the scaled terminal. Measure their unscaled parent even before the
-    // track first mounts, excluding the three-pixel inset at each end.
-    const height = Math.max(0, (el.parentElement?.clientHeight ?? el.clientHeight) - 6);
+    const height = heightRef.current;
     if (!height || !buffer.baseY) { setThumb(null); return; }
     const thumbHeight = Math.min(height, Math.max(24, height * term.rows / (buffer.baseY + term.rows)));
     const top = buffer.viewportY / buffer.baseY * (height - thumbHeight);
@@ -45,8 +45,15 @@ export function TermScrollbar({ sessionId, containerRef, hidden }: {
       subscriptions = term ? [term.onScroll(schedule), term.onWriteParsed(schedule), term.onResize(schedule)] : [];
       schedule();
     });
-    const ro = new ResizeObserver(schedule);
-    ro.observe(el);
+    // The track is a sibling of the scaled terminal. Measure their unscaled parent even before the
+    // track first mounts, excluding the three-pixel inset at each end.
+    const measured = el.parentElement ?? el;
+    const ro = new ResizeObserver(() => {
+      heightRef.current = Math.max(0, measured.clientHeight - 6);
+      schedule();
+    });
+    ro.observe(measured);
+    if (measured !== el) ro.observe(el);
     return () => {
       unwatch();
       subscriptions.forEach((s) => s.dispose());

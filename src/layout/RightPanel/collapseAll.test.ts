@@ -3,7 +3,8 @@
 //! honestly whether there is anything to collapse so the control can stay out of the way.
 
 import { describe, expect, it } from "vitest";
-import { collapseAllBelow, hasOpenDescendant, type FileNodeT } from "./FilesTab";
+import { collapseAllBelow, hasOpenDescendant } from "./FilesTab";
+import type { FileNodeT } from "./fileTree";
 
 /** Directory node with children; `open` defaults to true so tests state closure explicitly. */
 const dir = (name: string, children: FileNodeT[], open = true): FileNodeT => ({

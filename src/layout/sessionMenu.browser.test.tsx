@@ -64,7 +64,6 @@ vi.mock("../ipc/commands", () => ({
   listShells: vi.fn(() => Promise.resolve([])),
   ptyKill: vi.fn(() => Promise.resolve()),
   removeWorktree: vi.fn(),
-  worktreesInSubtree: vi.fn(() => Promise.resolve([])),
 }));
 vi.mock("../ipc/info", () => ({ copyText: vi.fn(), openDir: vi.fn() }));
 vi.mock("../ipc/chat", () => ({ chatStop: vi.fn(() => Promise.resolve()) }));
@@ -125,6 +124,18 @@ describe("ending a session process", () => {
     view.rerender(result.current.dialogs);
     expect(view.queryByRole("alertdialog")).toBeNull();
     view.unmount();
+  });
+
+  it.each([
+    [{ status: "idle", alive: true }, true],
+    [{ status: "running", alive: false }, false],
+    [{ status: "running" }, true],
+    [{ status: "idle" }, false],
+  ] as const)("offers Kill Process for runtime %o: %s", (runtime, offered) => {
+    testState.state.runtimes = { [node.id]: runtime };
+    const { result } = renderHook(() => useSessionMenu());
+    const labels = result.current.buildSessionItems(node).map(item => item.label);
+    expect(labels.includes("tree.killProcess")).toBe(offered);
   });
 
   it.each(["cancel", "escape"])("does not stop the process after %s", (method) => {
@@ -203,6 +214,38 @@ describe("browser page entry in the tree context menu", () => {
         .newSessionItems("project-1", null, null, { withBrowser: true })
         .some((item) => item.label === "tree.newBrowserPage"),
     ).toBe(false);
+  });
+});
+
+describe("agent session in a nested group", () => {
+  beforeEach(() => {
+    testState.addSession.mockReset();
+    testState.addSession.mockResolvedValue({ id: "agent-node-1" });
+    Object.assign(testState.state, {
+      groups: [
+        { id: "outer", projectId: "project-1", parentGroupId: null, worktreePath: "/repo/.vlx-worktrees/outer", worktreeBaseRef: "refs/heads/main" },
+        { id: "nested", projectId: "project-1", parentGroupId: "outer", worktreePath: null },
+      ],
+    });
+  });
+
+  it("starts in the worktree bound on an ancestor group", async () => {
+    const { result } = renderHook(() => useSessionMenu());
+    const agents = result.current.newSessionItems("project-1", "nested").find((item) => item.label === "tree.newAgentSessionGroup");
+    const claude = agents?.submenu?.find((item) => item.label === "tree.newAgentSession");
+    act(() => claude?.onClick?.({} as React.MouseEvent));
+
+    await waitFor(() => {
+      expect(testState.addSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          groupId: "nested",
+          kind: "claude",
+          cwd: "/repo/.vlx-worktrees/outer",
+          worktreePath: "/repo/.vlx-worktrees/outer",
+          worktreeBaseRef: "refs/heads/main",
+        }),
+      );
+    });
   });
 });
 

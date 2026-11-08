@@ -17,7 +17,7 @@ import type {
   SettingsTab,
   VisualSettings,
 } from "../theme";
-import type { SessionEngine, SessionKind } from "../types";
+import { hasTerminalInterface, type SessionEngine, type SessionKind } from "../types";
 
 /** User-configurable background keep-alive tab limit, defaulting to 32. */
 export const DEFAULT_MAX_LIVE_TABS = 32;
@@ -54,18 +54,19 @@ export interface AgentDefaultConfig {
    * AgentInstallCard fills it after locating a successful one-click installation, or with a path the
    * user enters in the card's path field. */
   path?: string;
-  /** View a new session of this agent opens in. Missing falls back to the conversation view for every
-   * chat-capable agent (`defaultEngineFor`). */
+  /** View a new session of this agent opens in. Missing uses the agent's built-in default
+   * (`defaultEngineFor`): conversation for Claude/Codex, terminal for other agents. */
   engine?: SessionEngine;
 }
 
-/** View a newly created session of this agent opens in: its saved per-agent choice, then the unified
- * conversation default. Callers only use this for kinds the chat engine can drive. */
+/** View a newly created session of this agent opens in: its saved per-agent choice, then its built-in
+ * default. Callers only use this for kinds the chat engine can drive. */
 export function defaultEngineFor(
   kind: SessionKind,
   agentDefaults: Record<string, AgentDefaultConfig>,
 ): SessionEngine {
-  return agentDefaults[kind]?.engine ?? "chat";
+  if (!hasTerminalInterface(kind)) return "chat";
+  return agentDefaults[kind]?.engine ?? (kind === "claude" || kind === "codex" ? "chat" : "tui");
 }
 
 /** The permission a session launches with: its own choice, or the agent kind's global default when it has
@@ -226,6 +227,9 @@ export interface PersistedSettings {
   /** Whether the Info panel's Resources section shows the whole-machine group. Off hides those rows and
    * stops sampling the machine, leaving only this session's own CPU and memory. */
   showSystemResources: boolean;
+  /** Whether the Info panel's This turn section shows the turn's changed files instead of its statistics.
+   * The choice sticks across turns and sessions until the user switches back. */
+  turnFilesView: boolean;
   /** Info panel sections the user collapsed, as a sparse map of section id to `true`. A missing id means
    * the section is open, so the map stays empty until someone collapses something. */
   infoCollapsed: Record<string, boolean>;
@@ -317,6 +321,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   sessionTitlePrefs: {},
   referSummary: { enabled: false, agent: "claude", model: "", effort: "" },
   showSystemResources: true,
+  turnFilesView: false,
   infoCollapsed: {},
   composerInlineChips: DEFAULT_COMPOSER_INLINE_CHIPS,
   composerInlineChipsRevision: COMPOSER_INLINE_CHIPS_REVISION,
@@ -410,6 +415,9 @@ export function loadSettings(): PersistedSettings {
       parsed.infoCollapsed && typeof parsed.infoCollapsed === "object" && !Array.isArray(parsed.infoCollapsed)
         ? Object.fromEntries(Object.entries(parsed.infoCollapsed).filter(([, closed]) => closed === true))
         : {};
+    merged.turnFilesView = merged.turnFilesView === true;
+    // The right panel's knowledge tab was removed; a saved value for it, or any unknown value, opens Info.
+    if (!["files", "info", "git"].includes(merged.inspectorTab)) merged.inspectorTab = "info";
     merged.planExecutePrefs = sanitizePlanExecutePrefs(parsed.planExecutePrefs);
     merged.memoryPrefs = sanitizeLaunchChoice(parsed.memoryPrefs);
     merged.sessionTitlePrefs = sanitizeSessionTitlePrefs(parsed.sessionTitlePrefs);
@@ -435,8 +443,8 @@ export function loadSettings(): PersistedSettings {
       merged.termRenderer = "dom";
     }
     // The view choice used to be a single app-wide setting covering Claude, Codex and OpenCode, while Pi
-    // and OMP were outside its scope. Fold a saved choice into those three agents; newer chat-capable
-    // agents use the unified conversation default. Clone first so the module-level defaults are never mutated.
+    // and OMP were outside its scope. Fold a saved choice into those three agents; other agents use their
+    // built-in defaults. Clone first so the module-level defaults are never mutated.
     merged.agentDefaults =
       merged.agentDefaults && typeof merged.agentDefaults === "object" && !Array.isArray(merged.agentDefaults)
         ? { ...merged.agentDefaults }
@@ -472,7 +480,6 @@ export const visualOf = (s: PersistedSettings): VisualSettings => ({
   paneStyle: s.paneStyle,
   dividerStyle: s.dividerStyle,
   navLayout: s.navLayout,
-  uiFontFamily: s.uiFontFamily,
   uiFontSize: s.uiFontSize,
   chatFontFamily: s.chatFontFamily,
   chatFontSize: s.chatFontSize,

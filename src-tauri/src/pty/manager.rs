@@ -65,7 +65,7 @@ const HEAL_POLL: Duration = Duration::from_millis(500);
 const QUIET_HEAL: Duration = Duration::from_secs(6);
 
 /// Output replay limit. Roughly 512 KB covers several full TUI redraws and recent history for new subscribers.
-const SCROLLBACK_CAP: usize = 512 * 1024;
+pub(crate) const SCROLLBACK_CAP: usize = 512 * 1024;
 /// Report waiting for the session map at least this long. `pty_write` takes that lock on the UI thread for
 /// every keystroke, so a holder that runs long freezes the whole application rather than one session, and
 /// 50 ms is roughly where the delay stops being invisible.
@@ -301,6 +301,10 @@ impl PtyManager {
         attach_only: bool,
         first_sink: OutputSink,
     ) -> Result<SpawnResult, String> {
+        if !kind.has_terminal_interface() {
+            return Err(format!("{} has no terminal interface. Open this conversation in the conversation view.",
+                crate::agent::launch_options::label(kind)));
+        }
         // A delayed terminal launch must not cross a completed Chat handoff.
         let transition_app=app.clone();
         let _transition=kind.supports_chat().then(||transition_app.chat().engine_guard());
@@ -494,20 +498,12 @@ impl PtyManager {
                 }
             }
         }
-        // Normalize the working directory. A stale path falls back to the home directory to avoid
-        // process-creation failures. Unspecified (empty or absent, as for a session in a collection with no
-        // folder behind it) also means home rather than this process's own directory, which on a desktop launch
-        // is `/` and is never what the user meant. Codex rollout capture also uses the result for cwd matching.
-        let spawn_cwd = match cwd.filter(|d| !d.is_empty()) {
-            Some(d) if std::path::Path::new(&d).is_dir() => Some(d),
-            Some(stale) => {
-                let fb = home_dir().filter(|h| std::path::Path::new(h).is_dir());
-                crate::diagnostics::record("WARN","pty_cwd_fallback",serde_json::json!({"sessionId":id,"step":"fallback"}));
-                let _ = stale;
-                fb
-            }
-            None => home_dir().filter(|h| std::path::Path::new(h).is_dir()),
-        };
+        // Normalize the working directory: unset or stale means home, as in the chat view (`host::spawn_dir`).
+        // Codex rollout capture also uses the result for cwd matching.
+        let spawn_cwd = crate::host::spawn_dir(cwd.as_deref());
+        if cwd.as_deref().is_some_and(|d| !d.trim().is_empty()) && spawn_cwd != cwd {
+            crate::diagnostics::record("WARN","pty_cwd_fallback",serde_json::json!({"sessionId":id,"step":"fallback"}));
+        }
         if let Some(dir) = &spawn_cwd {
             cmd.cwd(dir);
         }
@@ -687,7 +683,7 @@ impl PtyManager {
         let kiro_agent: Option<String> = if kind == SessionKind::Kiro {
             let started = std::time::Instant::now();
             crate::agent::kiro::audit_install("started", 0);
-            match crate::agent::kiro::install() {
+            match crate::agent::kiro::install(std::path::Path::new(&exe_path)) {
                 Ok(name) => {
                     crate::agent::kiro::audit_install("success", started.elapsed().as_millis());
                     Some(name)
@@ -703,9 +699,20 @@ impl PtyManager {
         } else {
             None
         };
-        // Windows temporarily forgoes lifecycle hooks; see `codex_lifecycle_hooks_supported`.
+        // Lifecycle hooks need a Codex that accepts the trust flag and a hooks table this platform can pass
+        // intact; otherwise the session keeps notify plus the rollout scan.
         let codex_hooks_supported = kind != SessionKind::Codex
-            || (!cfg!(windows) && codex_lifecycle_hooks_supported(bin_path.as_deref()));
+            || (codex_lifecycle_hooks_supported(bin_path.as_deref())
+                && crate::agent::inject::build_codex_hooks(&exe_path).is_some());
+        let opencode_v2 = kind == SessionKind::Opencode && crate::agent::opencode::is_v2(bin_path.as_deref().unwrap_or("opencode"));
+        let opencode_new_terminal = opencode_v2 && resume_id.is_none();
+        let mut resume_id = resume_id;
+        if opencode_v2 {
+            let session=crate::agent::session_settings::session(&app,&id)?;
+            let choice=crate::agent::session_settings::resolve(&app,&session)?;
+            resume_id=Some(crate::agent::opencode::prepare_v2_terminal(&app,&id,bin_path.as_deref().unwrap_or("opencode"),
+                spawn_cwd.as_deref(),resume_id.as_deref(),&choice)?);
+        }
         let should_capture_agent_id = resume_id.is_none() || fork;
         let mut terminal_thinking_off = false;
         let extra_args = if matches!(kind, SessionKind::Claude | SessionKind::Codex | SessionKind::Opencode | SessionKind::Antigravity) {
@@ -719,9 +726,21 @@ impl PtyManager {
                     kind, inject::shell_kind(&shell), extra_args.as_deref(), &selection,
                 );
                 for (key, value) in values { cmd.env(key, value); }
-                Some(args)
+                Some(if opencode_v2 {crate::agent::session_settings::without_selection_args(kind,Some(&args))}else{args})
             } else { extra_args }
         } else { extra_args };
+        let extra_args = if opencode_v2 {
+            let mut args=crate::agent::session_settings::without_selection_args(kind,extra_args.as_deref());
+            args.push_str(" --standalone");
+            if matches!(permission_mode.as_deref(),Some("skip"|"bypassPermissions")){args.push_str(" --auto");}
+            if opencode_new_terminal {
+                if let Some(prompt)=init_prompt.as_deref().filter(|p|!p.trim().is_empty()) {
+                    cmd.env(inject::INIT_PROMPT_ENV,prompt);
+                    args.push_str(&format!(" --prompt {}",inject::value_ref(inject::shell_kind(&shell),inject::INIT_PROMPT_ENV)));
+                }
+            }
+            Some(args.trim().to_string())
+        } else {extra_args};
         // Only the Windows theme-injection branch mutates this value.
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut agent_spawn = inject::prepare_with_args_capabilities(
@@ -790,7 +809,7 @@ impl PtyManager {
         // OpenCode receives inline configuration pointing to the installed state-bridge plugin. It reads
         // injected `VLX_*` values and reports session, idle, and permission events. Installation failure
         // leaves OpenCode functional with screen detection as a fallback.
-        if kind == SessionKind::Opencode {
+        if kind == SessionKind::Opencode && !opencode_v2 {
             if let Ok(data_dir) = app.data_dir() {
                 let plugin = crate::agent::opencode::plugin_path(&data_dir);
                 if plugin.exists() {
@@ -808,7 +827,7 @@ impl PtyManager {
         // Lazily install Copilot's static state-bridge hooks under `~/.copilot/hooks/vlx-term.json`.
         // Installation is idempotent and dynamic values remain in `VLX_*`; failures only disable authoritative state.
         if kind == SessionKind::Copilot {
-            if let Err(e) = crate::agent::copilot::install() {
+            if let Err(e) = crate::agent::copilot::install(std::path::Path::new(&exe_path)) {
                 crate::diagnostic_warn!(
                     "failed to install copilot hooks (copilot status reporting unavailable): {e}"
                 );
@@ -819,7 +838,7 @@ impl PtyManager {
         // user entries and refusing malformed structures. Dynamic values stay in `VLX_*`; failures only
         // disable authoritative state reporting.
         if kind == SessionKind::Cursor {
-            if let Err(e) = crate::agent::cursor::install() {
+            if let Err(e) = crate::agent::cursor::install(std::path::Path::new(&exe_path)) {
                 crate::diagnostic_warn!(
                     "failed to install cursor hooks (cursor status reporting unavailable): {e}"
                 );
@@ -844,10 +863,10 @@ impl PtyManager {
             }
         }
 
-        // Install Antigravity's static bridge at `~/.gemini/vlx-term/hook.sh` and merge the dedicated
+        // Install Antigravity's Unix script or Windows native bridge and merge the dedicated
         // `vlx-term-status` group into global hooks, preserving all user groups. Failures retain normal launch.
         if kind == SessionKind::Antigravity {
-            if let Err(e) = crate::agent::antigravity::install() {
+            if let Err(e) = crate::agent::antigravity::install(std::path::Path::new(&exe_path)) {
                 crate::diagnostic_warn!("failed to install antigravity hooks (antigravity status reporting unavailable): {e}");
             }
         }
@@ -857,7 +876,7 @@ impl PtyManager {
         // touching user configuration or data. Failures retain Crush's own configuration and screen fallback.
         if kind == SessionKind::Crush {
             match app.data_dir() {
-                Ok(data_dir) => match crate::agent::crush::install(&data_dir) {
+                Ok(data_dir) => match crate::agent::crush::install(&data_dir, std::path::Path::new(&exe_path)) {
                     Ok(config_dir) => {
                         cmd.env("CRUSH_GLOBAL_CONFIG", &config_dir);
                     }
@@ -876,7 +895,7 @@ impl PtyManager {
         if kind == SessionKind::Kimi {
             let started = std::time::Instant::now();
             crate::agent::kimi::audit_install("started", 0);
-            if crate::agent::kimi::install().is_err() {
+            if crate::agent::kimi::install(std::path::Path::new(&exe_path)).is_err() {
                 crate::agent::kimi::audit_install("failed", started.elapsed().as_millis());
             } else {
                 crate::agent::kimi::audit_install("success", started.elapsed().as_millis());
@@ -910,6 +929,8 @@ impl PtyManager {
         // this gate for the settings UI, and `install_wsl` remains for a later re-enable.
         #[cfg(not(windows))]
         if kind == SessionKind::Terminal {
+            // Shells read the mode at each prompt; refresh it here in case the data directory was reset.
+            let _ = super::completion::write_mode(&app.data_dir()?, &completion_mode(&app));
             if let Some((state, command)) = super::completion::install(&app.data_dir()?, &shell)? {
                 let stem = std::path::Path::new(&shell)
                     .file_stem()
@@ -1263,15 +1284,18 @@ impl PtyManager {
         }
 
         match kind {
-            // Browser nodes should never spawn PTYs; defensively attach no monitor or agent marker.
-            SessionKind::Browser => {}
-            // Terminal retains activity-based busy/idle only. Process-tree agent detection was too expensive.
+            // Browser nodes should never spawn PTYs, and DeepSeek and ZCode are refused above; attach no monitor or
+            // marker.
+            SessionKind::Browser | SessionKind::Deepseek | SessionKind::Zcode => {}
+            // Terminal keeps activity-based busy/idle and also watches its foreground process group, so an
+            // agent the user starts by hand is reported (see `agent_probe`).
             SessionKind::Terminal => {
                 spawn_status_monitor(
                     app_extra,
                     status_event_extra,
                     Arc::clone(&last_activity),
                     Arc::clone(&alive),
+                    Some(AgentProbe { sessions: Arc::clone(&self.sessions), id: id.clone(), shell_pid: pid }),
                 );
             }
             // Claude is marked immediately and relies entirely on precise HTTP-hook state. An interrupted
@@ -1293,8 +1317,8 @@ impl PtyManager {
                     Arc::clone(&alive),
                 );
             }
-            // OpenCode is marked immediately and relies on plugin events for working, waiting, and asking.
-            // The hook body also persists its session ID for later `--session` resume.
+            // v1 reports authoritative plugin events. v2 persists its identity before launch and uses
+            // the existing terminal activity monitor because its preview has no v1 event hook API.
             SessionKind::Opencode => {
                 app_extra.emit(
                     &status_event_extra,
@@ -1303,6 +1327,9 @@ impl PtyManager {
                         state_source: None,
                     },
                 );
+                if opencode_v2 {
+                    spawn_status_monitor(app_extra,status_event_extra,Arc::clone(&last_activity),Arc::clone(&alive),None);
+                }
             }
             // Copilot is marked immediately and relies on command-hook lifecycle events. The forwarded hook
             // body persists its session ID for later `--resume=<id>` without file scanning.
@@ -1402,6 +1429,7 @@ impl PtyManager {
                     status_event_extra,
                     Arc::clone(&last_activity),
                     Arc::clone(&alive),
+                    None,
                 );
             }
             // Kimi Code receives complete lifecycle state from official hooks and persists `session_id` from payloads.
@@ -1449,6 +1477,7 @@ impl PtyManager {
                     status_event_extra,
                     Arc::clone(&last_activity),
                     Arc::clone(&alive),
+                    None,
                 );
             }
             // Zoo Code has no injectable lifecycle hooks yet; mark its type and combine TUI detection with
@@ -1466,6 +1495,7 @@ impl PtyManager {
                     status_event_extra,
                     Arc::clone(&last_activity),
                     Arc::clone(&alive),
+                    None,
                 );
             }
             // Codex reports its state source immediately, before the first lifecycle event. Modern versions are
@@ -1555,7 +1585,34 @@ impl PtyManager {
         })
     }
 
+    /// Runs a completion action. A query waits here for the shell's answer instead of leaving the client to poll for
+    /// it, and with `apply` it also inserts a single match or the shared text, as native Tab does. Over a remote
+    /// connection each client request is a network round trip; this turns Tab from three or more into one.
     pub fn completion(
+        &self, id: &str, action: &str, source: &str, revision: Option<u64>, index: Option<usize>, apply: bool,
+    ) -> Result<super::completion::Snapshot, String> {
+        let snapshot = self.completion_step(id, action, source, revision, index)?;
+        if !matches!(action, "query" | "tab") || !snapshot.pending { return Ok(snapshot); }
+        let state = {
+            let map = self.sessions.lock().unwrap();
+            let session = map.get(id).ok_or("Terminal session is not running")?;
+            Arc::clone(&session.completion)
+        };
+        // The shell answers within milliseconds; the client keeps polling past this bound if it does not.
+        let deadline = Instant::now() + std::time::Duration::from_millis(1500);
+        while state.lock().unwrap().snapshot.pending && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let snapshot = self.completion_step(id, "state", source, None, None)?;
+        if !apply || snapshot.pending || !snapshot.ready || snapshot.hint_accepted { return Ok(snapshot); }
+        let step = if snapshot.items.len() == 1 { "accept" } else if snapshot.extendable { "extend" } else { return Ok(snapshot) };
+        // The step rechecks the revision and the items under the lock, so a key typed meanwhile cancels it.
+        let mut applied = self.completion_step(id, step, source, Some(snapshot.revision), Some(0))?;
+        applied.applied = true;
+        Ok(applied)
+    }
+
+    fn completion_step(
         &self, id: &str, action: &str, source: &str, revision: Option<u64>, index: Option<usize>,
     ) -> Result<super::completion::Snapshot, String> {
         let map = self.sessions.lock().unwrap();
@@ -1563,7 +1620,7 @@ impl PtyManager {
         let mut state = session.completion.lock().unwrap();
         match action {
             "state" => {}
-            "query" => {
+            "query" | "tab" => {
                 if !state.snapshot.ready || !state.snapshot.supported { return Ok(state.snapshot.clone()); }
                 if state.requested.is_some() { return Err("Native completion is still running".into()); }
                 #[cfg(unix)]
@@ -1573,10 +1630,12 @@ impl PtyManager {
                     return Ok(state.snapshot.clone());
                 }
                 state.snapshot.items.clear();
+                state.snapshot.hint_accepted = false;
                 state.requested = Some((state.snapshot.input_version, Instant::now()));
                 state.snapshot.pending = true;
                 state.owner = Some(source.to_string());
-                if session.input.try_send(super::completion::QUERY_KEY.to_vec()).is_err() {
+                let key = if action == "tab" && state.hint_capable { super::completion::QUERY_HINT_KEY } else { super::completion::QUERY_KEY };
+                if session.input.try_send(key.to_vec()).is_err() {
                     state.requested = None;
                     state.snapshot.pending = false;
                     return Err("Terminal input queue is unavailable".into());
@@ -1593,6 +1652,38 @@ impl PtyManager {
                     return Err("Completion is no longer current".into());
                 }
                 std::fs::write(&state.selection_file, format!("{} {index}\n", state.snapshot.revision))
+                    .map_err(|e| e.to_string())?;
+                session.input.try_send(super::completion::ACCEPT_KEY.to_vec())
+                    .map_err(|_| "Terminal input queue is unavailable")?;
+                state.input("");
+            }
+            // Insert the text every candidate shares, which the shell computed while collecting them.
+            "extend" => {
+                #[cfg(unix)]
+                if session.master.process_group_leader().is_some_and(|pid| pid as u32 != session.pid) {
+                    return Err("The shell is not editing a command".into());
+                }
+                if !state.snapshot.ready || state.snapshot.pending || state.owner.as_deref() != Some(source)
+                    || revision != Some(state.snapshot.revision) || !state.snapshot.extendable {
+                    return Err("Completion is no longer current".into());
+                }
+                std::fs::write(&state.selection_file, format!("{} p\n", state.snapshot.revision))
+                    .map_err(|e| e.to_string())?;
+                session.input.try_send(super::completion::ACCEPT_KEY.to_vec())
+                    .map_err(|_| "Terminal input queue is unavailable")?;
+                state.input("");
+            }
+            // Put back what was typed before Tab accepted the inline hint; the shell kept that text.
+            "undo" => {
+                #[cfg(unix)]
+                if session.master.process_group_leader().is_some_and(|pid| pid as u32 != session.pid) {
+                    return Err("The shell is not editing a command".into());
+                }
+                if !state.snapshot.ready || state.snapshot.pending || state.owner.as_deref() != Some(source)
+                    || revision != Some(state.snapshot.revision) || !state.snapshot.hint_accepted {
+                    return Err("Completion is no longer current".into());
+                }
+                std::fs::write(&state.selection_file, format!("{} u\n", state.snapshot.revision))
                     .map_err(|e| e.to_string())?;
                 session.input.try_send(super::completion::ACCEPT_KEY.to_vec())
                     .map_err(|_| "Terminal input queue is unavailable")?;
@@ -2029,11 +2120,9 @@ fn effective_default_shell(
 /// unsupported and retains notify/screen/busy fallback. Windows `.cmd` wrappers run through cmd.exe; native
 /// executables run directly. Probe each launch so an in-place Codex upgrade takes effect immediately.
 ///
-/// Callers currently skip this probe on Windows and never inject hooks there. The inline TOML table passed
-/// as `-c hooks=<table>` contains spaces and double quotes, and an npm-installed `codex.cmd` re-parses the
-/// command line through cmd.exe, which drops the quoting and splits the value into separate arguments. Codex
-/// then rejects the stray `--codex-hook` token and refuses to start (issue #53). Restore Windows hook support
-/// once the handlers move into `~/.codex/hooks.json`, leaving only quote-free flags on the command line.
+/// Windows once skipped this probe and injected no hooks (issue #53): the inline table's embedded double
+/// quotes did not survive npm's `codex.cmd` / `codex.ps1` wrappers. The Windows table now uses only
+/// single-quoted TOML literal strings (see `inject::codex_hooks_table`), so the probe applies everywhere.
 fn codex_lifecycle_hooks_supported(bin_path: Option<&str>) -> bool {
     let program = bin_path.filter(|p| !p.trim().is_empty()).unwrap_or("codex");
     #[cfg(windows)]
@@ -2058,6 +2147,13 @@ fn codex_lifecycle_hooks_supported(bin_path: Option<&str>) -> bool {
     text.contains("--dangerously-bypass-hook-trust")
 }
 
+#[cfg(not(windows))]
+fn completion_mode(app: &AppCtx) -> String {
+    crate::command_core::get_app_settings(app).ok()
+        .and_then(|mut map| map.remove(super::completion::MODE_KEY))
+        .unwrap_or_else(|| super::completion::DEFAULT_MODE.into())
+}
+
 fn recording_enabled(app: &AppCtx) -> bool {
     let Ok(conn) = app.db().conn.lock() else {
         return false;
@@ -2074,25 +2170,72 @@ impl Default for PtyManager {
     }
 }
 
+/// How often a terminal checks its foreground process group: every fifth poll, once a second.
+const AGENT_PROBE_EVERY: u32 = 5;
+
+/// What a terminal's status monitor needs to see which process owns the terminal.
+struct AgentProbe {
+    sessions: Arc<SessionMap>,
+    id: String,
+    shell_pid: u32,
+}
+
+impl AgentProbe {
+    /// The foreground process group of the terminal, or None once the session is gone or off Unix.
+    fn foreground_group(&self) -> Option<u32> {
+        #[cfg(unix)]
+        {
+            let map = self.sessions.lock().unwrap();
+            map.get(&self.id)?.master.process_group_leader().map(|pid| pid as u32)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (&self.sessions, &self.id);
+            None
+        }
+    }
+}
+
 /// Heuristic fallback monitor that reports coarse busy/idle state using output-activity hysteresis.
 ///
-/// Used only when authoritative events are unavailable. It provides busy/idle fallback without expensive
-/// process-tree agent detection.
+/// Used only when authoritative events are unavailable. With a probe (plain terminals) it also reports the
+/// agent the user started by hand, checking the foreground process group once a second rather than
+/// scanning the process tree.
 fn spawn_status_monitor(
     app: AppCtx,
     status_event: String,
     last_activity: Arc<Mutex<Instant>>,
     alive: Arc<AtomicBool>,
+    probe: Option<AgentProbe>,
 ) {
     std::thread::spawn(move || {
         let mut working = false; // Whether the session is currently classified as working.
         let mut active_streak: u32 = 0; // Consecutive cycles with output.
         let mut idle_streak: u32 = 0; // Consecutive cycles without output.
+        let mut tick: u32 = 0;
+        // The foreground group last classified and the agent reported for it.
+        let mut probed_group: Option<u32> = None;
+        let mut reported_agent: Option<&'static str> = None;
         loop {
             std::thread::sleep(POLL_INTERVAL);
             if !alive.load(Ordering::SeqCst) {
                 break;
             }
+
+            if let Some(probe) = probe.as_ref().filter(|_| tick.is_multiple_of(AGENT_PROBE_EVERY)) {
+                let group = probe.foreground_group();
+                if group != probed_group {
+                    probed_group = group;
+                    let agent = group
+                        .filter(|g| *g != probe.shell_pid)
+                        .and_then(super::agent_probe::agent_of);
+                    if agent != reported_agent {
+                        reported_agent = agent;
+                        app.emit(&status_event, StatusSignal::Agent { agent: agent.map(str::to_string), state_source: None });
+                    }
+                }
+            }
+            tick = tick.wrapping_add(1);
 
             // A cycle is active when the latest output falls within the activity window.
             let active = last_activity.lock().unwrap().elapsed() < ACTIVE_WINDOW;
@@ -2267,18 +2410,23 @@ pub(crate) fn parse_wsl_distros(stdout: &[u8]) -> Vec<String> {
     distros
 }
 
+/// Whether the current user has at least one WSL distribution registered. WSL records each distribution as a
+/// `{GUID}` subkey of Lxss (also the form of its `DefaultDistribution` value); other subkeys are not distributions.
+/// Windows keeps an inbox wsl.exe stub after WSL is uninstalled that answers any invocation, `--list` included,
+/// with an install prompt in its own window, so every caller checks this before running wsl.exe.
+#[cfg(windows)]
+pub(crate) fn wsl_distribution_registered() -> bool {
+    windows_registry::CURRENT_USER
+        .open(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
+        .and_then(|key| key.keys().map(|mut names| names.any(|name| name.starts_with('{'))))
+        .unwrap_or(false)
+}
+
 #[cfg(windows)]
 fn wsl_distros() -> Vec<String> {
     use std::os::windows::process::CommandExt;
 
-    // WSL registers each distribution as a subkey of Lxss. With none registered there is nothing to list, and
-    // Windows keeps an inbox wsl.exe stub after WSL is uninstalled that answers any invocation with an install
-    // prompt in its own window, so probing it would raise that prompt on every shell enumeration.
-    let registered = windows_registry::CURRENT_USER
-        .open(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
-        .and_then(|key| key.keys().map(|mut names| names.next().is_some()))
-        .unwrap_or(false);
-    if !registered {
+    if !wsl_distribution_registered() {
         return Vec::new();
     }
     // Avoid flashing a console window while probing shells during application startup.
@@ -2513,30 +2661,6 @@ fn resolve_fallback_shell(
         }
     }
     default_shell(kind, data_dir)
-}
-
-/// Resolves the home directory for stale-cwd fallback. Windows uses `USERPROFILE` or `HOMEDRIVE` plus
-/// `HOMEPATH`; other platforms use `HOME`. `None` lets the child inherit the process directory.
-fn home_dir() -> Option<String> {
-    #[cfg(windows)]
-    {
-        if let Ok(p) = std::env::var("USERPROFILE") {
-            if !p.is_empty() {
-                return Some(p);
-            }
-        }
-        if let (Ok(drive), Ok(path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-            let h = format!("{drive}{path}");
-            if !h.is_empty() {
-                return Some(h);
-            }
-        }
-        None
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var("HOME").ok().filter(|h| !h.is_empty())
-    }
 }
 
 #[cfg(test)]

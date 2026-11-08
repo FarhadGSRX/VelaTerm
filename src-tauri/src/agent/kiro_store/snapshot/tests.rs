@@ -37,3 +37,38 @@ fn rollback_journal_and_corrupt_database_fail_without_recovery() {
     fs::remove_file(sidecar(path,"-journal")).unwrap();fs::write(path,b"not sqlite").unwrap();
     assert!(database(path).is_err());assert_eq!(fs::read(path).unwrap(),b"not sqlite");
 }
+
+#[test]
+fn streamed_generation_exceeds_the_old_memory_limit_and_detects_same_size_edits() {
+    let f=crate::agent::kiro_store::tests::Fixture::new();let path=f.dir.join("large-native");
+    let mut file=File::create(&path).unwrap();file.set_len(MAX_SOURCE_BYTES+1).unwrap();file.write_all(b"original").unwrap();drop(file);
+    let directory=TempDir::new().unwrap();let copy=directory.0.join("copy");
+    let first=generation(&path,Some(&copy),1024*1024*1024).unwrap().unwrap();
+    assert_eq!(first.bytes,MAX_SOURCE_BYTES+1);assert_eq!(fs::metadata(&copy).unwrap().len(),first.bytes);
+    assert!(first==generation(&path,None,1024*1024*1024).unwrap().unwrap());
+    let mut file=fs::OpenOptions::new().write(true).open(&path).unwrap();file.write_all(b"modified").unwrap();drop(file);
+    assert!(first!=generation(&path,None,1024*1024*1024).unwrap().unwrap());
+    let over=directory.0.join("over");
+    assert!(generation(&path,Some(&over),1024).err().unwrap().starts_with("storage_pressure:"));assert!(!over.exists());
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(copy).unwrap().permissions().mode()&0o777,0o600);
+    }
+}
+
+#[test]
+fn cancellation_stops_a_copy_at_a_block_boundary_and_preserves_the_native_file() {
+    let f=crate::agent::kiro_store::tests::Fixture::new();let path=f.dir.join("large-native");
+    File::create(&path).unwrap().set_len(64*1024*1024).unwrap();let directory=TempDir::new().unwrap();let copy=directory.0.join("copy");
+    let cancel=AtomicBool::new(false);
+    let error=std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !cancel.load(Ordering::Relaxed) {
+                if fs::metadata(&copy).is_ok_and(|metadata|metadata.len()>0) {cancel.store(true,Ordering::Relaxed);break;}
+                std::thread::park_timeout(std::time::Duration::from_millis(1));
+            }
+        });
+        let result=generation_with_cancel(&path,Some(&copy),1024*1024*1024,&cancel);cancel.store(true,Ordering::Relaxed);result.err().unwrap()
+    });
+    assert_eq!(error,"read_canceled");assert!(fs::metadata(copy).unwrap().len()<64*1024*1024);assert_eq!(fs::metadata(path).unwrap().len(),64*1024*1024);
+}

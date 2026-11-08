@@ -27,11 +27,12 @@ async function completeTexts(row: ChatRow): Promise<string[]> {
   return result;
 }
 
-export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHistory = false, historyError, onRetryHistory }: {
+export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHistory = false, historyError, onRetryHistory, onQueryChange }: {
   entries: DisplayRow[];
   loadingHistory?: boolean;
   historyError?: string | null;
   onRetryHistory?: () => void;
+  onQueryChange?: (query: string) => void;
   scrollRef?: RefObject<HTMLDivElement | null>;
   onLocate: (index: number, query: string) => void;
   onClose: () => void;
@@ -48,6 +49,7 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   useEffect(() => {
+    if (!query) { setLoadingDetails(false); return; }
     const pending = entries.flatMap(entryRows).filter(row => row.kind === "tool" && row.detailAvailable && !searchDetails.has(row));
     if (!pending.length) { setLoadingDetails(false); return; }
     let disposed = false;
@@ -65,7 +67,7 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
       finally { if (!disposed) setLoadingDetails(false); }
     })();
     return () => { disposed = true; };
-  }, [entries]);
+  }, [entries, query]);
   const content = useMemo(() => entries.map(entry => entryRows(entry).flatMap(row => searchDetails.get(row) ?? texts(row))), [entries, detailsVersion]);
   const matches = useMemo(() => {
     if (!query) return [];
@@ -142,7 +144,7 @@ export function ChatSearch({ entries, onLocate, onClose, scrollRef, loadingHisto
     {historyError && <div role="alert">{historyError} <button className="vlx-btn" onClick={onRetryHistory}>{t("common.retry")}</button></div>}
     {detailsError && <div role="alert">{detailsError}</div>}
     <div className="sv-search-controls">
-      <input ref={input} className="vlx-input" aria-label={t("archive.searchTranscript")} placeholder={t("doc.searchPlaceholder")} value={query} onChange={event => { setQuery(event.target.value); setSelected(null); }} />
+      <input ref={input} className="vlx-input" aria-label={t("archive.searchTranscript")} placeholder={t("doc.searchPlaceholder")} value={query} onChange={event => { setQuery(event.target.value); onQueryChange?.(event.target.value); setSelected(null); }} />
       <span role="status" aria-label={current ? t("search.matchPosition", at + 1, matches.length) : undefined} title={current ? current.text.slice(Math.max(0, current.start - 70), current.start + current.length + 100) : undefined}>{query ? current ? `${at + 1}/${matches.length}` : loadingHistory || loadingDetails || historyError || detailsError ? "" : t("doc.searchNoMatch") : ""}</span>
       <button className="vlx-btn" disabled={!current} title={t("common.prev")} onClick={() => move(-1)}>↑</button>
       <button className="vlx-btn" disabled={!current} title={t("common.next")} onClick={() => move(1)}>↓</button>

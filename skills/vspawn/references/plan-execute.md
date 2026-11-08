@@ -73,6 +73,12 @@ work under `nohup`, waits for it, and exits when the work exits, so the completi
 itself. It prints the exit code, the elapsed time and the tail of the log. `vrun --status <label>`
 reports on a task that is still running.
 
+Every three minutes, counted from the start, `vrun` exits with code 75 and a progress report — the
+elapsed time and the tail of the log — while the work keeps running. Report progress, then issue
+`vrun --wait <label>` as a background shell command again; it keeps the same schedule. `-i <seconds>`
+changes the interval. Exit code 75 with the line `progress report` is never the result — only a line
+reading `finished · exit code N` is. There is no timeout unless you pass `-t <seconds>`.
+
 Do not start the work and then write a separate command to wait for it. Two failures on 2026-09-17 came
 from exactly that: one session's watcher was still attached to the previous round, so a verification that
 finished in 30 seconds went unnoticed for 38 minutes; another waited on a process matched by name and

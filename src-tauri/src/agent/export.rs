@@ -74,6 +74,14 @@ pub(crate) enum Event {
         text: String,
         ts: Option<String>,
     },
+    /// A background task finished while the agent was idle, and its notification started a new turn.
+    ///
+    /// Nobody typed it, so it is not a user message; but the reply that follows answers it, not the last
+    /// thing the person said. `summary` is the notification's own one-line account of the task.
+    Wake {
+        summary: String,
+        ts: Option<String>,
+    },
 }
 
 /// Locate a session recording by type and export its complete context as Markdown. Return Err for a
@@ -105,6 +113,11 @@ pub fn export_markdown(
             let path = resume::find_pi_session(kind, agent_session_id)
                 .ok_or("Pi session file not found")?;
             (path, pi_events(&resume::read_pi_transcript(kind, agent_session_id)?))
+        }
+        SessionKind::Zcode => {
+            let path = crate::agent::zcode::session_db_path()
+                .ok_or("ZCode's session store could not be located")?;
+            (path, crate::agent::zcode::history_events(agent_session_id)?)
         }
         SessionKind::Antigravity => {
             let path = crate::agent::antigravity::transcript_path(agent_session_id)
@@ -144,7 +157,7 @@ enum Sec {
     Assistant,
 }
 
-fn render(
+pub(crate) fn render(
     events: &[Event],
     session_name: &str,
     kind: &str,
@@ -158,8 +171,9 @@ fn render(
 
     for ev in events {
         // The export is the conversation. What a slash command printed back into the session belongs to
-        // the moment it was typed, not to the record of what was said.
-        if matches!(ev, Event::Command { .. }) {
+        // the moment it was typed, not to the record of what was said. Nor was a background task's wake-up
+        // said by anyone; the export already left task notifications out before they had rows of their own.
+        if matches!(ev, Event::Command { .. } | Event::Wake { .. }) {
             continue;
         }
         match ev {
@@ -224,7 +238,7 @@ fn render(
                         title.push_str("**");
                         blocks.push(format!("{title}\n\n{}", fenced("", text)));
                     }
-                    Event::User { .. } | Event::Shell { .. } | Event::Command { .. } => unreachable!(),
+                    Event::User { .. } | Event::Shell { .. } | Event::Command { .. } | Event::Wake { .. } => unreachable!(),
                 }
             }
         }
@@ -308,7 +322,10 @@ fn fenced(lang: &str, text: &str) -> String {
 // ─────────────────────────── Claude parsing ───────────────────────────
 
 /// What the CLI records as the assistant's reply to a command it answered itself, such as `/effort`.
-const NO_RESPONSE_PLACEHOLDER: &str = "No response requested.";
+pub(crate) const NO_RESPONSE_PLACEHOLDER: &str = "No response requested.";
+
+/// How Claude opens the message it records when a finished background task wakes the agent.
+const TASK_NOTIFICATION: &str = "<task-notification>";
 
 /// The text a locally answered slash command printed, or None for a row carrying anything else.
 ///
@@ -344,9 +361,16 @@ fn between(text: &str, open: &str, close: &str) -> Option<String> {
 
 /// Parse a complete Claude transcript into events, skipping sidechain, meta, and injected blocks.
 pub(crate) fn claude_events(content: &str) -> Vec<Event> {
+    claude_identified_events(content).into_iter().map(|(event,_)|event).collect()
+}
+
+/// Keep native identities beside the same events used by history, export, and search.
+pub(crate) fn claude_identified_events(content: &str) -> Vec<(Event,Option<String>)> {
     // Map tool_use IDs to names for subsequent tool_result display.
     let mut tool_names: HashMap<String, String> = HashMap::new();
     let mut out: Vec<Event> = Vec::new();
+    let mut identities = HashMap::new();
+    let mut block_counts: HashMap<String,usize> = HashMap::new();
 
     for line in content.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -382,6 +406,7 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
         let Some(msg) = v.get("message") else {
             continue;
         };
+        let first = out.len();
         match v.get("type").and_then(Value::as_str) {
             Some("user") => match msg.get("content") {
                 Some(Value::String(s)) => {
@@ -426,7 +451,13 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
                 let Some(items) = msg.get("content").and_then(Value::as_array) else {
                     continue;
                 };
-                for it in items {
+                // Claude persists each completed block separately, including empty thinking blocks.
+                // Count every block across frames just as the live engine's handle_assistant does.
+                let message_id = msg.get("id").and_then(Value::as_str);
+                let seen = block_counts.entry(message_id.unwrap_or("msg").to_string()).or_default();
+                let offset = *seen;
+                *seen += items.len();
+                for (index,it) in items.iter().enumerate() {
                     match it.get("type").and_then(Value::as_str) {
                         Some("text") => {
                             if let Some(s) = it.get("text").and_then(Value::as_str) {
@@ -435,6 +466,9 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
                                 // written to the recording. It says nothing; showing it would only
                                 // litter the conversation with the same line after every `/effort`.
                                 if !s.is_empty() && s != NO_RESPONSE_PLACEHOLDER {
+                                    if let Some(id) = message_id {
+                                        identities.insert(out.len(),format!("{id}:{}",offset+index));
+                                    }
                                     out.push(Event::AssistantText {
                                         text: s.to_string(),
                                         ts: ts.clone(),
@@ -480,13 +514,27 @@ pub(crate) fn claude_events(content: &str) -> Vec<Event> {
             }
             _ => {}
         }
+        if v["type"] == "user" {
+            if let Some(id) = v["uuid"].as_str() {
+                for (index,event) in out.iter().enumerate().skip(first) {
+                    if matches!(event,Event::User { .. }) {identities.insert(index,id.to_string());}
+                }
+            }
+        }
     }
-    out
+    out.into_iter().enumerate().map(|(index,event)|(event,identities.remove(&index))).collect()
 }
 
 /// Append a genuine user message, discarding empty text and injected blocks.
 fn push_user_text(out: &mut Vec<Event>, text: &str, ts: Option<String>) {
     let text = text.trim();
+    // Only a notification recorded as a message of its own opened a turn. One that arrives while the
+    // agent is busy is recorded as a queued attachment instead and never reaches this point.
+    if text.starts_with(TASK_NOTIFICATION) {
+        let summary = between(text, "<summary>", "</summary>").unwrap_or_default();
+        out.push(Event::Wake { summary, ts });
+        return;
+    }
     if text.is_empty() || is_injected_context(text) {
         return;
     }

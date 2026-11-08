@@ -5,13 +5,15 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import Icons from "../../../components/Icons";
 import { fmtTokens } from "../../../format";
 import { dateLocale, useT, type I18nKey } from "../../../i18n";
 import {
   chatSnapshot,
   chatStopTask,
-  chatSubagentRows,
+  chatSubagentSnapshot,
+  chatReadCancel,
+  inheritChatRowContext,
+  type ChatSnapshot,
   chatTaskOutput,
   extrasOf,
   isTaskFinished,
@@ -29,13 +31,7 @@ import { kindIconEl } from "../../sessionViewers/sessionMeta";
 import { assistantLabel } from "../../sessionViewers/TranscriptViewer";
 import { Entry } from "./ConversationRows";
 import { groupToolRuns, markAgentTurns } from "./toolRuns";
-
-/** The icon a task kind is drawn with, here and on its tab. */
-export function taskIcon(taskType: string) {
-  if (taskType === "local_workflow") return Icons.layers;
-  if (taskType === "local_agent") return Icons.bot;
-  return Icons.terminal;
-}
+import { fmtElapsed, taskIcon } from "./taskMeta";
 
 /** The label key for a task status; unknown values are shown as the agent wrote them. */
 export function taskStatusKey(status: string | undefined): I18nKey | null {
@@ -59,16 +55,6 @@ export function taskStatusKey(status: string | undefined): I18nKey | null {
     default:
       return null;
   }
-}
-
-/** "1:05" or "1:02:03": the duration format the phase list and the elapsed figure share. */
-export function fmtElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const seconds = total % 60;
-  const minutes = Math.floor(total / 60) % 60;
-  const hours = Math.floor(total / 3600);
-  const mm = hours ? String(minutes).padStart(2, "0") : String(minutes);
-  return `${hours ? `${hours}:` : ""}${mm}:${String(seconds).padStart(2, "0")}`;
 }
 
 /** Advance a backend duration using only the time since this client received it. */
@@ -133,7 +119,7 @@ export function TaskView({ tab, hidden }: { tab: TaskTab; hidden: boolean }) {
       const request = ++requestVersion;
       const version = eventVersion;
       try {
-        const snapshot = await chatSnapshot(tab.sessionId, {});
+        const snapshot = await chatSnapshot(tab.sessionId, { controlOnly: true });
         if (!disposed && request === requestVersion && version === eventVersion) {
           apply(extrasOf(snapshot).backgroundTasks);
         }
@@ -358,6 +344,11 @@ const ignoreRewindRequest = () => {};
 function SubagentConversation({ sessionId, taskId, live, hidden }: { sessionId: string; taskId: string; live: boolean; hidden: boolean }) {
   const t = useT();
   const [rows, setRows] = useState<ChatRow[] | null>(null);
+  const [page,setPage]=useState<ChatSnapshot>();
+  const reader=useRef<string | undefined>(undefined);
+  const pageRef=useRef<ChatSnapshot | undefined>(undefined);
+  const loadPage=useRef<(direction?:"before"|"after")=>Promise<void>>(async()=>{});
+  const [pageBusy,setPageBusy]=useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(() => new Set());
   const sectionRef = useRef<HTMLElement>(null);
@@ -372,28 +363,38 @@ function SubagentConversation({ sessionId, taskId, live, hidden }: { sessionId: 
     if (hidden) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let last = "";
-    const load = async () => {
+    let inFlight=false;
+    const load = async (direction?:"before"|"after") => {
+      if (inFlight) return;
+      inFlight=true;setPageBusy(true);clearTimeout(timer);
       try {
-        const value = await chatSubagentRows(sessionId, taskId);
-        const text = JSON.stringify(value);
-        if (!disposed && text !== last) {
-          last = text;
+        const known=pageRef.current;
+        const value = await chatSubagentSnapshot(sessionId, taskId,{
+          ...(direction==="before" ? {before:known?.rows[0]?.id} : direction==="after" ? {after:known?.rows.at(-1)?.id}
+            : known?.hasNewer ? {anchor:known.rows.at(-1)?.id} : {}),readJobId:reader.current,
+        });
+        if (disposed) {if (value.readJobId) void chatReadCancel(sessionId,value.readJobId).catch(()=>{});return;}
+        reader.current=value.readJobId;pageRef.current=value;setPage(value);
+        if (!disposed) {
           const scroller = sectionRef.current?.closest(".sv-task-view");
           follow.current = !scroller || scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 8;
-          setRows(value);
+          setRows(value.rows);
         }
         if (!disposed) setUnavailable(false);
       } catch {
         // Keep what was last read; the recording may not exist until the subagent writes its first step.
         if (!disposed) setUnavailable(true);
       }
-      if (!disposed && live) timer = setTimeout(() => void load(), OUTPUT_POLL_MS);
+      inFlight=false;if (!disposed) setPageBusy(false);
+      if (!disposed && (live || pageRef.current?.indexing)) timer = setTimeout(() => void load(), OUTPUT_POLL_MS);
     };
+    loadPage.current=load;
     void load();
     return () => {
       disposed = true;
       clearTimeout(timer);
+      if (reader.current) void chatReadCancel(sessionId,reader.current).catch(()=>{});
+      reader.current=undefined;
     };
   }, [sessionId, taskId, live, hidden]);
 
@@ -407,7 +408,7 @@ function SubagentConversation({ sessionId, taskId, live, hidden }: { sessionId: 
     // The prompt came from the parent conversation, not from the person reading it.
     const attributed = rows.map((row, index) =>
       index === 0 && row.kind === "user" && !row.origin && parent
-        ? { ...row, origin: { sessionId, name: parent.name, agent: parent.kind, role: "session" as const } }
+        ? inheritChatRowContext(row,{ ...row, origin: { sessionId, name: parent.name, agent: parent.kind, role: "session" as const } })
         : row,
     );
     return markAgentTurns(groupToolRuns(attributed));
@@ -424,6 +425,8 @@ function SubagentConversation({ sessionId, taskId, live, hidden }: { sessionId: 
   return (
     <section className="sv-task-section sv-task-conversation" ref={sectionRef}>
       <h3>{t("chat.tasks.conversation")}</h3>
+      {page?.hasMore && <button className="vlx-btn" disabled={pageBusy} onClick={()=>void loadPage.current("before")}>{t("chat.sync.history")}</button>}
+      {page?.indexing && <div className="sv-sync-state sv-loading-hint" role="status">{t("chat.history.indexing")}</div>}
       {!rows ? (
         <div className="sv-task-empty">{t("chat.tasks.conversationUnavailable")}</div>
       ) : entries.length === 0 ? (
@@ -444,6 +447,7 @@ function SubagentConversation({ sessionId, taskId, live, hidden }: { sessionId: 
           </div>
         ))
       )}
+      {page?.hasNewer && <button className="vlx-btn" disabled={pageBusy} onClick={()=>void loadPage.current("after")}>{t("chat.history.newer")}</button>}
     </section>
   );
 }

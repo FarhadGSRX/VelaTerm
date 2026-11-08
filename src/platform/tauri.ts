@@ -24,6 +24,7 @@ import {
   requestEffectiveNotifyPermission,
   requestNotifyPermission,
 } from "../notify";
+import { ClipboardUnresponsiveError, reportClipboardUnresponsive } from "./clipboardStall";
 import { env } from "./env";
 import type {
   BadgeCapability,
@@ -41,6 +42,7 @@ import type {
   QuitRequest,
   TransportCapability,
   UnlistenFn,
+  UpdateDownloadEvent,
   UpdaterCapability,
   VelaCommandCapability,
   WindowCapability,
@@ -116,9 +118,30 @@ const badge: BadgeCapability = {
   },
 };
 
+/**
+ * Local windows wait for the clipboard to become readable before touching it, so a stalled source fails this
+ * read instead of leaving a stuck read inside the app (see clipboard_gate.rs). Remote windows cannot call
+ * application commands; a rejected invoke means this check is unavailable, not that the clipboard is stuck.
+ */
+async function ensureClipboardResponsive(): Promise<void> {
+  if (!env.isTauri) return;
+  let ready = true;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    ready = await invoke<boolean>("clipboard_wait_ready");
+  } catch {
+    return;
+  }
+  if (!ready) {
+    reportClipboardUnresponsive();
+    throw new ClipboardUnresponsiveError();
+  }
+}
+
 const clipboard: ClipboardCapability = {
   writeText: copyText,
   async readText() {
+    await ensureClipboardResponsive();
     // Native main and remote windows read through the local plugin, symmetric with copyText. On
     // Windows this avoids WebView2's clipboard-read permission prompt because plugin IPC bypasses web
     // permissions. The main capability and runtime remote-window capability must allow read-text.
@@ -141,6 +164,7 @@ const clipboard: ClipboardCapability = {
   },
   async readImage() {
     if (!env.isTauri) return null;
+    await ensureClipboardResponsive();
     const { readImage } = await import("@tauri-apps/plugin-clipboard-manager");
     const image = await readImage();
     try {
@@ -174,10 +198,13 @@ const windowCap: WindowCapability = {
     if (!env.hasNativeHost) return null;
     // Local backend events must use the local Tauri channel, not transport. A remote window's
     // transport sends listeners to the remote WebSocket and cannot reach its local backend.
+    // Listen for this window's label only: the backend addresses a click to the window that posted the
+    // notification, and a bare listen would let every other window open the session too.
     const { listen } = await import("@tauri-apps/api/event");
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     return listen<string>("notification://click", (e) => {
       if (e.payload) cb(e.payload);
-    });
+    }, { target: getCurrentWindow().label });
   },
   async takeOpenProjectRequest() {
     if (!env.isTauri) return null;
@@ -197,7 +224,10 @@ const quit: QuitCapability = {
     if (!env.isTauri) return null;
     const { listen } = await import("@tauri-apps/api/event");
     return listen<Partial<QuitRequest> | null>("app://quit-requested", (event) =>
-      cb({ remoteWindows: event.payload?.remoteWindows ?? 0 }),
+      cb({
+        remoteWindows: event.payload?.remoteWindows ?? 0,
+        closeWindow: event.payload?.closeWindow ?? false,
+      }),
     );
   },
   async ack() {
@@ -273,12 +303,31 @@ const browser: BrowserCapability = {
     transportListen<BrowserPopupPayload>(`browser://popup/${tabId}`, (payload) => cb(payload)),
 };
 
+/** Windows, detected the same way as notify.ts; `env` only distinguishes macOS. */
+const isWindows = !env.isMac && /Win/i.test(navigator.userAgent);
+
+/**
+ * Windows final update step: the backend downloads through the updater plugin (signature verified), saves
+ * the installer in VelaTerm's own data folder rather than the plugin's Temp folder, starts it and exits.
+ * See src-tauri/src/updater_win.rs. Resolves only if installation could not start.
+ */
+async function installWindowsUpdate(rid: number, onEvent?: (event: UpdateDownloadEvent) => void): Promise<void> {
+  const { Channel, invoke } = await import("@tauri-apps/api/core");
+  const channel = new Channel<UpdateDownloadEvent>();
+  if (onEvent) channel.onmessage = onEvent;
+  await invoke("updater_install_windows", { rid, onEvent: channel });
+}
+
 /** Updater plugin on the desktop; browsers and remote windows do not self-update. */
 const updater: UpdaterCapability = {
   supported: env.isTauri,
   async check(headers) {
     const { check } = await import("@tauri-apps/plugin-updater");
-    return check(headers ? { headers } : undefined);
+    const update = await check(headers ? { headers } : undefined);
+    if (update && isWindows) {
+      update.downloadAndInstall = (onEvent) => installWindowsUpdate(update.rid, onEvent);
+    }
+    return update;
   },
   async relaunch() {
     const { relaunch } = await import("@tauri-apps/plugin-process");

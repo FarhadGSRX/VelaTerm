@@ -18,6 +18,13 @@ pub fn list_request(id: &str, cwd: Option<&str>) -> Value {
     }))
 }
 
+/// Skills from plugins installed on the ChatGPT account arrive a few seconds after the app-server starts,
+/// and Codex sends no `skills/changed` when they do: a list asked for at startup holds only the local ones.
+/// The answer to this request marks the account's plugins as synced, so the list is asked for again then.
+pub fn plugin_sync_request(id: &str) -> Value {
+    codex_protocol::request(id, "plugin/reconcile", json!({"reason": "skill catalogue"}))
+}
+
 pub fn codex_commands(result: &Value) -> Result<Vec<Value>, String> {
     let groups = result.get("data").and_then(Value::as_array)
         .ok_or("Codex returned an invalid skill catalogue")?;
@@ -38,8 +45,9 @@ pub fn codex_commands(result: &Value) -> Result<Vec<Value>, String> {
             if !names.insert(name) { continue; }
             commands.push(json!({
                 "name": name,
-                "description": skill.pointer("/interface/shortDescription")
-                    .or_else(|| skill.get("description")).and_then(Value::as_str).unwrap_or(""),
+                // A plugin skill's interface often carries `shortDescription: null`.
+                "description": skill.pointer("/interface/shortDescription").and_then(Value::as_str)
+                    .or_else(|| skill.get("description").and_then(Value::as_str)).unwrap_or(""),
                 "invocation": "$", "skillPath": path
             }));
         }
@@ -138,23 +146,42 @@ pub fn lookup(kind: SessionKind, bin: &str, cwd: Option<&str>, args: &[String]) 
             else { protocol::control_request("skills_init", protocol::initialize()) };
         writeln!(stdin, "{init}").and_then(|_| stdin.flush()).map_err(|e| e.to_string())?;
         let deadline = Instant::now() + Duration::from_secs(20);
+        // Account plugins can take a slow network's time to sync; past this the local skills are offered.
+        let sync_deadline = Instant::now() + Duration::from_secs(10);
+        // The list Codex gives before account plugins sync, kept in case the sync does not finish.
+        let mut local = None;
+        let send = |stdin: &mut std::process::ChildStdin, req: Value| {
+            writeln!(stdin, "{req}").and_then(|_| stdin.flush()).map_err(|e| e.to_string())
+        };
         loop {
-            let line = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| "The agent did not return its skill catalogue. Reopen the completion menu to retry.".to_string())?;
+            let until = if local.is_some() { sync_deadline.min(deadline) } else { deadline };
+            let line = match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+                Ok(line) => line,
+                Err(_) => return local.unwrap_or_else(||
+                    Err("The agent did not return its skill catalogue. Reopen the completion menu to retry.".into())),
+            };
             let Ok(value) = serde_json::from_str::<Value>(&line) else { continue; };
             if kind == SessionKind::Claude {
                 if value.pointer("/response/request_id").and_then(Value::as_str) == Some("skills_init") {
                     return claude_commands(&value["response"]["response"]);
                 }
             } else if let Some(id) = value["id"].as_str() {
-                if value.get("error").is_some() {
-                    return Err("Codex could not read its skill catalogue. Reopen the completion menu to retry.".into());
-                }
-                if id == "skills_init" {
-                    for req in [codex_protocol::initialized(), list_request("skills_list", cwd)] {
-                        writeln!(stdin, "{req}").and_then(|_| stdin.flush()).map_err(|e| e.to_string())?;
+                match id {
+                    // A failed sync, as under an API key, leaves the local list as the whole catalogue.
+                    "skills_sync" => send(&mut stdin, list_request("skills_list_synced", cwd))?,
+                    _ if value.get("error").is_some() => {
+                        return Err("Codex could not read its skill catalogue. Reopen the completion menu to retry.".into());
                     }
-                } else if id == "skills_list" { return codex_commands(&value["result"]); }
+                    "skills_init" => {
+                        for req in [codex_protocol::initialized(), list_request("skills_list", cwd),
+                            plugin_sync_request("skills_sync")] {
+                            send(&mut stdin, req)?;
+                        }
+                    }
+                    "skills_list" => local = Some(codex_commands(&value["result"])),
+                    "skills_list_synced" => return codex_commands(&value["result"]),
+                    _ => {}
+                }
             }
         }
     })();
@@ -171,7 +198,8 @@ mod tests {
         codex_commands(&json!({"data":[{"skills":[
             {"name":"vspawn","description":"Spawn a session","path":"/skills/vspawn/SKILL.md","enabled":true},
             {"name":"compact","path":"/skills/compact/SKILL.md","enabled":true},
-            {"name":"plugin:review","path":"/skills/review/SKILL.md","enabled":true},
+            {"name":"plugin:review","description":"Review a change","interface":{"shortDescription":null},
+                "path":"/skills/review/SKILL.md","enabled":true},
             {"name":"disabled","path":"/skills/disabled/SKILL.md","enabled":false}
         ],"errors":[]}]})).unwrap()
     }
@@ -182,6 +210,7 @@ mod tests {
         assert_eq!(commands.len(), 3);
         assert_eq!(commands[0]["invocation"], "$");
         assert_eq!(commands[0]["skillPath"], "/skills/vspawn/SKILL.md");
+        assert_eq!(commands[2]["description"], "Review a change");
         assert!(codex_commands(&json!({})).is_err());
         assert!(codex_commands(&json!({"data":[{"skills":[],"errors":[{"message":"invalid file"}]}]})).is_err());
         assert!(codex_commands(&json!({"data":[{"skills":[],"errors":[]}]})).unwrap().is_empty());

@@ -43,19 +43,6 @@ curl -s -m 3 -X POST -H "Content-Type: application/json" --data-binary @- \
 exit 0
 "#;
 
-/// Windows PowerShell hook with the same empty-output semantics as `SH_SCRIPT`.
-const PS1_SCRIPT: &str = r#"# vlx-term status bridge hook (auto-installed by vlx-term; safe to delete).
-# Only active in crush sessions launched by vlx-term (reads VLX_* env vars).
-$body = [Console]::In.ReadToEnd()
-if ($env:VLX_SPAWN_URL -and $env:VLX_SESSION_ID -and $env:VLX_TOKEN) {
-  try {
-    Invoke-RestMethod -Method Post -ContentType 'application/json' -TimeoutSec 3 -Body $body `
-      -Uri "$($env:VLX_SPAWN_URL)/hook/$($env:VLX_SESSION_ID)?t=$($env:VLX_TOKEN)&e=working" | Out-Null
-  } catch {}
-}
-# Emit nothing: exit 0 + empty stdout = crush treats as "no opinion", normal permission flow.
-"#;
-
 /// Shadow configuration directory selected by `CRUSH_GLOBAL_CONFIG`: `<data_dir>/crush`.
 pub fn config_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("crush")
@@ -66,31 +53,33 @@ fn config_path(data_dir: &Path) -> PathBuf {
     config_dir(data_dir).join("crush.json")
 }
 
-/// Hook script path: `<data_dir>/crush/hook.sh`, or `hook.ps1` on Windows.
+/// Unix hook script path: `<data_dir>/crush/hook.sh`.
 fn hook_script_path(data_dir: &Path) -> PathBuf {
-    let name = if cfg!(windows) { "hook.ps1" } else { "hook.sh" };
-    config_dir(data_dir).join(name)
+    config_dir(data_dir).join("hook.sh")
 }
 
-/// Command field string. Crush passes payload through stdin, so no event argument is needed. Unix invokes
-/// the executable shebang script directly; Windows uses `powershell -File` with a quoted path.
-fn hook_command(script: &Path) -> String {
+/// PowerShell bridge written by earlier Windows versions, deleted on install.
+fn legacy_ps1_path(data_dir: &Path) -> PathBuf {
+    config_dir(data_dir).join("hook.ps1")
+}
+
+/// Command field string for `target`. Crush passes payload through stdin, so no event argument is needed.
+/// Unix runs the shebang script directly. Windows calls the VelaTerm executable's native bridge instead of a
+/// script; Crush runs hook commands through its embedded POSIX shell on every platform, so POSIX quoting applies.
+fn hook_command(target: &Path) -> String {
     if cfg!(windows) {
-        format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
-            script.display()
-        )
+        super::hook_bridge::command(target, super::hook_bridge::Shell::Posix, "--agent-hook crush working")
     } else {
-        script.display().to_string()
+        target.display().to_string()
     }
 }
 
 /// PreToolUse entry omitting matcher to cover all tools, using a namespaced name for deduplication and a
-/// generous timeout beyond curl's own limit to prevent a hung script from blocking tool calls.
-fn hook_entry(script: &Path) -> serde_json::Value {
+/// generous timeout beyond the bridge's own limit to prevent a hung hook from blocking tool calls.
+fn hook_entry(target: &Path) -> serde_json::Value {
     serde_json::json!({
         "name": HOOK_NAME,
-        "command": hook_command(script),
+        "command": hook_command(target),
         "timeout": 5
     })
 }
@@ -100,7 +89,7 @@ fn hook_entry(script: &Path) -> serde_json::Value {
 ///
 /// Structural guards prefer no injection over damaged settings: root must be an object; missing hooks is
 /// created but a nonobject errors; missing PreToolUse is created but a nonarray errors.
-fn merge_into(root: &mut serde_json::Value, script: &Path) -> Result<(), String> {
+fn merge_into(root: &mut serde_json::Value, target: &Path) -> Result<(), String> {
     let obj = root
         .as_object_mut()
         .ok_or("crush.json root is not a JSON object")?;
@@ -116,7 +105,7 @@ fn merge_into(root: &mut serde_json::Value, script: &Path) -> Result<(), String>
         .ok_or("crush.json `hooks.PreToolUse` is not an array")?;
     // Remove same-name entries and stale paths before appending the current entry.
     arr.retain(|e| e.get("name").and_then(|n| n.as_str()) != Some(HOOK_NAME));
-    arr.push(hook_entry(script));
+    arr.push(hook_entry(target));
     Ok(())
 }
 
@@ -155,9 +144,9 @@ fn read_user_config() -> Result<serde_json::Value, String> {
     parse_user_config(existing.as_deref())
 }
 
-/// Install the hook script, preserving matching content/mtime and setting Unix mode 0o755.
+/// Install the Unix hook script, preserving matching content/mtime and setting mode 0o755.
 fn write_script(script: &Path) -> Result<(), String> {
-    let body = if cfg!(windows) { PS1_SCRIPT } else { SH_SCRIPT };
+    let body = SH_SCRIPT;
     let current = std::fs::read_to_string(script)
         .map(|s| s == body)
         .unwrap_or(false);
@@ -193,19 +182,26 @@ fn write_if_changed(path: &Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Install the script, clone user crush.json with our hook into `<data_dir>/crush/crush.json`, and return
-/// `<data_dir>/crush` for `CRUSH_GLOBAL_CONFIG`.
+/// Install the bridge, clone user crush.json with our hook into `<data_dir>/crush/crush.json`, and return
+/// `<data_dir>/crush` for `CRUSH_GLOBAL_CONFIG`. Unix writes `hook.sh`; Windows points the hook at `exe` and
+/// removes the PowerShell script earlier versions wrote.
 ///
 /// Called lazily on every launch so the clone follows current user settings. Matching files are not rewritten.
 ///
 /// Unwritable data, invalid JSON, or malformed structure returns Err for logging. Crush starts without the
-/// override using its own configuration, losing authoritative working/session ID but retaining screen fallback.
-pub fn install(data_dir: &Path) -> Result<PathBuf, String> {
-    let script = hook_script_path(data_dir);
+/// override using its own configuration, losing hook-reported working/session ID but retaining screen fallback.
+pub fn install(data_dir: &Path, exe: &Path) -> Result<PathBuf, String> {
     let config = config_path(data_dir);
-    write_script(&script)?;
+    let target = if cfg!(windows) {
+        let _ = std::fs::remove_file(legacy_ps1_path(data_dir));
+        exe.to_path_buf()
+    } else {
+        let script = hook_script_path(data_dir);
+        write_script(&script)?;
+        script
+    };
     let mut root = read_user_config()?;
-    merge_into(&mut root, &script)?;
+    merge_into(&mut root, &target)?;
     let content = serde_json::to_string_pretty(&root)
         .map_err(|e| format!("Failed to serialize crush.json: {e}"))?;
     write_if_changed(&config, &content)?;
@@ -223,10 +219,15 @@ mod tests {
         dir
     }
 
+    /// Executable path handed to `install`; only Windows embeds it in the hook command.
+    #[cfg(unix)]
+    const EXE: &str = "/opt/VelaTerm/velaterm";
+
+    #[cfg(unix)]
     #[test]
     fn install_writes_script_and_config_with_our_hook() {
         let data_dir = tmp_dir("fresh");
-        let dir = install(&data_dir).expect("installation should succeed");
+        let dir = install(&data_dir, Path::new(EXE)).expect("installation should succeed");
         assert_eq!(dir, config_dir(&data_dir));
 
         // The installed Unix script is executable, emits e=working, and never returns decision allow.
@@ -237,7 +238,6 @@ mod tests {
         );
         assert!(script.contains("e=working"), "the script should report working");
         assert!(!script.contains("decision"), "the script only observes and never returns an allow/deny decision");
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(hook_script_path(&data_dir))
@@ -265,10 +265,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&data_dir);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn install_calls_the_native_bridge_without_a_powershell_script() {
+        let data_dir = tmp_dir("native");
+        std::fs::create_dir_all(config_dir(&data_dir)).unwrap();
+        std::fs::write(legacy_ps1_path(&data_dir), "# old bridge").unwrap();
+        let exe = data_dir.join("velaterm.exe");
+        install(&data_dir, &exe).expect("installation should succeed");
+        assert!(!legacy_ps1_path(&data_dir).exists(), "the earlier PowerShell bridge should be removed");
+        assert!(!hook_script_path(&data_dir).exists(), "Windows writes no hook script");
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(config_path(&data_dir)).unwrap()).unwrap();
+        let command = v["hooks"]["PreToolUse"][0]["command"].as_str().unwrap();
+        assert!(command.ends_with("' --agent-hook crush working"), "{command}");
+        assert!(!command.to_ascii_lowercase().contains("powershell"), "{command}");
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn install_is_idempotent() {
         let data_dir = tmp_dir("idem");
-        install(&data_dir).unwrap();
+        install(&data_dir, Path::new(EXE)).unwrap();
         let cfg_mtime = std::fs::metadata(config_path(&data_dir))
             .unwrap()
             .modified()
@@ -277,7 +296,7 @@ mod tests {
             .unwrap()
             .modified()
             .unwrap();
-        install(&data_dir).unwrap();
+        install(&data_dir, Path::new(EXE)).unwrap();
         assert_eq!(
             std::fs::metadata(config_path(&data_dir))
                 .unwrap()

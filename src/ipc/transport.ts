@@ -8,6 +8,7 @@
 
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { t } from "../i18n";
 import { genId } from "../genId";
@@ -15,6 +16,8 @@ import { recordRequestError } from "./reqLog";
 import { safeCommand, safeError, diagnosticOperation } from "./diagnosticSafety";
 import { apiUrl } from "./shareBase";
 import { wsClient, bytesToB64 } from "./wsClient";
+import { acceptsHistoryProtocol, historyProtocolError, requiresHistoryProtocol } from "./historyCapability";
+import { mapBackendError } from "./backendError";
 import type { SessionKind } from "../types";
 
 /** Whether this is a Tauri WebView rather than browser remote access. Remote-connection windows are physically
@@ -133,6 +136,7 @@ const DIRECT_DESKTOP_CMDS = new Set([
   "ssh_trust_host",
   "ssh_connect",
   "wsl_connect",
+  "connect_cancel",
   "ssh_disconnect",
   "browser_open",
   "browser_navigate",
@@ -161,6 +165,9 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
     if (tracked) diagnosticEvent("request", { requestId, command: safeCommand(cmd), status: "success", clientDurationMs: Math.round(performance.now() - started) });
     return result;
   }).catch((err) => {
+    const raw = err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
+    const localized = raw === undefined ? undefined : mapBackendError(raw);
+    if (raw !== localized) err = err instanceof Error ? new Error(localized) : localized;
     if (tracked) diagnosticEvent("request", { requestId, command: safeCommand(cmd), status: "failed", errorCode: safeError(err), clientDurationMs: Math.round(performance.now() - started) });
     // User-canceled clone is handled control flow, not a global error; cleanup failures return another error.
     const message = String(err);
@@ -174,11 +181,25 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
 let pendingDiagnostics = 0;
 
 /** Submit only fixed diagnostic events. Delivery failure never re-enters request error logging. */
-export function diagnosticEvent(event: "request" | "shell_switch" | "restart" | "pty_output" | "ws_state" | "pty_spawn" | "input_latency", fields: Record<string, unknown>): void {
+export function diagnosticEvent(event: "request" | "shell_switch" | "restart" | "pty_output" | "ws_state" | "pty_spawn" | "input_latency" | "startup_ui", fields: Record<string, unknown>): void {
   if (pendingDiagnostics >= 24 || (!isTauri && !wsClient.isDiagnosticReady())) return;
   pendingDiagnostics++;
   void invokeInner("diagnostic_event", { operationId: diagnosticOperation(fields.sessionId), ...fields, event })
     .catch(() => {}).finally(() => { pendingDiagnostics--; });
+}
+
+let desktopHistoryProtocol: Promise<void> | undefined;
+
+function requireDesktopHistoryProtocol(): Promise<void> {
+  // A new command is safe to probe: an old dispatcher rejects its name without reading history.
+  // Never probe chat_snapshot with a new flag that an older backend could silently ignore.
+  return desktopHistoryProtocol ??= tauriInvoke<{ historyProtocol?: number }>("desktop_call", { cmd: "chat_capabilities", args: {} })
+    .then(result => { if (!acceptsHistoryProtocol(result?.historyProtocol)) throw historyProtocolError(); })
+    .catch(error => {
+      if (/Unknown command: chat_capabilities|history_protocol_unsupported:/.test(String(error))) throw historyProtocolError();
+      desktopHistoryProtocol = undefined;
+      throw error;
+    });
 }
 
 function invokeInner<T>(cmd: string, args?: Record<string, unknown>, diagnostic?: { requestId: string; operationId?: string }): Promise<T> {
@@ -198,6 +219,11 @@ function invokeInner<T>(cmd: string, args?: Record<string, unknown>, diagnostic?
   }
   // Browser/remote continues through WebSocket and web/dispatch.rs.
   if (!isTauri) return wsClient.invoke<T>(cmd, args, diagnostic);
+  if (requiresHistoryProtocol(cmd)) {
+    return requireDesktopHistoryProtocol().then(() => tauriInvoke<T>("desktop_call", {
+      cmd, args: args ?? {}, diagnosticRequestId: diagnostic?.requestId, diagnosticOperationId: diagnostic?.operationId,
+    }));
+  }
   // Desktop invokes whitelisted native commands directly and routes everything else through desktop_call.
   return DIRECT_DESKTOP_CMDS.has(cmd)
     ? tauriInvoke<T>(cmd, diagnostic ? { ...args, diagnosticRequestId: diagnostic.requestId, diagnosticOperationId: diagnostic.operationId } : args)
@@ -248,6 +274,19 @@ export function listenNative<T>(
   cb: (payload: T) => void,
 ): Promise<UnlistenFn> {
   return tauriListen<T>(name, (e) => cb(e.payload));
+}
+
+/**
+ * Like `listenNative`, but only for events the desktop process addresses to this window with
+ * `emit_to(label, …)`. A bare Tauri `listen` defaults to target Any and also receives events addressed to
+ * every other window, so one menu action or notification click would act in the main window and in every
+ * remote window at once. Events broadcast to all windows with `emit` still arrive.
+ */
+export function listenOwnWindow<T>(
+  name: string,
+  cb: (payload: T) => void,
+): Promise<UnlistenFn> {
+  return tauriListen<T>(name, (e) => cb(e.payload), { target: getCurrentWindow().label });
 }
 
 // PTY output streams.

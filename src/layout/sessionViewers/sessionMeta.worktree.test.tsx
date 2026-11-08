@@ -7,11 +7,15 @@ import type { Session } from "../../types";
 
 const mocks = vi.hoisted(() => ({
   getSessionCwd: vi.fn(),
-  getGitStatus: vi.fn(),
+  getGitBranchInfo: vi.fn(),
 }));
 
-vi.mock("../../ipc/commands", () => ({ getSessionCwd: mocks.getSessionCwd }));
-vi.mock("../../ipc/info", () => ({ getGitStatus: mocks.getGitStatus }));
+vi.mock("../../ipc/commands", () => ({
+  getSessionCwd: mocks.getSessionCwd,
+  gitWatch: () => Promise.resolve({ root: "/repo", supported: true }),
+}));
+vi.mock("../../ipc/events", () => ({ onFsChanged: () => Promise.resolve(() => {}) }));
+vi.mock("../../ipc/info", () => ({ getGitBranchInfo: mocks.getGitBranchInfo }));
 vi.mock("../../i18n", () => ({
   dateLocale: () => "en-US",
   useT: () => (key: string) => key,
@@ -35,7 +39,7 @@ describe("SessionKindIcon worktree badge", () => {
   it("detects a worktree from the running process cwd when metadata is absent", async () => {
     const path = "/repo/.claude/worktrees/task";
     mocks.getSessionCwd.mockResolvedValue(path);
-    mocks.getGitStatus.mockResolvedValue({
+    mocks.getGitBranchInfo.mockResolvedValue({
       isRepo: true,
       branch: "task",
       isWorktree: true,
@@ -54,7 +58,7 @@ describe("SessionKindIcon worktree badge", () => {
     const { container } = render(<SessionKindIcon session={session} />);
 
     await waitFor(() => expect(mocks.getSessionCwd).toHaveBeenCalledWith("child"));
-    await waitFor(() => expect(mocks.getGitStatus).toHaveBeenCalledWith(path));
+    await waitFor(() => expect(mocks.getGitBranchInfo).toHaveBeenCalledWith(path));
     await waitFor(() => expect(container.querySelector(".wt-badge")).not.toBeNull());
   });
 });

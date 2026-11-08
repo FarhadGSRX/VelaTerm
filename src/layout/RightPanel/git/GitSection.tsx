@@ -1,24 +1,35 @@
 //! Collapsible group header for the Git panel: a disclosure arrow, a title, its count, and the
-//! action that applies to the whole group. The action only appears when the group has rows, so an
+//! actions that apply to the whole group. The actions only appear when the group has rows, so an
 //! empty group stays a quiet single line.
 
 import Icons from "../../../components/Icons";
+
+/** One right-aligned group action, such as Stage all or Discard all. */
+export interface SectionAction {
+  key: string;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  icon?: React.ReactNode;
+  danger?: boolean;
+}
 
 export function GitSection({
   title,
   count,
   open,
   onToggle,
-  action,
+  actions = [],
   children,
+  view,
 }: {
   title: string;
   count: number;
   open: boolean;
   onToggle: () => void;
-  /** Right-aligned group action, such as Stage all or View all. */
-  action?: { label: string; onClick: () => void; disabled?: boolean };
+  actions?: SectionAction[];
   children?: React.ReactNode;
+  view?: { label: string; onClick: () => void };
 }) {
   return (
     <div className="git-sec">
@@ -26,6 +37,7 @@ export function GitSection({
         <button
           type="button"
           className="git-sec-toggle"
+          title={title}
           onClick={onToggle}
           aria-expanded={open}
         >
@@ -33,18 +45,53 @@ export function GitSection({
           <span className="ttl">{title}</span>
           <span className="cnt">{count}</span>
         </button>
-        {action && count > 0 && (
+        {view && count > 0 && <button type="button" className="git-sec-act git-view-all" onClick={view.onClick}>{view.label}</button>}
+        {count > 0 && actions.map((action) => (
           <button
+            key={action.key}
             type="button"
-            className="git-sec-act"
+            className={"git-sec-act" + (action.danger ? " danger" : "")}
+            title={action.label}
+            aria-label={action.label}
             onClick={action.onClick}
             disabled={action.disabled}
           >
-            {action.label}
+            {action.icon ?? action.label}
           </button>
-        )}
+        ))}
       </div>
       {open && children}
+    </div>
+  );
+}
+
+/** Inline confirmation for an action that destroys work: what will happen, and two buttons. */
+export function GitConfirm({
+  text,
+  confirmLabel,
+  cancelLabel,
+  disabled,
+  onConfirm,
+  onCancel,
+}: {
+  text: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  disabled?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="git-confirm" role="alertdialog" aria-label={confirmLabel}>
+      <span>{text}</span>
+      <div className="git-confirm-acts">
+        <button type="button" className="vlx-btn git-danger-btn" disabled={disabled} onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+        <button type="button" className="vlx-btn" onClick={onCancel}>
+          {cancelLabel}
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,14 +1,13 @@
-/* Keep the session title visible when localized navigation labels need more room. */
-.m-header.m-header-kiro {
-  flex-wrap: wrap;
-  padding-top: max(12px, env(safe-area-inset-top));
-  padding-bottom: 12px;
-}
-.m-header-kiro .m-session-view-link {
-  flex: 0 0 100%;
-  max-width: 100%;
-  min-height: 44px;
-  text-align: center;
-  white-space: normal;
-  overflow-wrap: anywhere;
+/* Compact switch between the terminal and its transcript. It stays in the header row as a small button so it
+   never reads as the page title; the title gives up width and truncates instead. */
+.m-header .m-session-view-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  white-space: nowrap;
+  text-decoration: none;
 }

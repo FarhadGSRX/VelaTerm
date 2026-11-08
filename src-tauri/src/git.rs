@@ -9,6 +9,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+pub mod panel;
+pub mod compare;
+pub mod remote;
+
 /// Git clone progress event, delivered directly through Tauri or forwarded globally over WebSocket.
 pub const CLONE_PROGRESS_EVENT: &str = "git://clone-progress";
 /// Stable cancellation code that lets the frontend distinguish user cancellation from failure.
@@ -130,6 +134,8 @@ pub fn cancel_clone(operation_id: &str, owner: &str) -> Result<bool, String> {
 pub struct GitStatus {
     pub is_repo: bool,
     pub branch: Option<String>,
+    /// Full HEAD identity; None before the first commit.
+    pub head: Option<String>,
     pub ahead: u32,
     pub behind: u32,
     pub staged: u32,
@@ -139,6 +145,14 @@ pub struct GitStatus {
     pub is_worktree: bool,
     /// Top-level worktree directory for frontend display; present only for linked worktrees.
     pub worktree_path: Option<String>,
+    /// Short name of the branch's upstream, such as `origin/main`; None when none is configured.
+    pub upstream: Option<String>,
+    /// Whether any remote is configured, so a branch without upstream can be published.
+    pub has_remote: bool,
+    /// Operation stopped on conflicts: `merge`, `rebase`, `cherry-pick`, or `revert`.
+    pub operation: Option<String>,
+    /// Top-level directory of the working tree; change-list paths are relative to it.
+    pub root: Option<String>,
 }
 
 impl GitStatus {
@@ -146,6 +160,7 @@ impl GitStatus {
         Self {
             is_repo: false,
             branch: None,
+            head: None,
             ahead: 0,
             behind: 0,
             staged: 0,
@@ -153,8 +168,88 @@ impl GitStatus {
             untracked: 0,
             is_worktree: false,
             worktree_path: None,
+            upstream: None,
+            has_remote: false,
+            operation: None,
+            root: None,
         }
     }
+}
+
+/// Upper bound for one background Git read. A slower scan is killed with its helpers and reported
+/// as a failure, instead of holding a thread and a process while the next refresh starts another.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Status shown by the panels describes the superproject: a submodule counts as changed when its
+/// checked-out commit moves, not when files inside it do. Looking inside costs one full status per
+/// submodule on every refresh (seconds per refresh in a workspace of JDK checkouts). This is only
+/// the default, so a submodule's own `ignore` setting still decides for that submodule.
+const SHALLOW_SUBMODULES: [&str; 2] = ["-c", "diff.ignoreSubmodules=dirty"];
+
+/// Run a read-only Git command, handing its stdout to `read` on a helper thread, within
+/// `timeout` ([`READ_TIMEOUT`] outside tests). `read` returns its result and whether it stopped
+/// early, in which case Git is killed rather than awaited. None when Git cannot start, fails, or
+/// times out.
+fn read_git<T: Send + 'static>(
+    path: &str,
+    args: &[&str],
+    timeout: Duration,
+    read: impl FnOnce(std::process::ChildStdout) -> (T, bool) + Send + 'static,
+) -> Option<T> {
+    let mut command = crate::host::command("git");
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // Own process group, so a timeout also stops the helpers Git started.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(read(stdout));
+    });
+    let deadline = Instant::now() + timeout;
+    let stop = |child: &mut std::process::Child| {
+        terminate_clone_process(child);
+        let _ = child.wait();
+    };
+    let Ok((value, stopped)) = rx.recv_timeout(timeout) else {
+        stop(&mut child);
+        return None;
+    };
+    if stopped {
+        stop(&mut child);
+        return Some(value);
+    }
+    // Stdout is closed, so Git is exiting; still bound the wait.
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success().then_some(value),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                stop(&mut child);
+                return None;
+            }
+        }
+    }
+}
+
+/// Run Git in a directory and preserve stdout bytes for NUL-delimited path records.
+fn run_git_bytes(path: &str, args: &[&str]) -> Option<Vec<u8>> {
+    read_git(path, args, READ_TIMEOUT, |mut stdout| {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        (buf, false)
+    })
 }
 
 /// Run Git in a directory and return stdout with only the trailing newline removed.
@@ -163,16 +258,8 @@ impl GitStatus {
 /// column 0, so an unstaged-only change starts with a space (` M README.md`); trimming the whole
 /// output eats that space on the first line, shifting every column after it.
 fn run_git_raw(path: &str, args: &[&str]) -> Option<String> {
-    let output = crate::host::command("git")
-        .arg("-C")
-        .arg(path)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let output = run_git_bytes(path, args)?;
+    let text = String::from_utf8_lossy(&output);
     Some(text.trim_end_matches(['\n', '\r']).to_string())
 }
 
@@ -181,62 +268,61 @@ fn run_git(path: &str, args: &[&str]) -> Option<String> {
     run_git_raw(path, args).map(|s| s.trim().to_string())
 }
 
+/// Resolve branch/worktree metadata without reading the index or scanning any files.
+pub fn branch_info(path: &str) -> GitStatus {
+    let read = |args: &[&str]| remote::run_headless(path, args, Duration::from_secs(5));
+    let Ok(locations) = read(&[
+        "rev-parse", "--is-inside-work-tree", "--absolute-git-dir", "--git-common-dir", "--show-toplevel",
+    ]) else { return GitStatus::not_repo(); };
+    let mut lines = locations.lines();
+    if lines.next().map(str::trim) != Some("true") { return GitStatus::not_repo(); }
+    let git_dir = lines.next().map(str::trim);
+    let common_dir = lines.next().map(str::trim);
+    let root = lines.next().map(str::trim).map(str::to_string);
+    let resolve = |p: &str| std::fs::canonicalize(std::path::Path::new(path).join(p)).ok();
+    let is_worktree = match (git_dir.and_then(resolve), common_dir.and_then(resolve)) {
+        (Some(gd), Some(cd)) => gd != cd,
+        _ => false,
+    };
+    GitStatus {
+        is_repo: true,
+        branch: read(&["symbolic-ref", "--quiet", "--short", "HEAD"]).ok(),
+        is_worktree,
+        worktree_path: if is_worktree { root.clone() } else { None },
+        root,
+        ..GitStatus::default()
+    }
+}
+
 /// Inspect Git state; return is_repo=false for non-repositories or unavailable Git.
 pub fn status(path: &str) -> GitStatus {
-    let is_repo = run_git(path, &["rev-parse", "--is-inside-work-tree"])
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    if !is_repo {
+    // One rev-parse answers all four location questions, one line each in argument order. Outside a
+    // work tree `--show-toplevel` fails, so a failed call and a `false` first line both mean "no repo".
+    //
+    // Do not switch to `--path-format=absolute`, introduced only in Git 2.31. Older Git echoes the
+    // unknown option as a revision and shifts every line after it. `--absolute-git-dir` is Git 2.13+;
+    // the common dir may be relative and is resolved against `path` below.
+    let Some(locations) = run_git_raw(path, &[
+        "rev-parse", "--is-inside-work-tree", "--absolute-git-dir", "--git-common-dir", "--show-toplevel",
+    ]) else {
+        return GitStatus::not_repo();
+    };
+    let mut lines = locations.lines();
+    if lines.next().map(str::trim) != Some("true") {
         return GitStatus::not_repo();
     }
+    let git_dir = lines.next().map(str::trim).filter(|s| !s.is_empty());
+    let common_dir = lines.next().map(str::trim).filter(|s| !s.is_empty());
+    let root = lines.next().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
 
-    // A detached HEAD makes `--abbrev-ref` answer with the literal "HEAD", which is not a branch name.
-    // Reporting None lets the UI say "detached" instead of showing a branch called HEAD.
-    let branch = run_git(path, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .filter(|s| !s.is_empty() && s != "HEAD");
-
-    // ahead/behind are relative to upstream; use 0/0 when no upstream exists.
-    let (mut ahead, mut behind) = (0, 0);
-    if let Some(counts) = run_git(
-        path,
-        &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
-    ) {
-        let mut it = counts.split_whitespace();
-        ahead = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        behind = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    }
-
-    // Parse porcelain output into staged, unstaged, and untracked counts.
-    let (mut staged, mut unstaged, mut untracked) = (0, 0, 0);
-    if let Some(porcelain) = run_git_raw(path, &["status", "--porcelain"]) {
-        for line in porcelain.lines() {
-            let bytes = line.as_bytes();
-            if bytes.len() < 2 {
-                continue;
-            }
-            let x = bytes[0] as char;
-            let y = bytes[1] as char;
-            if x == '?' && y == '?' {
-                untracked += 1;
-                continue;
-            }
-            if x != ' ' && x != '?' {
-                staged += 1;
-            }
-            if y != ' ' && y != '?' {
-                unstaged += 1;
-            }
-        }
-    }
+    // One porcelain v2 call reports the branch (including an unborn one), HEAD, the upstream and
+    // ahead/behind next to the entries, which used to take four separate git processes.
+    let [c, ignore] = SHALLOW_SUBMODULES;
+    let porcelain = run_git_raw(path, &[c, ignore, "status", "--porcelain=v2", "--branch"]).unwrap_or_default();
+    let summary = parse_status_v2(&porcelain);
 
     // A linked worktree's git-dir differs from its common git-dir; the main worktree's paths match.
-    //
-    // Do not switch back to `--path-format=absolute`, introduced only in Git 2.31. Older Git echoes
-    // the unknown option as a revision, shifting parsed lines and misclassifying ordinary repos as
-    // worktrees. Use Git 2.13+'s `--absolute-git-dir`, resolve a relative common-dir against cwd,
-    // canonicalize both paths, and compare them.
-    let (mut is_worktree, mut worktree_path) = (false, None);
-    // Normalize Git-returned paths into canonical absolute paths for exact comparison.
+    // Canonicalize both before comparing.
     let abs_git_path = |p: &str| -> Option<std::path::PathBuf> {
         let pb = std::path::Path::new(p);
         let joined = if pb.is_absolute() {
@@ -246,31 +332,94 @@ pub fn status(path: &str) -> GitStatus {
         };
         std::fs::canonicalize(joined).ok()
     };
-    if let (Some(git_dir), Some(common_dir)) = (
-        run_git(path, &["rev-parse", "--absolute-git-dir"]),
-        run_git(path, &["rev-parse", "--git-common-dir"]),
-    ) {
-        if let (Some(gd), Some(cd)) = (abs_git_path(&git_dir), abs_git_path(&common_dir)) {
-            if gd != cd {
-                is_worktree = true;
-                // Obtain the worktree root for frontend directory-name display.
-                worktree_path =
-                    run_git(path, &["rev-parse", "--show-toplevel"]).filter(|s| !s.is_empty());
-            }
-        }
-    }
+    // Stopped operations leave their markers in the worktree's own git directory.
+    let operation = git_dir
+        .and_then(|d| remote::operation_in(std::path::Path::new(d)))
+        .map(str::to_string);
+    let is_worktree = match (git_dir.and_then(abs_git_path), common_dir.and_then(abs_git_path)) {
+        (Some(gd), Some(cd)) => gd != cd,
+        _ => false,
+    };
+    // The worktree root is shown as the directory name for linked worktrees only.
+    let worktree_path = if is_worktree { root.clone() } else { None };
+    // An upstream implies a remote; only a branch without one needs the extra lookup.
+    let has_remote = summary.upstream.is_some() || !remote::remotes(path).is_empty();
 
     GitStatus {
         is_repo: true,
-        branch,
-        ahead,
-        behind,
-        staged,
-        unstaged,
-        untracked,
+        branch: summary.branch,
+        head: summary.head,
+        ahead: summary.ahead,
+        behind: summary.behind,
+        staged: summary.staged,
+        unstaged: summary.unstaged,
+        untracked: summary.untracked,
         is_worktree,
         worktree_path,
+        upstream: summary.upstream,
+        has_remote,
+        operation,
+        root,
     }
+}
+
+/// Branch header and entry counts parsed from `git status --porcelain=v2 --branch`.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StatusSummary {
+    branch: Option<String>,
+    head: Option<String>,
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+    staged: u32,
+    unstaged: u32,
+    untracked: u32,
+}
+
+/// Parse porcelain v2 output. Ordinary (`1`) and rename (`2`) entries carry index and worktree
+/// columns where `.` means unchanged; unmerged (`u`) entries count on both sides, as they did in v1.
+fn parse_status_v2(out: &str) -> StatusSummary {
+    let mut s = StatusSummary::default();
+    for line in out.lines() {
+        if let Some(header) = line.strip_prefix("# ") {
+            let (key, value) = header.split_once(' ').unwrap_or((header, ""));
+            match key {
+                "branch.oid" if value != "(initial)" => s.head = Some(value.to_string()),
+                "branch.head" if value != "(detached)" => s.branch = Some(value.to_string()),
+                "branch.upstream" => s.upstream = Some(value.to_string()),
+                "branch.ab" => {
+                    for part in value.split_whitespace() {
+                        if let Some(n) = part.strip_prefix('+') {
+                            s.ahead = n.parse().unwrap_or(0);
+                        } else if let Some(n) = part.strip_prefix('-') {
+                            s.behind = n.parse().unwrap_or(0);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let mut fields = line.splitn(3, ' ');
+        match (fields.next(), fields.next()) {
+            (Some("1" | "2"), Some(xy)) => {
+                let xy = xy.as_bytes();
+                if xy.first().is_some_and(|c| *c != b'.') {
+                    s.staged += 1;
+                }
+                if xy.get(1).is_some_and(|c| *c != b'.') {
+                    s.unstaged += 1;
+                }
+            }
+            (Some("u"), Some(_)) => {
+                s.staged += 1;
+                s.unstaged += 1;
+            }
+            (Some("?"), _) => s.untracked += 1,
+            _ => {}
+        }
+    }
+    s
 }
 
 /// A repository found below a directory that is not itself inside a repository.
@@ -1154,11 +1303,14 @@ pub fn push_branch(wt_path: &str, branch: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether a directory has uncommitted changes.
+/// Whether a directory has uncommitted changes; None when Git could not answer (including a timeout).
+fn worktree_changes(path: &str) -> Option<bool> {
+    run_git(path, &["status", "--porcelain"]).map(|s| !s.is_empty())
+}
+
+/// Whether a directory has uncommitted changes, for previews where an unknown answer reads as clean.
 pub fn worktree_has_changes(path: &str) -> bool {
-    run_git(path, &["status", "--porcelain"])
-        .map(|s| !s.is_empty())
-        .unwrap_or(false)
+    worktree_changes(path).unwrap_or(false)
 }
 
 /// Commit all changes in a directory so a merge can include a child worktree's uncommitted work.
@@ -1663,7 +1815,10 @@ pub fn merge_branches_apply(
     })?;
     // Commit dirty source worktree changes first so the merge can include them.
     if let Some(src_dir) = r.source_dir.as_deref() {
-        if worktree_has_changes(src_dir) {
+        // An unknown answer must not read as clean, or the merge would leave this work behind.
+        let dirty = worktree_changes(src_dir)
+            .ok_or("Couldn't check the source worktree for uncommitted changes. Try again.")?;
+        if dirty {
             let msg = commit_message
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -1712,6 +1867,8 @@ pub fn merge_branches_apply(
 pub struct ChangedFile {
     /// Repository-relative path using forward slashes.
     pub path: String,
+    /// Source path of a rename, when present.
+    pub original_path: Option<String>,
     /// Status: modified, added, deleted, untracked, or renamed.
     pub status: String,
     /// Added lines from numstat; zero for binary/unavailable values.
@@ -1734,6 +1891,9 @@ pub struct ChangedFile {
     pub unstaged_additions: u32,
     pub unstaged_deletions: u32,
     pub unstaged_binary: bool,
+    /// For an unmerged path, which side did what: `both-modified`, `both-added`, `both-deleted`,
+    /// `added-by-us`, `added-by-them`, `deleted-by-us`, or `deleted-by-them`.
+    pub conflict: Option<String>,
 }
 
 /// Both sides of a single-file diff: HEAD versus worktree.
@@ -1745,36 +1905,43 @@ pub struct FileDiff {
     pub original: String,
     /// Worktree content, empty for deleted files.
     pub modified: String,
-    /// Binary/oversized marker; both sides remain empty for frontend messaging.
+    /// Binary content cannot be rendered as a line diff.
     pub binary: bool,
+    /// Text beyond the viewer limit is distinct from binary content.
+    pub too_large: bool,
 }
 
 /// Commit record shown in the group's recent-commits panel.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
+    /// Full object identity for stable expansion, keys, and pagination.
+    pub oid: String,
     /// Short hash (%h).
     pub hash: String,
     /// First-line subject (%s).
     pub subject: String,
+    /// Complete subject and body, preserving internal line breaks.
+    pub message: String,
     /// Author name (%an).
     pub author: String,
     /// Relative time (%cr), such as "2 days ago".
     pub relative: String,
-    /// Full hash (%H). The history graph joins commits on full hashes, because an abbreviation can
-    /// grow longer between two page loads.
-    pub id: String,
-    /// Full parent hashes (%P), first parent first; empty for a root commit.
+    /// Parent identities (%P); empty for a root commit, two or more for a merge.
     pub parents: Vec<String>,
-    /// Full ref names pointing at this commit (%D with `--decorate=full`), such as
-    /// "HEAD -> refs/heads/main", "refs/remotes/origin/main" or "tag: refs/tags/v1". Full names are
-    /// what tell a remote branch from a local branch whose name has a slash in it.
+    /// Ref names pointing at this commit (%D), such as `HEAD -> main`, `origin/main`, `tag: v1`.
     pub refs: Vec<String>,
 }
 
 /// Return up to `limit` recent commits; non-repositories/empty histories return an empty vector.
 pub fn recent_commits(cwd: &str, limit: usize) -> Vec<CommitInfo> {
-    log_page(cwd, limit.clamp(1, 50), 0, false)
+    log_page(cwd, limit.clamp(1, 50), 0)
+}
+
+/// Top-level directory of the repository containing `cwd`; an error outside a repository.
+pub fn top_level(cwd: &str) -> Result<String, String> {
+    require_repo(cwd)?;
+    Ok(repo_top(cwd))
 }
 
 /// Resolve repository root, falling back to the supplied directory.
@@ -1800,18 +1967,31 @@ fn porcelain_side(c: char) -> &'static str {
     }
 }
 
-/// Collect a `git diff --numstat` map of path -> (additions, deletions, binary).
+/// Collect a `git diff --numstat -z` map of path -> (additions, deletions, binary).
 /// Binary files report `-` for both counts.
 fn numstat_map(cwd: &str, args: &[&str]) -> std::collections::HashMap<String, (u32, u32, bool)> {
-    let mut map = std::collections::HashMap::new();
-    let Some(out) = run_git(cwd, args) else {
-        return map;
+    let mut args = args.to_vec();
+    args.push("-z");
+    let Some(out) = run_git_bytes(cwd, &args) else {
+        return std::collections::HashMap::new();
     };
-    for line in out.lines() {
-        let mut it = line.split('\t');
+    parse_numstat(&out)
+}
+
+/// Rename/copy records have an empty path column followed by source and destination NUL fields.
+fn parse_numstat(out: &[u8]) -> std::collections::HashMap<String, (u32, u32, bool)> {
+    let mut map = std::collections::HashMap::new();
+    let text = String::from_utf8_lossy(out);
+    let mut fields = text.split('\0');
+    while let Some(field) = fields.next() {
+        let mut it = field.splitn(3, '\t');
         let a = it.next().unwrap_or("");
         let d = it.next().unwrap_or("");
-        let p = it.next().unwrap_or("").trim();
+        let Some(mut p) = it.next() else { continue; };
+        if p.is_empty() {
+            fields.next();
+            p = fields.next().unwrap_or("");
+        }
         if p.is_empty() {
             continue;
         }
@@ -1824,9 +2004,105 @@ fn numstat_map(cwd: &str, args: &[&str]) -> std::collections::HashMap<String, (u
     map
 }
 
+/// One NUL-delimited porcelain record. Paths are always repository-root-relative.
+pub(crate) struct PathStatus {
+    pub path: String,
+    pub original_path: Option<String>,
+    pub xy: String,
+}
+
+/// Parse porcelain v1 -z, including the extra source path after a rename or copy.
+fn parse_path_status(out: &[u8]) -> Vec<PathStatus> {
+    collect_path_status(out.split(|b| *b == 0).map(<[u8]>::to_vec), usize::MAX).0
+}
+
+/// Parse porcelain v1 -z fields until `limit` entries are collected. Returns the entries and
+/// whether another entry followed them, i.e. whether the listing was cut off.
+fn collect_path_status(mut fields: impl Iterator<Item = Vec<u8>>, limit: usize) -> (Vec<PathStatus>, bool) {
+    let mut entries = Vec::new();
+    while let Some(field) = fields.next() {
+        if field.len() < 4 || field[2] != b' ' { continue; }
+        if entries.len() >= limit { return (entries, true); }
+        let xy = String::from_utf8_lossy(&field[..2]).into_owned();
+        let original_path = if field[0] == b'R' || field[0] == b'C'
+            || field[1] == b'R' || field[1] == b'C' {
+            fields.next().map(|p| String::from_utf8_lossy(&p).into_owned())
+        } else { None };
+        entries.push(PathStatus {
+            path: String::from_utf8_lossy(&field[3..]).into_owned(),
+            original_path,
+            xy,
+        });
+    }
+    (entries, false)
+}
+
+/// Changed-file entries the Git panel lists at most. A folder that should have been ignored
+/// (dependencies, build output, generated reports) can add tens of thousands of untracked files;
+/// listing all of them froze the interface, so the list stops here and the panel says so.
+pub const GIT_STATUS_LIMIT: usize = 1000;
+/// Untracked files larger than this are listed without a line count.
+const LINE_COUNT_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+/// Total bytes one listing may read to count untracked lines; files past the budget get no count.
+const LINE_COUNT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+
+/// [`path_status`] for a whole repository with every untracked file listed, read as Git writes it.
+/// Git is stopped as soon as more than `limit` entries have arrived, so a flooded repository costs
+/// a bounded amount of time and memory. Returns the entries and whether the listing was cut off.
+pub(crate) fn path_status_limited(cwd: &str, limit: usize) -> Result<(Vec<PathStatus>, bool), String> {
+    use std::io::BufRead;
+    let [c, ignore] = SHALLOW_SUBMODULES;
+    let args = [c, ignore, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."];
+    // Past the limit the rest of the output is not wanted; Git is stopped instead of walking the tree.
+    read_git(cwd, &args, READ_TIMEOUT, move |stdout| {
+        let fields = std::io::BufReader::new(stdout).split(0).map_while(Result::ok);
+        let listing = collect_path_status(fields, limit);
+        let truncated = listing.1;
+        (listing, truncated)
+    })
+    .ok_or_else(|| "Failed to read Git status".into())
+}
+
+/// Read machine-safe status without taking Git's optional background index lock.
+pub(crate) fn path_status(cwd: &str, all_untracked: bool) -> Result<Vec<PathStatus>, String> {
+    let [c, ignore] = SHALLOW_SUBMODULES;
+    let untracked = if all_untracked { "--untracked-files=all" } else { "--untracked-files=normal" };
+    let out = run_git_bytes(cwd, &[c, ignore, "status", "--porcelain=v1", "-z", untracked, "--", "."])
+        .ok_or("Failed to read Git status")?;
+    Ok(parse_path_status(&out))
+}
+
+/// Shared file decoration; unmerged records take precedence over their individual sides.
+pub(crate) fn status_badge(xy: &str) -> &'static str {
+    match porcelain_status(xy) {
+        "conflicted" => "!",
+        "untracked" => "U",
+        "renamed" => "R",
+        "deleted" => "D",
+        "added" => "A",
+        _ => "M",
+    }
+}
+
 /// Map porcelain XY codes to display status.
+/// How an unmerged path conflicts, from its porcelain XY code (see git-status "Short Format").
+fn conflict_kind(xy: &str) -> Option<&'static str> {
+    Some(match xy {
+        "UU" => "both-modified",
+        "AA" => "both-added",
+        "DD" => "both-deleted",
+        "AU" => "added-by-us",
+        "UA" => "added-by-them",
+        "DU" => "deleted-by-us",
+        "UD" => "deleted-by-them",
+        _ => return None,
+    })
+}
+
 fn porcelain_status(xy: &str) -> &'static str {
-    if xy == "??" {
+    if matches!(xy, "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU") {
+        "conflicted"
+    } else if xy == "??" {
         "untracked"
     } else if xy.contains('R') {
         "renamed"
@@ -1839,8 +2115,27 @@ fn porcelain_status(xy: &str) -> &'static str {
     }
 }
 
-/// List staged, unstaged, and untracked changes with per-file line counts; reject non-repositories.
+/// The Git panel's change list: at most [`GIT_STATUS_LIMIT`] files.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFileList {
+    pub files: Vec<ChangedFile>,
+    /// More changes exist than `files` holds. Line counts are then left at zero for every file.
+    pub truncated: bool,
+}
+
+/// [`changed_file_list`] without the cap flag, for tests that only look at the files.
+#[cfg(test)]
 pub fn changed_files(cwd: &str) -> Result<Vec<ChangedFile>, String> {
+    Ok(changed_file_list(cwd)?.files)
+}
+
+/// List staged, unstaged, and untracked changes with per-file line counts; reject non-repositories.
+pub fn changed_file_list(cwd: &str) -> Result<ChangedFileList, String> {
+    changed_file_list_limited(cwd, GIT_STATUS_LIMIT)
+}
+
+fn changed_file_list_limited(cwd: &str, limit: usize) -> Result<ChangedFileList, String> {
     if cwd.trim().is_empty() {
         return Err("No working directory".into());
     }
@@ -1853,33 +2148,43 @@ pub fn changed_files(cwd: &str) -> Result<Vec<ChangedFile>, String> {
     // Three numstat views: everything against HEAD (what the change viewer shows), the staged part
     // alone, and the not-yet-staged part alone. The Git panel needs the last two to label its
     // Staged and Changes groups with their own line counts.
-    let stat = numstat_map(cwd, &["diff", "--numstat", "HEAD"]);
-    let staged = numstat_map(cwd, &["diff", "--numstat", "--cached", "HEAD"]);
-    let unstaged = numstat_map(cwd, &["diff", "--numstat"]);
+    let root = repo_top(cwd);
+    // Query from the root because the panel operates on the entire repository, even for a nested cwd.
+    let (entries, truncated) = path_status_limited(&root, limit)?;
+    let unborn = !has_head(&root);
+    // A cut-off list shows no line counts at all, so none of the numstat runs or file reads happen.
+    let numstat = |args: &[&str]| if truncated { std::collections::HashMap::new() } else { numstat_map(&root, args) };
+    let stat = if unborn { std::collections::HashMap::new() }
+        else { numstat(&["diff", "--numstat", "HEAD"]) };
+    let staged = numstat(&["diff", "--numstat", "--cached"]);
+    let unstaged = numstat(&["diff", "--numstat"]);
+    let mut budget = LINE_COUNT_BUDGET_BYTES;
     // Porcelain supplies XY in columns 0-1 and path from column 3, including untracked files.
-    let porcelain = run_git_raw(cwd, &["status", "--porcelain"]).unwrap_or_default();
     let mut files: Vec<ChangedFile> = Vec::new();
-    for line in porcelain.lines() {
-        if line.len() < 4 {
-            continue;
-        }
-        let xy = &line[..2];
-        let rest = line[3..].trim();
-        // For `old -> new` rename output, use the new path and remove Git's path quoting.
-        let path = rest
-            .rsplit(" -> ")
-            .next()
-            .unwrap_or(rest)
-            .trim()
-            .trim_matches('"')
-            .to_string();
+    for entry in entries {
+        let xy = entry.xy.as_str();
+        let path = entry.path;
         if path.is_empty() {
             continue;
         }
         let status = porcelain_status(xy);
-        let (additions, deletions, binary) = stat.get(&path).copied().unwrap_or((0, 0, false));
+        let (mut additions, mut deletions, mut binary) = stat.get(&path).copied().unwrap_or((0, 0, false));
         let (sa, sd, sb) = staged.get(&path).copied().unwrap_or((0, 0, false));
-        let (ua, ud, ub) = unstaged.get(&path).copied().unwrap_or((0, 0, false));
+        let (mut ua, ud, mut ub) = unstaged.get(&path).copied().unwrap_or((0, 0, false));
+        if !truncated && (xy == "??" || unborn) && !path.ends_with('/') {
+            // Counting reads the whole file, so large files and anything past the budget are
+            // listed without a count rather than read on every refresh.
+            let full = std::path::Path::new(&root).join(&path);
+            let size = std::fs::symlink_metadata(&full).map(|m| m.len()).unwrap_or(0);
+            if size <= LINE_COUNT_MAX_FILE_BYTES && size <= budget {
+                budget -= size;
+                let stats = panel::worktree_stats(&full)?;
+                binary = stats.1;
+                additions = stats.0;
+                deletions = 0;
+                if xy == "??" { ua = additions; ub = binary; }
+            }
+        }
         // Untracked files report `??`, which is neither an index nor a worktree code: place them
         // entirely on the worktree side so the panel can list them under Untracked files.
         let mut chars = xy.chars();
@@ -1894,6 +2199,7 @@ pub fn changed_files(cwd: &str) -> Result<Vec<ChangedFile>, String> {
         };
         files.push(ChangedFile {
             path,
+            original_path: entry.original_path,
             status: status.to_string(),
             additions,
             deletions,
@@ -1906,29 +2212,112 @@ pub fn changed_files(cwd: &str) -> Result<Vec<ChangedFile>, String> {
             unstaged_additions: ua,
             unstaged_deletions: ud,
             unstaged_binary: ub,
+            conflict: conflict_kind(xy).map(str::to_string),
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+    Ok(ChangedFileList { files, truncated })
 }
 
-/// Treat content as binary when it contains NUL or exceeds 2 MB.
-fn is_binary_bytes(bytes: &[u8]) -> bool {
-    bytes.len() > 2 * 1024 * 1024 || bytes.contains(&0)
+/// Dependency and build folder names that are nearly always meant to be ignored. When one of them
+/// floods the change list it is the suggestion, even if ignoring it alone stays above the limit.
+const IGNORE_CANDIDATE_NAMES: &[&str] = &[
+    "node_modules", "target", "dist", "build", "vendor", ".next", ".nuxt", ".turbo", ".cache",
+    ".parcel-cache", "__pycache__", ".venv", "venv", ".gradle", "coverage",
+];
+/// Entries read when looking for the folder to suggest; enough to see where a flood comes from.
+const IGNORE_SCAN_LIMIT: usize = 200_000;
+
+/// Suggest one folder to add to `.gitignore` when the change list hits [`GIT_STATUS_LIMIT`].
+/// None when no single folder accounts for the flood.
+pub fn ignore_suggestion(cwd: &str) -> Result<Option<String>, String> {
+    require_repo(cwd)?;
+    let (entries, _) = path_status_limited(&repo_top(cwd), IGNORE_SCAN_LIMIT)?;
+    Ok(suggest_ignore_folder(&entries, GIT_STATUS_LIMIT))
 }
 
-/// Read raw bytes with `git show <spec>`; avoid run_git's trimming/lossy conversion.
-fn git_show_bytes(cwd: &str, spec: &str) -> Option<Vec<u8>> {
-    let out = crate::host::command("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["show", spec])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+/// The outermost known dependency or build folder holding the most untracked files, if it holds at
+/// least a tenth of `limit`. Otherwise the deepest folder that holds at least half of the untracked
+/// files and whose removal leaves no more than `limit` entries.
+fn suggest_ignore_folder(entries: &[PathStatus], limit: usize) -> Option<String> {
+    use std::collections::HashMap;
+    let mut per_dir: HashMap<String, usize> = HashMap::new();
+    let mut known: HashMap<String, usize> = HashMap::new();
+    let mut untracked = 0usize;
+    for entry in entries.iter().filter(|e| e.xy == "??") {
+        untracked += 1;
+        // A trailing `/` marks a directory Git reports whole, such as a nested repository; only its
+        // ancestors are candidates.
+        let parts: Vec<&str> = entry.path.trim_end_matches('/').split('/').collect();
+        let mut in_known = false;
+        for depth in 1..parts.len() {
+            let dir = parts[..depth].join("/");
+            if !in_known && IGNORE_CANDIDATE_NAMES.contains(&parts[depth - 1]) {
+                in_known = true;
+                *known.entry(dir.clone()).or_default() += 1;
+            }
+            *per_dir.entry(dir).or_default() += 1;
+        }
     }
-    Some(out.stdout)
+    // Ties resolve to the alphabetically first folder so the suggestion is stable between scans.
+    let best_known = known.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)));
+    if let Some((dir, count)) = best_known {
+        if count >= limit / 10 {
+            return Some(dir);
+        }
+    }
+    let total = entries.len();
+    per_dir
+        .into_iter()
+        .filter(|(_, count)| total - count <= limit && count * 2 >= untracked)
+        .max_by(|a, b| a.0.matches('/').count().cmp(&b.0.matches('/').count()).then_with(|| b.0.cmp(&a.0)))
+        .map(|(dir, _)| dir)
+}
+
+/// The `.gitignore` [`ignore_folder`] writes: the one at the repository root.
+pub fn ignore_file_path(cwd: &str) -> std::path::PathBuf {
+    std::path::Path::new(&repo_top(cwd)).join(".gitignore")
+}
+
+/// Add `folder` to the repository's root `.gitignore`. Only the folder [`ignore_suggestion`] proposes
+/// right now is accepted, so a caller cannot write an arbitrary pattern. Returns false when the file
+/// already lists it.
+pub fn ignore_folder(cwd: &str, folder: &str) -> Result<bool, String> {
+    if ignore_suggestion(cwd)?.as_deref() != Some(folder) {
+        return Err("This folder is no longer suggested for .gitignore. Refresh and try again.".into());
+    }
+    append_gitignore(&ignore_file_path(cwd), folder)
+}
+
+fn append_gitignore(file: &std::path::Path, folder: &str) -> Result<bool, String> {
+    use std::io::Write;
+    if folder.is_empty() || folder.chars().any(char::is_control) {
+        return Err("This folder name cannot be written to .gitignore".into());
+    }
+    // Anchored to the root and escaped, so the line matches this folder and nothing else.
+    let mut line = String::from("/");
+    for c in folder.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[') { line.push('\\'); }
+        line.push(c);
+    }
+    line.push('/');
+    let existing = match std::fs::symlink_metadata(file) {
+        // Appending through a link could write outside the repository.
+        Ok(meta) if !meta.is_file() => return Err("The repository's .gitignore is not a regular file".into()),
+        Ok(_) => std::fs::read(file).map_err(|e| format!("Cannot read .gitignore: {e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(format!("Cannot read .gitignore: {e}")),
+    };
+    let text = String::from_utf8_lossy(&existing);
+    let bare = &line[1..line.len() - 1];
+    if text.lines().map(str::trim).any(|l| l == line || l == &line[1..] || l == &line[..line.len() - 1] || l == bare) {
+        return Ok(false);
+    }
+    let lead = if existing.is_empty() || existing.ends_with(b"\n") { "" } else { "\n" };
+    std::fs::OpenOptions::new().create(true).append(true).open(file)
+        .and_then(|mut f| f.write_all(format!("{lead}{line}\n").as_bytes()))
+        .map_err(|e| format!("Cannot write .gitignore: {e}"))?;
+    Ok(true)
 }
 
 /// The filesystem path `file_diff` reads for the worktree side: `repo_top(cwd)` joined with `path`.
@@ -1940,7 +2329,7 @@ pub fn file_diff_worktree_path(cwd: &str, path: &str) -> std::path::PathBuf {
 }
 
 /// Return HEAD/worktree text for one file. Added/untracked has no original; deleted has no modified.
-/// If either side is binary/oversized, set binary and leave both strings empty.
+/// Binary and oversized content use separate flags and leave both strings empty.
 pub fn file_diff(cwd: &str, path: &str) -> Result<FileDiff, String> {
     if cwd.trim().is_empty() || path.trim().is_empty() {
         return Err("Missing working directory or path".into());
@@ -1953,40 +2342,7 @@ pub fn file_diff(cwd: &str, path: &str) -> Result<FileDiff, String> {
 /// gate it, and pass the SAME value here — so the checked path and the read path cannot diverge, and
 /// the `repo_top` git subprocess runs once instead of twice.
 pub fn file_diff_at(cwd: &str, path: &str, work_path: &std::path::Path) -> Result<FileDiff, String> {
-    if cwd.trim().is_empty() || path.trim().is_empty() {
-        return Err("Missing working directory or path".into());
-    }
-    // HEAD side via `git show HEAD:<path>`; added/untracked files have no object.
-    let original_bytes = git_show_bytes(cwd, &format!("HEAD:{path}"));
-    // Worktree side reads the caller-resolved repository file; deleted files are absent.
-    let modified_bytes = std::fs::read(work_path).ok();
-
-    let orig_bin = original_bytes
-        .as_deref()
-        .map(is_binary_bytes)
-        .unwrap_or(false);
-    let mod_bin = modified_bytes
-        .as_deref()
-        .map(is_binary_bytes)
-        .unwrap_or(false);
-    if orig_bin || mod_bin {
-        return Ok(FileDiff {
-            path: path.to_string(),
-            original: String::new(),
-            modified: String::new(),
-            binary: true,
-        });
-    }
-    Ok(FileDiff {
-        path: path.to_string(),
-        original: original_bytes
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default(),
-        modified: modified_bytes
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default(),
-        binary: false,
-    })
+    panel::file_diff_at(cwd, path, "all", work_path)
 }
 
 // ─────────────────────────── Git panel actions ───────────────────────────
@@ -2089,7 +2445,8 @@ fn run_git_checked(cwd: &str, args: &[&str]) -> Result<String, String> {
 /// Run `git <prefix> -- <paths>` in batches so long file lists cannot overflow the command line.
 fn run_git_on_paths(cwd: &str, prefix: &[&str], paths: &[String]) -> Result<(), String> {
     for chunk in paths.chunks(MAX_PATHS_PER_CALL) {
-        let mut args: Vec<&str> = prefix.to_vec();
+        let mut args: Vec<&str> = vec!["--literal-pathspecs"];
+        args.extend_from_slice(prefix);
         args.push("--");
         for p in chunk {
             args.push(p.as_str());
@@ -2119,13 +2476,14 @@ pub fn unstage(cwd: &str, paths: &[String]) -> Result<(), String> {
     require_repo(cwd)?;
     check_rel_paths(paths)?;
     let root = repo_top(cwd);
+    let paths = panel::expand_renames(&root, paths)?;
     if has_head(&root) {
-        run_git_on_paths(&root, &["reset", "-q", "HEAD"], paths)
+        run_git_on_paths(&root, &["reset", "-q", "HEAD"], &paths)
     } else {
         run_git_on_paths(
             &root,
             &["rm", "--cached", "-r", "-q", "--ignore-unmatch"],
-            paths,
+            &paths,
         )
     }
 }
@@ -2134,23 +2492,24 @@ pub fn unstage(cwd: &str, paths: &[String]) -> Result<(), String> {
 ///
 /// Callers pass the repository root: both the pathspec and, thanks to `--full-name`, the output are
 /// then root-relative, matching the paths `changed_files` produced.
-fn tracked_paths(cwd: &str, paths: &[String]) -> std::collections::HashSet<String> {
+fn tracked_paths(cwd: &str, paths: &[String]) -> Result<std::collections::HashSet<String>, String> {
     let mut tracked = std::collections::HashSet::new();
     for chunk in paths.chunks(MAX_PATHS_PER_CALL) {
-        let mut args: Vec<&str> = vec!["ls-files", "--full-name", "--"];
+        let mut args: Vec<&str> = vec!["--literal-pathspecs", "ls-files", "--full-name", "-z", "--"];
         for p in chunk {
             args.push(p.as_str());
         }
-        if let Some(out) = run_git(cwd, &args) {
-            for line in out.lines() {
-                let name = line.trim().trim_matches('"');
+        {
+            let out = panel::read_git(cwd, &args)?;
+            for field in out.split(|b| *b == 0) {
+                let name = String::from_utf8_lossy(field);
                 if !name.is_empty() {
-                    tracked.insert(name.to_string());
+                    tracked.insert(name.into_owned());
                 }
             }
         }
     }
-    tracked
+    Ok(tracked)
 }
 
 /// Delete one untracked entry, refusing anything that does not resolve inside the repository.
@@ -2203,7 +2562,7 @@ pub fn discard(cwd: &str, paths: &[String]) -> Result<(), String> {
     require_repo(cwd)?;
     check_rel_paths(paths)?;
     let root = repo_top(cwd);
-    let tracked = tracked_paths(&root, paths);
+    let tracked = tracked_paths(&root, paths)?;
     let (restore, remove): (Vec<String>, Vec<String>) = paths
         .iter()
         .cloned()
@@ -2223,6 +2582,13 @@ pub fn discard(cwd: &str, paths: &[String]) -> Result<(), String> {
 /// Commit what is staged and return the new commit. `amend` rewrites the previous commit instead,
 /// which git refuses before the first commit.
 pub fn commit(cwd: &str, message: &str, amend: bool) -> Result<CommitInfo, String> {
+    commit_at(cwd, message, amend, None)
+}
+
+/// [`commit`] bound to the commit the user saw: with `expect_head`, an amend is refused when HEAD
+/// has moved since, so a commit made meanwhile (by an agent in the same worktree, say) is never
+/// the one silently rewritten.
+pub fn commit_at(cwd: &str, message: &str, amend: bool, expect_head: Option<&str>) -> Result<CommitInfo, String> {
     require_repo(cwd)?;
     let msg = message.trim();
     if msg.is_empty() {
@@ -2231,6 +2597,12 @@ pub fn commit(cwd: &str, message: &str, amend: bool) -> Result<CommitInfo, Strin
     if amend && !has_head(cwd) {
         return Err("Nothing to amend: this repository has no commits yet".into());
     }
+    if let (true, Some(expected)) = (amend, expect_head) {
+        let actual = run_git(cwd, &["rev-parse", "--verify", "HEAD"]).unwrap_or_default();
+        if actual != expected {
+            return Err("The last commit changed since the amend target was shown. Review it and try again".into());
+        }
+    }
     let mut args: Vec<&str> = vec!["commit", "-q"];
     if amend {
         args.push("--amend");
@@ -2238,69 +2610,60 @@ pub fn commit(cwd: &str, message: &str, amend: bool) -> Result<CommitInfo, Strin
     args.push("-m");
     args.push(msg);
     run_git_checked(cwd, &args)?;
-    log_page(cwd, 1, 0, false)
+    log_page(cwd, 1, 0)
         .into_iter()
         .next()
         .ok_or_else(|| "Commit succeeded but could not be read back".to_string())
 }
 
-/// Total commits reachable from HEAD, or from every ref when `all` is set; zero outside a
-/// repository or before the first commit.
-pub fn commit_count(cwd: &str, all: bool) -> u32 {
-    run_git(cwd, &["rev-list", "--count", if all { "--all" } else { "HEAD" }])
+/// Total commits reachable from HEAD; zero outside a repository or before the first commit.
+pub fn commit_count(cwd: &str) -> u32 {
+    run_git(cwd, &["rev-list", "--count", "HEAD"])
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
 }
 
-/// Field separator for commit pretty-printing: a one-line subject cannot contain a unit separator.
-const COMMIT_PRETTY: &str = "--pretty=format:%h\x1f%s\x1f%an\x1f%cr\x1f%H\x1f%P\x1f%D";
+/// NUL-separated fields and records allow complete multiline messages without ambiguous line parsing.
+const COMMIT_PRETTY: &str = "--pretty=format:%H%x00%h%x00%s%x00%an%x00%cr%x00%P%x00%D%x00%B";
 
-/// Parse the unit-separated commit lines produced by [`COMMIT_PRETTY`].
+/// Parse the eight NUL-separated fields produced by [`COMMIT_PRETTY`] with git log -z.
 fn parse_commit_lines(out: &str) -> Vec<CommitInfo> {
-    out.lines()
-        .filter_map(|line| {
-            let mut f = line.split('\x1f');
-            let hash = f.next()?.to_string();
-            if hash.is_empty() {
-                return None;
-            }
-            Some(CommitInfo {
-                subject: f.next().unwrap_or("").to_string(),
-                author: f.next().unwrap_or("").to_string(),
-                relative: f.next().unwrap_or("").to_string(),
-                id: f.next().unwrap_or("").to_string(),
-                parents: f.next().unwrap_or("").split_whitespace().map(String::from).collect(),
-                refs: f
-                    .next()
-                    .unwrap_or("")
-                    .split(", ")
-                    .filter(|r| !r.is_empty())
-                    .map(String::from)
-                    .collect(),
-                hash,
-            })
+    out.split('\0').collect::<Vec<_>>().chunks_exact(8)
+        .filter(|f| !f[0].is_empty())
+        .map(|f| CommitInfo {
+            oid: f[0].to_string(),
+            hash: f[1].to_string(),
+            subject: f[2].to_string(),
+            author: f[3].to_string(),
+            relative: f[4].to_string(),
+            parents: f[5].split_whitespace().map(str::to_string).collect(),
+            refs: f[6].split(", ").map(str::trim).filter(|r| !r.is_empty()).map(str::to_string).collect(),
+            message: f[7].trim_end_matches(['\n', '\r']).to_string(),
         })
         .collect()
 }
 
 /// One page of history, newest first. `offset` skips that many commits, so the Git panel can keep
 /// loading older pages; non-repositories and empty histories return an empty vector.
-///
-/// Topological order keeps every child above its parents, which the history graph needs to draw
-/// its lanes, and `all` widens the walk from HEAD to every branch, remote, and tag.
-pub fn log_page(cwd: &str, limit: usize, offset: usize, all: bool) -> Vec<CommitInfo> {
+pub fn log_page(cwd: &str, limit: usize, offset: usize) -> Vec<CommitInfo> {
+    log_page_at(cwd, limit, offset, None).unwrap_or_default()
+}
+
+/// Pin every offset page to the same HEAD so concurrent commits cannot shift its boundaries.
+pub fn log_page_at(cwd: &str, limit: usize, offset: usize, head: Option<&str>) -> Result<Vec<CommitInfo>, String> {
+    if let Some(hash) = head { check_commit_hash(hash)?; }
     if run_git(cwd, &["rev-parse", "--is-inside-work-tree"]).as_deref() != Some("true") {
-        return Vec::new();
+        return Err("Not a git repository".into());
+    }
+    let revision = head.unwrap_or("HEAD");
+    if head.is_none() && run_git(cwd, &["rev-parse", "--verify", "HEAD"]).is_none() {
+        return Ok(Vec::new());
     }
     let n = limit.clamp(1, 200).to_string();
     let skip = format!("--skip={}", offset.min(1_000_000));
-    let mut args = vec!["log", "--topo-order", "--decorate=full", "-n", &n, &skip, COMMIT_PRETTY];
-    if all {
-        args.push("--all");
-    }
-    match run_git(cwd, &args) {
-        Some(s) if !s.is_empty() => parse_commit_lines(&s),
-        _ => Vec::new(),
+    match run_git_raw(cwd, &["log", "-z", "-n", &n, &skip, COMMIT_PRETTY, revision, "--"]) {
+        Some(s) => Ok(parse_commit_lines(&s)),
+        None => Err("Failed to read Git history".into()),
     }
 }
 
@@ -2309,7 +2672,7 @@ pub fn log_page(cwd: &str, limit: usize, offset: usize, all: bool) -> Vec<Commit
 /// only safe rule is to allow short and full hexadecimal hashes and nothing else.
 fn check_commit_hash(hash: &str) -> Result<(), String> {
     let h = hash.trim();
-    let ok = (4..=40).contains(&h.len()) && h.chars().all(|c| c.is_ascii_hexdigit());
+    let ok = (4..=64).contains(&h.len()) && h.chars().all(|c| c.is_ascii_hexdigit());
     if ok {
         Ok(())
     } else {
@@ -2317,25 +2680,38 @@ fn check_commit_hash(hash: &str) -> Result<(), String> {
     }
 }
 
-/// Files changed by one commit, with that commit's own line counts. Merge commits produce no
-/// diff against a single parent and therefore return an empty list.
+/// Files changed against the first parent, or the empty tree for a root commit.
 pub fn commit_files(cwd: &str, hash: &str) -> Result<Vec<ChangedFile>, String> {
     require_repo(cwd)?;
     check_commit_hash(hash)?;
-    let stat = numstat_map(cwd, &["diff-tree", "--no-commit-id", "--numstat", "-r", hash]);
-    let names = run_git(
-        cwd,
-        &["diff-tree", "--no-commit-id", "--name-status", "-r", hash],
-    )
-    .unwrap_or_default();
+    let root = repo_top(cwd);
+    let parents = run_git_checked(&root, &["rev-list", "--parents", "-n", "1", hash, "--"])?;
+    let parent = parents.split_whitespace().nth(1);
+    tree_diff_files(&root, parent, hash)
+}
+
+/// Files that differ between two commits, `from` (None for the empty tree) to `to`, with renames
+/// detected and line counts on the staged side, which is the side a committed change belongs to.
+pub(crate) fn tree_diff_files(root: &str, from: Option<&str>, to: &str) -> Result<Vec<ChangedFile>, String> {
+    let mut args = vec!["diff-tree", "--no-commit-id", "--root", "-M", "-r"];
+    if let Some(from) = from { args.push(from); }
+    args.push(to);
+    let mut stats_args = args.clone();
+    stats_args.push("--numstat");
+    let stat = numstat_map(root, &stats_args);
+    args.extend(["--name-status", "-z"]);
+    let names = panel::read_git(root, &args)?;
     let mut files: Vec<ChangedFile> = Vec::new();
-    for line in names.lines() {
-        let mut it = line.split('\t');
-        let code = it.next().unwrap_or("").trim();
-        let first = it.next().unwrap_or("").trim();
+    let text = String::from_utf8_lossy(&names);
+    let mut fields = text.split('\0');
+    while let Some(code) = fields.next() {
+        if code.is_empty() { continue; }
+        let first = fields.next().unwrap_or("");
         // Rename and copy rows carry a similarity score and both paths; the new path is what the
         // commit produced, so report that one.
-        let path = it.next().unwrap_or(first).trim().trim_matches('"').to_string();
+        let path = if code.starts_with('R') || code.starts_with('C') {
+            fields.next().unwrap_or("")
+        } else { first }.to_string();
         if path.is_empty() {
             continue;
         }
@@ -2344,6 +2720,7 @@ pub fn commit_files(cwd: &str, hash: &str) -> Result<Vec<ChangedFile>, String> {
         let (additions, deletions, binary) = stat.get(&path).copied().unwrap_or((0, 0, false));
         files.push(ChangedFile {
             path,
+            original_path: if code.starts_with('R') || code.starts_with('C') { Some(first.to_string()) } else { None },
             status: status.to_string(),
             additions,
             deletions,
@@ -2356,6 +2733,7 @@ pub fn commit_files(cwd: &str, hash: &str) -> Result<Vec<ChangedFile>, String> {
             unstaged_additions: 0,
             unstaged_deletions: 0,
             unstaged_binary: false,
+            conflict: None,
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -2368,28 +2746,16 @@ pub fn commit_file_diff(cwd: &str, hash: &str, path: &str) -> Result<FileDiff, S
     require_repo(cwd)?;
     check_commit_hash(hash)?;
     check_rel_path(path)?;
-    let original_bytes = git_show_bytes(cwd, &format!("{hash}^:{path}"));
-    let modified_bytes = git_show_bytes(cwd, &format!("{hash}:{path}"));
-    let binary = original_bytes.as_deref().map(is_binary_bytes).unwrap_or(false)
-        || modified_bytes.as_deref().map(is_binary_bytes).unwrap_or(false);
-    if binary {
-        return Ok(FileDiff {
-            path: path.to_string(),
-            original: String::new(),
-            modified: String::new(),
-            binary: true,
-        });
-    }
-    Ok(FileDiff {
-        path: path.to_string(),
-        original: original_bytes
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default(),
-        modified: modified_bytes
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default(),
-        binary: false,
-    })
+    let root = repo_top(cwd);
+    let files = commit_files(&root, hash)?;
+    let entry = files.iter().find(|f| f.path == path).ok_or("This file is not part of the selected commit")?;
+    let parents = run_git_checked(&root, &["rev-list", "--parents", "-n", "1", hash, "--"])?;
+    let original_bytes = match parents.split_whitespace().nth(1) {
+        Some(parent) => panel::blob(&root, Some(parent), entry.original_path.as_deref().unwrap_or(path))?,
+        None => None,
+    };
+    let modified_bytes = panel::blob(&root, Some(hash), path)?;
+    Ok(panel::make_diff(path, original_bytes, modified_bytes))
 }
 
 #[cfg(test)]
@@ -2539,7 +2905,7 @@ mod merge_tests {
         let dir = init_repo();
         let cwd = dir.to_string_lossy().to_string();
         std::fs::write(dir.join("new.txt"), "brand new\n").unwrap();
-        assert_eq!(commit_count(&cwd, false), 1);
+        assert_eq!(commit_count(&cwd), 1);
 
         stage(&cwd, &["new.txt".to_string()]).unwrap();
         let staged = changed_files(&cwd).unwrap();
@@ -2554,7 +2920,7 @@ mod merge_tests {
         stage(&cwd, &["new.txt".to_string()]).unwrap();
         let made = commit(&cwd, "add new.txt", false).unwrap();
         assert_eq!(made.subject, "add new.txt");
-        assert_eq!(commit_count(&cwd, false), 2);
+        assert_eq!(commit_count(&cwd), 2);
         assert!(changed_files(&cwd).unwrap().is_empty(), "committing clears the working tree");
 
         // An empty message is refused before git runs, so no half-made commit can result.
@@ -2651,10 +3017,10 @@ mod merge_tests {
             stage(&cwd, &[format!("f{i}.txt")]).unwrap();
             commit(&cwd, &format!("commit {i}"), false).unwrap();
         }
-        assert_eq!(commit_count(&cwd, false), 4);
+        assert_eq!(commit_count(&cwd), 4);
 
-        let first = log_page(&cwd, 2, 0, false);
-        let second = log_page(&cwd, 2, 2, false);
+        let first = log_page(&cwd, 2, 0);
+        let second = log_page(&cwd, 2, 2);
         assert_eq!(first.len(), 2);
         assert_eq!(second.len(), 2);
         assert_eq!(first[0].subject, "commit 2", "history is newest first");
@@ -2675,34 +3041,46 @@ mod merge_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// What the history graph reads: full parent hashes to draw edges from, ref names for the
-    /// labels, and the all-branches walk that reaches commits HEAD cannot see.
+    /// Complete messages and full identities survive paging, concurrent commits, and amend.
     #[test]
-    fn history_graph_fields_and_all_branches() {
+    fn history_messages_and_pinned_head() {
         let dir = init_repo();
         let cwd = dir.to_string_lossy().to_string();
-        git(&dir, &["checkout", "-q", "-b", "side"]);
-        std::fs::write(dir.join("side.txt"), "side\n").unwrap();
-        git(&dir, &["add", "-A"]);
-        git(&dir, &["commit", "-q", "-m", "on side"]);
-        git(&dir, &["checkout", "-q", "main"]);
-        git(&dir, &["tag", "v1"]);
-
-        let head = log_page(&cwd, 10, 0, false);
-        assert_eq!(head.len(), 1, "HEAD history leaves the side branch out");
-        assert_eq!(commit_count(&cwd, false), 1);
-        assert_eq!(head[0].id.len(), 40, "the graph joins commits on full hashes");
-        assert!(head[0].parents.is_empty(), "the root commit has no parents");
-        assert!(head[0].refs.iter().any(|r| r == "HEAD -> refs/heads/main"), "refs: {:?}", head[0].refs);
-        assert!(head[0].refs.iter().any(|r| r == "tag: refs/tags/v1"), "refs: {:?}", head[0].refs);
-
-        let all = log_page(&cwd, 10, 0, true);
-        assert_eq!(all.len(), 2, "the all-branches walk reaches the side branch");
-        assert_eq!(commit_count(&cwd, true), 2);
-        assert_eq!(all[0].subject, "on side", "children come before their parents");
-        assert_eq!(all[0].parents, vec![all[1].id.clone()]);
-        assert_eq!(all[0].refs, vec!["refs/heads/side".to_string()]);
+        std::fs::write(dir.join("message.txt"), "one\n").unwrap();
+        stage(&cwd, &["message.txt".into()]).unwrap();
+        let message = "Complete subject\n\nMultiline body\nUnicode: 文档\nUnit separator: \x1f end";
+        let made = commit(&cwd, message, false).unwrap();
+        assert_eq!(made.message, message);
+        assert_eq!(made.oid.len(), 40);
+        assert_eq!(status(&cwd).head.as_deref(), Some(made.oid.as_str()));
+        let old_second = log_page_at(&cwd, 1, 1, Some(&made.oid)).unwrap();
+        std::fs::write(dir.join("message.txt"), "two\n").unwrap();
+        stage(&cwd, &["message.txt".into()]).unwrap();
+        let next = commit(&cwd, "Next commit", false).unwrap();
+        let pinned = log_page_at(&cwd, 1, 1, Some(&made.oid)).unwrap();
+        assert_eq!(pinned[0].oid, old_second[0].oid);
+        let count = commit_count(&cwd);
+        assert!(commit_at(&cwd, "Stale amend", true, Some(&made.oid)).unwrap_err().contains("changed"));
+        let amended = commit_at(&cwd, "Amended subject\n\nFull amended body", true, Some(&next.oid)).unwrap();
+        assert_eq!(commit_count(&cwd), count);
+        assert_ne!(next.oid, amended.oid);
+        assert_eq!(amended.message, "Amended subject\n\nFull amended body");
+        assert!(log_page_at(&cwd, 1, 0, Some("--all")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// NUL records preserve literal arrows, whitespace, and rename source boundaries.
+    #[test]
+    fn status_paths_are_not_line_or_arrow_delimited() {
+        let entries = parse_path_status(b" M folder/a -> b.txt\0R  target\tname\0old\nname\0?? dir/new.txt\0");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].path, "folder/a -> b.txt");
+        assert_eq!(entries[1].path, "target\tname");
+        assert_eq!(entries[1].original_path.as_deref(), Some("old\nname"));
+        assert_eq!(entries[2].path, "dir/new.txt");
+        assert_eq!(status_badge("UU"), "!");
+        assert_eq!(status_badge("??"), "U");
+        assert_eq!(status_badge("R "), "R");
     }
 
     /// Derive default clone directory names from common repository URL forms.
@@ -3050,6 +3428,30 @@ mod porcelain_tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[test]
+    fn status_v2_reads_branch_upstream_and_counts() {
+        let out = "# branch.oid 0123abcd\n# branch.head feature/x\n# branch.upstream origin/feature/x\n\
+                   # branch.ab +2 -3\n1 M. N... 100644 100644 100644 a b staged.txt\n\
+                   1 .M N... 100644 100644 100644 a b changed.txt\n1 MM N... 100644 100644 100644 a b both.txt\n\
+                   2 R. N... 100644 100644 100644 a b R100 new.txt\told.txt\n\
+                   u UU N... 100644 100644 100644 100644 a b c conflict.txt\n? new dir/file.txt\n";
+        assert_eq!(parse_status_v2(out), StatusSummary {
+            branch: Some("feature/x".into()),
+            head: Some("0123abcd".into()),
+            upstream: Some("origin/feature/x".into()),
+            ahead: 2,
+            behind: 3,
+            staged: 4,
+            unstaged: 3,
+            untracked: 1,
+        });
+        // Unborn branch and detached HEAD.
+        let unborn = parse_status_v2("# branch.oid (initial)\n# branch.head main\n");
+        assert_eq!((unborn.branch.as_deref(), unborn.head), (Some("main"), None));
+        let detached = parse_status_v2("# branch.oid 0123\n# branch.head (detached)\n");
+        assert_eq!((detached.branch, detached.head.as_deref()), (None, Some("0123")));
+    }
+
     /// Run a Git command in a directory and assert success.
     fn git(dir: &std::path::Path, args: &[&str]) {
         let out = crate::host::command("git")
@@ -3078,6 +3480,196 @@ mod porcelain_tests {
         git(&dir, &["commit", "-q", "-m", "init"]);
         git(&dir, &["branch", "-M", "main"]);
         dir
+    }
+
+    #[test]
+    fn branch_metadata_does_not_read_index_and_handles_worktrees() {
+        let repo = init_repo();
+        let cwd = repo.to_str().unwrap();
+        let wt = repo.join("linked");
+        git(&repo, &["worktree", "add", "-qb", "feature", wt.to_str().unwrap()]);
+        let linked = branch_info(wt.to_str().unwrap());
+        assert!(linked.is_repo && linked.is_worktree);
+        assert_eq!(linked.branch.as_deref(), Some("feature"));
+        assert!(linked.worktree_path.is_some());
+        git(&wt, &["checkout", "--detach", "-q"]);
+        assert!(branch_info(wt.to_str().unwrap()).branch.is_none());
+        // A full status scan fails on this index; branch metadata must still succeed unchanged.
+        std::fs::write(repo.join(".git/index"), b"intentionally invalid index").unwrap();
+        let main = branch_info(cwd);
+        assert!(main.is_repo && !main.is_worktree);
+        assert_eq!(main.branch.as_deref(), Some("main"));
+        assert!(main.worktree_path.is_none());
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn panel_status_reports_moved_submodules_but_not_their_edits() {
+        let upstream = init_repo();
+        let repo = init_repo();
+        git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream.to_str().unwrap(), "sub"]);
+        git(&repo, &["commit", "-q", "-m", "add sub"]);
+        let sub = repo.join("sub");
+        git(&sub, &["config", "user.email", "t@example.com"]);
+        git(&sub, &["config", "user.name", "tester"]);
+        git(&sub, &["config", "commit.gpgsign", "false"]);
+        let cwd = repo.to_str().unwrap();
+        let listed = |cwd: &str| changed_files(cwd).unwrap().iter().any(|f| f.path == "sub");
+        let counts = |cwd: &str| { let s = status(cwd); (s.staged, s.unstaged, s.untracked) };
+
+        // Edits inside the submodule stay with the submodule, the expensive part of a refresh.
+        std::fs::write(sub.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(sub.join("new.txt"), "new\n").unwrap();
+        assert_eq!(counts(cwd), (0, 0, 0));
+        assert!(!listed(cwd));
+        assert!(path_status(cwd, true).unwrap().is_empty());
+
+        // A submodule's own setting still wins over the default.
+        git(&repo, &["config", "submodule.sub.ignore", "none"]);
+        assert!(listed(cwd));
+        git(&repo, &["config", "--unset", "submodule.sub.ignore"]);
+
+        // A moved commit is a superproject change and is listed.
+        git(&sub, &["commit", "-qam", "move"]);
+        assert_eq!(counts(cwd), (0, 1, 0));
+        assert!(listed(cwd));
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&upstream);
+    }
+
+    #[test]
+    fn background_reads_stop_at_the_timeout_with_their_helpers() {
+        let repo = init_repo();
+        let marker = repo.join("helper-survived");
+        // A shell alias runs `sleep` as a helper process; the marker appears only if it outlives the timeout.
+        let alias = "alias.hang=!sleep 1 && touch helper-survived";
+        let started = Instant::now();
+        let out = read_git(repo.to_str().unwrap(), &["-c", alias, "hang"], Duration::from_millis(300), |mut stdout| {
+            let mut buf = Vec::new();
+            let _ = stdout.read_to_end(&mut buf);
+            (buf, false)
+        });
+        assert!(out.is_none());
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(!marker.exists(), "the helper kept running after the timeout");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn branch_metadata_handles_unborn_branches_and_missing_directories() {
+        let dir = std::env::temp_dir().join(format!("vlx-branch-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!branch_info(dir.to_str().unwrap()).is_repo);
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["symbolic-ref", "HEAD", "refs/heads/unborn"]);
+        assert_eq!(branch_info(dir.to_str().unwrap()).branch.as_deref(), Some("unborn"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!branch_info(dir.to_str().unwrap()).is_repo);
+    }
+
+    /// Raw paths retain Unicode, quotes, whitespace, tabs, and newlines regardless of core.quotepath.
+    #[test]
+    fn numstat_preserves_literal_paths_and_rename_destinations() {
+        let out = concat!(
+            "2\t1\t中文 \"文件\".txt\0",
+            "3\t4\t leading\tand\ntrailing \0",
+            "-\t-\t图片.png\0",
+            "5\t6\t\0原目录/旧名.txt\0新目录/新名.txt\0",
+            "7\t8\tnext.txt\0",
+        );
+        let map = parse_numstat(out.as_bytes());
+        assert_eq!(map.len(), 5);
+        assert_eq!(map["中文 \"文件\".txt"], (2, 1, false));
+        assert_eq!(map[" leading\tand\ntrailing "], (3, 4, false));
+        assert_eq!(map["图片.png"], (0, 0, true));
+        assert_eq!(map["新目录/新名.txt"], (5, 6, false));
+        assert_eq!(map["next.txt"], (7, 8, false));
+    }
+
+    /// Display paths must also reach the exact file during staging, diffing, history, and discard.
+    #[test]
+    fn unicode_paths_round_trip_through_panel_operations() {
+        let repo = init_repo();
+        let root = repo.to_string_lossy().to_string();
+        git(&repo, &["config", "core.quotepath", "true"]);
+        std::fs::create_dir_all(repo.join("子目录")).unwrap();
+        let cwd = repo.join("子目录").to_string_lossy().to_string();
+        let mut names = vec!["未跟踪文件.txt", "v0.2.6_变更说明.md", "日本語 한글 😀.txt", " 文件名 .txt", "literal -> path.txt"];
+        #[cfg(unix)]
+        names.extend(["\"中文\".txt", "制表\t换行\n.txt", "目录\\说明.txt"]);
+
+        for name in names {
+            let paths = vec![name.to_string()];
+            std::fs::write(repo.join(name), "one\n").unwrap();
+            let files = changed_files(&cwd).unwrap();
+            assert_eq!(files.len(), 1, "{name:?}");
+            assert_eq!(files[0].path, name);
+            assert_eq!(files[0].worktree, "untracked");
+            assert_eq!(file_diff(&cwd, name).unwrap().modified, "one\n");
+            stage(&cwd, &paths).unwrap();
+            let files = changed_files(&cwd).unwrap();
+            assert_eq!(files[0].index, "added");
+            assert_eq!(files[0].staged_additions, 1);
+            unstage(&cwd, &paths).unwrap();
+            assert_eq!(changed_files(&cwd).unwrap()[0].worktree, "untracked");
+            stage(&cwd, &paths).unwrap();
+            let made = commit(&root, "Add path fixture", false).unwrap();
+            let files = commit_files(&cwd, &made.oid).unwrap();
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].path, name);
+            assert_eq!(files[0].additions, 1);
+            assert_eq!(commit_file_diff(&cwd, &made.oid, name).unwrap().modified, "one\n");
+
+            std::fs::write(repo.join(name), "one\ntwo\n").unwrap();
+            stage(&cwd, &paths).unwrap();
+            std::fs::write(repo.join(name), "one\ntwo\nthree\n").unwrap();
+            let files = changed_files(&cwd).unwrap();
+            assert_eq!(files[0].additions, 2);
+            assert_eq!(files[0].staged_additions, 1);
+            assert_eq!(files[0].unstaged_additions, 1);
+            discard(&cwd, &paths).unwrap();
+            assert_eq!(std::fs::read_to_string(repo.join(name)).unwrap(), "one\ntwo\n",
+                "discard must restore tracked content and preserve the index: {name:?}");
+            unstage(&cwd, &paths).unwrap();
+            discard(&cwd, &paths).unwrap();
+            assert_eq!(std::fs::read_to_string(repo.join(name)).unwrap(), "one\n");
+            assert!(changed_files(&cwd).unwrap().is_empty());
+        }
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+
+    /// Worktree renames use destination counts; history keeps Unicode names and binary markers.
+    #[test]
+    fn unicode_rename_and_binary_stats_match_status_paths() {
+        let repo = init_repo();
+        let cwd = repo.to_string_lossy().to_string();
+        git(&repo, &["config", "core.quotepath", "true"]);
+        git(&repo, &["config", "diff.renames", "true"]);
+        let original = "旧名称.txt";
+        let renamed = "新名称.txt";
+        let content = "line\n".repeat(20);
+        std::fs::write(repo.join(original), &content).unwrap();
+        stage(&cwd, &[original.into()]).unwrap();
+        commit(&cwd, "Add rename fixture", false).unwrap();
+        git(&repo, &["mv", original, renamed]);
+        std::fs::write(repo.join(renamed), format!("{content}extra\n")).unwrap();
+        std::fs::write(repo.join("图片.bin"), b"\0binary").unwrap();
+        stage(&cwd, &[renamed.into(), "图片.bin".into()]).unwrap();
+        let files = changed_files(&cwd).unwrap();
+        let renamed_file = files.iter().find(|f| f.path == renamed).unwrap();
+        assert_eq!(renamed_file.status, "renamed");
+        assert_eq!(renamed_file.staged_additions, 1);
+        assert!(files.iter().find(|f| f.path == "图片.bin").unwrap().staged_binary);
+        let made = commit(&cwd, "Rename and add binary", false).unwrap();
+        let files = commit_files(&cwd, &made.oid).unwrap();
+        let renamed_file = files.iter().find(|f| f.path == renamed).unwrap();
+        assert_eq!(renamed_file.status, "renamed");
+        assert_eq!(renamed_file.original_path.as_deref(), Some(original));
+        assert_eq!(renamed_file.additions, 1);
+        assert_eq!(renamed_file.deletions, 0);
+        assert!(files.iter().find(|f| f.path == "图片.bin").unwrap().binary);
+        std::fs::remove_dir_all(repo).unwrap();
     }
 
     /// An unstaged-only change puts a space in column 0 of the first porcelain line. Reading that
