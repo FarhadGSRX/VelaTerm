@@ -14,6 +14,7 @@ fg's fork of VelaTerm (upstream `vlinx-io/VelaTerm`), the terminal that hosts F-
 - Slug: velaterm
 - Channel: ws-velaterm
 - Lead: evo/velaterm-lead
+- Sponsor: evo/f-co-mgr
 - Crew: cx1/velaterm-crew, mac/velaterm-crew
 - Loop: plan in the lead; Sonnet subagents build where a change is well scoped; `cargo test` and vitest, then a live check on Evo, verify; the crews install each build on CX1 and the Mac and run the runbook's check rows
 
