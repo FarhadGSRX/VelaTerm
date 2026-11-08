@@ -124,6 +124,10 @@ function App() {
           // Broadcasts that landed while the socket was down are not replayed, so re-read the
           // authoritative session records rather than carrying a stale set of dots forward.
           void useTermStore.getState().syncSessionStates();
+          // Settings broadcasts are not replayed either. A client that kept its old copy across a backend
+          // restart would write that whole copy back on its next preference change, undoing any change
+          // made while it was away, so re-read them as at startup.
+          void refreshSettingsFromBackend();
         });
     // Detect and cache available shells here for the inline selector. Module-level detection would
     // race WebSocket connection before remote login completes. On failure, leave an empty list so the
