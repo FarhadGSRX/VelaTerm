@@ -44,7 +44,7 @@ pub fn clear_all_background_shells() {
     marked().lock().unwrap().clear();
 }
 
-fn is_marked(session_id: &str) -> bool {
+pub(crate) fn is_marked(session_id: &str) -> bool {
     marked().lock().unwrap().contains(session_id)
 }
 
@@ -75,7 +75,7 @@ fn is_claude(name: &str) -> bool {
 /// throws the question away. A session that never reported a state is a plain shell or still starting,
 /// and neither is idle in the sense the sweep means. A waiting session that started Bash background work
 /// (`marked`) is refused while a shell is still found below its Claude (`shell_found`).
-fn refusal(state: Option<AgentState>, marked: bool, shell_found: bool) -> Option<&'static str> {
+pub(crate) fn refusal(state: Option<AgentState>, marked: bool, shell_found: bool) -> Option<&'static str> {
     match state {
         Some(AgentState::Waiting) if marked && shell_found => {
             Some("it has background shell work still running (Bash run_in_background)")
@@ -90,7 +90,7 @@ fn refusal(state: Option<AgentState>, marked: bool, shell_found: bool) -> Option
 
 /// Look for a shell below Claude only when the mark says one may exist and nothing else already refuses.
 /// A mark with no shell behind it is stale, so it is cleared.
-fn shell_below_claude(app: &AppCtx, target: &str, chat: bool, state: Option<AgentState>) -> bool {
+pub(crate) fn shell_below_claude(app: &AppCtx, target: &str, chat: bool, state: Option<AgentState>) -> bool {
     if chat || state != Some(AgentState::Waiting) || !is_marked(target) {
         return false;
     }

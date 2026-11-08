@@ -164,7 +164,7 @@ fn wake_cwd(own: Option<String>, project_root: Option<String>) -> Option<String>
 /// Start a stopped Claude terminal session from the backend, resuming its conversation with `wire` as the
 /// launch prompt. The terminal starts at a default size; the first tab to attach resizes it. Returns the
 /// receipt: `sent` once Claude has read the message, `blocked` when Claude is up but stopped short of it.
-fn wake(app: &AppCtx, target: &str, wire: &str) -> Result<&'static str, String> {
+pub(crate) fn wake(app: &AppCtx, target: &str, wire: &str) -> Result<&'static str, String> {
     use crate::models::SessionKind;
     // A session linked to a file preset takes the preset's current values before they are read below.
     crate::agent::preset_file::prepare_launch(app, target)?;

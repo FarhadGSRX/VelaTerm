@@ -274,6 +274,16 @@ pub fn open_project_from_args(args: &[String], cwd: &Path) -> Result<Option<Path
         .map_err(|e| format!("cannot resolve project path {}: {e}", joined.display()))
 }
 
+/// `--quit-if-quiet` reached the running instance: exit without the quit dialog when every session is quiet.
+/// `app.exit(0)` carries a code, so the run loop does not ask for confirmation, and the exit cleanup runs.
+#[cfg(all(feature = "gui", not(debug_assertions)))]
+fn quit_if_quiet_request(app: &tauri::AppHandle) {
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    if agent::quit_if_quiet::handle(&AppCtx::Tauri(app.clone()), &dir) {
+        app.exit(0);
+    }
+}
+
 #[cfg(all(feature = "gui", not(debug_assertions)))]
 fn queue_open_project(app: &tauri::AppHandle, args: &[String], cwd: &str) {
     use tauri::Emitter;
@@ -657,6 +667,11 @@ pub fn run(initial_open_project: Option<PathBuf>) {
     #[cfg(not(debug_assertions))]
     let builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            // A quiet-quit request opens no project and shows no window: it only decides whether to exit.
+            if agent::quit_if_quiet::requested(&args) {
+                quit_if_quiet_request(app);
+                return;
+            }
             queue_open_project(app, &args, &cwd);
             // Launching again brings up the main window, opening a new one after the user closed it.
             open_main_window(app);
@@ -716,6 +731,15 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             initial_open_project.map(|p| p.to_string_lossy().into_owned()),
         )))
         .setup(|app| {
+            // `--quit-if-quiet` on a launch that is the only instance (a release build forwards a second
+            // launch's arguments to the first one and exits before this point): there is nothing to quit.
+            // Say so and leave before any service starts. The main window is created hidden and not yet shown.
+            if agent::quit_if_quiet::requested(&std::env::args().collect::<Vec<_>>()) {
+                if let Ok(dir) = app.path().app_data_dir() {
+                    agent::quit_if_quiet::write_result(&dir, "not-running", &[]);
+                }
+                std::process::exit(0);
+            }
             // Main and connection windows share a work-area-aware native startup frame on every platform.
             if let Some(win) = app.get_webview_window("main") {
                 window_layout::apply(&win);
@@ -1100,6 +1124,8 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             agent::chat::auto_continue::start(AppCtx::Tauri(app.handle().clone()));
             // Keeps file presets in step with ~/.config/velaterm/presets.json while VelaTerm runs.
             agent::preset_file::start(AppCtx::Tauri(app.handle().clone()));
+            // Resumes the sessions whose preset carries an autostart message, once per process start.
+            agent::autostart::start(AppCtx::Tauri(app.handle().clone()));
             agent::remote_model_catalog::start(AppCtx::Tauri(app.handle().clone()));
 
             // Refresh the search index in the background so the first search only pays for what changed

@@ -81,6 +81,8 @@ struct Entry {
     settings: Option<String>,
     /// Sessions linked to this preset are kept out of the search index and unreadable by other sessions.
     private: bool,
+    /// The first message for the session when VelaTerm starts. `None`: the session is not started by itself.
+    autostart: Option<String>,
 }
 
 fn map_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
@@ -92,11 +94,12 @@ fn map_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
         cwd: r.get(4)?,
         settings: r.get(5)?,
         private: r.get(6)?,
+        autostart: r.get(7)?,
     })
 }
 
 const ENTRY_COLUMNS: &str =
-    "p.id, p.name, p.agent_args, p.permission_mode, p.cwd, p.settings_path, p.private";
+    "p.id, p.name, p.agent_args, p.permission_mode, p.cwd, p.settings_path, p.private, p.autostart";
 
 // ── Reading the file ──
 
@@ -115,6 +118,9 @@ fn parse_doc(text: &str) -> Result<Vec<Value>, String> {
         .cloned()
         .ok_or_else(|| "presets must be a list".to_string())
 }
+
+/// The longest `autostart` message a preset may carry.
+const AUTOSTART_MAX: usize = 4000;
 
 /// A valid preset and the keys it carried that VelaTerm ignores, or the preset's id (when it has one)
 /// and why it was rejected.
@@ -170,8 +176,17 @@ fn parse_entry(value: &Value) -> Result<(Entry, Vec<&'static str>), (Option<Stri
         Some(Value::Bool(flag)) => *flag,
         Some(_) => return Err(fail("private must be true or false".into())),
     };
+    let autostart = match obj.get("autostart") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) if text.trim().is_empty() => None,
+        Some(Value::String(text)) if text.chars().count() > AUTOSTART_MAX => {
+            return Err(fail(format!("autostart is longer than {AUTOSTART_MAX} characters")));
+        }
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(_) => return Err(fail("autostart must be a string".into())),
+    };
     let ignored = if obj.contains_key("execPath") { vec!["execPath"] } else { Vec::new() };
-    Ok((Entry { id, name, args, permission_mode, cwd, settings, private }, ignored))
+    Ok((Entry { id, name, args, permission_mode, cwd, settings, private, autostart }, ignored))
 }
 
 /// An argument VelaTerm can quote the same way for every shell it launches in, and that leaves alone the
@@ -237,6 +252,7 @@ fn changed_fields(old: &Entry, new: &Entry) -> Vec<&'static str> {
         ("cwd", old.cwd != new.cwd),
         ("settings", old.settings != new.settings),
         ("private", old.private != new.private),
+        ("autostart", old.autostart != new.autostart),
     ]
     .into_iter()
     .filter_map(|(field, changed)| changed.then_some(field))
@@ -283,8 +299,8 @@ fn apply_import(conn: &Connection, items: &[Value], now_ms: i64) -> Result<Vec<V
                 }
                 tx.execute(
                     "INSERT INTO agent_presets
-                       (id, name, base_kind, agent_args, permission_mode, sort_order, created_at, source, cwd, settings_path, private)
-                     VALUES (?1, ?2, 'claude', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                       (id, name, base_kind, agent_args, permission_mode, sort_order, created_at, source, cwd, settings_path, private, autostart)
+                     VALUES (?1, ?2, 'claude', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     params![
                         entry.id,
                         entry.name,
@@ -295,7 +311,8 @@ fn apply_import(conn: &Connection, items: &[Value], now_ms: i64) -> Result<Vec<V
                         SOURCE,
                         entry.cwd,
                         entry.settings,
-                        entry.private
+                        entry.private,
+                        entry.autostart
                     ],
                 )
                 .map_err(|e| e.to_string())?;
@@ -308,7 +325,7 @@ fn apply_import(conn: &Connection, items: &[Value], now_ms: i64) -> Result<Vec<V
                 }
                 tx.execute(
                     "UPDATE agent_presets
-                        SET name = ?2, agent_args = ?3, permission_mode = ?4, cwd = ?5, settings_path = ?6, private = ?8, exec_path = NULL
+                        SET name = ?2, agent_args = ?3, permission_mode = ?4, cwd = ?5, settings_path = ?6, private = ?8, autostart = ?9, exec_path = NULL
                       WHERE id = ?1 AND source = ?7",
                     params![
                         entry.id,
@@ -318,7 +335,8 @@ fn apply_import(conn: &Connection, items: &[Value], now_ms: i64) -> Result<Vec<V
                         entry.cwd,
                         entry.settings,
                         SOURCE,
-                        entry.private
+                        entry.private,
+                        entry.autostart
                     ],
                 )
                 .map_err(|e| e.to_string())?;
@@ -600,6 +618,7 @@ pub fn list(conn: &Connection) -> Result<Value, String> {
             "cwd": preset.cwd,
             "settings": preset.settings,
             "private": preset.private,
+            "autostart": preset.autostart.is_some(),
             "sessions": linked,
         }));
     }
@@ -845,8 +864,56 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_made_in_velaterm_keeps_copy_at_creation() {
+    fn autostart_is_parsed_and_off_unless_a_non_blank_string() {
+        let parse = |v: Value| parse_entry(&v).map(|(e, _)| e.autostart);
+        assert_eq!(parse(lead(json!([]))), Ok(None), "absent");
+        let mut p = lead(json!([]));
+        p["autostart"] = Value::Null;
+        assert_eq!(parse(p.clone()), Ok(None), "null");
+        p["autostart"] = json!("");
+        assert_eq!(parse(p.clone()), Ok(None), "empty");
+        p["autostart"] = json!(" \n\t ");
+        assert_eq!(parse(p.clone()), Ok(None), "whitespace");
+        p["autostart"] = json!("Reply STARTED.");
+        assert_eq!(parse(p.clone()), Ok(Some("Reply STARTED.".to_string())));
+        p["autostart"] = json!("x".repeat(AUTOSTART_MAX));
+        assert!(parse(p.clone()).unwrap().is_some(), "the limit itself is allowed");
+        p["autostart"] = json!("x".repeat(AUTOSTART_MAX + 1));
+        assert!(parse(p.clone()).unwrap_err().1.contains("autostart"));
+        p["autostart"] = json!(true);
+        assert!(parse(p.clone()).unwrap_err().1.contains("autostart"));
+        p["autostart"] = json!(["a"]);
+        assert!(parse(p).unwrap_err().1.contains("autostart"));
+    }
+
+    #[test]
+    fn autostart_is_imported_and_its_change_detected() {
         let conn = db();
+        let stored = |conn: &Connection| -> Option<String> {
+            conn.query_row("SELECT autostart FROM agent_presets WHERE id = 'f-co/lead'", [], |r| r.get(0)).unwrap()
+        };
+        let mut preset = lead(json!([]));
+        preset["autostart"] = json!("first");
+        let lines = import(&conn, file(json!([preset.clone()])), 1);
+        assert_eq!(lines, vec![json!({"change": "added", "id": "f-co/lead"})]);
+        assert_eq!(stored(&conn).as_deref(), Some("first"));
+
+        let lines = import(&conn, file(json!([preset.clone()])), 2);
+        assert!(lines.is_empty(), "an unchanged file changes nothing");
+
+        preset["autostart"] = json!("second");
+        let lines = import(&conn, file(json!([preset.clone()])), 3);
+        assert_eq!(lines, vec![json!({"change": "updated", "id": "f-co/lead", "fields": ["autostart"]})]);
+        assert_eq!(stored(&conn).as_deref(), Some("second"));
+
+        preset["autostart"] = json!("");
+        let lines = import(&conn, file(json!([preset])), 4);
+        assert_eq!(lines, vec![json!({"change": "updated", "id": "f-co/lead", "fields": ["autostart"]})]);
+        assert_eq!(stored(&conn), None, "an empty message turns it off");
+    }
+
+    #[test]
+    fn a_preset_made_in_velaterm_keeps_copy_at_creation() {        let conn = db();
         let mine = crate::db::repo::create_agent_preset(&conn, "mine", SessionKind::Claude, None, Some("--new"), None, None)
             .unwrap();
         conn.execute("UPDATE sessions SET agent_preset_id = ?1 WHERE id = 's'", [&mine.id]).unwrap();
