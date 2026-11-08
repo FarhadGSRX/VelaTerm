@@ -656,6 +656,9 @@ fn serve_with_app(
                 }
             }
             // Emit an additional Tool signal from lifecycle fields so Info can show active tooling.
+            if crate::agent::stop::starts_background_shell(&body) {
+                crate::agent::stop::mark_background_shell(&sid);
+            }
             if let Some(tool_signal) = parse_tool_signal(&body) {
                 on_signal(sid.clone(), tool_signal);
             }

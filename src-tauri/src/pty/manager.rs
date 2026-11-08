@@ -1210,6 +1210,7 @@ impl PtyManager {
             // natural exit requires this path to prevent backend handle leaks.
             sessions_for_read.lock().unwrap().remove(&id_for_read);
             status_cache_for_read.lock().unwrap().remove(&id_for_read);
+            crate::agent::stop::clear_background_shell(&id_for_read);
             // Emit `pty://exit` for natural exit and `pty://killed` for intentional termination. Other attached
             // clients use the latter to close their views instead of leaving a frozen terminal.
             // An agent that exits mid-turn never sends Stop; settle it so `vstat` and anything waiting on
@@ -1733,6 +1734,7 @@ impl PtyManager {
             diagnostic.step("finish");
         }
         self.status_cache.lock().unwrap().remove(id);
+        crate::agent::stop::clear_background_shell(id);
         if killed {diagnostic.success();}
         Ok(())
     }
@@ -1762,6 +1764,7 @@ impl PtyManager {
             let _ = session.killer.kill();
         }
         self.status_cache.lock().unwrap().clear();
+        crate::agent::stop::clear_all_background_shells();
     }
 
     /// Detaches one output subscriber without killing the session. Spawn-or-attach is unified in `spawn`.

@@ -23,13 +23,63 @@ pub struct Request {
     pub force: bool,
 }
 
+/// Sessions whose Claude has asked for a Bash command with `run_in_background`. The hooks report such a
+/// session as `waiting` once its turn ends, so the mark is the only sign that shell work may be running.
+/// In memory only: a restart of VelaTerm also restarts the terminals the marks describe.
+fn marked() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static MARKED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    MARKED.get_or_init(Default::default)
+}
+
+pub fn mark_background_shell(session_id: &str) {
+    marked().lock().unwrap().insert(session_id.to_string());
+}
+
+/// Called when the session's terminal exits or is killed, so a restart starts clean.
+pub fn clear_background_shell(session_id: &str) {
+    marked().lock().unwrap().remove(session_id);
+}
+
+pub fn clear_all_background_shells() {
+    marked().lock().unwrap().clear();
+}
+
+fn is_marked(session_id: &str) -> bool {
+    marked().lock().unwrap().contains(session_id)
+}
+
+/// Whether a Claude hook body is a `PreToolUse` for the Bash tool with `run_in_background` true.
+pub(crate) fn starts_background_shell(body: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<Value>(body) else { return false };
+    let event = v.get("hook_event_name").or_else(|| v.get("hookEventName")).and_then(Value::as_str);
+    event == Some("PreToolUse")
+        && v.get("tool_name").or_else(|| v.get("toolName")).and_then(Value::as_str) == Some("Bash")
+        && v.get("tool_input").and_then(|input| input.get("run_in_background")).and_then(Value::as_bool) == Some(true)
+}
+
+/// A POSIX shell, with or without `.exe`. Not `cmd`, `pwsh` or `powershell`: Windows MCP launchers use those.
+fn is_posix_shell(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    matches!(name, "bash" | "sh" | "zsh" | "dash" | "fish")
+}
+
+fn is_claude(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "claude" || name == "claude.exe"
+}
+
 /// Why a session must not be stopped without `--force`, or `None` when it may be.
 ///
 /// A working or background session would lose its work. An asking one is waiting on fg, and stopping it
 /// throws the question away. A session that never reported a state is a plain shell or still starting,
-/// and neither is idle in the sense the sweep means.
-fn refusal(state: Option<AgentState>) -> Option<&'static str> {
+/// and neither is idle in the sense the sweep means. A waiting session that started Bash background work
+/// (`marked`) is refused while a shell is still found below its Claude (`shell_found`).
+fn refusal(state: Option<AgentState>, marked: bool, shell_found: bool) -> Option<&'static str> {
     match state {
+        Some(AgentState::Waiting) if marked && shell_found => {
+            Some("it has background shell work still running (Bash run_in_background)")
+        }
         Some(AgentState::Waiting) => None,
         Some(AgentState::Working) => Some("it is working"),
         Some(AgentState::Background) => Some("its background work is still running"),
@@ -38,6 +88,22 @@ fn refusal(state: Option<AgentState>) -> Option<&'static str> {
     }
 }
 
+/// Look for a shell below Claude only when the mark says one may exist and nothing else already refuses.
+/// A mark with no shell behind it is stale, so it is cleared.
+fn shell_below_claude(app: &AppCtx, target: &str, chat: bool, state: Option<AgentState>) -> bool {
+    if chat || state != Some(AgentState::Waiting) || !is_marked(target) {
+        return false;
+    }
+    let found = app
+        .pty()
+        .cwd_pid(target)
+        .and_then(|pid| crate::procstat::below_process_has(pid, is_claude, is_posix_shell))
+        .unwrap_or(false);
+    if !found {
+        clear_background_shell(target);
+    }
+    found
+}
 fn state_name(state: Option<AgentState>) -> Value {
     state.map(|s| json!(s)).unwrap_or(Value::Null)
 }
@@ -64,7 +130,8 @@ pub fn stop(app: &AppCtx, req: &Request) -> Result<Value, String> {
         return Ok(out);
     }
     if !req.force {
-        if let Some(why) = refusal(state) {
+        let shell_found = shell_below_claude(app, &target, chat, state);
+        if let Some(why) = refusal(state, is_marked(&target), shell_found) {
             return Err(format!("Not stopping {}: {why}. Pass --force to stop it anyway", session.name));
         }
     }
@@ -126,8 +193,9 @@ const USAGE: &str = "usage: vstop <session> [--reason \"<text>\"] [--force] [--j
 Stop a session's process the way the sidebar's Kill does. The session stays in the tree, and vtell
 or a click resumes it in the same conversation.
 Targets accept a session ID, an ID prefix of at least 8 characters, or an unambiguous name.
-Refuses, unless --force, a session that is working, running background work, waiting on a permission
-prompt or question, or has not reported a state; and always refuses the calling session.
+Refuses, unless --force, a session that is working, running background work (including a Bash
+run_in_background command still running), waiting on a permission prompt or question, or has not
+reported a state; and always refuses the calling session.
 Stopping also clears the session's unread marker.
 --reason is recorded in VelaTerm's diagnostics log.";
 
@@ -201,10 +269,47 @@ mod tests {
 
     #[test]
     fn only_a_waiting_session_stops_without_force() {
-        assert_eq!(refusal(Some(AgentState::Waiting)), None);
+        assert_eq!(refusal(Some(AgentState::Waiting), false, false), None);
         for state in [Some(AgentState::Working), Some(AgentState::Background), Some(AgentState::Asking), None] {
-            assert!(refusal(state).is_some(), "{state:?} must need --force");
+            assert!(refusal(state, false, false).is_some(), "{state:?} must need --force");
         }
+    }
+
+    #[test]
+    fn a_waiting_session_is_refused_only_with_a_mark_and_a_shell() {
+        assert_eq!(refusal(Some(AgentState::Waiting), true, false), None);
+        assert_eq!(refusal(Some(AgentState::Waiting), false, true), None);
+        let why = refusal(Some(AgentState::Waiting), true, true).unwrap();
+        assert!(why.contains("Bash run_in_background"));
+    }
+
+    #[test]
+    fn hook_bodies_mark_only_background_bash() {
+        let bash = |input: &str| format!(r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{input}}}"#);
+        assert!(starts_background_shell(&bash(r#"{"command":"sleep 99","run_in_background":true}"#)));
+        assert!(!starts_background_shell(&bash(r#"{"command":"ls"}"#)));
+        assert!(!starts_background_shell(&bash(r#"{"command":"ls","run_in_background":false}"#)));
+        assert!(!starts_background_shell(r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"run_in_background":true}}"#));
+        assert!(!starts_background_shell(r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"run_in_background":true}}"#));
+        assert!(!starts_background_shell("not json"));
+    }
+
+    #[test]
+    fn only_posix_shells_count() {
+        for name in ["bash", "bash.exe", "SH", "zsh", "dash", "fish.exe"] {
+            assert!(is_posix_shell(name), "{name}");
+        }
+        for name in ["cmd.exe", "pwsh.exe", "powershell", "node", "claude"] {
+            assert!(!is_posix_shell(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_mark_is_set_and_cleared_per_session() {
+        mark_background_shell("mark-test");
+        assert!(is_marked("mark-test"));
+        clear_background_shell("mark-test");
+        assert!(!is_marked("mark-test"));
     }
 
     #[test]

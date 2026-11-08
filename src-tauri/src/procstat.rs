@@ -156,6 +156,51 @@ pub fn subtree_has_process(pid: u32, matches: impl Fn(&str) -> bool) -> Option<b
     Some(false)
 }
 
+/// Whether a process matching `matches` runs strictly below a process matching `anchor`, within the tree
+/// rooted at `pid`. None when the root is gone. The anchor itself never counts, nor do processes that sit
+/// beside or above it, so a shell that hosts the agent is not mistaken for work the agent started.
+pub fn below_process_has(pid: u32, anchor: impl Fn(&str) -> bool, matches: impl Fn(&str) -> bool) -> Option<bool> {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    sys.process(Pid::from_u32(pid))?;
+    let table: Vec<(u32, Option<u32>, String)> = sys
+        .processes()
+        .iter()
+        .map(|(p, process)| {
+            (p.as_u32(), process.parent().map(|parent| parent.as_u32()), process.name().to_string_lossy().into_owned())
+        })
+        .collect();
+    Some(below_has(&table, pid, anchor, matches))
+}
+
+/// The pure core of `below_process_has`, over `(pid, parent, name)` rows.
+fn below_has(table: &[(u32, Option<u32>, String)], root: u32, anchor: impl Fn(&str) -> bool, matches: impl Fn(&str) -> bool) -> bool {
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut names: HashMap<u32, &str> = HashMap::new();
+    for (pid, parent, name) in table {
+        names.insert(*pid, name);
+        if let Some(parent) = parent {
+            children.entry(*parent).or_default().push(*pid);
+        }
+    }
+    let mut stack = vec![(root, false)];
+    let mut seen: HashMap<u32, ()> = HashMap::new();
+    while let Some((cur, below_anchor)) = stack.pop() {
+        if seen.insert(cur, ()).is_some() {
+            continue;
+        }
+        let name = names.get(&cur).copied().unwrap_or("");
+        if below_anchor && matches(name) {
+            return true;
+        }
+        let next = below_anchor || anchor(name);
+        if let Some(kids) = children.get(&cur) {
+            stack.extend(kids.iter().map(|kid| (*kid, next)));
+        }
+    }
+    false
+}
+
 /// Machine-wide CPU, memory, and swap, plus platform saturation signals. macOS reports both the
 /// kernel's memory pressure level and load average; Linux reports load average; Windows reports neither.
 #[derive(Debug, Clone, Serialize)]
@@ -283,4 +328,27 @@ pub fn system_stats() -> SystemStats {
     guard.inner.mark_refreshed();
     guard.last = Some(out.clone());
     out
+}
+
+#[cfg(test)]
+mod below_tests {
+    use super::below_has;
+
+    fn rows(list: &[(u32, Option<u32>, &str)]) -> Vec<(u32, Option<u32>, String)> {
+        list.iter().map(|(p, q, n)| (*p, *q, n.to_string())).collect()
+    }
+
+    #[test]
+    fn only_processes_below_the_anchor_match() {
+        let claude = |n: &str| n == "claude";
+        let bash = |n: &str| n == "bash";
+        let table = rows(&[(1, None, "pwsh"), (2, Some(1), "claude"), (3, Some(2), "bash"), (4, Some(1), "bash")]);
+        assert!(below_has(&table, 1, claude, bash));
+        let only_sibling = rows(&[(1, None, "pwsh"), (2, Some(1), "claude"), (4, Some(1), "bash")]);
+        assert!(!below_has(&only_sibling, 1, claude, bash));
+        let no_claude = rows(&[(1, None, "pwsh"), (4, Some(1), "bash")]);
+        assert!(!below_has(&no_claude, 1, claude, bash));
+        let deep = rows(&[(1, None, "pwsh"), (2, Some(1), "claude"), (3, Some(2), "node"), (5, Some(3), "bash")]);
+        assert!(below_has(&deep, 1, claude, bash));
+    }
 }
