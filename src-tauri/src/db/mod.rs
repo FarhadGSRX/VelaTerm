@@ -49,6 +49,7 @@ impl Db {
         crate::agent::plan_execute::migrate(&conn)?;
         conn.execute_batch(crate::agent::tell::SCHEMA).map_err(|e| e.to_string())?;
         conn.execute_batch(crate::agent::tell_tui::SCHEMA).map_err(|e| e.to_string())?;
+        conn.execute_batch(crate::search::private::SCHEMA).map_err(|e| e.to_string())?;
         crate::mobile_push::init(&conn)?;
         crate::memory::init(&conn)?;
         crate::kb::init(&conn)?;
@@ -277,6 +278,11 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             conn.execute(&format!("ALTER TABLE agent_presets ADD COLUMN {column} TEXT"), [])
                 .map_err(|e| format!("Failed to migrate agent_presets.{column}: {e}"))?;
         }
+    }
+    // File presets: `private` marks the sessions linked to the preset as private (search/private.rs).
+    if table_exists(conn, "agent_presets") && !column_exists(conn, "agent_presets", "private") {
+        conn.execute("ALTER TABLE agent_presets ADD COLUMN private INTEGER NOT NULL DEFAULT 0", [])
+            .map_err(|e| format!("Failed to migrate agent_presets.private: {e}"))?;
     }
     if table_exists(conn, "projects") && !column_exists(conn, "projects", "collection_id") {
         conn.execute("ALTER TABLE projects ADD COLUMN collection_id TEXT REFERENCES projects(id) ON DELETE SET NULL", [])

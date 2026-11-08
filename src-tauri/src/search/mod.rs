@@ -26,6 +26,7 @@
 pub mod ansi;
 pub mod fuzzy;
 pub mod index;
+pub mod private;
 pub mod tokenize;
 
 use std::path::Path;

@@ -89,7 +89,7 @@ fn delete_rows(
 }
 
 /// Current Unix time in seconds.
-fn now_secs() -> i64 {
+pub(super) fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -303,6 +303,11 @@ pub fn reindex_session(db: &Db, recordings_dir: &Path, session: &Session) -> Res
         if !fts_ready(&conn) {
             return Ok(());
         }
+        // A private session is never indexed; drop whatever rows it still has.
+        if super::private::is_private(&conn, &session.id) {
+            drop(conn);
+            return drop_private(db, &[session.id.clone()]);
+        }
     }
     // Read and parse/strip files outside the lock.
     let built = build_full(session, recordings_dir);
@@ -361,6 +366,56 @@ pub fn drop_sessions(db: &Db, ids: &[String]) -> Result<(), String> {
     }
     tx.commit()
         .map_err(|e| format!("Failed to commit drop tx: {e}"))?;
+    Ok(())
+}
+
+/// Drop the index rows of private sessions. Only when some rows were actually there, scrub the database
+/// file, because FTS5 and SQLite keep deleted text in free pages and segments until they are rewritten.
+/// An ordinary refresh, with nothing to drop, never reaches the scrub.
+pub fn drop_private(db: &Db, ids: &[String]) -> Result<(), String> {
+    let present: Vec<String> = {
+        let conn = db.conn.lock().unwrap();
+        if !fts_ready(&conn) {
+            return Ok(());
+        }
+        let mut found = Vec::new();
+        for id in ids {
+            let any: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM session_fts WHERE session_id = ?1) \
+                         OR EXISTS(SELECT 1 FROM session_words WHERE session_id = ?1) \
+                         OR EXISTS(SELECT 1 FROM search_index_state WHERE session_id = ?1)",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("Failed to check private session rows: {e}"))?;
+            if any {
+                found.push(id.clone());
+            }
+        }
+        found
+    };
+    if present.is_empty() {
+        return Ok(());
+    }
+    drop_sessions(db, &present)?;
+    scrub(db)
+}
+
+/// Make deleted index text unrecoverable from the database file: merge both FTS5 tables' segments
+/// (`optimize` rewrites them without the deleted rows), `VACUUM` the freed pages, then truncate the WAL.
+/// The connection lock is held throughout, and `VACUUM` rewrites the whole file, so on a large database this
+/// blocks every other database user for roughly the time it takes to copy the file.
+fn scrub(db: &Db) -> Result<(), String> {
+    let conn = db.conn.lock().unwrap();
+    for table in ["session_fts", "session_words"] {
+        conn.execute(&format!("INSERT INTO {table}({table}) VALUES('optimize')"), [])
+            .map_err(|e| format!("Failed to optimize {table}: {e}"))?;
+    }
+    // VACUUM cannot run inside a transaction; the connection is in autocommit here.
+    conn.execute_batch("VACUUM").map_err(|e| format!("Failed to vacuum the database: {e}"))?;
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .map_err(|e| format!("Failed to truncate the write-ahead log: {e}"))?;
     Ok(())
 }
 
@@ -479,14 +534,17 @@ pub fn backfill_words(db: &Db) -> Result<(), String> {
 /// complete the word index for any trigram row that lacks a companion.
 pub fn refresh_stale(db: &Db, recordings_dir: &Path) -> Result<(), String> {
     // Snapshot sessions and checkpoints under the lock, then release it before expensive work.
-    let (sessions, states, orphan_ids) = {
+    let (sessions, states, orphan_ids, private_ids) = {
         let conn = db.conn.lock().unwrap();
         if !fts_ready(&conn) {
             return Ok(());
         }
-        let sessions = repo::list_all_sessions(&conn)?;
+        let private_ids = super::private::ids(&conn);
+        let mut sessions = repo::list_all_sessions(&conn)?;
         let live: std::collections::HashSet<String> =
             sessions.iter().map(|s| s.id.clone()).collect();
+        // A private session is never indexed, so the loop below never sees it.
+        sessions.retain(|s| !private_ids.contains(&s.id));
 
         let mut states: std::collections::HashMap<(String, String), StateRow> =
             std::collections::HashMap::new();
@@ -525,13 +583,15 @@ pub fn refresh_stale(db: &Db, recordings_dir: &Path) -> Result<(), String> {
                 );
             }
         }
-        (sessions, states, orphan.into_iter().collect::<Vec<_>>())
+        (sessions, states, orphan.into_iter().collect::<Vec<_>>(), private_ids.into_iter().collect::<Vec<_>>())
     };
 
     // Remove index rows whose sessions no longer exist in the database.
     if !orphan_ids.is_empty() {
         drop_sessions(db, &orphan_ids)?;
     }
+    // Drop rows a session indexed before it became private, and scrub the file if there were any.
+    drop_private(db, &private_ids)?;
     backfill_words(db)?;
 
     // Checkpoints written before source_path existed get the path recorded without re-indexing, in one
@@ -1045,4 +1105,71 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
+
+    fn bytes_contain(path: &Path, needle: &str) -> bool {
+        std::fs::read(path).map(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes())).unwrap_or(false)
+    }
+
+    #[test]
+    fn a_private_session_is_never_indexed_and_its_rows_are_scrubbed_from_the_files() {
+        const WORD: &str = "zebraquartz9f3";
+        let dir = std::env::temp_dir().join(format!("vlx-private-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index.db");
+        let wal = dir.join("index.db-wal");
+        let db = Db::open(&path).unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO projects(id, name, root_path, sort_order, created_at) VALUES ('p','p','/p',0,0)", [])
+                .unwrap();
+            for id in ["priv", "pub"] {
+                conn.execute(
+                    "INSERT INTO sessions(id, project_id, name, kind, sort_order, created_at) VALUES (?1,'p',?1,'terminal',0,0)",
+                    [id],
+                )
+                .unwrap();
+            }
+        }
+        std::fs::write(dir.join("priv.log"), format!("the {WORD} line\nsecond line\n")).unwrap();
+        std::fs::write(dir.join("pub.log"), "an ordinary line\n").unwrap();
+
+        refresh_stale(&db, &dir).unwrap();
+        assert!(count_rows(&db, "priv") > 0 && count_rows(&db, "pub") > 0);
+        assert!(bytes_contain(&path, WORD) || bytes_contain(&wal, WORD), "the word is in the files before the scrub");
+
+        // Flag it: the next refresh drops its rows and checkpoint, leaves the other session alone, and scrubs.
+        super::super::private::set(&db.conn.lock().unwrap(), "priv", true).unwrap();
+        refresh_stale(&db, &dir).unwrap();
+        assert_eq!(count_rows(&db, "priv"), 0);
+        let states: i64 = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM search_index_state WHERE session_id = 'priv'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(states, 0);
+        assert!(count_rows(&db, "pub") > 0);
+        assert!(!bytes_contain(&path, WORD), "the word is gone from the database file");
+        assert!(!bytes_contain(&wal, WORD), "and from the write-ahead log");
+
+        // A private session that grows, or stops, stays out of the index.
+        std::fs::write(dir.join("priv.log"), format!("the {WORD} line\nsecond line\nthird line\n")).unwrap();
+        refresh_stale(&db, &dir).unwrap();
+        reindex_session(&db, &dir, &make_session("priv", SessionKind::Terminal, None)).unwrap();
+        assert_eq!(count_rows(&db, "priv"), 0);
+        assert!(!bytes_contain(&path, WORD) && !bytes_contain(&wal, WORD));
+
+        // Clearing the flag lets it be indexed again.
+        super::super::private::set(&db.conn.lock().unwrap(), "priv", false).unwrap();
+        refresh_stale(&db, &dir).unwrap();
+        assert!(count_rows(&db, "priv") > 0);
+
+        // Reindexing at stop drops rows a session got while it was not yet flagged.
+        super::super::private::set(&db.conn.lock().unwrap(), "priv", true).unwrap();
+        reindex_session(&db, &dir, &make_session("priv", SessionKind::Terminal, None)).unwrap();
+        assert_eq!(count_rows(&db, "priv"), 0);
+        assert!(!bytes_contain(&path, WORD) && !bytes_contain(&wal, WORD));
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }}

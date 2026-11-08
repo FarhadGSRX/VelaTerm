@@ -11,6 +11,9 @@
 //!
 //! The file:
 //!
+//! An optional `"private": true` keeps the linked sessions out of the search index and unreadable by other
+//! sessions (`search/private.rs`). It is set when a session is linked and at each launch, never on unlink.
+//!
 //! ```json
 //! {"version": 1, "presets": [{"id": "f-co/velaterm-lead", "name": "velaterm-lead", "kind": "claude",
 //!   "cwd": "C:/Users/me/Code/VelaTerm", "args": ["--model", "opus"], "permissionMode": "auto",
@@ -76,6 +79,8 @@ struct Entry {
     permission_mode: Option<String>,
     cwd: Option<String>,
     settings: Option<String>,
+    /// Sessions linked to this preset are kept out of the search index and unreadable by other sessions.
+    private: bool,
 }
 
 fn map_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
@@ -86,10 +91,12 @@ fn map_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
         permission_mode: r.get(3)?,
         cwd: r.get(4)?,
         settings: r.get(5)?,
+        private: r.get(6)?,
     })
 }
 
-const ENTRY_COLUMNS: &str = "p.id, p.name, p.agent_args, p.permission_mode, p.cwd, p.settings_path";
+const ENTRY_COLUMNS: &str =
+    "p.id, p.name, p.agent_args, p.permission_mode, p.cwd, p.settings_path, p.private";
 
 // ── Reading the file ──
 
@@ -158,8 +165,13 @@ fn parse_entry(value: &Value) -> Result<(Entry, Vec<&'static str>), (Option<Stri
     };
     let cwd = path_field(obj, "cwd").map_err(fail)?;
     let settings = path_field(obj, "settings").map_err(fail)?;
+    let private = match obj.get("private") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(flag)) => *flag,
+        Some(_) => return Err(fail("private must be true or false".into())),
+    };
     let ignored = if obj.contains_key("execPath") { vec!["execPath"] } else { Vec::new() };
-    Ok((Entry { id, name, args, permission_mode, cwd, settings }, ignored))
+    Ok((Entry { id, name, args, permission_mode, cwd, settings, private }, ignored))
 }
 
 /// An argument VelaTerm can quote the same way for every shell it launches in, and that leaves alone the
@@ -224,6 +236,7 @@ fn changed_fields(old: &Entry, new: &Entry) -> Vec<&'static str> {
         ("permissionMode", old.permission_mode != new.permission_mode),
         ("cwd", old.cwd != new.cwd),
         ("settings", old.settings != new.settings),
+        ("private", old.private != new.private),
     ]
     .into_iter()
     .filter_map(|(field, changed)| changed.then_some(field))
@@ -270,8 +283,8 @@ fn apply_import(conn: &Connection, items: &[Value], now_ms: i64) -> Result<Vec<V
                 }
                 tx.execute(
                     "INSERT INTO agent_presets
-                       (id, name, base_kind, agent_args, permission_mode, sort_order, created_at, source, cwd, settings_path)
-                     VALUES (?1, ?2, 'claude', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                       (id, name, base_kind, agent_args, permission_mode, sort_order, created_at, source, cwd, settings_path, private)
+                     VALUES (?1, ?2, 'claude', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
                         entry.id,
                         entry.name,
@@ -281,7 +294,8 @@ fn apply_import(conn: &Connection, items: &[Value], now_ms: i64) -> Result<Vec<V
                         now_ms / 1000,
                         SOURCE,
                         entry.cwd,
-                        entry.settings
+                        entry.settings,
+                        entry.private
                     ],
                 )
                 .map_err(|e| e.to_string())?;
@@ -294,9 +308,18 @@ fn apply_import(conn: &Connection, items: &[Value], now_ms: i64) -> Result<Vec<V
                 }
                 tx.execute(
                     "UPDATE agent_presets
-                        SET name = ?2, agent_args = ?3, permission_mode = ?4, cwd = ?5, settings_path = ?6, exec_path = NULL
+                        SET name = ?2, agent_args = ?3, permission_mode = ?4, cwd = ?5, settings_path = ?6, private = ?8, exec_path = NULL
                       WHERE id = ?1 AND source = ?7",
-                    params![entry.id, entry.name, entry.args, entry.permission_mode, entry.cwd, entry.settings, SOURCE],
+                    params![
+                        entry.id,
+                        entry.name,
+                        entry.args,
+                        entry.permission_mode,
+                        entry.cwd,
+                        entry.settings,
+                        SOURCE,
+                        entry.private
+                    ],
                 )
                 .map_err(|e| e.to_string())?;
                 json!({"change": "updated", "id": entry.id, "fields": fields})
@@ -403,6 +426,7 @@ pub fn prepare_launch(app: &AppCtx, session_id: &str) -> Result<Option<String>, 
 
 pub(crate) fn follow(conn: &Connection, session_id: &str) -> Result<Option<String>, String> {
     let Some(preset) = linked(conn, session_id)? else { return Ok(None) };
+    crate::search::private::set(conn, session_id, preset.private)?;
     conn.execute(
         "UPDATE sessions SET agent_args = ?2, permission_mode = ?3, agent_path = NULL WHERE id = ?1",
         params![session_id, preset.args, preset.permission_mode],
@@ -484,11 +508,11 @@ pub fn link(conn: &Connection, session_id: &str, preset_id: &str, force: bool) -
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or("The session no longer exists")?;
-    let (base, cwd): (String, Option<String>) = conn
+    let (base, cwd, private): (String, Option<String>, bool) = conn
         .query_row(
-            "SELECT base_kind, cwd FROM agent_presets WHERE id = ?1 AND source = ?2",
+            "SELECT base_kind, cwd, private FROM agent_presets WHERE id = ?1 AND source = ?2",
             params![preset_id, SOURCE],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -511,6 +535,7 @@ pub fn link(conn: &Connection, session_id: &str, preset_id: &str, force: bool) -
     }
     conn.execute("UPDATE sessions SET agent_preset_id = ?2 WHERE id = ?1", params![session_id, preset_id])
         .map_err(|e| e.to_string())?;
+    crate::search::private::set(conn, session_id, private)?;
     Ok(mismatch)
 }
 
@@ -574,6 +599,7 @@ pub fn list(conn: &Connection) -> Result<Value, String> {
             "permissionMode": preset.permission_mode,
             "cwd": preset.cwd,
             "settings": preset.settings,
+            "private": preset.private,
             "sessions": linked,
         }));
     }
@@ -587,6 +613,7 @@ mod tests {
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::schema::SCHEMA).unwrap();
+        conn.execute_batch(crate::search::private::SCHEMA).unwrap();
         conn.execute("INSERT INTO projects (id, name, root_path, created_at) VALUES ('p', 'p', ?1, 0)", [abs("/work")])
             .unwrap();
         for (id, kind) in [("s", "claude"), ("t", "terminal")] {
@@ -772,6 +799,49 @@ mod tests {
         import(&conn, file(json!([])), 3);
         assert_eq!(follow(&conn, "s").unwrap(), None);
         assert_eq!(row(&conn, "s").0.as_deref(), Some("--model sonnet --effort high"));
+    }
+
+    #[test]
+    fn private_is_parsed_and_defaults_to_false() {
+        let parse = |v: Value| parse_entry(&v).map(|(e, _)| e.private);
+        assert_eq!(parse(lead(json!([]))), Ok(false));
+        let mut p = lead(json!([]));
+        p["private"] = json!(true);
+        assert_eq!(parse(p.clone()), Ok(true));
+        p["private"] = json!(false);
+        assert_eq!(parse(p.clone()), Ok(false));
+        p["private"] = json!("yes");
+        assert!(parse(p).unwrap_err().1.contains("private"));
+    }
+
+    #[test]
+    fn private_flag_is_set_and_cleared_on_link_and_launch_and_kept_on_unlink() {
+        let conn = db();
+        let private = |id: &str| crate::search::private::is_private(&conn, id);
+        let mut preset = lead(json!([]));
+        preset["private"] = json!(true);
+        let lines = import(&conn, file(json!([preset.clone()])), 1);
+        assert_eq!(lines, vec![json!({"change": "added", "id": "f-co/lead"})]);
+        assert!(!private("s"), "an unlinked session is not touched");
+
+        link(&conn, "s", "f-co/lead", false).unwrap();
+        assert!(private("s"), "linking sets it");
+
+        // The file drops `private`; the next launch clears it.
+        preset["private"] = json!(false);
+        let lines = import(&conn, file(json!([preset.clone()])), 2);
+        assert_eq!(lines, vec![json!({"change": "updated", "id": "f-co/lead", "fields": ["private"]})]);
+        assert!(private("s"), "nothing changes until the session starts");
+        follow(&conn, "s").unwrap();
+        assert!(!private("s"), "a launch clears it");
+
+        preset["private"] = json!(true);
+        import(&conn, file(json!([preset])), 3);
+        follow(&conn, "s").unwrap();
+        assert!(private("s"), "a launch sets it");
+        assert_eq!(unlink(&conn, "s").unwrap().as_deref(), Some("f-co/lead"));
+        assert!(private("s"), "unlinking leaves it as it is");
+        assert_eq!(list(&conn).unwrap()[0]["private"], json!(true));
     }
 
     #[test]

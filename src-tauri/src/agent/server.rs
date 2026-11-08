@@ -1078,6 +1078,18 @@ fn handle_refer_with_reader(
         Err(e) => return (500, error_body(&e)),
     };
 
+    // A private session's conversation is not shared with other sessions, by `vrefer` or `vrefer --ask`.
+    // Checked before any transcript read, so neither the text nor a summary of it is ever produced.
+    {
+        let db = app.db();
+        let Ok(conn) = db.conn.lock() else {
+            return (500, error_body("database is unavailable"));
+        };
+        if let Some(refusal) = crate::search::private::refusal(&conn, &req.session_id, &session.id, &session.name) {
+            return (403, error_body(&refusal));
+        }
+    }
+
     // Terminal sessions and agents whose id has not been captured yet have no conversation to read.
     // Recordings are raw ANSI byte streams and are deliberately not offered as a fallback.
     let messages = match read(app, &session_id) {
@@ -3381,4 +3393,53 @@ mod tests {
             "a /spawn with the wrong token must not trigger on_spawn"
         );
     }
-}
+
+    /// `vrefer` and `vrefer --ask` refuse another session's read of a private session, never reaching the
+    /// transcript reader, while the session itself may read its own conversation.
+    #[test]
+    fn refer_refuses_a_private_session_to_everyone_but_itself() {
+        let dir = std::env::temp_dir().join(format!("vlx-refer-private-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = crate::db::Db::open(&dir.join("t.db")).unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO projects(id, name, root_path, sort_order, created_at) VALUES ('p','p','/p',0,0)", [])
+                .unwrap();
+            for (id, name) in [("sess-priv", "secret-role"), ("sess-other", "other-role")] {
+                conn.execute(
+                    "INSERT INTO sessions(id, project_id, name, kind, sort_order, created_at) VALUES (?1,'p',?2,'claude',0,0)",
+                    rusqlite::params![id, name],
+                )
+                .unwrap();
+            }
+            crate::search::private::set(&conn, "sess-priv", true).unwrap();
+        }
+        let app = AppCtx::Headless(std::sync::Arc::new(crate::host::HeadlessHost::new(dir.clone(), db)));
+        let request = |from: &str, target: &str, ask: Option<&str>| ReferRequest {
+            session_id: from.into(),
+            target: target.into(),
+            start: None,
+            end: None,
+            last: None,
+            list: false,
+            ask: ask.map(String::from),
+            with: None,
+            timeout: None,
+        };
+        let never = |_: &AppCtx, _: &str| -> Result<Vec<crate::agent::transcript::TranscriptMessage>, String> {
+            panic!("a refused read must not reach the transcript")
+        };
+        for ask in [None, Some("what did it decide?")] {
+            let (code, body) = handle_refer_with_reader(&app, request("sess-other", "sess-priv", ask), never);
+            assert_eq!(code, 403);
+            assert!(
+                body.contains("secret-role is private, so another session can't read its conversation"),
+                "{body}"
+            );
+        }
+        let (code, _) = handle_refer_with_reader(&app, request("sess-priv", "sess-priv", None), |_, _| Ok(Vec::new()));
+        assert_eq!(code, 200, "a private session may read itself");
+        let (code, _) = handle_refer_with_reader(&app, request("sess-priv", "sess-other", None), |_, _| Ok(Vec::new()));
+        assert_eq!(code, 200, "a session that is not private is still readable");
+        let _ = std::fs::remove_dir_all(&dir);
+    }}
