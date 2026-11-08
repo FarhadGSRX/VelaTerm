@@ -259,6 +259,11 @@ impl PtyManager {
         self.sessions.lock().unwrap().contains_key(sid)
     }
 
+    /// How long the session's process has been up, or None when it is not running.
+    pub fn uptime(&self, sid: &str) -> Option<Duration> {
+        self.sessions.lock().unwrap().get(sid).map(|session| session.started.elapsed())
+    }
+
     pub fn launch_permission_mode(&self, sid: &str) -> Option<Option<String>> {
         self.sessions.lock().unwrap().get(sid).map(|session| session.launch_permission_mode.clone())
     }
@@ -1060,6 +1065,7 @@ impl PtyManager {
                 input: input_tx,
                 killer,
                 pid,
+                started: Instant::now(),
                 intentional,
                 kill_info,
                 stream: Arc::clone(&stream),

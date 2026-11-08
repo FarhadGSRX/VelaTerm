@@ -115,14 +115,25 @@ pub fn stop(app: &AppCtx, req: &Request) -> Result<Value, String> {
     }
     super::tell::session(app, &req.session_id)?;
     let session = super::tell::session(app, &target)?;
-    let state = super::status_watch::snapshot()
+    let reported = super::status_watch::snapshot()
         .1
         .into_iter()
         .find(|row| row.session_id == target)
         .map(|row| row.state);
     let chat = session.engine == "chat";
+    let state = if chat {
+        reported
+    } else {
+        // A resumed Claude that never reported counts as at its prompt (see `prompt_ready`).
+        super::prompt_ready::effective_state(
+            session.kind,
+            session.agent_session_id.as_deref().is_some_and(|id| !id.trim().is_empty()),
+            app.pty().uptime(&target),
+            reported,
+        )
+    };
     let alive = if chat { app.chat().is_alive(&target) } else { app.pty().is_running(&target) };
-    let mut out = json!({"sessionId": target, "name": session.name, "before": state_name(state)});
+    let mut out = json!({"sessionId": target, "name": session.name, "before": state_name(reported)});
     if !alive {
         // A sweep re-running over parked sessions clears any marker left from before.
         crate::session_state::set_unread(app, &target, false);

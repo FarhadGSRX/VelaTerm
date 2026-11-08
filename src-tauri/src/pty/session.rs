@@ -446,6 +446,8 @@ pub struct PtySession {
     pub killer: Box<dyn ChildKiller + Send + Sync>,
     /// Child PID used to query runtime cwd.
     pub pid: u32,
+    /// When this process was spawned, for the tell/stop/quiet-quit decision on a Claude that has not reported a state.
+    pub started: Instant,
     /// Whether termination was intentional, such as restart or closing a split. Shared with the reader so it suppresses
     /// natural-exit events that would otherwise close the pane.
     pub intentional: Arc<AtomicBool>,

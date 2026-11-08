@@ -1795,16 +1795,27 @@ fn handle_stat(app: &AppCtx, req: StatRequest) -> (u16, String) {
         None => (None, None),
     };
 
-    let ids: Vec<String> = match &wanted {
-        Some(ids) => ids.clone(),
-        None => rows.iter().map(|r| r.session_id.clone()).collect(),
-    };
     let briefs = {
         let db = app.db();
         let Ok(conn) = db.conn.lock() else {
             return (500, error_body("database is unavailable"));
         };
         crate::db::repo::list_referable_sessions(&conn).unwrap_or_default()
+    };
+    let ids: Vec<String> = match &wanted {
+        Some(ids) => ids.clone(),
+        None => {
+            // A running session that has reported no state (a Claude resumed with no prompt) is listed too,
+            // with state null, so it does not look absent.
+            let mut ids: Vec<String> = rows.iter().map(|r| r.session_id.clone()).collect();
+            for brief in &briefs {
+                let running = app.pty().is_running(&brief.session_id) || app.chat().is_alive(&brief.session_id);
+                if running && !ids.contains(&brief.session_id) {
+                    ids.push(brief.session_id.clone());
+                }
+            }
+            ids
+        }
     };
 
     let sessions: Vec<serde_json::Value> = ids

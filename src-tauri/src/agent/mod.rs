@@ -66,6 +66,7 @@ pub mod plan_execute;
 pub mod preset_cli;
 pub mod autostart;
 pub mod preset_file;
+pub mod prompt_ready;
 pub mod quit_if_quiet;
 pub mod stop;
 pub mod tell;
