@@ -7888,7 +7888,7 @@ mod tests {
 
     fn tell_report(app: &AppCtx, req: &crate::agent::plan_execute::Request) -> Result<serde_json::Value, String> {
         crate::agent::tell::send(app, &crate::agent::tell::Request {
-            session_id:req.session_id.clone(), target:None, report:true, steer:false, round:Some(req.round),
+            session_id:req.session_id.clone(), sender:None, target:None, report:true, steer:false, round:Some(req.round),
             message_id:req.message_id.clone(), text:req.text.clone(),
         })
     }
@@ -8096,7 +8096,7 @@ mod tests {
         let (app, _, _) = plan_execute_fixture();
         flow::action(&app,&flow_request("planner","dispatch",1,"Implement")).unwrap();
         flow::action(&app,&flow_request("planner","block",1,"Waiting for the executor's update")).unwrap();
-        let mut req = tell::Request {session_id:"executor".into(), target:None, report:true, steer:false, round:Some(1),
+        let mut req = tell::Request {session_id:"executor".into(), sender:None, target:None, report:true, steer:false, round:Some(1),
             text:"Ready".into(), message_id:format!("msg-{}",uuid::Uuid::new_v4())};
         req.target=Some("owner".into()); assert!(tell::send(&app,&req).unwrap_err().contains("planning session"));
         req.target=None; req.session_id="planner".into(); assert!(tell::send(&app,&req).is_err());
@@ -8139,7 +8139,7 @@ mod tests {
         peers[1].permissions.lock().unwrap().insert("req-1".into(),json!({"toolName":"AskUserQuestion"}));
         req.text="A third correction".into();req.message_id=format!("msg-{}",uuid::Uuid::new_v4());
         assert_eq!(tell::send(&app,&req).unwrap()["delivery"],"blocked");
-        let report=tell::Request{session_id:"executor".into(),target:None,report:true,steer:true,round:Some(1),
+        let report=tell::Request{session_id:"executor".into(),sender:None,target:None,report:true,steer:true,round:Some(1),
             text:"Done".into(),message_id:format!("msg-{}",uuid::Uuid::new_v4())};
         assert!(tell::send(&app,&report).unwrap_err().contains("cannot be combined"));
         for id in ["planner","executor"] {app.chat().stop(&app,id).unwrap();}

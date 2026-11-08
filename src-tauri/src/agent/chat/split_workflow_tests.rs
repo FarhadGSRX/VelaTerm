@@ -283,6 +283,7 @@ fn split_plan_execute_confirmation_reports_and_independent_corrections() {
 
     let report = |index: usize, round| crate::agent::tell::Request {
         session_id: peers[index].clone(),
+        sender: None,
         target: None,
         report: true,
         steer: false,
@@ -439,6 +440,7 @@ fn split_plan_execute_missing_report_and_stop_are_isolated_per_task() {
     assert!(app.chat().turn_in_progress(&peers[1]));
     let report = crate::agent::tell::Request {
         session_id: peers[1].clone(),
+        sender: None,
         target: None,
         report: true,
         steer: false,

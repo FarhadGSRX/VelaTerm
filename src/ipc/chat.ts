@@ -83,10 +83,11 @@ export interface SubagentInfo {
 }
 
 export interface MessageOrigin {
-  sessionId: string;
+  /** Absent for a helper's message, which has a name and no session or agent. */
+  sessionId?: string;
   name: string;
-  agent: Session["kind"];
-  role: "plan" | "exec" | "review" | "system" | "initiator" | "session";
+  agent?: Session["kind"];
+  role: "plan" | "exec" | "review" | "system" | "initiator" | "session" | "helper";
   runId?: string;
   round?: number;
 }

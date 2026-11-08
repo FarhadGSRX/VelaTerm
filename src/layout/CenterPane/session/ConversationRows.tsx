@@ -5,8 +5,7 @@ import { memo, type ReactNode } from "react";
 
 import { useT } from "../../../i18n";
 import type { ChatImageValue, ChatRewindScope, ChatRow } from "../../../ipc/chat";
-import { kindIconEl } from "../../sessionViewers/sessionMeta";
-import { messageSenderName } from "./MessageSender";
+import { messageSenderName, originIconEl } from "./MessageSender";
 import {
   CompactionRow,
   CommandRow,
@@ -183,7 +182,7 @@ export function Row({
       return (
         <MessageBubble
           who={row.origin ? messageSenderName(row.origin, t) : t("archive.you")}
-          icon={row.origin ? kindIconEl(row.origin.agent, 14) : undefined}
+          icon={row.origin ? originIconEl(row.origin, 14) : undefined}
           isUser
           text={row.text}
           images={row.images}

@@ -17,7 +17,7 @@ import Icons from "../../components/Icons";
 import { dateLocale, useT } from "../../i18n";
 import type { TranscriptMessage } from "../../ipc/commands";
 import type { Session } from "../../types";
-import { messageSenderName } from "../CenterPane/session/MessageSender";
+import { messageSenderName, originIconEl } from "../CenterPane/session/MessageSender";
 import { MessageBubble } from "../CenterPane/session/rows";
 import { UserMessageRail } from "../CenterPane/session/UserMessageRail";
 import { userMessagePreview } from "../CenterPane/session/userMessageRailItems";
@@ -147,7 +147,7 @@ export function TranscriptViewer({
             <div key={idx} ref={isTarget ? targetRef : undefined} data-message-id={`transcript-${idx}`} className={isTarget ? "tv-target" : undefined}>
               <MessageBubble
                 who={who}
-                icon={isUser ? (origin ? kindIconEl(origin.agent, 14) : undefined) : kindIconEl(session.kind, 14)}
+                icon={isUser ? (origin ? originIconEl(origin, 14) : undefined) : kindIconEl(session.kind, 14)}
                 isUser={isUser}
                 at={m.timestamp ?? undefined}
                 text={m.text ?? ""}

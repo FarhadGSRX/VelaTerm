@@ -47,6 +47,14 @@ The backend derives the sender's session ID, name and agent from the sending ses
 identity headers yourself. Ordinary messages display the sender's icon and name and do not change a
 planning/execution workflow's state.
 
+## Sending as a helper
+
+A background helper that runs inside a session's environment (a waker, for instance) would otherwise send as
+that session, and could not message it. `vtell --sender "<name>" <target> <text>` sends under the given name
+instead: 1 to 64 characters, no control characters. The message carries no sender session, shows the name
+with a helper label, and may target the session whose environment the helper runs in. `--sender` cannot be
+combined with `--report` or `--round`.
+
 ## Steering a message into a running turn
 
 Without `--steer` a message sent to a busy recipient waits for its running turn to end. `--steer` writes
