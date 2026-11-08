@@ -2642,7 +2642,6 @@ const fr: typeof en = {
   "artifact.useOptionTitle": "Place dans la zone de message de la session qui a écrit cette page un message demandant de garder cette variante", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "Copie un message demandant de garder cette variante", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
-  "artifact.composeDraft": "Envoyez ou effacez d’abord votre message.",
   "kb.overview": "Vue d’ensemble",
   "kb.sources": "Sources",
   "kb.searchAll": "Rechercher dans les connaissances et les notes…",

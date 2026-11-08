@@ -43,9 +43,9 @@ describe("runCompose", () => {
   beforeEach(() => resetComposeHistory());
 
   it("hands passing text to the message box, and counts only what went in toward the rate limit", () => {
-    const fill = vi.fn().mockReturnValueOnce("draft").mockReturnValue("inserted");
-    expect(runCompose(ok, fill)).toBe("draft");
-    // The refused fill didn't start the one-second wait.
+    const fill = vi.fn().mockReturnValueOnce("absent").mockReturnValue("inserted");
+    expect(runCompose(ok, fill)).toBe("not-beside");
+    // The compose that found no message box didn't start the one-second wait.
     expect(runCompose({ ...ok, now: ok.now + 10 }, fill)).toBeNull();
     expect(fill).toHaveBeenLastCalledWith("s", "/thoughts ok 3");
     expect(runCompose({ ...ok, now: ok.now + 500 }, fill)).toBe("too-soon");
@@ -63,10 +63,11 @@ describe("runCompose", () => {
 });
 
 describe("the message box and the bridge", () => {
-  it("fills only an empty box", () => {
-    expect(composeIntoDraft("", "/thoughts ok 3")).toEqual({ next: "/thoughts ok 3" });
-    expect(composeIntoDraft("  \n", "/thoughts ok 3")).toEqual({ next: "/thoughts ok 3" });
-    expect(composeIntoDraft("half a sentence", "/thoughts ok 3")).toEqual({ refused: "draft" });
+  it("puts the line alone in an empty box, else on its own line after what is there", () => {
+    expect(composeIntoDraft("", "/thoughts ok 3")).toBe("/thoughts ok 3");
+    expect(composeIntoDraft("  \n", "/thoughts ok 3")).toBe("/thoughts ok 3");
+    expect(composeIntoDraft("half a sentence", "/thoughts ok 3")).toBe("half a sentence\n/thoughts ok 3");
+    expect(composeIntoDraft("/thoughts ok 3\n\n", "/thoughts no 4")).toBe("/thoughts ok 3\n/thoughts no 4");
   });
 
   it("parses compose with string text only, keeping one character past the limit so it is refused", () => {

@@ -12,7 +12,7 @@ vi.mock("./controls", () => ({ LevelBar: () => null, ControlChip: () => null }))
 
 import { invoke, listen, onTransportReconnect } from "../../../ipc/transport";
 import { useTermStore } from "../../../store/termStore";
-import { insertIntoComposer, openBesideSession } from "../doc/artifact/artifactWriters";
+import { insertIntoComposer, openBesideOrHold, openBesideSession, takeHeldBeside } from "../doc/artifact/artifactWriters";
 import { resetComposeHistory } from "../doc/artifact/artifactCompose";
 import { ChatPane } from "./ChatPane";
 import { useOutbox } from "./outbox";
@@ -78,6 +78,22 @@ describe("artifact panel beside a conversation", () => {
     expect(useTermStore.getState().dockDocs).toEqual({});
   });
 
+  it("opens a page held while the conversation was off screen as soon as it is shown", async () => {
+    expect(openBesideOrHold("s", PAGE, true)).toBe("held");
+    await mountPane();
+    await waitFor(() => expect(document.querySelector(".artifact-dock iframe")).toBeTruthy());
+    // Taken once: another mount doesn't open it again.
+    expect(takeHeldBeside("s")).toBeUndefined();
+  });
+
+  it("holds only when allowed, and opens beside a conversation that is on screen", async () => {
+    expect(openBesideOrHold("nobody", PAGE, false)).toBe("tab");
+    expect(takeHeldBeside("nobody")).toBeUndefined();
+    await mountPane();
+    expect(openBesideOrHold("s", PAGE, true)).toBe("beside");
+    expect(takeHeldBeside("s")).toBeUndefined();
+  });
+
   it("leaves other sessions' pages and hidden panes to open as tabs", async () => {
     await mountPane();
     expect(openBesideSession("other", PAGE)).toBe(false);
@@ -131,13 +147,16 @@ describe("compose from the panel's page", () => {
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).not.toContain("chat_send");
   });
 
-  it("refuses when the message box already holds text, and says so", async () => {
+  it("adds each compose on its own line after what is already typed, so clicks add up", async () => {
     const { input, post, results } = await openPanel("s");
-    await act(async () => insertIntoComposer("s", "half a sentence"));
+    await act(async () => insertIntoComposer("s", "half a sentence  "));
     await post("/thoughts ok 3");
-    expect(input.value).toBe("half a sentence");
-    expect(results()).toEqual([{ type: "composeResult", ok: false, reason: "draft", source: "vlx-artifact-host" }]);
-    expect(screen.getByText("Send or clear your message first.")).toBeTruthy();
+    expect(input.value).toBe("half a sentence\n/thoughts ok 3");
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2000);
+    await post("/thoughts no 4");
+    vi.mocked(Date.now).mockRestore();
+    expect(input.value).toBe("half a sentence\n/thoughts ok 3\n/thoughts no 4");
+    expect(results().every((m) => (m as { ok?: boolean }).ok === true)).toBe(true);
   });
 
   it("refuses a page whose panel folder belongs to another session, or to none", async () => {

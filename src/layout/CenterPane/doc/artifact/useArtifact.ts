@@ -188,8 +188,8 @@ export function useArtifact(
           composeIntoComposer,
         );
         postToFrame(frameRef.current, reason ? { type: "composeResult", ok: false, reason } : { type: "composeResult", ok: true });
-        // The draft refusal is shown beside the message box; the others are for whoever wrote the page.
-        if (reason && reason !== "draft") {
+        // Refusals are for whoever wrote the page, so they go to its console.
+        if (reason) {
           setEntries((list) => pushConsole(list, { id: ++entryId.current, level: "warn", text: `compose refused: ${reason}` }));
         }
       }

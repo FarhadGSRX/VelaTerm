@@ -2635,7 +2635,6 @@ const en = {
   "artifact.useOption": (id: string) => `Use ${id}`,
   "artifact.useOptionTitle": "Put a message asking to keep this option in the message box of the session that wrote this page",
   "artifact.useOptionCopyTitle": "Copy a message asking to keep this option",
-  "artifact.composeDraft": "Send or clear your message first.",
   // Knowledge base and archived sessions pages.
   "kb.overview": "Overview",
   "kb.sources": "Sources",

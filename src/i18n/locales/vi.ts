@@ -2584,7 +2584,6 @@ const vi: typeof en = {
   "artifact.useOption": (id: string) => `Dùng ${id}`,
   "artifact.useOptionTitle": "Đưa vào ô nhập tin nhắn của phiên đã viết trang này một tin nhắn yêu cầu giữ phương án này",
   "artifact.useOptionCopyTitle": "Sao chép tin nhắn yêu cầu giữ phương án này",
-  "artifact.composeDraft": "Hãy gửi hoặc xóa tin nhắn của bạn trước.",
   // Knowledge base and archived sessions pages.
   "kb.overview": "Tổng quan",
   "kb.sources": "Nguồn",

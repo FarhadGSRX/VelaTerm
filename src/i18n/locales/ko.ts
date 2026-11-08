@@ -2607,7 +2607,6 @@ const ko: typeof en = {
   "artifact.useOptionTitle": "이 시안을 유지해 달라는 메시지를 이 페이지를 작성한 세션의 입력란에 넣습니다", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "이 시안을 유지해 달라는 메시지를 복사합니다", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
-  "artifact.composeDraft": "먼저 메시지를 보내거나 지우세요.",
   "kb.overview": "개요",
   "kb.sources": "출처",
   "kb.searchAll": "지식 및 노트 검색…",

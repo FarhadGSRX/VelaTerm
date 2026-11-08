@@ -14,8 +14,7 @@ export type ComposeRefusal =
   | "empty"
   | "too-long"
   | "control"
-  | "too-soon"
-  | "draft";
+  | "too-soon";
 
 // C0 and C1 controls, DEL, and the Unicode line and paragraph separators: anything a terminal or an editor might
 // take as Enter or as a key.
@@ -30,8 +29,8 @@ export interface ComposeRequest {
   now: number;
 }
 
-/** What a conversation view did with the text: filled its empty box, refused for a draft, or wasn't there. */
-export type ComposeFill = "inserted" | "draft" | "absent";
+/** What a conversation view did with the text: took it into its box, or wasn't there. */
+export type ComposeFill = "inserted" | "absent";
 
 const lastAccepted = new Map<string, number>();
 
@@ -52,16 +51,14 @@ export function runCompose(r: ComposeRequest, fill: (session: string, text: stri
   const refused = composeRefusal({ ...r, last: r.beside ? lastAccepted.get(r.beside) : undefined });
   if (refused) return refused;
   const session = r.beside as string;
-  const result = fill(session, r.text);
-  if (result === "draft") return "draft";
-  if (result === "absent") return "not-beside";
+  if (fill(session, r.text) === "absent") return "not-beside";
   lastAccepted.set(session, r.now);
   return null;
 }
 
-/** The message box's own rule: fill it when it is empty, and never mix into what the user is typing. */
-export function composeIntoDraft(current: string, text: string): { next: string } | { refused: "draft" } {
-  return current.trim() ? { refused: "draft" } : { next: text };
+/** The message box after a compose: the text alone in an empty box, else on its own line after what is there. */
+export function composeIntoDraft(current: string, text: string): string {
+  return current.trim() ? `${current.replace(/\s+$/, "")}\n${text}` : text;
 }
 
 /** Forget the rate-limit history; for tests. */

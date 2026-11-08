@@ -147,6 +147,7 @@ import {
   ARTIFACT_OPEN_BESIDE_EVENT,
   COMPOSER_INSERT_EVENT,
   isArtifactPath,
+  takeHeldBeside,
   type ArtifactOpenBesideDetail,
   type ComposerInsertDetail,
 } from "../doc/artifact/artifactWriters";
@@ -518,18 +519,10 @@ export function ChatPane({
     const onInsert = (e: Event) => {
       const detail = (e as CustomEvent<ComposerInsertDetail>).detail;
       if (!detail || detail.sessionId !== session.id) return;
-      if (detail.ifEmpty) {
-        // A page's `compose` never mixes into what the user is typing: the box must be empty, as shown on screen.
-        const decision = composeIntoDraft(inputRef.current?.value ?? "", detail.text);
-        if ("refused" in decision) {
-          detail.result = "draft";
-          const text = t("artifact.composeDraft");
-          setNotice({ text, priority: "medium" });
-          window.setTimeout(() => setNotice((n) => (n?.text === text ? null : n)), 4000);
-          return;
-        }
+      if (detail.compose) {
+        // A page's `compose` adds its one line after what is in the box, as shown on screen, so clicks add up.
         detail.result = "inserted";
-        setDraft(decision.next);
+        setDraft(composeIntoDraft(inputRef.current?.value ?? "", detail.text));
         requestAnimationFrame(() => inputRef.current?.focus());
         return;
       }
@@ -551,6 +544,12 @@ export function ChatPane({
       setDockOpenCount((n) => n + 1);
     };
     window.addEventListener(ARTIFACT_OPEN_BESIDE_EVENT, onOpen);
+    // fg: a page this conversation asked for while it was off screen opens now that it is shown.
+    const held = takeHeldBeside(session.id);
+    if (held) {
+      setDockPath(held);
+      setDockOpenCount((n) => n + 1);
+    }
     return () => window.removeEventListener(ARTIFACT_OPEN_BESIDE_EVENT, onOpen);
   }, [canDock, session.id]);
 

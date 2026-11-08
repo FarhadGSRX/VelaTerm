@@ -45,7 +45,7 @@ import { ConnectionBanner } from "./remote/ConnectionBanner";
 import { ProjectDialogRoutes } from "./remote/ProjectDialogRoutes";
 import { startMirrorSync } from "./store/mirrorSync";
 import { useTermStore } from "./store/termStore";
-import { isArtifactPath, noteArtifactWriter, openBesideSession } from "./layout/CenterPane/doc/artifact/artifactWriters";
+import { isArtifactPath, noteArtifactWriter, openBesideOrHold } from "./layout/CenterPane/doc/artifact/artifactWriters";
 import { startUsageSync } from "./store/usageSync";
 import { watchSystemTheme } from "./theme";
 import { memoryRouteHidesRightPanel, useMemoryLocation } from "./layout/Memory/navigation";
@@ -197,8 +197,14 @@ function App() {
       }
       // `vopen` always opens a tab. `vartifact` opens the file beside the calling conversation, and falls
       // back to a tab when that conversation is not on screen (terminal session, hidden pane, phone).
+      // fg: a conversation-view session off screen on a non-phone client keeps the page instead, and shows it
+      // beside the conversation the next time that conversation is shown.
       if (isArtifactPath(req.path)) noteArtifactWriter(req.path, req.sessionId);
-      if (req.beside && openBesideSession(req.sessionId, req.path)) return;
+      if (req.beside) {
+        const session = useTermStore.getState().sessions.find((s) => s.id === req.sessionId);
+        const canHold = !isMobileView() && session?.engine === "chat";
+        if (openBesideOrHold(req.sessionId, req.path, canHold) !== "tab") return;
+      }
       useTermStore.getState().openDocTab(req.path);
     });
     // Synchronize the tree across clients by debouncing backend `tree://changed` broadcasts. Bursts

@@ -2624,7 +2624,6 @@ const ja: typeof en = {
   "artifact.useOptionTitle": "この案を残すよう依頼するメッセージを、このページを書いたセッションの入力欄に入れます", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "この案を残すよう依頼するメッセージをコピーします", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
-  "artifact.composeDraft": "先にメッセージを送信するか消去してください。",
   "kb.overview": "概要",
   "kb.sources": "ソース",
   "kb.searchAll": "ナレッジとノートを検索…",

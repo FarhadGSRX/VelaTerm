@@ -2631,7 +2631,6 @@ const de: typeof en = {
   "artifact.useOptionTitle": "Fügt eine Nachricht, diese Variante beizubehalten, in das Eingabefeld der Sitzung ein, die diese Seite geschrieben hat", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "Kopiert eine Nachricht, diese Variante beizubehalten", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
-  "artifact.composeDraft": "Sende oder lösche zuerst deine Nachricht.",
   "kb.overview": "Übersicht",
   "kb.sources": "Quellen",
   "kb.searchAll": "Wissen und Notizen durchsuchen…",

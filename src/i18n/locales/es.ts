@@ -2639,7 +2639,6 @@ const es: typeof en = {
   "artifact.useOptionTitle": "Coloca en el cuadro de mensaje de la sesión que escribió esta página un mensaje que pide conservar esta opción", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "Copia un mensaje que pide conservar esta opción", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
-  "artifact.composeDraft": "Envía o borra primero tu mensaje.",
   "kb.overview": "Resumen",
   "kb.sources": "Fuentes",
   "kb.searchAll": "Buscar en conocimientos y notas…",

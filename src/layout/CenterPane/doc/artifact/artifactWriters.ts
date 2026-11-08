@@ -47,25 +47,46 @@ export function openBesideSession(sessionId: string, path: string): boolean {
   return event.defaultPrevented;
 }
 
+/** Pages a conversation asked to show beside it while no view of it was on screen, by session; the newest wins. */
+const heldBeside = new Map<string, string>();
+
+/**
+ * Show `path` beside conversation `sessionId` (fg-only). When no view of it is on screen and `canHold`, the path
+ * waits and opens the next time that conversation is shown ("held"); otherwise the caller opens a tab.
+ */
+export function openBesideOrHold(sessionId: string, path: string, canHold: boolean): "beside" | "held" | "tab" {
+  if (openBesideSession(sessionId, path)) return "beside";
+  if (!canHold) return "tab";
+  heldBeside.set(sessionId, path);
+  return "held";
+}
+
+/** The page waiting to show beside `sessionId`, removed as it is taken. */
+export function takeHeldBeside(sessionId: string): string | undefined {
+  const path = heldBeside.get(sessionId);
+  heldBeside.delete(sessionId);
+  return path;
+}
+
 /** Event a conversation view listens for to put text into its composer without sending it. */
 export const COMPOSER_INSERT_EVENT = "vlx:composer-insert";
 
 export interface ComposerInsertDetail {
   sessionId: string;
   text: string;
-  /** Set by a page's `compose`: fill the box only when it is empty. */
-  ifEmpty?: boolean;
-  /** Written by the conversation view that took an `ifEmpty` event. */
-  result?: "inserted" | "draft";
+  /** Set by a page's `compose`: the text is one line, added on a new line after anything already typed. */
+  compose?: boolean;
+  /** Written by the conversation view that took a `compose` event. */
+  result?: "inserted";
 }
 
 export function insertIntoComposer(sessionId: string, text: string): void {
   window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail: { sessionId, text } }));
 }
 
-/** Fill the message box of `sessionId` only when it is empty; "absent" when no conversation view took it. */
-export function composeIntoComposer(sessionId: string, text: string): "inserted" | "draft" | "absent" {
-  const detail: ComposerInsertDetail = { sessionId, text, ifEmpty: true };
+/** Add one line to the message box of `sessionId`; "absent" when no conversation view took it. */
+export function composeIntoComposer(sessionId: string, text: string): "inserted" | "absent" {
+  const detail: ComposerInsertDetail = { sessionId, text, compose: true };
   window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail }));
   return detail.result ?? "absent";
 }
