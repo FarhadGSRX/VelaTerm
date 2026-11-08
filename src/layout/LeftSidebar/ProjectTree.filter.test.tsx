@@ -38,6 +38,9 @@ vi.mock("../../hooks/shortcutRegistry", () => ({
   formatCombo: (combo: string) => combo,
 }));
 vi.mock("../../ipc/shareBase", () => ({ isShareSurface: false }));
+// ProjectTree focuses a session's input on Enter, which pulls these in; stub them so wsClient is not loaded.
+vi.mock("../../terminal/registry", () => ({ focusTerminal: vi.fn() }));
+vi.mock("../CenterPane/session/composerFocus", () => ({ focusComposer: vi.fn() }));
 vi.mock("../../sharing/sessionNavigation", () => ({
   navigateSharedSession: vi.fn(),
   sharedSessionUrl: () => "",
