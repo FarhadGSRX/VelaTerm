@@ -700,8 +700,6 @@ const vi: typeof en = {
   "git.commitNoFiles": "Commit này không thay đổi tệp nào",
   "git.noCommits": "Chưa có commit nào",
   "git.loadMore": "Tải thêm",
-  "git.allBranches": "Tất cả nhánh",
-  "git.currentBranch": "Nhánh hiện tại",
   "git.upstreamTitle": (u: string) => `Nhánh upstream: ${u}`,
   "git.fetch": "Fetch",
   "git.pull": "Pull",

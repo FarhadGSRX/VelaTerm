@@ -700,8 +700,6 @@ const ja: typeof en = {
   "git.commitNoFiles": "このコミットにファイルの変更はありません",
   "git.noCommits": "コミットがありません",
   "git.loadMore": "さらに読み込む",
-  "git.allBranches": "すべてのブランチ",
-  "git.currentBranch": "現在のブランチ",
   "git.upstreamTitle": (u: string) => `上流ブランチ: ${u}`,
   "git.fetch": "フェッチ",
   "git.pull": "プル",

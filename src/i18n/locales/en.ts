@@ -701,8 +701,6 @@ const en = {
   "git.commitNoFiles": "No file changes in this commit",
   "git.noCommits": "No commits yet",
   "git.loadMore": "Load more",
-  "git.allBranches": "All branches",
-  "git.currentBranch": "Current branch",
   "git.upstreamTitle": (u: string) => `Upstream branch: ${u}`,
   "git.fetch": "Fetch",
   "git.pull": "Pull",

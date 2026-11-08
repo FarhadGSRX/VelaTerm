@@ -702,8 +702,6 @@ const ptBR: typeof en = {
   "git.commitNoFiles": "Este commit não altera arquivos",
   "git.noCommits": "Ainda não há commits",
   "git.loadMore": "Carregar mais",
-  "git.allBranches": "Todos os branches",
-  "git.currentBranch": "Branch atual",
   "git.upstreamTitle": (u: string) => `Branch upstream: ${u}`,
   "git.fetch": "Buscar",
   "git.pull": "Pull",

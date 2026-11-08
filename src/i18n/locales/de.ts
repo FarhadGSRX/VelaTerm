@@ -701,8 +701,6 @@ const de: typeof en = {
   "git.commitNoFiles": "Keine Dateiänderungen in diesem Commit",
   "git.noCommits": "Noch keine Commits",
   "git.loadMore": "Mehr laden",
-  "git.allBranches": "Alle Branches",
-  "git.currentBranch": "Aktueller Branch",
   "git.upstreamTitle": (u: string) => `Upstream-Branch: ${u}`,
   "git.fetch": "Abrufen",
   "git.pull": "Pull",

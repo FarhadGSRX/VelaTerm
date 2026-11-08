@@ -697,8 +697,6 @@ const zhTW: typeof en = {
   "git.commitNoFiles": "這個提交沒有檔案變更",
   "git.noCommits": "尚未有提交",
   "git.loadMore": "載入更多",
-  "git.allBranches": "所有分支",
-  "git.currentBranch": "目前分支",
   "git.upstreamTitle": (u: string) => `上游分支：${u}`,
   "git.fetch": "擷取",
   "git.pull": "提取",

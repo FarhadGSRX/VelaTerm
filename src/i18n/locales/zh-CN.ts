@@ -696,8 +696,6 @@ const zhCN: typeof en = {
   "git.commitNoFiles": "这个提交没有文件变化",
   "git.noCommits": "还没有提交",
   "git.loadMore": "加载更多",
-  "git.allBranches": "所有分支",
-  "git.currentBranch": "当前分支",
   "git.upstreamTitle": (u: string) => `上游分支：${u}`,
   "git.fetch": "抓取",
   "git.pull": "拉取",

@@ -702,8 +702,6 @@ const es: typeof en = {
   "git.commitNoFiles": "Este commit no cambia archivos",
   "git.noCommits": "Aún no hay commits",
   "git.loadMore": "Cargar más",
-  "git.allBranches": "Todas las ramas",
-  "git.currentBranch": "Rama actual",
   "git.upstreamTitle": (u: string) => `Rama upstream: ${u}`,
   "git.fetch": "Fetch",
   "git.pull": "Pull",

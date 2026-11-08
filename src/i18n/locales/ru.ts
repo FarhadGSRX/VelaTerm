@@ -710,8 +710,6 @@ const ru: typeof en = {
   "git.commitNoFiles": "В этом коммите нет изменений файлов",
   "git.noCommits": "Коммитов пока нет",
   "git.loadMore": "Загрузить ещё",
-  "git.allBranches": "Все ветки",
-  "git.currentBranch": "Текущая ветка",
   "git.upstreamTitle": (u: string) => `Вышестоящая ветка: ${u}`,
   "git.fetch": "Получить",
   "git.pull": "Извлечь",
