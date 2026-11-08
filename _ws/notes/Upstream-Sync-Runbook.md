@@ -397,6 +397,15 @@ Since 2026-10-31 the script holds no SHA, so it never needs repointing. It finds
 **This is fg's only step.** Post the old and new SHAs in `#velaterm`, then ask him to restart VelaTerm
 (Windows) or run `~/velaterm-swap.sh` (macOS). The restart ends this session; he resumes it.
 
+### 8b — The restart job, where it's installed (the Mac first, CX1 later)
+
+technet-sync-lead's job quits VelaTerm only when every session is quiet, swaps in the staged build, stops leftovers, relaunches, and rolls back if the new build doesn't come up. Its code and its install and undo are in TechNet-Sync's README § velaterm-restart. Where it's installed, it replaces fg's step 8.
+
+1. **Stage the build** as step 7 says (the Mac: `/Applications/VelaTerm fg-<sha>.app`). Don't swap.
+2. **Required before the trigger, until every machine runs a build with the fix in the v0.3.0 sync plan's Part 2b:** run `vstat --json`, and list running Claude sessions with no reported state. Any listed session blocks the quit forever, because a Claude resumed with no prompt reports nothing until its next turn. If any are listed, wait until fg has typed into them, and don't trigger.
+3. **Trigger the job, then end your turn at once.** Your own session is busy while its turn runs, and the job retries every 30 s for 10 minutes. On the Mac: `launchctl kickstart gui/$(id -u)/com.fg.velaterm-restart`. CX1, later: `schtasks /run /tn "\fg\velaterm-restart"`.
+4. **The result** is the last ` RESULT ` line of the log (`grep ' RESULT ' <log> | tail -1`). The Mac's log is `~/Library/Application Support/velaterm-restart/restart.log`; Windows's is `%LOCALAPPDATA%\velaterm-restart\restart.log`. After the relaunch, monitor comes back by its `autostart` preset and reports it. Then run step 9's rows.
+
 There is no restart checklist. fg tries new features on Evo first, before the other machines pull them, and
 brings any problem back to that session. Rollback, if he asks for it: quit, rename the new binary aside,
 rename the backup back, reopen.
