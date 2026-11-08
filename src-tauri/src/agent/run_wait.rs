@@ -31,6 +31,8 @@ const TAIL_LINES: usize = 20;
 /// Reaching the wait limit is not the command failing. 124 is what `timeout(1)` returns, so a caller
 /// that already knows that convention reads it correctly.
 const TIMEOUT_EXIT: i32 = 124;
+/// Written when the waiting run times out, holding the time in ms since the epoch.
+const WAITED_FILE: &str = "waited";
 
 struct Parsed {
     label: String,
@@ -152,17 +154,24 @@ fn detach(command: &mut Command) {
     command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
 }
 
-#[cfg(unix)]
-fn alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+fn now_ms() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
 }
 
-#[cfg(windows)]
-fn alive(_pid: u32) -> bool {
-    // Windows has no cheap equivalent here; the recorded exit code answers the question that matters.
-    false
+/// What `--status` says about a label. Pure so each case can be tested: an exit code wins; otherwise a
+/// live PID is running; a gone PID with a marker means the command ended after the waiting `vrun` had
+/// given up, so its exit code was never written; a gone PID without one means it was stopped.
+fn status_message(label: &str, exit: Option<i32>, pid: Option<u32>, running: bool, waited: Option<&str>) -> String {
+    if let Some(code) = exit {
+        return format!("vrun: {label} finished with exit code {code}");
+    }
+    match (pid, running, waited) {
+        (None, _, _) => format!("vrun: {label} has no recorded PID"),
+        (Some(pid), true, _) => format!("vrun: {label} is still running as PID {pid}"),
+        (Some(pid), false, Some(at)) => format!("vrun: {label} (PID {pid}) finished after vrun stopped waiting at {at} (ms since epoch); its exit code was not recorded"),
+        (Some(pid), false, None) => format!("vrun: {label} (PID {pid}) recorded no exit code; it was stopped, or vrun did not outlive it"),
+    }
 }
-
 fn status(label: &str) -> ! {
     let dir = run_dir(label);
     if !dir.exists() {
@@ -170,18 +179,11 @@ fn status(label: &str) -> ! {
         std::process::exit(1);
     }
     let log = dir.join("log");
-    match std::fs::read_to_string(dir.join("exit")) {
-        Ok(code) => println!("vrun: {label} finished with exit code {}", code.trim()),
-        Err(_) => {
-            let pid = std::fs::read_to_string(dir.join("pid")).ok()
-                .and_then(|text| text.trim().parse::<u32>().ok());
-            match pid {
-                Some(pid) if alive(pid) => println!("vrun: {label} is still running as PID {pid}"),
-                Some(pid) => println!("vrun: {label} (PID {pid}) recorded no exit code; it was stopped, or vrun did not outlive it"),
-                None => println!("vrun: {label} has no recorded PID"),
-            }
-        }
-    }
+    let exit = std::fs::read_to_string(dir.join("exit")).ok().and_then(|code| code.trim().parse::<i32>().ok());
+    let pid = std::fs::read_to_string(dir.join("pid")).ok().and_then(|text| text.trim().parse::<u32>().ok());
+    let running = pid.is_some_and(super::runs::alive);
+    let waited = std::fs::read_to_string(dir.join(WAITED_FILE)).ok().map(|text| text.trim().to_string());
+    println!("{}", status_message(label, exit, pid, running, waited.as_deref()));
     println!("vrun: log {}", log.display());
     let text = tail(&log);
     if !text.is_empty() { println!("{text}"); }
@@ -215,6 +217,7 @@ fn start(parsed: Parsed) -> ! {
     // and the previous run's record never names this one's session while it starts.
     let _ = std::fs::remove_file(dir.join(super::runs::META_FILE));
     let _ = std::fs::remove_file(dir.join("exit"));
+    let _ = std::fs::remove_file(dir.join(WAITED_FILE));
     let log = match std::fs::File::create(&log_path) {
         Ok(file) => file,
         Err(error) => {
@@ -284,8 +287,24 @@ fn start(parsed: Parsed) -> ! {
             println!("vrun: check on it with `vrun --status {}`; the log is {}", parsed.label, log_path.display());
             let text = tail(&log_path);
             if !text.is_empty() { println!("{text}"); }
+            let _ = std::fs::write(dir.join(WAITED_FILE), now_ms().to_string());
             std::process::exit(TIMEOUT_EXIT);
         }
         std::thread::sleep(POLL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::status_message;
+
+    #[test]
+    fn status_messages_cover_every_case() {
+        assert!(status_message("b", Some(3), Some(1), false, None).contains("exit code 3"));
+        assert!(status_message("b", None, Some(7), true, Some("1")).contains("still running as PID 7"));
+        let gone = status_message("b", None, Some(7), false, Some("12345"));
+        assert!(gone.contains("stopped waiting at 12345") && gone.contains("not recorded"));
+        assert!(status_message("b", None, Some(7), false, None).contains("it was stopped"));
+        assert!(status_message("b", None, None, false, None).contains("no recorded PID"));
     }
 }

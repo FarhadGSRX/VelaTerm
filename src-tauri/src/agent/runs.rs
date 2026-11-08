@@ -84,13 +84,13 @@ fn runs_dir(app: &AppCtx) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn alive(pid: u32) -> bool {
+pub(crate) fn alive(pid: u32) -> bool {
     // Signal 0 checks for existence without touching the process.
     pid != 0 && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0
 }
 
 #[cfg(windows)]
-fn alive(pid: u32) -> bool {
+pub(crate) fn alive(pid: u32) -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     // STILL_ACTIVE: the exit code a process reports until it has exited.
