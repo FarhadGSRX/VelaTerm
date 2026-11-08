@@ -186,6 +186,8 @@ fn stat(path:&Path) -> Option<(i64,Option<i64>)> {
 /// Where a session's searchable text comes from, resolved with at most one directory lookup.
 enum Track {Transcript(PathBuf),Recording(PathBuf),None}
 fn track(app:&AppCtx,session:&Session,previous:Option<&State>) -> Result<Track,String> {
+    // A private session has no source: every refresh path then drops its rows and never indexes it.
+    if is_private(app,&session.id) {return Ok(Track::None);}
     if let Some(id)=session.native.as_deref().map(str::trim).filter(|id|!id.is_empty()) {
         if session.kind==SessionKind::Kiro {return Ok(Track::Transcript(PathBuf::new()));}
         // The recorded path costs one stat; the per-kind lookup walks the agent's whole session tree.
@@ -199,6 +201,19 @@ fn track(app:&AppCtx,session:&Session,previous:Option<&State>) -> Result<Track,S
     }
     let recording=app.data_dir()?.join("recordings").join(format!("{}.log",session.id));
     Ok(if recording.is_file() {Track::Recording(recording)} else {Track::None})
+}
+
+/// Whether the session is flagged private in the app database. The lock is held only for the lookup.
+fn is_private(app:&AppCtx,session:&str) -> bool {super::private::is_private(&app.db().conn.lock().unwrap(),session)}
+
+/// Make removed text unrecoverable from the file: FTS5 `optimize` rewrites both tables' segments without the
+/// deleted rows, `VACUUM` rewrites the freed pages, and the WAL is truncated. Both name `main`: the app database is attached read-only, and an unqualified checkpoint fails on it. Upstream's incremental vacuum
+/// can leave deleted text in free pages. Run only after a private session's rows were dropped, never on an
+/// ordinary refresh. `VACUUM` rewrites the whole file, so it takes time on a large index.
+fn scrub(conn:&Connection) -> Result<(),String> {
+    conn.execute_batch("INSERT INTO session_fts(session_fts) VALUES('optimize'); INSERT INTO session_words(session_words) VALUES('optimize');").map_err(sql)?;
+    conn.execute_batch("VACUUM main").map_err(sql)?;
+    conn.query_row("PRAGMA main.wal_checkpoint(TRUNCATE)",[],|_|Ok(())).map_err(sql)
 }
 
 fn delete_rows(conn:&Connection,session:&str,from_message:Option<i64>) -> Result<(),String> {
@@ -362,10 +377,14 @@ fn refresh_locked(app:&AppCtx,conn:&Connection,session:&Session,cancel:&Arc<Atom
     let previous=state(conn,&session.id)?;
     let track=track(app,session,previous.as_ref())?;
     let (source,path)=match &track {Track::Transcript(path)=>("transcript",path.clone()),Track::Recording(path)=>("recording",path.clone()),Track::None=> {
-        if previous.is_none() {return Ok(Refreshed::Unchanged);}
+        // Rows of a private session are checked even without a state row, so none are left behind.
+        let rows:bool=is_private(app,&session.id) && conn.query_row("SELECT EXISTS(SELECT 1 FROM session_fts WHERE session_id=?1)",[&session.id],|r|r.get(0)).map_err(sql)?;
+        if previous.is_none() && !rows {return Ok(Refreshed::Unchanged);}
         conn.execute_batch("BEGIN IMMEDIATE").map_err(sql)?;
         let result=delete_rows(conn,&session.id,None).and_then(|_|conn.execute("DELETE FROM corpus_state WHERE session_id=?1",[&session.id]).map(|_|()).map_err(sql));
-        return finish(conn,result).map(|_|Refreshed::Removed);
+        finish(conn,result)?;
+        if rows {scrub(conn)?;}
+        return Ok(Refreshed::Removed);
     }};
     let kiro=session.kind==SessionKind::Kiro;
     let (length,modified)=if kiro {(0,None)} else {stat(&path).ok_or("source_missing: search source is unavailable")?};
@@ -810,6 +829,62 @@ mod tests {
         let text="、".repeat(30_000)+"\n"+&"雪".repeat(30_000);let mut joined=String::new();let mut blocks=0;
         chunks(&mut text.as_bytes(),&AtomicBool::new(false),|block|{assert!(block.len()<=CHUNK_BYTES);joined.push_str(block);blocks+=1;Ok(())}).unwrap();
         assert_eq!(joined,text);assert!(blocks>=3);
+    }
+
+    fn file_holds(path:&Path,needle:&str) -> bool {std::fs::read(path).map(|bytes|bytes.windows(needle.len()).any(|w|w==needle.as_bytes())).unwrap_or(false)}
+    fn wait_for(what:&str,mut done:impl FnMut()->bool) {
+        for _ in 0..100 {if done() {return;}std::thread::sleep(std::time::Duration::from_millis(50));}
+        panic!("timed out waiting for {what}");
+    }
+
+    #[test]
+    fn a_private_session_is_never_indexed_and_its_text_is_scrubbed_from_the_files() {
+        const WORD:&str="zebraquartz9f3";
+        let root=std::env::temp_dir().join(format!("vlx-search-private-{}",uuid::Uuid::new_v4()));std::fs::create_dir_all(root.join("recordings")).unwrap();
+        let db=crate::db::Db::open(&root.join("business.sqlite")).unwrap();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO projects(id,name,root_path,sort_order,created_at) VALUES('p','p','/p',0,0);
+            INSERT INTO sessions(id,project_id,name,kind,sort_order,created_at) VALUES('priv','p','priv','terminal',0,0),('pub','p','pub','terminal',0,0);").unwrap();
+        let app=AppCtx::Headless(Arc::new(crate::host::HeadlessHost::new(root.clone(),db)));
+        let log=|id:&str,text:&str| std::fs::write(root.join("recordings").join(format!("{id}.log")),text).unwrap();
+        let set=|private:bool| super::super::private::set(&app.db().conn.lock().unwrap(),"priv",private).unwrap();
+        log("priv",&format!("the {WORD} line\nsecond line\n"));log("pub","an ordinary line\n");
+        let conn=open(&app).unwrap();let cancel=Arc::new(AtomicBool::new(false));let budget=Arc::new(AtomicBool::new(false));
+        let all=sessions(&app,None).unwrap();let find=|id:&str| all.iter().find(|s|s.id==id).unwrap().clone();
+        let (private,ordinary)=(find("priv"),find("pub"));
+        let rows=|id:&str| conn.query_row("SELECT count(*) FROM session_fts WHERE session_id=?1",[id],|r|r.get::<_,i64>(0)).unwrap();
+        let states=|id:&str| conn.query_row("SELECT count(*) FROM corpus_state WHERE session_id=?1",[id],|r|r.get::<_,i64>(0)).unwrap();
+        let (file,wal)=(path(&root),{let mut name=path(&root).into_os_string();name.push("-wal");PathBuf::from(name)});
+
+        refresh_session(&app,&conn,&private,&cancel).unwrap();refresh_session(&app,&conn,&ordinary,&cancel).unwrap();
+        assert!(rows("priv")>0 && rows("pub")>0);
+        assert!(file_holds(&file,WORD) || file_holds(&wal,WORD),"the word is in the files before the scrub");
+
+        // Flagged: the refresh drops the rows and the state, leaves the other session alone, and scrubs both files.
+        set(true);
+        assert!(matches!(refresh_session(&app,&conn,&private,&cancel).unwrap(),Refreshed::Removed));
+        assert_eq!((rows("priv"),states("priv")),(0,0));assert!(rows("pub")>0);
+        assert!(!file_holds(&file,WORD),"the word is gone from corpus.sqlite");assert!(!file_holds(&wal,WORD),"and from its write-ahead log");
+
+        // A private session that grows stays out through every path, and an ordinary refresh does not scrub.
+        log("priv",&format!("the {WORD} line\nsecond line\nthird line\n"));
+        assert!(matches!(refresh_session(&app,&conn,&private,&cancel).unwrap(),Refreshed::Unchanged));
+        assert!(matches!(refresh_for_search(&app,&conn,&private,&cancel,&budget).unwrap(),Refreshed::Unchanged));
+        crate::search::reindex_session_quiet(&app,"priv");std::thread::sleep(std::time::Duration::from_millis(500));
+        assert_eq!((rows("priv"),states("priv")),(0,0));
+        assert!(!file_holds(&file,WORD) && !file_holds(&wal,WORD));
+
+        // Clearing the flag lets it be indexed again, through the stop-time reindex as well.
+        set(false);
+        refresh_for_search(&app,&conn,&private,&cancel,&budget).unwrap();assert!(rows("priv")>0);
+        assert!(file_holds(&file,WORD) || file_holds(&wal,WORD));
+        set(true);
+        crate::search::reindex_session_quiet(&app,"priv");
+        wait_for("the stop-time reindex to drop a newly private session",||rows("priv")==0);
+        assert!(!file_holds(&file,WORD) && !file_holds(&wal,WORD));
+        set(false);
+        crate::search::reindex_session_quiet(&app,"priv");
+        wait_for("the stop-time reindex to index a cleared session",||rows("priv")>0);
+        drop(conn);drop(app);let _=std::fs::remove_dir_all(&root);
     }
 
     /// Times a cold warm-up as the background pass runs it on a copied data directory, VLX_BENCH_DATA=<dir>,
