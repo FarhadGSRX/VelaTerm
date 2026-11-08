@@ -207,7 +207,10 @@ export function usePtySession(session: Session, cwd?: string, hidden?: boolean) 
     const focused = windowFocused && !hidden && isActiveSession;
     if (lastFocusSentRef.current === focused) return;
     lastFocusSentRef.current = focused;
-    void ptyWrite(session.id, focused ? "\x1b[I" : "\x1b[O");
+    // The session's process can be stopped from outside this window (`vstop`, another client's Kill) while
+    // its view stays open, and the write then fails with "Session … not found". A lost focus report is
+    // harmless; an uncaught rejection takes over the whole window.
+    void ptyWrite(session.id, focused ? "\x1b[I" : "\x1b[O").catch(() => {});
   }, [windowFocused, hidden, isActiveSession, session.id, sizeMode]);
 
   // When a session becomes visible/active, flush its background backlog immediately in chunks. Chunking
