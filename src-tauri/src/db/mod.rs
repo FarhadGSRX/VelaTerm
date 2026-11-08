@@ -284,6 +284,11 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         conn.execute("ALTER TABLE agent_presets ADD COLUMN private INTEGER NOT NULL DEFAULT 0", [])
             .map_err(|e| format!("Failed to migrate agent_presets.private: {e}"))?;
     }
+    // File presets: `autostart` is the message that resumes the linked sessions when VelaTerm starts.
+    if table_exists(conn, "agent_presets") && !column_exists(conn, "agent_presets", "autostart") {
+        conn.execute("ALTER TABLE agent_presets ADD COLUMN autostart TEXT", [])
+            .map_err(|e| format!("Failed to migrate agent_presets.autostart: {e}"))?;
+    }
     if table_exists(conn, "projects") && !column_exists(conn, "projects", "collection_id") {
         conn.execute("ALTER TABLE projects ADD COLUMN collection_id TEXT REFERENCES projects(id) ON DELETE SET NULL", [])
             .map_err(|e| format!("Failed to migrate projects.collection_id: {e}"))?;
@@ -405,8 +410,18 @@ mod tests {
         migrate(&conn).unwrap();
     }
 
-    /// A fresh full SCHEMA also migrates idempotently, skipping existing columns and creating the index.
     #[test]
+    fn migrate_adds_the_autostart_column_to_a_legacy_presets_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(schema::SCHEMA).unwrap();
+        conn.execute("ALTER TABLE agent_presets DROP COLUMN autostart", []).unwrap();
+        assert!(!column_exists(&conn, "agent_presets", "autostart"));
+        migrate(&conn).unwrap();
+        assert!(column_exists(&conn, "agent_presets", "autostart"));
+        migrate(&conn).unwrap();
+    }
+
+    /// A fresh full SCHEMA also migrates idempotently, skipping existing columns and creating the index.    #[test]
     fn migrate_is_noop_safe_on_fresh_schema() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(schema::SCHEMA).unwrap();

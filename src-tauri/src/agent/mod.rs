@@ -54,6 +54,7 @@ pub mod usage_store;
 pub mod permission_state;
 pub mod plan_execute;
 pub mod preset_cli;
+pub mod autostart;
 pub mod preset_file;
 pub mod stop;
 pub mod tell;

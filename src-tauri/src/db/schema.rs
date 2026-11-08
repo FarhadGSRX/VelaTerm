@@ -156,7 +156,8 @@ CREATE TABLE IF NOT EXISTS agent_presets (
   source          TEXT,                       -- NULL: made in VelaTerm; 'file': kept in step with presets.json
   cwd             TEXT,                       -- File presets: the folder a new session starts in
   settings_path   TEXT,                       -- File presets: a settings file merged into each launch
-  private         INTEGER NOT NULL DEFAULT 0  -- File presets: sessions linked to it are private
+  private         INTEGER NOT NULL DEFAULT 0, -- File presets: sessions linked to it are private
+  autostart       TEXT                        -- File presets: the first message when VelaTerm starts the linked sessions itself
 );
 
 -- Freshness bookkeeping for the global search index. Each session/track records how far indexing has

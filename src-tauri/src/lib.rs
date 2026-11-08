@@ -1003,6 +1003,8 @@ fn run_with_builder(builder: tauri::Builder<tauri::Wry>, initial_open_project: O
             agent::chat::auto_continue::start(AppCtx::Tauri(app.handle().clone()));
             // Keeps file presets in step with ~/.config/velaterm/presets.json while VelaTerm runs.
             agent::preset_file::start(AppCtx::Tauri(app.handle().clone()));
+            // Resumes the sessions whose preset carries an autostart message, once per process start.
+            agent::autostart::start(AppCtx::Tauri(app.handle().clone()));
             agent::remote_model_catalog::start(AppCtx::Tauri(app.handle().clone()));
 
             // Refresh the search index in the background so the first search only pays for what changed
