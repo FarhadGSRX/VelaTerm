@@ -150,6 +150,7 @@ import {
   type ArtifactOpenBesideDetail,
   type ComposerInsertDetail,
 } from "../doc/artifact/artifactWriters";
+import { composeIntoDraft } from "../doc/artifact/artifactCompose";
 
 /** Width of the artifact panel beside a conversation, remembered across panes and restarts. */
 const DOCK_WIDTH_KEY = "vlx-artifact-dock-width";
@@ -517,6 +518,21 @@ export function ChatPane({
     const onInsert = (e: Event) => {
       const detail = (e as CustomEvent<ComposerInsertDetail>).detail;
       if (!detail || detail.sessionId !== session.id) return;
+      if (detail.ifEmpty) {
+        // A page's `compose` never mixes into what the user is typing: the box must be empty, as shown on screen.
+        const decision = composeIntoDraft(inputRef.current?.value ?? "", detail.text);
+        if ("refused" in decision) {
+          detail.result = "draft";
+          const text = t("artifact.composeDraft");
+          setNotice({ text, priority: "medium" });
+          window.setTimeout(() => setNotice((n) => (n?.text === text ? null : n)), 4000);
+          return;
+        }
+        detail.result = "inserted";
+        setDraft(decision.next);
+        requestAnimationFrame(() => inputRef.current?.focus());
+        return;
+      }
       setDraft((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")}\n\n${detail.text}` : detail.text));
       requestAnimationFrame(() => inputRef.current?.focus());
     };

@@ -53,8 +53,19 @@ export const COMPOSER_INSERT_EVENT = "vlx:composer-insert";
 export interface ComposerInsertDetail {
   sessionId: string;
   text: string;
+  /** Set by a page's `compose`: fill the box only when it is empty. */
+  ifEmpty?: boolean;
+  /** Written by the conversation view that took an `ifEmpty` event. */
+  result?: "inserted" | "draft";
 }
 
 export function insertIntoComposer(sessionId: string, text: string): void {
   window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail: { sessionId, text } }));
+}
+
+/** Fill the message box of `sessionId` only when it is empty; "absent" when no conversation view took it. */
+export function composeIntoComposer(sessionId: string, text: string): "inserted" | "draft" | "absent" {
+  const detail: ComposerInsertDetail = { sessionId, text, ifEmpty: true };
+  window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail }));
+  return detail.result ?? "absent";
 }

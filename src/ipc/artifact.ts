@@ -15,6 +15,8 @@ export interface ArtifactGrant {
   entry: string;
   /** Folder the grant serves. */
   root: string;
+  /** The session whose panel folder holds the page, the only one its `compose` may reach (fg-only). */
+  composeSession?: string | null;
 }
 
 export interface ArtifactVersion {

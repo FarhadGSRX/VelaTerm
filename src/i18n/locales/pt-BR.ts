@@ -2636,6 +2636,7 @@ const ptBR: typeof en = {
   "artifact.useOptionTitle": "Coloca na caixa de mensagem da sessão que escreveu esta página uma mensagem pedindo para manter esta opção", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "Copia uma mensagem pedindo para manter esta opção", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
+  "artifact.composeDraft": "Envie ou apague sua mensagem primeiro.",
   "kb.overview": "Visão geral",
   "kb.sources": "Fontes",
   "kb.searchAll": "Pesquisar conhecimento e notas…",

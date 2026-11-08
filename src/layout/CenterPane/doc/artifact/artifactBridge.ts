@@ -4,6 +4,10 @@
 //! shapes listed here, with every field type-checked and clipped. They feed displays (error count, console,
 //! blocked-request banner, scroll restore, the picked element and the option list) and never trigger an action
 //! by themselves: a picked element only opens the comment box, and nothing reaches a session until the user sends it.
+//! fg's `compose` is the one message that fills a message box, and only under the rules in `artifactCompose`; it
+//! never sends.
+
+import { COMPOSE_MAX } from "./artifactCompose";
 
 /** Source tag the injected script puts on every message. */
 export const BRIDGE_SOURCE = "vlx-artifact";
@@ -39,7 +43,8 @@ export type BridgeMessage =
   | { type: "scroll"; y: number }
   | ({ type: "picked" } & PickedTarget)
   | { type: "pickCancel" }
-  | { type: "options"; options: ArtifactOption[] };
+  | { type: "options"; options: ArtifactOption[] }
+  | { type: "compose"; text: string };
 
 function clip(v: unknown, max = MAX_TEXT): string | null {
   return typeof v === "string" ? v.slice(0, max) : null;
@@ -98,6 +103,11 @@ export function parseBridgeMessage(data: unknown): BridgeMessage | null {
       }
       return { type: "options", options };
     }
+    case "compose":
+      // Only the shape here; artifactCompose applies the rules. Keep one character past the limit, so longer
+      // text is refused rather than cut to fit.
+      if (typeof m.text !== "string") return null;
+      return { type: "compose", text: m.text.slice(0, COMPOSE_MAX + 1) };
     default:
       return null;
   }
@@ -107,7 +117,8 @@ export function parseBridgeMessage(data: unknown): BridgeMessage | null {
 export type HostMessage =
   | { type: "pick"; on: boolean }
   | { type: "marks"; marks: { n: number; selector: string }[] }
-  | { type: "reveal"; option?: string; selector?: string };
+  | { type: "reveal"; option?: string; selector?: string }
+  | { type: "composeResult"; ok: boolean; reason?: string };
 
 export function postToFrame(frame: HTMLIFrameElement | null, message: HostMessage): void {
   // The frame has an opaque origin, so "*" is the only target that reaches it; the message carries no secrets.

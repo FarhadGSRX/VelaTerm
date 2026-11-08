@@ -22,7 +22,8 @@ import { fsWatch, statFile } from "../../../../ipc/info";
 import { parseBridgeMessage, postToFrame, pushConsole, type ArtifactOption, type ConsoleEntry } from "./artifactBridge";
 import { artifactReview, reviewMarks, setDraft, setPicking, subscribeArtifactReview } from "./artifactReview";
 import { isNetAllowed, setNetAllowed } from "./artifactPrefs";
-import { artifactWriter, subscribeArtifactWriters } from "./artifactWriters";
+import { runCompose } from "./artifactCompose";
+import { artifactWriter, composeIntoComposer, subscribeArtifactWriters } from "./artifactWriters";
 
 /** Lease renewal for both the grant and the directory watch. */
 const RENEW_MS = 60_000;
@@ -79,9 +80,18 @@ export interface ArtifactState {
   frameRef: React.RefObject<HTMLIFrameElement | null>;
 }
 
-export function useArtifact(path: string, opts: { hidden: boolean; version?: number | null }): ArtifactState {
+export function useArtifact(
+  path: string,
+  opts: { hidden: boolean; version?: number | null; composeTo?: string | null },
+): ArtifactState {
   const version = opts.version ?? null;
   const [grant, setGrant] = useState<ArtifactGrant | null>(null);
+  // Read by the message handler, which is registered once: the grant says which panel folder holds the page,
+  // and `composeTo` is the conversation the panel sits beside (none in a tab).
+  const grantRef = useRef<ArtifactGrant | null>(null);
+  grantRef.current = grant;
+  const composeToRef = useRef<string | null>(opts.composeTo ?? null);
+  composeToRef.current = opts.composeTo ?? null;
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const [nonce, setNonce] = useState(0);
@@ -171,6 +181,17 @@ export function useArtifact(path: string, opts: { hidden: boolean; version?: num
         if (blockedUris.current.has(msg.uri)) return;
         blockedUris.current.add(msg.uri);
         setBlocked(blockedUris.current.size);
+      }
+      else if (msg.type === "compose") {
+        const reason = runCompose(
+          { text: msg.text, panelSession: grantRef.current?.composeSession, beside: composeToRef.current, now: Date.now() },
+          composeIntoComposer,
+        );
+        postToFrame(frameRef.current, reason ? { type: "composeResult", ok: false, reason } : { type: "composeResult", ok: true });
+        // The draft refusal is shown beside the message box; the others are for whoever wrote the page.
+        if (reason && reason !== "draft") {
+          setEntries((list) => pushConsole(list, { id: ++entryId.current, level: "warn", text: `compose refused: ${reason}` }));
+        }
       }
       else if (msg.type === "console") setEntries((list) => pushConsole(list, { id: ++entryId.current, level: msg.level, text: msg.text }));
       else if (msg.type === "error") setEntries((list) => pushConsole(list, { id: ++entryId.current, level: "error", text: msg.text, line: msg.line || undefined }));

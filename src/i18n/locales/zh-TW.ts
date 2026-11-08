@@ -2575,6 +2575,7 @@ const zhTW: typeof en = {
   "artifact.useOptionTitle": "在寫出此頁面的會話輸入框中填入一則訊息，要求保留這個方案", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "複製一則要求保留這個方案的訊息", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
+  "artifact.composeDraft": "請先傳送或清除你的訊息。",
   "kb.overview": "總覽",
   "kb.sources": "來源",
   "kb.searchAll": "搜尋知識與筆記…",

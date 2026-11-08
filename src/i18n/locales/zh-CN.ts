@@ -2573,6 +2573,7 @@ const zhCN: typeof en = {
   "artifact.useOption": (id: string) => `采用 ${id}`,
   "artifact.useOptionTitle": "在写出此页面的会话输入框中填入一条消息，要求保留这个方案",
   "artifact.useOptionCopyTitle": "复制一条要求保留这个方案的消息",
+  "artifact.composeDraft": "请先发送或清除你的消息。",
   // Knowledge base and archived sessions pages.
   "kb.overview": "概览",
   "kb.sources": "来源",

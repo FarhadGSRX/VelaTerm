@@ -2648,6 +2648,7 @@ const ru: typeof en = {
   "artifact.useOptionTitle": "Вставляет в поле ввода сессии, которая создала эту страницу, сообщение с просьбой оставить этот вариант", // Put a message asking to keep this option in the message box of the session that wrote this page
   "artifact.useOptionCopyTitle": "Копирует сообщение с просьбой оставить этот вариант", // Copy a message asking to keep this option
   // Knowledge base and archived sessions pages.
+  "artifact.composeDraft": "Сначала отправьте или удалите своё сообщение.",
   "kb.overview": "Обзор",
   "kb.sources": "Источники",
   "kb.searchAll": "Поиск по знаниям и заметкам…",

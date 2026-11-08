@@ -3,12 +3,13 @@
 //! Stepping to an earlier version previews that snapshot without touching the file; restoring writes it back
 //! after a confirmation, and the restore itself becomes the newest version through the usual change watch.
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 
 import Icons from "../../../../components/Icons";
 import { dateLocale, useT } from "../../../../i18n";
 import { artifactRestore } from "../../../../ipc/artifact";
 import { useTermStore } from "../../../../store/termStore";
+import { ArtifactHostContext } from "./ArtifactCard";
 import { ArtifactHeaderControls, ArtifactPane } from "./ArtifactParts";
 import { useArtifact } from "./useArtifact";
 import "./artifact.css";
@@ -36,7 +37,9 @@ export function ArtifactDock({ path, onClose, style }: { path: string; onClose: 
   const [confirmRestore, setConfirmRestore] = useState(false);
   const [restoreFailed, setRestoreFailed] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
-  const state = useArtifact(path, { hidden: false, version });
+  // The conversation this panel sits beside: the only one the page's `compose` may fill.
+  const host = useContext(ArtifactHostContext);
+  const state = useArtifact(path, { hidden: false, version, composeTo: host?.sessionId ?? null });
 
   useEffect(() => {
     setVersion(null);

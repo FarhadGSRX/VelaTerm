@@ -70,6 +70,24 @@ pub struct GrantInfo {
     /// The entry page relative to the root, percent-encoded per segment.
     pub entry: String,
     pub root: String,
+    /// The session whose panel folder holds this page, the only one its `compose` messages may reach. See
+    /// [`compose_session_in`].
+    pub compose_session: Option<String>,
+}
+
+/// Folder under `~/.claude` whose per-session subfolders hold the pages allowed to `compose` (fg-only).
+const PANELS_DIR: &str = "session-panel";
+
+/// The session a page may compose into. Its folder, with symlinks resolved, must be exactly
+/// `<panels>/<session id>`: a page in a subfolder, or anywhere else, gets none. `root` is already canonical.
+fn compose_session_in(root: &Path, panels: &Path) -> Option<String> {
+    let panels = panels.canonicalize().ok()?;
+    if root.parent()? != panels.as_path() {
+        return None;
+    }
+    let id = root.file_name()?.to_str()?;
+    let valid = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    valid.then(|| id.to_string())
 }
 
 /// One saved version of an artifact's entry page.
@@ -129,7 +147,9 @@ pub fn issue(path: &str, opts: IssueOptions) -> Result<GrantInfo, String> {
         id.clone(),
         Grant { root: root.clone(), entry: name.clone(), entry_override, source, net: opts.net, deny: opts.deny, renewed: Instant::now() },
     );
-    Ok(GrantInfo { grant_id: id, entry: encode_segment(&name), root: root.to_string_lossy().into_owned() })
+    let compose_session =
+        crate::host::home_dir().and_then(|home| compose_session_in(&root, &home.join(".claude").join(PANELS_DIR)));
+    Ok(GrantInfo { grant_id: id, entry: encode_segment(&name), root: root.to_string_lossy().into_owned(), compose_session })
 }
 
 /// Extend a grant's lease; false when it already lapsed and the tab must ask for a new one.
@@ -478,6 +498,41 @@ mod tests {
 
     fn header<'a>(s: &'a Served, name: &str) -> Option<&'a str> {
         s.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn compose_session_only_for_a_page_directly_in_its_panel_folder() {
+        let panels = temp_dir("panels");
+        let id = "4f952227-723e-4662-a536-4b10643556a6";
+        let own = panels.join(id);
+        fs::create_dir_all(own.join("sub")).unwrap();
+        assert_eq!(compose_session_in(&own, &panels).as_deref(), Some(id));
+        // A subfolder, the panels folder itself, a folder that isn't a session ID, and any other folder get none.
+        assert_eq!(compose_session_in(&own.join("sub"), &panels), None);
+        assert_eq!(compose_session_in(&panels, &panels), None);
+        let odd = panels.join("not a session");
+        fs::create_dir_all(&odd).unwrap();
+        assert_eq!(compose_session_in(&odd, &panels), None);
+        let elsewhere = temp_dir("elsewhere").join(id);
+        fs::create_dir_all(&elsewhere).unwrap();
+        assert_eq!(compose_session_in(&elsewhere, &panels), None);
+        // A panels folder that doesn't exist allows nothing.
+        assert_eq!(compose_session_in(&own, &panels.join("missing")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compose_session_follows_symlinks_before_checking() {
+        let panels = temp_dir("panels-link");
+        let outside = temp_dir("outside");
+        let id = "0a9b7916-0000-4000-8000-000000000000";
+        let target = outside.join(id);
+        fs::create_dir_all(&target).unwrap();
+        // A session folder that is a symlink to somewhere else resolves to that place, so it is refused.
+        std::os::unix::fs::symlink(&target, panels.join(id)).unwrap();
+        fs::write(target.join("p.html"), "<html></html>").unwrap();
+        let root = panels.join(id).join("p.html").canonicalize().unwrap().parent().unwrap().to_path_buf();
+        assert_eq!(compose_session_in(&root, &panels), None);
     }
 
     #[test]

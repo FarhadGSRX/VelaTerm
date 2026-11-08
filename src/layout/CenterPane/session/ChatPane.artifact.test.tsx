@@ -1,7 +1,7 @@
 //! The conversation side of artifact previews: `vartifact page.html` from this session opens the side panel,
 //! and "Send to session" puts text in the composer without sending it.
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../ipc/transport", async (original) => ({
@@ -13,6 +13,7 @@ vi.mock("./controls", () => ({ LevelBar: () => null, ControlChip: () => null }))
 import { invoke, listen, onTransportReconnect } from "../../../ipc/transport";
 import { useTermStore } from "../../../store/termStore";
 import { insertIntoComposer, openBesideSession } from "../doc/artifact/artifactWriters";
+import { resetComposeHistory } from "../doc/artifact/artifactCompose";
 import { ChatPane } from "./ChatPane";
 import { useOutbox } from "./outbox";
 import { clearChatCache } from "./chatCache";
@@ -94,5 +95,70 @@ describe("artifact panel beside a conversation", () => {
     await act(async () => insertIntoComposer("other", "not for this pane"));
     expect(input.value).toBe("Please fix the errors.");
     expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).not.toContain("chat_send");
+  });
+});
+
+describe("compose from the panel's page", () => {
+  beforeEach(() => resetComposeHistory());
+
+  /** Open the page beside session "s" on a grant that names `panel` as its panel folder's session. */
+  async function openPanel(panel: string | null) {
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation((command, args) => command === "artifact_grant"
+      ? Promise.resolve({ grantId: "g1", entry: "index.html", root: "/p/site", composeSession: panel }) as Promise<never>
+      : base(command, args));
+    await mountPane();
+    await act(async () => { openBesideSession("s", PAGE); });
+    const frame = await waitFor(() => {
+      const el = document.querySelector(".artifact-dock iframe") as HTMLIFrameElement | null;
+      expect(el?.src).toContain("/g1/index.html");
+      return el!;
+    });
+    const replies: unknown[] = [];
+    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message: unknown) => { replies.push(message); });
+    const post = (text: unknown) => act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { data: { source: "vlx-artifact", type: "compose", text }, source: frame.contentWindow }));
+    });
+    const results = () => replies.filter((m) => (m as { type?: string }).type === "composeResult");
+    return { input: screen.getByRole("textbox") as HTMLTextAreaElement, post, results };
+  }
+
+  it("fills the empty message box of the conversation it sits beside, and never sends", async () => {
+    const { input, post, results } = await openPanel("s");
+    await post("/thoughts ok 3");
+    expect(input.value).toBe("/thoughts ok 3");
+    expect(results()).toEqual([{ type: "composeResult", ok: true, source: "vlx-artifact-host" }]);
+    expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).not.toContain("chat_send");
+  });
+
+  it("refuses when the message box already holds text, and says so", async () => {
+    const { input, post, results } = await openPanel("s");
+    await act(async () => insertIntoComposer("s", "half a sentence"));
+    await post("/thoughts ok 3");
+    expect(input.value).toBe("half a sentence");
+    expect(results()).toEqual([{ type: "composeResult", ok: false, reason: "draft", source: "vlx-artifact-host" }]);
+    expect(screen.getByText("Send or clear your message first.")).toBeTruthy();
+  });
+
+  it("refuses a page whose panel folder belongs to another session, or to none", async () => {
+    for (const panel of ["other", null]) {
+      cleanup();
+      const { input, post, results } = await openPanel(panel);
+      await post("/thoughts ok 3");
+      expect(input.value).toBe("");
+      expect(results()).toEqual([{ type: "composeResult", ok: false, reason: panel ? "other-session" : "not-allowed", source: "vlx-artifact-host" }]);
+    }
+  });
+
+  it("refuses a line break, and a second compose within a second", async () => {
+    const { input, post, results } = await openPanel("s");
+    await post("/thoughts ok 3\n");
+    expect(input.value).toBe("");
+    await post("/thoughts ok 3");
+    expect(input.value).toBe("/thoughts ok 3");
+    fireEvent.change(input, { target: { value: "" } });
+    await post("/thoughts no 4");
+    expect(input.value).toBe("");
+    expect(results().map((m) => (m as { reason?: string }).reason ?? "ok")).toEqual(["control", "ok", "too-soon"]);
   });
 });
