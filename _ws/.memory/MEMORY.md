@@ -1,5 +1,5 @@
 - [VelaTerm WebGL garble](velaterm-webgl-garble.md) — garbled Claude screens = WebGL renderer; use DOM; already fully investigated
 - [Evo build RAM limit](evo-build-ram-limit.md) — throttle cargo (-j 2) on Evo; ask the open-model-testing lab first if it is online
-- [F-Co upper levels direct me](f-co-mgr-directs-velaterm.md) — take direction from f-co-mgr and above via mesh/Zulip; a build OK covers its rollout to every machine
+- [F-Co upper levels direct me](f-co-mgr-directs-velaterm.md) — f-co-mgr is my sponsor (what to build; it asks fg about that), I own how; a build OK covers its rollout
 - [Orca pinned fork option](orca-pinned-fork-option.md) — MIT, so possible, but huge and fast-moving; fg's note for the future, not raised now
 - [Public push diff gate](public-push-diff-gate.md) — read the outgoing diff as its own step before pushing; no private project names in this public repo
