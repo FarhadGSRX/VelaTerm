@@ -1036,6 +1036,13 @@ struct ChatProcess {
     bypass_capable: bool,
     /// Selected permissions are independent of the policy accepted by the active Codex turn.
     codex_permission_state: Mutex<CodexPermissionState>,
+    /// Codex only: its configuration named a permissions profile when this app-server started, so `auto`
+    /// sends no policy and the profile applies (`codex_protocol::inherits_permissions`).
+    codex_profile: bool,
+    /// Codex only: the session went back to `auto` after a turn ran under an explicit pick. A turn's policy
+    /// stays with the thread, so the process is let go once it is idle, and the next message resumes the
+    /// thread in a new one that sends no policy.
+    codex_reopen: AtomicBool,
     /// `default` or `plan` for Codex. Kept separate from `mode`, which controls approvals and sandboxing.
     collaboration_mode: Mutex<Option<String>>,
     /// Installed app-server's authoritative collaboration preset catalogue.
@@ -1720,6 +1727,9 @@ impl ChatManager {
             permission_confirmed: AtomicBool::new(matches!(kind, SessionKind::Opencode | SessionKind::Omp | SessionKind::Zcode) || acp_protocol::supported(kind)),
             bypass_capable,
             codex_permission_state: Mutex::new(CodexPermissionState::default()),
+            codex_profile: kind == SessionKind::Codex
+                && codex_protocol::profile_configured(crate::agent::resume::codex_home().as_deref()),
+            codex_reopen: AtomicBool::new(false),
             collaboration_mode: Mutex::new(match kind {
                 SessionKind::Codex => Some(
                     match collaboration_mode.map(str::trim) {
@@ -2344,6 +2354,16 @@ impl ChatManager {
         *proc.mode.lock().unwrap() = mode.to_string();
         proc.permission_confirmed.store(true, Ordering::Relaxed);
         if proc.kind == SessionKind::Codex {
+            let reopen = {
+                let state = proc.codex_permission_state.lock().unwrap();
+                needs_profile_reopen(proc.codex_profile, mode, state.applied.as_deref(), state.requests.values().map(String::as_str))
+            };
+            // A later explicit pick before the release cancels it: its policy can go out on the next turn.
+            proc.codex_reopen.store(reopen, Ordering::Relaxed);
+            drop(_change);
+            if reopen {
+                release_if_idle(app, session_id, &proc);
+            }
             return Ok(());
         }
         if proc.kind == SessionKind::Opencode {
@@ -3324,6 +3344,20 @@ impl ChatManager {
     }
 }
 
+/// Whether a switch to `mode` needs a new Codex process before the configured profile applies again: the
+/// session inherits in `mode`, and a policy from an explicit pick was accepted for this thread, or is on its
+/// way. A turn's policy stays with the thread, and the protocol has no request that hands it back.
+fn needs_profile_reopen<'a>(
+    profile: bool,
+    mode: &str,
+    applied: Option<&str>,
+    in_flight: impl IntoIterator<Item = &'a str>,
+) -> bool {
+    let explicit = |sent: &str| !codex_protocol::inherits_permissions(sent, true);
+    codex_protocol::inherits_permissions(mode, profile)
+        && (applied.is_some_and(explicit) || in_flight.into_iter().any(explicit))
+}
+
 /// The turn lock keeps a new send or attach from racing the final idle check and process release.
 fn release_if_idle(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
     // Background audits retain their protocol peer while the user visits another view.
@@ -3332,7 +3366,7 @@ fn release_if_idle(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
     let mut turn = proc.turn.lock().unwrap();
     let now = std::time::Instant::now();
     turn.settling.retain(|_, deadline| *deadline > now);
-    if proc.release_when_idle.load(Ordering::Relaxed)
+    if (proc.release_when_idle.load(Ordering::Relaxed) || proc.codex_reopen.load(Ordering::Relaxed))
         && proc.alive.load(Ordering::Relaxed)
         && !turn.running
         && !proc.shell_running.load(Ordering::Relaxed)
@@ -4671,6 +4705,7 @@ fn open_codex_thread(app: &AppCtx, session_id: &str, proc: &Arc<ChatProcess>) {
         proc.cwd.as_deref(),
         model.as_deref(),
         &mode,
+        codex_protocol::inherits_permissions(&mode, proc.codex_profile),
         service_tier.as_deref(),
         personality.as_deref(),
     )) {
@@ -4872,6 +4907,15 @@ fn handle_codex_response(
                 .and_then(Value::as_str)
                 .map(str::to_string);
             if !verify_native_identity(app,session_id,proc,&thread_id) { return; }
+            if proc.codex_profile {
+                // What the thread runs under, so a check can see whether `auto` took the configured profile.
+                crate::diagnostics::record("INFO", "codex_thread_permissions", json!({
+                    "sessionId": session_id,
+                    "mode": proc.mode.lock().unwrap().clone(),
+                    "approvalPolicy": result.get("approvalPolicy"),
+                    "sandbox": result.get("sandbox"),
+                }));
+            }
             remember_codex_thread(app, session_id, proc, &thread_id, model, effort);
             proc.ready.store(true, Ordering::Relaxed);
             start_waiting_message(app, session_id, proc);
@@ -6337,6 +6381,7 @@ fn dispatch(
                     collaboration_preset_effort: collaboration_preset_effort.as_deref(),
                     service_tier: service_tier.as_deref(),
                     personality: personality.as_deref(),
+                    inherit_permissions: codex_protocol::inherits_permissions(&mode, proc.codex_profile),
                 },
             ), text, &commands),client.as_deref());
             proc.write_codex_input(&envelope,text,images,Some(&mode))?;
@@ -7026,6 +7071,8 @@ mod tests {
             permission_confirmed: AtomicBool::new(false),
             bypass_capable: false,
             codex_permission_state: Mutex::new(CodexPermissionState::default()),
+            codex_profile: false,
+            codex_reopen: AtomicBool::new(false),
             collaboration_mode: Mutex::new(None),
             collaboration_modes: Mutex::new(Vec::new()),
             current_turn: Mutex::new(None),
@@ -8456,6 +8503,8 @@ mod tests {
             permission_confirmed: AtomicBool::new(false),
             bypass_capable: false,
             codex_permission_state: Mutex::new(CodexPermissionState::default()),
+            codex_profile: false,
+            codex_reopen: AtomicBool::new(false),
             collaboration_mode: Mutex::new(None),
             collaboration_modes: Mutex::new(Vec::new()),
             current_turn: Mutex::new(None),
@@ -10263,6 +10312,11 @@ mod tests {
 
     /// Exercise the actual Codex wire path without contacting a model or running its proposed tools.
     fn codex_permission_fixture(tag: &str) -> (AppCtx, Arc<ChatProcess>, BufReader<std::process::ChildStdout>) {
+        codex_fixture(tag, false)
+    }
+
+    /// A Codex conversation in `auto`; with `profile`, as if Codex's configuration named a permissions profile.
+    fn codex_fixture(tag: &str, profile: bool) -> (AppCtx, Arc<ChatProcess>, BufReader<std::process::ChildStdout>) {
         let app = ctx(tag);
         {
             let conn = app.db().conn.lock().unwrap();
@@ -10271,6 +10325,7 @@ mod tests {
         }
         let (mut proc, stdout) = cat_process();
         Arc::get_mut(&mut proc).unwrap().kind = SessionKind::Codex;
+        Arc::get_mut(&mut proc).unwrap().codex_profile = profile;
         *proc.mode.lock().unwrap() = "auto".into();
         *proc.agent_session_id.lock().unwrap() = Some("thread-permissions".into());
         app.chat().sessions.lock().unwrap().insert("s".into(), proc.clone());
@@ -10763,6 +10818,51 @@ mod tests {
         assert!(events.lock().unwrap().iter().any(|event| event["type"] == "settingsChanged"
             && event["mode"] == "full-access" && event.get("pendingPermissionMode") == Some(&Value::Null)));
         manager.stop(&app, "s").unwrap();
+    }
+
+    #[test]
+    fn codex_auto_inherits_a_configured_profile_and_reopens_after_an_explicit_pick() {
+        let (app, proc, mut reader) = codex_fixture("codex-profile", true);
+        let manager = app.chat();
+        manager.send(&app, "s", "first", Vec::new(), "queue").unwrap();
+        let first = read_codex_request(&mut reader);
+        assert_eq!(first["method"], "turn/start");
+        assert!(first["params"].get("approvalPolicy").is_none(), "auto sends no policy under a profile");
+        assert!(first["params"].get("sandboxPolicy").is_none());
+        accept_codex_permission_turn(&app, &proc, &first, "turn-first");
+        // A pick undone before any turn carried it leaves the thread on the profile: nothing to reopen.
+        crate::command_core::chat_set_mode(&app, "s", "full-access").unwrap();
+        crate::command_core::chat_set_mode(&app, "s", "auto").unwrap();
+        assert!(!proc.codex_reopen.load(Ordering::Relaxed));
+        // An explicit pick still overrides, on the next turn.
+        crate::command_core::chat_set_mode(&app, "s", "full-access").unwrap();
+        handle_codex_notification(&app, "s", &proc, "turn/completed", json!({"turn":{"id":"turn-first","status":"completed"}}));
+        assert!(proc.alive.load(Ordering::Relaxed));
+        manager.send(&app, "s", "second", Vec::new(), "queue").unwrap();
+        let second = read_codex_request(&mut reader);
+        assert_eq!(second["params"]["approvalPolicy"], "never");
+        assert_eq!(second["params"]["sandboxPolicy"]["type"], "dangerFullAccess");
+        // Back to auto while that turn runs: the process waits for the turn, then goes, so the next message
+        // resumes the thread in a new one that sends no policy.
+        crate::command_core::chat_set_mode(&app, "s", "auto").unwrap();
+        assert!(proc.codex_reopen.load(Ordering::Relaxed));
+        assert!(proc.alive.load(Ordering::Relaxed), "a running turn is not cut off");
+        accept_codex_permission_turn(&app, &proc, &second, "turn-second");
+        handle_codex_notification(&app, "s", &proc, "turn/completed", json!({"turn":{"id":"turn-second","status":"completed"}}));
+        assert!(!proc.alive.load(Ordering::Relaxed), "the idle process was let go");
+        manager.stop(&app, "s").unwrap();
+    }
+
+    #[test]
+    fn a_profile_reopen_is_needed_only_after_an_explicit_policy_reached_the_thread() {
+        let none: [&str; 0] = [];
+        assert!(needs_profile_reopen(true, "auto", Some("full-access"), none));
+        assert!(needs_profile_reopen(true, "auto", Some("read-only"), none));
+        assert!(needs_profile_reopen(true, "auto", Some("auto"), ["full-access"]), "an explicit turn on its way");
+        assert!(!needs_profile_reopen(true, "auto", Some("auto"), none));
+        assert!(!needs_profile_reopen(true, "auto", None, none));
+        assert!(!needs_profile_reopen(true, "full-access", Some("read-only"), none), "an explicit pick needs no profile");
+        assert!(!needs_profile_reopen(false, "auto", Some("full-access"), none), "without a profile auto sends its own policy");
     }
 
     #[test]

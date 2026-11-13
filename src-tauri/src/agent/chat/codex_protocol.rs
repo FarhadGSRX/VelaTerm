@@ -148,8 +148,32 @@ pub fn initialize(id: &str) -> Value {
     )
 }
 
+/// Whether a session in `mode` leaves its permissions to Codex's own configuration: true in `auto` when that
+/// configuration names a permissions profile (`default_permissions`), so the profile applies instead of the
+/// workspace-write policy `auto` sends otherwise. An explicit `read-only` or `full-access` still overrides it.
+pub fn inherits_permissions(mode: &str, profile_configured: bool) -> bool {
+    profile_configured && !matches!(mode, "read-only" | "full-access" | "skip")
+}
+
+/// Whether a Codex `config.toml` names a default permissions profile at its top level.
+pub fn config_names_profile(config: &str) -> bool {
+    config
+        .parse::<toml_edit::DocumentMut>()
+        .ok()
+        .and_then(|doc| doc.get("default_permissions").and_then(|item| item.as_str()).map(|name| !name.trim().is_empty()))
+        .unwrap_or(false)
+}
+
+/// Whether the Codex configuration in `home` names a default permissions profile. Read when the app-server
+/// starts, which is when Codex itself reads its configuration.
+pub fn profile_configured(home: Option<&std::path::Path>) -> bool {
+    home.and_then(|home| std::fs::read_to_string(home.join("config.toml")).ok())
+        .is_some_and(|config| config_names_profile(&config))
+}
+
 /// Start or resume the native thread after the initialize handshake. With `fork`, the resumed thread is
-/// forked into a new one instead, leaving the source thread unchanged.
+/// forked into a new one instead, leaving the source thread unchanged. With `inherit`, no approval or
+/// sandbox policy is sent, so the thread takes Codex's configured permissions profile.
 pub fn open_thread(
     id: &str,
     resume: Option<&str>,
@@ -157,6 +181,7 @@ pub fn open_thread(
     cwd: Option<&str>,
     model: Option<&str>,
     mode: &str,
+    inherit: bool,
     service_tier: Option<&str>,
     personality: Option<&str>,
 ) -> Value {
@@ -181,9 +206,11 @@ pub fn open_thread(
     if let Some(personality) = personality.filter(|_| !fork) {
         params.insert("personality".into(), json!(personality));
     }
-    let (approval, sandbox) = workflow(mode);
-    params.insert("approvalPolicy".into(), json!(approval));
-    params.insert("sandbox".into(), json!(sandbox));
+    if !inherit {
+        let (approval, sandbox) = workflow(mode);
+        params.insert("approvalPolicy".into(), json!(approval));
+        params.insert("sandbox".into(), json!(sandbox));
+    }
     let method = match resume {
         Some(_) if fork => "thread/fork",
         Some(_) => "thread/resume",
@@ -205,6 +232,9 @@ pub struct TurnOptions<'a> {
     pub service_tier: Option<&'a str>,
     /// `none`, `friendly` or `pragmatic`; None keeps the configured personality.
     pub personality: Option<&'a str>,
+    /// Send no approval or sandbox policy, so the thread keeps Codex's configured permissions profile
+    /// ([`inherits_permissions`]). A turn's policy would override the thread's from then on.
+    pub inherit_permissions: bool,
 }
 
 pub fn turn_start(
@@ -222,6 +252,7 @@ pub fn turn_start(
         collaboration_preset_effort,
         service_tier,
         personality,
+        inherit_permissions,
     } = options;
     // Codex accepts an omitted effort but rejects empty values, including in collaboration settings.
     let effort = effort.map(str::trim).filter(|value| !value.is_empty());
@@ -241,9 +272,11 @@ pub fn turn_start(
     if let Some(personality) = personality {
         params["personality"] = json!(personality);
     }
-    let (approval, sandbox) = workflow(mode);
-    params["approvalPolicy"] = json!(approval);
-    params["sandboxPolicy"] = sandbox_policy(sandbox);
+    if !inherit_permissions {
+        let (approval, sandbox) = workflow(mode);
+        params["approvalPolicy"] = json!(approval);
+        params["sandboxPolicy"] = sandbox_policy(sandbox);
+    }
     if let (Some(collaboration_mode), Some(model)) = (collaboration_mode, model) {
         if matches!(collaboration_mode, "default" | "plan") {
             let mut settings = json!({
@@ -517,6 +550,7 @@ mod tests {
                 collaboration_preset_effort: Some("medium"),
                 service_tier: Some("fast"),
                 personality: Some("pragmatic"),
+                inherit_permissions: false,
             },
         );
         assert_eq!(value["method"], "turn/start");
@@ -739,14 +773,58 @@ mod tests {
 
     #[test]
     fn open_thread_forks_a_pending_fork_and_resumes_otherwise() {
-        let fork = open_thread("1", Some("source"), true, None, None, "default", None, Some("pragmatic"));
+        let fork = open_thread("1", Some("source"), true, None, None, "default", false, None, Some("pragmatic"));
         assert_eq!(fork["method"], "thread/fork");
         assert_eq!(fork["params"]["threadId"], "source");
         assert!(fork["params"].get("personality").is_none(), "thread/fork has no personality field");
-        let resume = open_thread("2", Some("source"), false, None, None, "default", None, Some("pragmatic"));
+        let resume = open_thread("2", Some("source"), false, None, None, "default", false, None, Some("pragmatic"));
         assert_eq!(resume["method"], "thread/resume");
         assert_eq!(resume["params"]["personality"], "pragmatic");
-        let fresh = open_thread("3", None, true, None, None, "default", None, None);
+        let fresh = open_thread("3", None, true, None, None, "default", false, None, None);
         assert_eq!(fresh["method"], "thread/start");
+    }
+
+    #[test]
+    fn only_a_top_level_default_permissions_names_a_profile() {
+        assert!(config_names_profile("default_permissions = \"f-co\"\n[permissions.f-co]\nextends = \":workspace\"\n"));
+        assert!(!config_names_profile(""));
+        assert!(!config_names_profile("default_permissions = \"  \"\n"));
+        assert!(!config_names_profile("default_permissions = 3\n"));
+        assert!(!config_names_profile("[profiles.work]\ndefault_permissions = \"f-co\"\n"), "a named profile's key is not the default");
+        assert!(!config_names_profile("default_permissions = \"f-co\"\n[broken"), "unreadable config defers nothing");
+        let home = std::env::temp_dir().join(format!("vlx-codex-profile-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(!profile_configured(Some(home.as_path())), "no config.toml");
+        std::fs::write(home.join("config.toml"), "default_permissions = \"f-co\"\n").unwrap();
+        assert!(profile_configured(Some(home.as_path())));
+        assert!(!profile_configured(None));
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn auto_inherits_a_configured_profile_and_explicit_picks_still_override() {
+        assert!(inherits_permissions("auto", true));
+        assert!(!inherits_permissions("auto", false), "without a profile, auto keeps workspace-write");
+        for explicit in ["read-only", "full-access", "skip"] {
+            assert!(!inherits_permissions(explicit, true), "{explicit}");
+        }
+    }
+
+    #[test]
+    fn an_inheriting_thread_and_turn_send_no_permission_policy() {
+        for (resume, fork, method) in [(None, false, "thread/start"), (Some("t"), false, "thread/resume"), (Some("t"), true, "thread/fork")] {
+            let open = open_thread("1", resume, fork, None, None, "auto", true, None, None);
+            assert_eq!(open["method"], method);
+            assert!(open["params"].get("approvalPolicy").is_none(), "{method}");
+            assert!(open["params"].get("sandbox").is_none(), "{method}");
+            let explicit = open_thread("1", resume, fork, None, None, "auto", false, None, None);
+            assert_eq!(explicit["params"]["approvalPolicy"], "on-request", "{method}");
+            assert_eq!(explicit["params"]["sandbox"], "workspace-write", "{method}");
+        }
+        let turn = |inherit_permissions| turn_start("2", "t", "go", &[], TurnOptions { mode: "auto", inherit_permissions, ..TurnOptions::default() });
+        let inherited = turn(true);
+        assert!(inherited["params"].get("approvalPolicy").is_none());
+        assert!(inherited["params"].get("sandboxPolicy").is_none());
+        assert_eq!(turn(false)["params"]["sandboxPolicy"]["type"], "workspaceWrite");
     }
 }
