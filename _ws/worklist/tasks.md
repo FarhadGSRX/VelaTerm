@@ -63,6 +63,8 @@ Tags: [tasks]
 
 - [ ] Idea: `vtell`'s "The session is missing or archived" (`agent/tell.rs:44-48`) could say which, and for an archived target, that fg restores it from Archived Sessions. On 2026-11-13 the shared message cost a cross-machine check before a read of CX1's database showed research-director was simply archived (Zulip ws-velaterm › vtell: listed session refused as missing or archived (CX1), 3923-3928). Size XS, my guess #task/cc/evo/velaterm-lead
 
+- [ ] Bug, no build unless fg asks: autostart skips Conversation View sessions without a log line. `select` keeps only `engine == "tui"` (`agent/autostart.rs:45-48`), so a monitor switched to Conversation View isn't resumed after VelaTerm starts. Found 2026-11-24 on CX1: its monitor had been switched between 2026-11-11 and 11-18, and it stayed down for 14 min, along with the waker (Zulip ws-velaterm › cx1: monitor not autostarted after a reboot, 4335-4337). Workaround: switch the session back to a terminal. Fix if a build happens: resume chat sessions too, and log each one it skips. Size S, my guess #task/cc/evo/velaterm-lead
+
 - [ ] Upstream PRs for the Windows worktree bug (d0fdde0) and the macOS launch-line bug (a7db13e), each cut from `main`, if fg wants them #task/cc/evo/velaterm-lead
 
 - [ ] Idea: a remote browser client keeps running the code it loaded until its page is refreshed, even after Evo restarts onto a new build, because it reconnects by itself. The compose buttons did nothing on CX1 for that reason on 2026-11-08 (ws-velaterm 3559), and again after the 21:17Z restart, until fg refreshed the tab (3566-3567). The page could compare the server's build with its own on reconnect and offer a reload. Size S, my guess #task/cc/evo/velaterm-lead
