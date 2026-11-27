@@ -43,7 +43,10 @@ const json = (text) => {
   try { return JSON.parse(text) } catch { return undefined }
 }
 
-const before = new Set((json(run(app, ['ls']).out)?.spaces ?? []).map((s) => s.id))
+// A headless machine (the Mac: herdr-core only) has no app CLI; 10a is then done from the app that shows it.
+const listed = spawnSync(app, ['ls'], { encoding: 'utf8', windowsHide: true })
+const hasApp = !listed.error
+const before = new Set(hasApp ? (json(listed.stdout)?.spaces ?? []).map((s) => s.id) : [])
 const started = run(hc, ['run', '--bg', '--no-parent', '--name', slug, '--cwd', cwd, '--', 'node', launch, slug, '--resume', conversation])
 console.log(`launch: ${started.out || started.err}`)
 await new Promise((done) => setTimeout(done, wait * 1000))
@@ -53,12 +56,16 @@ const got = json(run(hc, ['get', slug, '--json']).out) ?? {}
 console.log(`state: ${got.state} status=${JSON.stringify(got.status)} labels=${JSON.stringify(got.labels)}`)
 
 const space = got.labels?.['herdr.space']
-run(app, ['do', 'tab.rename', '--id', slug, '--name', slug])
-console.log(`tab renamed: ${slug}`)
-if (spaceName && space && !before.has(space)) {
-  run(app, ['do', 'space.rename', '--id', space, '--name', spaceName])
-  console.log(`space ${space} was new: renamed to ${spaceName}`)
-} else if (space) console.log(`space ${space} already existed: left as is`)
+if (!hasApp) {
+  console.log(`no herdr app here (${app}): 10a is done from the app that shows this machine`)
+} else {
+  run(app, ['do', 'tab.rename', '--id', slug, '--name', slug])
+  console.log(`tab renamed: ${slug}`)
+  if (spaceName && space && !before.has(space)) {
+    run(app, ['do', 'space.rename', '--id', space, '--name', spaceName])
+    console.log(`space ${space} was new: renamed to ${spaceName}`)
+  } else if (space) console.log(`space ${space} already existed: left as is`)
+}
 
 const registry = json(readFileSync(join(homedir(), '.zulip-mesh', 'sessions.json'), 'utf8'))
 const r = registry?.by_name?.[zulip] ?? {}

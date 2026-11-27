@@ -32,7 +32,7 @@ For state without the screen or the title, use the harness's `node <clone>/plugi
 7. The same transcript grows past the baseline, and no new file appears.
 8. `state.mjs` shows `claude-code`, `idle` or `working`.
 9. Its settings, plugins, auto mode and status line load (from its screen).
-10. The right space and tab (10a renames the tab for every role, since the app names a new tab with a number).
+10. The right space and tab (10a renames the tab for every role, since the app names a new tab with a number). A headless machine has no app (the Intel Mac runs herdr-core only, as the Herdr app has no Intel build), so `move-role.mjs` skips 10a there, and it's done from the app that shows that machine.
 11. One mention, and it replies within about a minute.
 
 **After**
