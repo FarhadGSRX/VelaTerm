@@ -4,13 +4,14 @@ How one F-Co role leaves VelaTerm and resumes, on the same conversation, in the 
 
 ## The Scripts
 
-Each script is read-only towards VelaTerm and works out its own paths (`$HOME`, `%APPDATA%`, `%LOCALAPPDATA%`, `FG_VAULT_ROOT`).
+Each script is read-only towards VelaTerm and works out its own paths (`$HOME`, `FG_VAULT_ROOT`, and VelaTerm's data folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, or `VLX_DB` for the database itself). The Python and node scripts run on Windows, macOS and Linux; `move-role.ps1` is Windows-only, and `move-role.mjs` does the same everywhere (`HC_BIN` and `HERDR_APP_BIN` override where `hc` and the app's CLI are).
 
 | Script | Step | What it does |
 |---|---|---|
 | `precheck.py --machine <m> <slug>,…` | 1–2 | Each role's VelaTerm row (taken by the registry's `velaterm_id`), its kind and engine, its saved conversation, the transcript baseline, `launch.mjs --print` against its VelaTerm preset, and whether a process holds it. |
 | `wait-archived.py <velaterm id>` | 3 | Waits until fg's archive lands, then prints `archived_at`. Run it in the background. |
 | `add-job.mjs <slug> --like <role> --cwd <dir> --space <space> [--write]` | before 1, Jobs only | Records an existing Job in `~/.config/f-co/jobs.json` with the like-role's argv and the Job page, through `spawn.mjs`'s `writeJob`. Without `--write` it only prints the entry. Then `register.js <slug> --launch "node …/launch.mjs <slug>"`, which keeps the record's conversation. |
+| `node move-role.mjs --slug --conversation --cwd --zulip [--space-name] [--wait] [--private]` | 4, 5, 10a | The same as `move-role.ps1` below, on any platform. |
 | `move-role.ps1 -Slug -Conversation -Cwd -Zulip [-SpaceName] [-Private]` | 4, 5, 10a | Launches through the F-Co launcher, then reports state, labels and the registry entry. It names the tab, and the space only if this launch made it. |
 
 For state without the screen or the title, use the harness's `node <clone>/plugins/f-co/scripts/state.mjs <slug>`.

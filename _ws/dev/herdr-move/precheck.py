@@ -14,18 +14,36 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 HOME = Path.home()
 VAULT = Path(os.environ.get('FG_VAULT_ROOT') or HOME / '_fg3')
 LAUNCH = VAULT / 'Code' / 'Fg-CC-Harness' / 'plugins' / 'f-co' / 'scripts' / 'launch.mjs'
-DB = Path(os.environ.get('VLX_DB') or Path(os.environ['APPDATA']) / 'io.vlinx.vlxterm.fg.release' / 'vlx-term.db')
 REGISTRY = HOME / '.zulip-mesh' / 'sessions.json'
 PRESETS = HOME / '.config' / 'velaterm' / 'presets.json'
+APP_ID = 'io.vlinx.vlxterm.fg.release'
+
+
+def velaterm_db():
+    """VelaTerm's database: Tauri's app data folder for the fg build, or VLX_DB."""
+    if os.environ.get('VLX_DB'):
+        return Path(os.environ['VLX_DB'])
+    if sys.platform == 'win32':
+        return Path(os.environ['APPDATA']) / APP_ID / 'vlx-term.db'
+    if sys.platform == 'darwin':
+        return HOME / 'Library' / 'Application Support' / APP_ID / 'vlx-term.db'
+    return Path(os.environ.get('XDG_DATA_HOME') or HOME / '.local' / 'share') / APP_ID / 'vlx-term.db'
+
+
+DB = velaterm_db()
 
 
 def holders():
     """Command lines of every running claude and codex process."""
+    if sys.platform != 'win32':
+        out = subprocess.run(['ps', '-axo', 'command'], capture_output=True, text=True).stdout
+        return '\n'.join(line for line in out.splitlines() if 'claude' in line or 'codex' in line)
     script = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'claude.exe','codex.exe' } "
               "| ForEach-Object CommandLine")
     return subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True, text=True).stdout

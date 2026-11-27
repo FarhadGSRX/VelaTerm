@@ -9,7 +9,15 @@ import sys
 import time
 from pathlib import Path
 
-DB = Path(os.environ.get('VLX_DB') or Path(os.environ['APPDATA']) / 'io.vlinx.vlxterm.fg.release' / 'vlx-term.db')
+APP_ID = 'io.vlinx.vlxterm.fg.release'
+if os.environ.get('VLX_DB'):
+    DB = Path(os.environ['VLX_DB'])
+elif sys.platform == 'win32':
+    DB = Path(os.environ['APPDATA']) / APP_ID / 'vlx-term.db'
+elif sys.platform == 'darwin':
+    DB = Path.home() / 'Library' / 'Application Support' / APP_ID / 'vlx-term.db'
+else:
+    DB = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share') / APP_ID / 'vlx-term.db'
 sid = sys.argv[1]
 while True:
     try:
