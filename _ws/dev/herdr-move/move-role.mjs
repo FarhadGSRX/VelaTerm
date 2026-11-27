@@ -9,7 +9,7 @@
 // --private: never read its screen, and print nothing of `hc get` beyond state, status and labels (its `title` is
 // Claude's conversation title). HC_BIN and HERDR_APP_BIN override where hc and the app's CLI are.
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -29,7 +29,9 @@ const isPrivate = args.includes('--private')
 
 const win = process.platform === 'win32'
 const local = process.env.LOCALAPPDATA ?? ''
-const hc = process.env.HC_BIN || (win ? join(local, 'Programs', 'herdr-core', 'hc.exe') : 'hc')
+// herdr-core's install.sh puts `hc` in ~/.local/bin on macOS and Linux.
+const unixHc = join(homedir(), '.local', 'bin', 'hc')
+const hc = process.env.HC_BIN || (win ? join(local, 'Programs', 'herdr-core', 'hc.exe') : existsSync(unixHc) ? unixHc : 'hc')
 const app = process.env.HERDR_APP_BIN || (win ? join(local, 'Programs', 'herdr-app', 'herdr-app.exe') : 'herdr-app')
 const vault = process.env.FG_VAULT_ROOT || join(homedir(), '_fg3')
 const launch = join(vault, 'Code', 'Fg-CC-Harness', 'plugins', 'f-co', 'scripts', 'launch.mjs')
