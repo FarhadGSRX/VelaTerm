@@ -40,10 +40,14 @@ DB = velaterm_db()
 
 
 def holders():
-    """Command lines of every running claude and codex process."""
+    """Command lines of every running claude and codex process, picked by executable name. Matching the command line
+    would also catch another program whose arguments name `claude` and the conversation, such as a checker's script."""
     if sys.platform != 'win32':
-        out = subprocess.run(['ps', '-axo', 'command'], capture_output=True, text=True).stdout
-        return '\n'.join(line for line in out.splitlines() if 'claude' in line or 'codex' in line)
+        def ps(column):
+            out = subprocess.run(['ps', '-axo', f'pid=,{column}='], capture_output=True, text=True).stdout
+            return [parts for parts in (line.split(None, 1) for line in out.splitlines()) if len(parts) == 2]
+        agents = {pid for pid, comm in ps('comm') if os.path.basename(comm.strip()) in ('claude', 'codex')}
+        return '\n'.join(args for pid, args in ps('args') if pid in agents)
     script = ("Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'claude.exe','codex.exe' } "
               "| ForEach-Object CommandLine")
     return subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True, text=True).stdout
